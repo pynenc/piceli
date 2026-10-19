@@ -696,6 +696,43 @@ class _Instance:
         return self.branch if self.branch is not None else self.env.name
 
 
+def _provenance_of(entry: dict[str, Any], image: BuiltImage) -> None:
+    """Keep where ``image`` was built in its component entry (0.22.0)."""
+    from piceli.infra import provenance
+
+    found = provenance.clean(image.extra.get("provenance"))
+    if found is not None:
+        entry["provenance"] = found
+    else:
+        entry.pop("provenance", None)
+
+
+class _Quarantined:
+    """The in-cluster builder while its node is quarantined (0.22.0): it
+    mirrors, but builds nothing (``build-host-quarantined``)."""
+
+    def __init__(self, inner: Any, reason: str) -> None:
+        self._inner = inner
+        self._reason = reason
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def _refuse(self) -> CompositionError:
+        # The reason shows in the status (failure.log_tail) and gitops wait.
+        return CompositionError(
+            "build-host-quarantined",
+            self._reason,
+            details={"outcome": {"log_tail": self._reason}},
+        )
+
+    def build(self, items: Any, checkout: Any) -> Any:
+        raise self._refuse()
+
+    def build_spec(self, request: Any, checkout: Any) -> Any:
+        raise self._refuse()
+
+
 def _running_images(record: Mapping[str, Any]) -> dict[str, Any]:
     """The images the environment runs, by component (the release's identity)."""
     return {
@@ -1424,21 +1461,28 @@ class CompositionController:
         """A build host's ``built`` request: checked against what this
         controller asked for and against its registry, then recorded as
         its own build would be (0.21.0)."""
-        from piceli.infra import remote_builds
+        from piceli.infra import provenance, remote_builds
 
         images = remote_builds.delivered(self.state, body, self._in_registry)
+        host = str(body.get("host"))
+        receipt = body.get("receipt")
+        receipt = receipt if isinstance(receipt, Mapping) else {}
+        # 0.22.0: where it was built, kept with the image.
+        record = provenance.from_receipt(receipt, host)
         for name, item in images.items():
+            extra: dict[str, Any] = {"host": host, "provenance": record}
+            if item["platforms"]:
+                extra = {"platforms": item["platforms"], **extra}
+            if item.get("nodes"):  # 0.22.0: imported into these nodes
+                extra.update(delivery="nodes", nodes=list(item["nodes"]))
             self._remember(
                 name,
                 item["key"],
-                BuiltImage(
-                    item["pull_ref"],
-                    item["manifest_digest"],
-                    {"platforms": item["platforms"], "host": str(body.get("host"))}
-                    if item["platforms"]
-                    else {"host": str(body.get("host"))},
-                ),
+                BuiltImage(item["pull_ref"], item["manifest_digest"], extra),
             )
+        for signal in receipt.get("health") or ():
+            if isinstance(signal, Mapping):
+                self._record_health(host, "host", signal, "builder-serve")
         self.log(
             f"build host {body.get('host')}: delivered {', '.join(sorted(images))}"
         )
@@ -1495,6 +1539,7 @@ class CompositionController:
                 elif kind == "build-claim":
                     from piceli.infra import remote_builds
 
+                    self._refuse_quarantined(str(body.get("host") or ""))
                     remote_builds.claim(self.state, body, self.clock())
                 elif kind == "built":
                     self._delivered(body)
@@ -1502,7 +1547,12 @@ class CompositionController:
                     from piceli.infra import remote_builds
 
                     remote_builds.failed(self.state, body)
+                    self._build_failed_health(body)
                     self._wake_waiting()
+                elif kind == "rebuild":
+                    self._rebuild(body)
+                elif kind == "host-release":
+                    self._release_host(body)
                 else:
                     raise GitOpsError("gitops-request-invalid", "unknown request kind")
             except GitOpsError as error:
@@ -1633,6 +1683,10 @@ class CompositionController:
         self.state["forced"][name] = {"trigger": f"promote {key}/{branch}@{full[:12]}"}
 
     def _sync(self, body: Mapping[str, Any]) -> None:
+        from piceli.infra import remote_builds
+
+        # 0.22.0: an explicit sync retries builds a host reported failed.
+        remote_builds.clear_failures(self.state)
         env = body.get("env")
         component = body.get("component")
         instances = self._instances()
@@ -1673,7 +1727,11 @@ class CompositionController:
         cluster = getattr(self._composition, "cluster", None)
         controller = getattr(cluster, "controller", None)
         order = tuple(getattr(controller, "builds", None) or ("cluster",))
+        blocked = self._cluster_quarantine()
         if "hosts" not in order:
+            if blocked is not None:
+                # 0.22.0: a quarantined builder node makes no images.
+                return _Quarantined(self.ports.builder, blocked)
             return self.ports.builder
         from piceli.gitops.config import parse_duration
         from piceli.infra.remote_builds import HostBuilds
@@ -1686,6 +1744,206 @@ class CompositionController:
             host_wait=parse_duration(getattr(controller, "host_wait", "30m")),
             clock=self.clock,
             urls={key: source.url for key, source in self.sources.sources.items()},
+            # 0.22.0: Controller(delivery="nodes") names every node and the
+            # platform it runs; the hosts import into each of them.
+            nodes={
+                node.name: f"linux/{node.arch}"
+                for node in getattr(cluster, "nodes", ())
+            }
+            if getattr(controller, "delivery", "registry") == "nodes"
+            else None,
+            cluster_blocked=self._cluster_quarantine,
+            owner=lambda: self._step_env,
+        )
+
+    # ------------------------------------------------------------ build health
+    def _health_policy(self) -> tuple[int | None, float]:
+        """``Controller(quarantine_after=, quarantine_window=)`` (0.22.0)."""
+        from piceli.dev.model import QUARANTINE_AFTER, QUARANTINE_WINDOW
+        from piceli.gitops.config import parse_duration
+
+        cluster = getattr(self._composition, "cluster", None)
+        controller = getattr(cluster, "controller", None)
+        after = getattr(controller, "quarantine_after", QUARANTINE_AFTER)
+        window = getattr(controller, "quarantine_window", QUARANTINE_WINDOW)
+        return after, float(parse_duration(window))
+
+    def _health_events(self, name: str) -> list[Any]:
+        from piceli.dev.health import HealthEvent
+
+        entry = (self.state.get("build_health") or {}).get(name) or {}
+        return [
+            HealthEvent.from_dict(item)
+            for item in entry.get("events") or ()
+            if isinstance(item, Mapping)
+        ]
+
+    def _quarantine_of(self, name: str) -> dict[str, Any] | None:
+        from piceli.dev.health import quarantine
+
+        after, window = self._health_policy()
+        return quarantine(
+            self._health_events(name), after=after, window=window, now=self.clock()
+        )
+
+    def _record_health(
+        self, name: str, kind: str, signal: Mapping[str, Any], source: str
+    ) -> None:
+        """One health event for the build host or node ``name`` (0.22.0)."""
+        from piceli.dev.health import event
+
+        entry = self.state.setdefault("build_health", {}).setdefault(
+            name, {"kind": kind, "events": []}
+        )
+        entry["kind"] = kind
+        entry["events"] = [
+            *(entry.get("events") or ()),
+            event(signal, source, self.clock()).to_dict(),
+        ][-50:]
+        found = self._quarantine_of(name)
+        self.log(
+            f"build health: {kind} {name}: {signal.get('kind')}"
+            + (f"; QUARANTINED: {found['reason']}" if found else "")
+        )
+
+    def _cluster_quarantine(self) -> str | None:
+        """Why the cluster's builder node makes no images now, or ``None``."""
+        for name, entry in sorted((self.state.get("build_health") or {}).items()):
+            if entry.get("kind") != "node":
+                continue
+            found = self._quarantine_of(name)
+            if found is not None:
+                return (
+                    f"the cluster builder node {name} is quarantined since "
+                    f"{found['since']}: {found['reason']} (piceli gitops "
+                    f"release-host {name} clears it)"
+                )
+        return None
+
+    def _refuse_quarantined(self, host: str) -> None:
+        found = self._quarantine_of(host) if host else None
+        if found is not None:
+            raise GitOpsError(
+                "gitops-request-invalid",
+                f"build host {host} is quarantined since {found['since']}: "
+                f"{found['reason']} (piceli gitops release-host {host})",
+            )
+
+    def _job_failure_health(self, error: BaseException) -> None:
+        """A failed in-cluster build whose output shows a machine-health
+        signature counts against the node its Job ran on."""
+        if getattr(error, "from_host", None):
+            return  # counted when the host answered build-failed
+        if getattr(error, "code", None) == "build-host-quarantined":
+            return  # nothing ran
+        from piceli.dev.pod import health_signal
+
+        details = getattr(error, "details", None) or {}
+        tail = str(getattr(error, "output_tail", "") or "") or str(
+            (
+                (details.get("outcome") or {}) if isinstance(details, Mapping) else {}
+            ).get("log_tail")
+            or ""
+        )
+        signal = health_signal(tail.splitlines()) if tail else None
+        if signal is None:
+            return
+        cluster = getattr(self.ports.builder, "cluster", None)
+        node = getattr(cluster, "node_name", None) or "cluster"
+        self._record_health(str(node), "node", signal, "build-job")
+
+    def _build_failed_health(self, body: Mapping[str, Any]) -> None:
+        from piceli.dev.pod import health_signal
+
+        signal = health_signal(str(body.get("log_tail") or "").splitlines())
+        if signal is not None:
+            self._record_health(
+                str(body.get("host") or "?"), "host", signal, "build-failed"
+            )
+
+    def _release_host(self, body: Mapping[str, Any]) -> None:
+        """``piceli gitops release-host NAME``: forget its health events."""
+        name = str(body.get("host") or "")
+        entry = (self.state.get("build_health") or {}).pop(name, None)
+        if entry is None:
+            raise GitOpsError(
+                "gitops-request-invalid", f"no health events are recorded for {name}"
+            )
+        self.state["host_release"] = {"host": name, "at": _iso(self.clock())}
+        self.log(f"build health: {name} released")
+
+    def _health_status(self) -> dict[str, Any] | None:
+        from piceli.dev.health import view
+
+        after, window = self._health_policy()
+        found = {
+            name: {
+                "kind": entry.get("kind"),
+                **view(
+                    self._health_events(name),
+                    after=after,
+                    window=window,
+                    now=self.clock(),
+                ),
+            }
+            for name, entry in sorted((self.state.get("build_health") or {}).items())
+        }
+        return found or None
+
+    def _rebuild(self, body: Mapping[str, Any]) -> None:
+        """``piceli gitops rebuild --host NAME [--since T]`` (0.22.0): every
+        deployed image built on that host (or node) is built again, through
+        each environment's usual plan, approval and checks."""
+        from piceli.infra import provenance
+
+        host = str(body.get("host") or "")
+        if not host:
+            raise GitOpsError("gitops-request-invalid", "rebuild names no host")
+        try:
+            since = provenance.parse_since(body.get("since"))
+        except ValueError as error:
+            raise GitOpsError("gitops-request-invalid", str(error)) from None
+        found: dict[str, set[str]] = {}
+        dropped = 0
+        for key, record in self._envs().items():
+            group = str(record.get("group") or key)
+            for name, entry in (record.get("components") or {}).items():
+                if not isinstance(entry, Mapping) or not provenance.built_on(
+                    entry.get("provenance"), host, since
+                ):
+                    continue
+                found.setdefault(group, set()).add(str(name))
+                digest = entry.get("source_digest")
+                if digest:
+                    # Its cached build result goes: no environment reuses it.
+                    path = self._cache_path(str(name), str(digest))
+                    if path.exists():
+                        path.unlink()
+                        dropped += 1
+        if not found:
+            raise GitOpsError(
+                "gitops-request-invalid",
+                f"no deployed image was built on {host}"
+                + (f" since {body.get('since')}" if since else ""),
+            )
+        for group, names in sorted(found.items()):
+            self.state["forced"][group] = {"trigger": f"sync rebuild {host}"}
+            rebuild = self.state.setdefault("rebuild", {}).setdefault(group, [])
+            for name in sorted(names):
+                if name not in rebuild:
+                    rebuild.append(name)
+        self.state["last_rebuild"] = {
+            "host": host,
+            "since": body.get("since"),
+            "at": _iso(self.clock()),
+            "envs": {group: sorted(names) for group, names in sorted(found.items())},
+            "dropped": dropped,
+        }
+        self.log(
+            f"rebuild of what {host} built: "
+            + "; ".join(
+                f"{g}: {', '.join(sorted(n))}" for g, n in sorted(found.items())
+            )
         )
 
     def _cache_path(self, component: str, digest: str) -> Path:
@@ -1697,7 +1955,14 @@ class CompositionController:
         if not isinstance(found, Mapping) or not found.get("pull_ref"):
             return None
         return BuiltImage(
-            str(found["pull_ref"]), str(found.get("manifest_digest") or "")
+            str(found["pull_ref"]),
+            str(found.get("manifest_digest") or ""),
+            # 0.22.0: where it was built (provenance) comes back with it.
+            {
+                str(k): v
+                for k, v in found.items()
+                if k not in ("pull_ref", "manifest_digest")
+            },
         )
 
     def _remember(self, component: str, digest: str, image: BuiltImage) -> None:
@@ -1825,16 +2090,18 @@ class CompositionController:
                     images[item.component] = image
         except BuildPending:
             raise  # a build host builds them: not failed (see _step)
-        except Exception:
+        except Exception as error:
             for entry in components.values():
                 if entry["state"] == "building":
                     entry["state"] = "failed"
+            self._job_failure_health(error)
             raise
         (self.state.get("rebuild") or {}).pop(name, None)
         for key, entry in components.items():
             image = images[key]
             entry["digest"] = image.manifest_digest
             entry["image"] = image.pull_ref
+            _provenance_of(entry, image)
             deployed = (previous.get(key) or {}).get("deployed_image")
             entry["deployed_image"] = deployed
             entry["state"] = "unchanged" if deployed == image.pull_ref else "rolling"
@@ -1985,16 +2252,18 @@ class CompositionController:
                 self._build_times(name, sorted(request.images))
         except BuildPending:
             raise  # a build host builds them: not failed (see _step)
-        except Exception:
+        except Exception as error:
             for entry in components.values():
                 if entry["state"] == "building":
                     entry["state"] = "failed"
+            self._job_failure_health(error)
             raise
         (self.state.get("rebuild") or {}).pop(name, None)
         for key, entry in components.items():
             image = images[key]
             entry["digest"] = image.manifest_digest
             entry["image"] = image.pull_ref
+            _provenance_of(entry, image)
             deployed = (previous.get(key) or {}).get("deployed_image")
             entry["deployed_image"] = deployed
             entry["state"] = "unchanged" if deployed == image.pull_ref else "rolling"
@@ -2774,6 +3043,10 @@ class CompositionController:
             record.pop("in_progress", None)
             if not pending:
                 record.pop("waiting_since", None)
+                # 0.22.0: a step that ended without waiting wants no build.
+                from piceli.infra import remote_builds
+
+                remote_builds.settle(self.state, str(record.get("branch")))
             if deploy and not pending:
                 self._record_step(record, *started)
             self.telemetry.step_finished(
@@ -2897,6 +3170,14 @@ class CompositionController:
             self._step(record, self._stop)
         self._probe_clusters()
         self._registry_usage(now)
+        # 0.22.0: wanted builds no step asked for in three polls are leftovers.
+        from piceli.infra import remote_builds
+
+        dropped = remote_builds.prune(
+            self.state, self.clock(), max(3 * float(self.config.poll_seconds), 300.0)
+        )
+        if dropped:
+            self.log(f"builds no longer wanted: {', '.join(sorted(dropped))}")
         return self._publish()
 
     # ------------------------------------------------------------ reach, rollout
@@ -3301,6 +3582,18 @@ class CompositionController:
                 # Added in 0.21.0: what this controller waits for build hosts
                 # to build (piceli builder serve reads it).
                 "builds_wanted": _wanted_builds(self.state, self.clock()),
+                # Added in 0.22.0: health events and quarantine of its build
+                # hosts and builder node, and the last rebuild request.
+                **(
+                    {"build_health": health}
+                    if (health := self._health_status())
+                    else {}
+                ),
+                **(
+                    {"last_rebuild": self.state["last_rebuild"]}
+                    if self.state.get("last_rebuild")
+                    else {}
+                ),
                 "poll_failures": int(self.state.get("poll_failures") or 0),
                 # Added in 0.14.6: the registry claim's use measured by the
                 # controller (``du`` in the registry pod), for the UI.

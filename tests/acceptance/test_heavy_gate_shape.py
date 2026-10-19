@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from piceli.maintenance import heavy
@@ -22,6 +23,10 @@ def test_concurrent_heavy_runs_serialize_with_receipts(tmp_path: Path) -> None:
     log = tmp_path / "windows"
     env = {**os.environ, heavy.DIR_ENV: str(state)}
     env.pop(heavy.HELD_ENV, None)
+    # The test holds the lock until both runs say they wait: their waits are
+    # then known, however slowly a loaded machine starts the processes.
+    gate = heavy.HeavyLock(state)
+    gate.acquire(["test"], name="test-gate")
     procs = [
         subprocess.Popen(
             [
@@ -45,6 +50,14 @@ def test_concurrent_heavy_runs_serialize_with_receipts(tmp_path: Path) -> None:
         )
         for name in ("agent-a", "agent-b")
     ]
+    try:
+        for proc in procs:
+            assert proc.stderr is not None
+            while "waiting for the heavy-work lock" not in proc.stderr.readline():
+                assert proc.poll() is None, "the run ended without waiting"
+        time.sleep(0.5)
+    finally:
+        gate.release()
     receipts = []
     for proc in procs:
         out, _ = proc.communicate(timeout=60)
@@ -56,6 +69,6 @@ def test_concurrent_heavy_runs_serialize_with_receipts(tmp_path: Path) -> None:
     (_, first_end), (second_start, _) = windows
     assert first_end <= second_start  # the busy windows never overlap
     assert {r["name"] for r in receipts} == {"agent-a", "agent-b"}
-    assert max(r["waited_seconds"] for r in receipts) >= 0.8
+    assert min(r["waited_seconds"] for r in receipts) >= 0.5
     assert all(r["duration_seconds"] >= 1.0 for r in receipts)
     assert len(heavy.HeavyLock(state).recent_receipts()) == 2

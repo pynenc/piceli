@@ -253,11 +253,13 @@ def test_ambiguous_absence_blocks_retry(local_api, tmp_path):
 
 def test_delayed_mutation_is_bounded_and_detached_work_not_retried(local_api, tmp_path):
     api, original_provider = local_api
-    provider = provider_at(original_provider.host, request_seconds=0.05)
+    # Every request gets 0.5 s: the held write never answers in time, and the
+    # other requests still do on a loaded runner (0.05 s timed some out).
+    provider = provider_at(original_provider.host, request_seconds=0.5)
     run = executor(provider, tmp_path)
     plan, snapshot, grant = prepare(provider, [manifest()])
     # The server holds the write until the test releases it; the client gives
-    # up after 0.05 s. "In flight" and "applied" are states the test sets,
+    # up after 0.5 s. "In flight" and "applied" are states the test sets,
     # not wall-clock windows: a resume while the write is held stays blocked
     # (it never writes twice); once the server has applied it, a resume is
     # ready.

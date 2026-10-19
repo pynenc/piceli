@@ -87,7 +87,9 @@ def builder_image(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
 
 
 def test_builder_has_the_tools_c_builds_need(builder_image: str) -> None:
-    tools = "make cmake pkg-config curl xz gcc cargo cargo-zigbuild zig uv python3"
+    tools = (
+        "make cmake pkg-config curl xz gcc ld.lld cargo cargo-zigbuild zig uv python3"
+    )
     output = _run(
         "docker", "run", "--rm", builder_image, "sh", "-c",
         f"for t in {tools}; do command -v $t >/dev/null || echo missing $t; done",
@@ -102,6 +104,14 @@ def test_builder_lints_rust_with_clippy_and_rustfmt(builder_image: str) -> None:
         "cargo clippy --version && cargo fmt --version",
     )  # fmt: skip
     assert "clippy" in output and "rustfmt" in output
+
+
+def test_builder_ships_rust_1_97() -> None:
+    """0.22.0: the image's default Rust (a source can pin another)."""
+    dockerfile = (
+        Path(__file__).resolve().parents[2] / "images" / "Dockerfile"
+    ).read_text()
+    assert "rust:1.97.0-slim-bookworm@sha256:" in dockerfile
 
 
 def test_builder_builds_a_crate_whose_build_script_runs_cmake_and_make(

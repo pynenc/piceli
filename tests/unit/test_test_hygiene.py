@@ -1,0 +1,29 @@
+"""Tests stay reliable on busy CI runners (docs/contributing/index.md).
+
+An elapsed-time upper bound under 1 s fails on a loaded runner long before
+it catches a real slowdown: wait on an event, a fake clock or a counted call,
+or let the broken case take far longer and bound it loosely.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+ELAPSED = re.compile(
+    r"assert\b[^\n]*(?:monotonic\(\)|perf_counter\(\)|\belapsed\b|\btook\b)[^\n]*<=?\s*([0-9]*\.?[0-9]+)\b"
+)
+MINIMUM = 1.0
+
+
+def test_no_sub_second_elapsed_time_bounds() -> None:
+    tight = [
+        f"{path.relative_to(ROOT)}:{text[: match.start()].count(chr(10)) + 1}"
+        for path in sorted((ROOT / "tests").rglob("*.py"))
+        if path.name != Path(__file__).name
+        for text in [path.read_text(errors="ignore")]
+        for match in ELAPSED.finditer(text)
+        if float(match.group(1)) < MINIMUM
+    ]
+    assert not tight, f"elapsed-time bounds under {MINIMUM} s: {tight}"

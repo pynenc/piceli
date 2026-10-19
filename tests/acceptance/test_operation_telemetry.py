@@ -136,9 +136,11 @@ def test_compensation_retention_state_is_exported_verbatim():
 
 
 def test_queue_flush_and_shutdown_budgets_account_for_drops():
-    with receiver(delay=0.3) as (url, _):
+    # Requests take 2 s: waiting for one would break the budgets by far more
+    # than a loaded runner's scheduling noise.
+    with receiver(delay=3) as (url, _):
         emitter = OperationTelemetry(
-            OtlpOptions(url, "private", capacity=1, request_seconds=0.1)
+            OtlpOptions(url, "private", capacity=1, request_seconds=2)
         )
         for i in range(30):
             with emitter.operation("apply", f"op-{i}"):
@@ -146,12 +148,12 @@ def test_queue_flush_and_shutdown_budgets_account_for_drops():
         started = time.monotonic()
         assert not emitter.flush(0.001)
         initial = emitter.shutdown(0.005)
-        assert time.monotonic() - started < 0.1
+        assert time.monotonic() - started < 1
         assert initial["dropped"] > 0
         # A timed-out shutdown explicitly reports in-flight work, never a zero-loss success.
         if not initial["drained"]:
             assert initial["pending"] > 0
-        final = emitter.shutdown(1)
+        final = emitter.shutdown(5)
         assert final["drained"] and final["pending"] == 0
         for signal in final["signals"].values():
             assert (

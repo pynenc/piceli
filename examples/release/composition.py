@@ -12,7 +12,7 @@ Preview the manifests without a cluster:
 from __future__ import annotations
 
 from piceli import App, ConfigVolume, SecretVolume
-from piceli.k8s.ops.plan import DeploymentComposition
+from piceli.k8s.ops import DeploymentComposition
 from piceli.k8s.release_spec import ReleaseContext
 
 

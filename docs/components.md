@@ -32,7 +32,7 @@ it end to end.
 ```python
 from piceli.envs import Branches, Environment, Stack, Tag
 from piceli.infra import Cluster, Component, Source
-from piceli.pipeline.model import Registry
+from piceli.pipeline import Registry
 
 cluster = Cluster(
     "my-cluster",
@@ -226,7 +226,11 @@ approve ENV HASH`). Without `--builder-image` the controller mirrors
 third-party images but cannot build. `piceli gitops run --once --local-build
 --kubeconfig F --context C --config config.json --state-dir DIR` runs one
 poll on your machine instead, building with the local host tools and
-pushing through a port-forward to the registry.
+pushing through a port-forward to the registry. Since 0.22.0 it builds
+every platform the controller is enabled with, like the build Job and build
+hosts (another architecture cross-compiles: a Rust build with `cargo
+zigbuild`), and pushes one OCI index per image over them; with one platform
+it pushes that platform's image alone, as before.
 
 ### Status
 

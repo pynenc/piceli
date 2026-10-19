@@ -426,6 +426,20 @@ to its ownership check. Files a commit does not change keep their times in
 the checkout and the copy, so incremental builds (cargo) rebuild only what
 changed.
 
+**The queue.** `builds_wanted` holds only what a step waits for now:
+
+- an environment that asks for a newer build (a new commit) drops the build
+  it asked for before; one whose step ends without waiting (deployed,
+  failed, stopped) drops its builds; an entry no step asked for in three
+  polls (at least 5 minutes) goes, which also clears what an older
+  controller left behind;
+- a build a host reported failed shows `failed` (host, reason, output tail)
+  while listed, hosts never take it, and the controller does not offer the
+  same inputs again: the environment fails at once with the host's tail
+  until its inputs change or `piceli gitops sync` retries it;
+- a host never builds again what it just answered (built or failed) while
+  the controller still lists it.
+
 The controller accepts a `built` request only for a build it asked for,
 with every image built from the same inputs (its change key) and its digest
 present in its registry; then it records the images as its own builds and
@@ -435,6 +449,148 @@ Anything else is a rejected request (`rejected_requests` in the status).
 The builder image must be the controller's Piceli version. Its registry
 must be on a node that works: `Registry.in_cluster(on=...)` places it, and
 moving it means a new claim, which the next builds and mirrors fill again.
+
+#### Delivery into the nodes, without a registry
+
+When the cluster has no registry that works (or you prefer not to use
+one), build hosts can import what they build straight into the nodes'
+containerd over SSH, with `ctr images import`:
+
+```python
+cluster = Cluster(
+    "my-cluster",
+    api="https://10.0.0.1:6443",
+    credentials="my-cluster",
+    nodes=[
+        Node("node-a", arch="amd64", roles=["controller"],
+             target="ssh://root@10.0.0.1?runtime=k3s-containerd"),
+        Node("node-b", arch="arm64",
+             target="ssh://ops@10.0.0.2?runtime=containerd"),
+    ],
+    controller=Controller(on="node-a", builds=("hosts",), delivery="nodes"),
+    dev=DevBuilds(node=None, image="ghcr.io/pynenc/piceli-builder@sha256:<digest>",
+                  hosts=[BuildHost.docker("laptop")]),
+)
+```
+
+- `Controller(delivery="nodes")` (the default is `"registry"`) needs
+  `builds=("hosts",)`; with `("hosts", "cluster")` the in-cluster fallback
+  still pushes to the registry, so a registry must be declared.
+- Every declared node needs `target=`: a workload can land on any node, so
+  every node receives every image. The target is the same as for a
+  pipeline's `NodeImport`: `ssh://[user@]host[:port]?runtime=containerd` or
+  `runtime=k3s-containerd` (`k3s ctr`), with `namespace=` (default
+  `k8s.io`) and `sudo=` (default `true`: `sudo -n ctr`); `docker://name?runtime=containerd`
+  for a kind node. The controller's configuration keeps the targets
+  without their SSH user.
+- The controller must build every node's platform; `piceli gitops enable`
+  does by default (the architectures of the declared nodes). A node whose
+  platform is not built fails the step (`composition-invalid`).
+
+The wanted build then names each node and its platform
+(`controller.builds_wanted[].deliver`: `{"mode": "nodes", "nodes":
+{"node-a": "linux/amd64", "node-b": "linux/arm64"}}`). `piceli builder
+serve` builds every platform as before and, instead of pushing, imports
+into each node the archive of the node's architecture, over SSH with this
+host's own access (its keys and, when `SSH_AUTH_SOCK` is set, its agent;
+SSH runs in batch mode). No docker is needed on the build host for this
+step and nothing is pushed anywhere. The import streams the archive
+through a relay that checks the image's config digest before containerd
+sees a complete image (a mismatch imports nothing), then asks the node
+which config digest the name now points at.
+
+Every node knows the image by the same name,
+`node.piceli.invalid/<repository>:sha256-<hex>`: a content tag of the
+image's config digests (the config digest itself for one platform, else
+the SHA-256 of its `platform=config` lines), so the name can never point at
+other content. The `.invalid` domain never resolves: a node that lacks the
+image cannot pull one from elsewhere, so its pod fails to start and the
+rollout's checks fail instead of running something else. Workloads keep
+the default pull policy (`IfNotPresent` for this tag), which uses the
+imported image.
+
+The answer (`built`) carries, per image, its config digest per platform
+and each node's import receipt (platform, result, the name and the config
+digest the node reported). The controller accepts it only when every node
+it asked for is there, each with its own platform's config digest under
+that name; then it deploys through the same plan, approval and checks.
+Otherwise the request is rejected (`rejected_requests`) and the build stays
+wanted. The controller does not ask the nodes itself: it has no SSH access
+or node credentials, and the API's `node.status.images` carries no config
+digest, lags the kubelet's status updates and lists at most 50 images, so
+the receipts of the import, which verified the config digest on the node,
+are the evidence.
+
+A node added later receives images at the next build of each component;
+`piceli gitops sync ENV --component NAME` rebuilds one now. Third-party
+images (`Component.image(...)`) are copied into a registry, so they still
+need `Registry.in_cluster(...)`.
+
+### Where each image was built (0.22.0)
+
+Every image the controller records keeps its **provenance**: the machine
+that built it (the build host's name, or the node its build Job ran on),
+the builder image, the source commits, the toolchains when the build
+reported them, and when the build started and ended. It is kept with the
+image in the controller's cache, so a later deploy that reuses the image
+keeps it too, and shows per component in `piceli gitops status --json` and
+in every run of the history:
+
+```json
+"components": {"web": {"image": "registry…/shop/web@sha256:…", "digest": "sha256:…",
+  "provenance": {"builder": "host", "host": "mini",
+                 "builder_image": "ghcr.io/pynenc/piceli-builder@sha256:…",
+                 "commits": {"shop": "3f2a91c0…"},
+                 "started_at": "2026-10-18T09:00:00Z", "finished_at": "2026-10-18T09:30:00Z"}}}
+```
+
+`piceli builder serve` also pushes it next to each image it delivers, as an
+in-toto Statement (SLSA provenance v1, subject the image digest) attached
+as an OCI 1.1 referrer (`artifactType: application/vnd.in-toto+json`); a
+registry that refuses referrers only loses the copy, never the delivery.
+
+When a machine turns out faulty, list what it built and rebuild it:
+
+```sh
+piceli gitops suspects --host mini --since 2026-10-01 --json \
+  --kubeconfig ~/.kube/lab --context lab
+piceli gitops rebuild --host mini --since 2026-10-01 \
+  --kubeconfig ~/.kube/lab --context lab
+```
+
+`suspects` lists every deployed image the host (or node) built, per
+environment, cluster and component, from the status; `--since` keeps
+builds that ended at or after that time. `rebuild` asks the controller to
+drop those images' cached build results and deploy each environment that
+runs one (trigger `sync rebuild mini`): the images are built again,
+elsewhere when the host is quarantined, and deployed through the usual
+plan, approval and checks. `controller.last_rebuild` in the status says
+what it took; a host that built nothing deployed is a rejected request.
+
+### Faulty build hosts and nodes: quarantine (0.22.0)
+
+The controller records a health event for a build host when its
+`build-failed` answer's output shows a machine-health sign (an internal
+compiler error, a segfault, an illegal instruction, a bus error, a machine
+check, an undefined symbol at link; see {doc}`dev_builds`), and for the
+builder node when one of its build Jobs fails that way. After
+`Controller(quarantine_after=2, quarantine_window="24h")` events (the
+defaults; `None` turns it off) the host or node is quarantined:
+
+- a quarantined host's `build-claim` is refused (`rejected_requests`);
+  `piceli builder serve` on it reads that from the status, says why and
+  claims nothing, as it does while its own record on the host (see
+  {doc}`dev_builds`) quarantines it;
+- with `builds=("hosts", "cluster")` a quarantined builder node is no
+  fallback: the build keeps waiting for a host;
+- with `builds=("cluster",)` the step fails with `build-host-quarantined`
+  (retried with backoff) and nothing runs on the node.
+
+`piceli gitops hosts` shows each one's events and state
+(`controller.build_health` in the status); `piceli gitops release-host
+NAME` ends a quarantine once the machine is sound. A build that passed but
+met a corrupt cached blob (`cache-corrupt` in a host build's log: the blob
+is discarded and fetched or written again) also counts against its host.
 
 ### Removed objects are deleted (pruning)
 
@@ -583,9 +739,17 @@ does not answer, `health`, `checks`, `revision`, `reason`, `last_contact`,
 `clusters.<name>` (reach of every cluster) and `removals` (placements
 removed and what was kept).
 
+A composition controller's components carry `provenance` (0.22.0: where
+each image was built, see above), and its `controller` adds `build_health`
+(each build host and builder node with health events: `kind` `host` or
+`node`, `quarantined`, `reason`, `since`, `recent`, `policy` and the last
+`events`) and `last_rebuild` (the last `gitops rebuild` it took: `host`,
+`since`, `at`, `envs`, `dropped`), each only when there is one.
+
 `piceli gitops approve`, `piceli gitops sync`, `piceli promote` and `piceli
 env stop|start` add one key each to the ConfigMap `piceli-gitops-requests`
-(kinds `approve`, `sync`, `promote`, `stop`, `start`); the controller
+(kinds `approve`, `sync`, `promote`, `stop`, `start`; 0.22.0: `rebuild`
+from `gitops rebuild`, `host-release` from `gitops release-host`); the controller
 removes a request once it handled it, oldest `at` first (a stop and a start
 waiting together: the later one wins). An approval stands while the plan
 keeps its hash: a push that changes nothing in the plan does not ask again.

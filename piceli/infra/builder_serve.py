@@ -17,13 +17,26 @@ container engine, with the cluster owner's credential profile:
    cross-compiles with ``cargo zigbuild``);
 4. deliver the archives itself: push them to the cluster's registry through
    a port-forward (only the blobs it lacks) and one OCI index per image over
-   its platforms;
+   its platforms; or (0.22.0, when the wanted build names nodes:
+   ``Controller(delivery="nodes")``) import each image into every node's
+   containerd over SSH (``ctr images import``), the archive of the node's
+   platform, under the content-tagged name of
+   :func:`piceli.infra.remote_builds.node_reference`;
 5. answer ``built`` (each image's key, pull reference, digest and
-   platforms, and a receipt: host, times, image, commits) or
-   ``build-failed`` with the output's tail.
+   platforms, each node's import receipt when delivered into the nodes,
+   and a receipt: host, times, image, commits) or ``build-failed`` with
+   the output's tail.
+
+0.22.0: each delivered image gets its provenance (host, builder image,
+commits, times; :mod:`piceli.infra.provenance`) pushed as an OCI referrer
+when the registry takes it. A build whose output shows a machine-health
+signature (a crashed compiler, a segfault, a corrupt cached blob;
+:mod:`piceli.dev.health`) records a health event on the host; a quarantined
+host claims nothing and says why until ``piceli dev release-host``.
 
 Nothing here holds a Tailscale, registry or cluster credential of its own:
-the profile reaches the API, the API reaches the registry.
+the profile reaches the API, the API reaches the registry; the nodes are
+reached with this host's own SSH access (its keys, its agent).
 
 Importing this module is side-effect free.
 """
@@ -245,6 +258,37 @@ def job_argv(wanted: Mapping[str, Any]) -> list[str]:
     return argv
 
 
+def _nodes(wanted: Mapping[str, Any]) -> dict[str, str]:
+    """``{node: platform}`` the wanted build is imported into (0.22.0), else ``{}``."""
+    deliver = wanted.get("deliver") or {}
+    if deliver.get("mode") != "nodes":
+        return {}
+    return {str(k): str(v) for k, v in (deliver.get("nodes") or {}).items()}
+
+
+def node_importer(
+    targets: Mapping[str, str],
+    backend: Any,
+    ssh_agent_socket: Path | None = None,
+) -> Callable[[str, str, str, Path], Mapping[str, Any]]:
+    """``BuilderServe.node_import`` over the declared ``Node(target=...)``
+    URLs (``{node: url}``): :meth:`piceli.pipeline.backend.Backend.node_deliver`
+    (the validating relay into ``ctr images import -``, then the node's own
+    report of the config digest), with this host's SSH agent when it runs one."""
+
+    def run(
+        node: str, image_id: str, reference: str, archive: Path
+    ) -> Mapping[str, Any]:
+        url = targets.get(node)
+        if not url:
+            raise BuildFailed(f"node {node} declares no target= on this host")
+        return backend.node_deliver(
+            url, image_id, reference, archive=archive, ssh_agent_socket=ssh_agent_socket
+        )
+
+    return run
+
+
 def _commits(wanted: Mapping[str, Any]) -> dict[str, str]:
     if wanted.get("kind") == "spec":
         return {str(k): str(v) for k, v in (wanted.get("commits") or {}).items()}
@@ -266,8 +310,10 @@ class BuilderServe:
     container: Callable[
         [list[str], Mapping[str, Path], Path, Callable[[str], None]], int
     ]
-    push: Callable[[str, str, Path], str]
-    index: Callable[[str, Mapping[str, str]], str]
+    #: Push one archive to the registry; its digest-pinned pull reference
+    #: (``None``: no registry to push to).
+    push: Callable[[str, str, Path], str] | None
+    index: Callable[[str, Mapping[str, str]], str] | None
     root: Path
     say: Callable[[str], None] = lambda _line: None
     clock: Callable[[], float] = time.time
@@ -276,14 +322,58 @@ class BuilderServe:
     git: Callable[..., subprocess.CompletedProcess[bytes]] = field(
         default=subprocess.run
     )
+    #: 0.22.0: import one archive into one node, ``(node, config digest,
+    #: reference, archive)``; returns the ``piceli.node-delivery.v1`` receipt
+    #: (``None``: no node targets on this host).
+    node_import: Callable[[str, str, str, Path], Mapping[str, Any]] | None = None
+    #: 0.22.0: the host's health (:class:`piceli.dev.health.Health`), or None.
+    health: Any = None
+    #: 0.22.0: pushes a provenance document as a referrer of
+    #: ``(repository, digest, body)``; ``None``: not pushed.
+    attest: Callable[[str, str, bytes], Any] | None = None
+    #: Machine-health signals seen in the current build's output.
+    signals: list[dict[str, str]] = field(default_factory=list)
+    #: Why this host claims nothing (its quarantine), once said.
+    quarantine: dict[str, Any] | None = None
+    #: The controller's health record of this host, from its status.
+    controller_health: Mapping[str, Any] | None = None
+    _said: Any = None
+    #: Builds this host answered (built or failed) that the controller still
+    #: lists: skipped until it drops them (0.22.0).
+    answered: set[str] = field(default_factory=set)
+    #: The current build's toolchain versions (``{tool: version}``), from
+    #: its receipt.
+    toolchains: dict[str, str] = field(default_factory=dict)
 
     # ------------------------------------------------------------ choosing
     def wanted(self) -> list[dict[str, Any]]:
         status = self.channel.read_status() or {}
-        return list((status.get("controller") or {}).get("builds_wanted") or ())
+        controller = status.get("controller") or {}
+        # 0.22.0: the controller's own record of this host (it refuses the
+        # claims of a host it quarantined).
+        found = (controller.get("build_health") or {}).get(self.host)
+        self.controller_health = found if isinstance(found, Mapping) else None
+        return list(controller.get("builds_wanted") or ())
 
     def pick(self) -> dict[str, Any] | None:
-        for entry in self.wanted():
+        entries = self.wanted()
+        held = self.controller_health or {}
+        if held.get("quarantined"):
+            if self._said != held.get("reason"):
+                self.say(
+                    f"builder: the controller quarantined {self.host} since "
+                    f"{held.get('since')}: {held.get('reason')} (piceli gitops "
+                    f"release-host {self.host}); claiming no builds"
+                )
+                self._said = held.get("reason")
+            return None
+        self._said = None
+        # 0.22.0: what this host answered stays until the controller drops
+        # it (its next poll); never build it again meanwhile.
+        self.answered &= {str(entry.get("id")) for entry in entries}
+        for entry in entries:
+            if entry.get("failed") or str(entry.get("id")) in self.answered:
+                continue  # a failed build is retried by `piceli gitops sync`
             claimed = entry.get("claimed") or {}
             if not claimed or claimed.get("host") == self.host:
                 return entry
@@ -313,8 +403,46 @@ class BuilderServe:
         return False
 
     # ------------------------------------------------------------ building
+    def quarantined(self) -> dict[str, Any] | None:
+        """This host's quarantine (0.22.0), said once when it starts."""
+        if self.health is None:
+            return None
+        try:
+            found = self.health.quarantined()
+        except Exception:  # an unreadable record never stops the loop
+            return self.quarantine
+        if found is not None and (self.quarantine or {}).get("reason") != found.get(
+            "reason"
+        ):
+            from piceli.dev.health import describe_quarantine
+
+            self.say(
+                f"builder: {describe_quarantine(self.host, found)}; claiming no builds"
+            )
+        elif found is None and self.quarantine is not None:
+            self.say(f"builder: {self.host} is released; claiming builds again")
+        self.quarantine = found
+        return found
+
+    def _record_health(self, signal: Mapping[str, Any]) -> None:
+        if self.health is None:
+            return
+        try:
+            found = self.health.record(signal, "builder-serve")
+        except Exception as error:
+            self.say(f"builder: the health event was not recorded ({error})")
+            return
+        self.say(
+            f"builder: health event on {self.host}: {signal.get('kind')}"
+            + (f" ({signal.get('line')})" if signal.get("line") else "")
+        )
+        if found is not None:
+            self.quarantined()
+
     def once(self) -> str | None:
         """Build one wanted build, if any; its id."""
+        if self.quarantined() is not None:
+            return None
         entry = self.pick()
         if entry is None or not self.claim(entry):
             return None
@@ -322,20 +450,29 @@ class BuilderServe:
         self.say(f"builder: building {', '.join(entry.get('images') or ())} ({build})")
         began = self.clock()
         tail: deque[str] = deque(maxlen=TAIL_LINES)
+        self.signals = []
         try:
             images = self.build(entry, tail)
         except BuildFailed as error:
+            from piceli.dev.pod import health_signal
             from piceli.gitops.state import build_failed_request
 
             text = error.tail or "\n".join(tail)
             self.channel.add_request(
                 *build_failed_request(build, self.host, str(error), text)
             )
+            self.answered.add(build)
             self.say(f"builder: {build} failed: {error}")
+            signal = (
+                self.signals[0] if self.signals else health_signal(text.splitlines())
+            )
+            if signal is not None:
+                self._record_health(signal)
             return build
         from piceli.gitops.state import built_request
+        from piceli.infra import provenance
 
-        receipt = {
+        receipt: dict[str, Any] = {
             "host": self.host,
             "image": self.image,
             "started_at": _iso(began),
@@ -344,9 +481,54 @@ class BuilderServe:
             "platforms": list(entry.get("platforms") or ()),
             "commits": _commits(entry),
         }
+        if self.toolchains:  # 0.22: what the build installed, for provenance
+            receipt["toolchains"] = dict(self.toolchains)
+        if _nodes(entry):
+            receipt["delivery"] = "nodes"
+        # 0.22: a passed build that met a corrupt cache still counts.
+        cached = [s for s in self.signals if s["kind"].startswith("cache-")]
+        if cached:
+            receipt["health"] = cached
+            self._record_health(cached[0])
+        record = provenance.from_receipt(receipt, self.host)
+        referrers = self.attach(entry, images, record)
+        if referrers:
+            receipt["referrers"] = referrers
         self.channel.add_request(*built_request(build, self.host, images, receipt))
+        self.answered.add(build)
         self.say(f"builder: {build} delivered in {receipt['seconds']:.0f}s")
         return build
+
+    def attach(
+        self,
+        entry: Mapping[str, Any],
+        images: Mapping[str, Mapping[str, Any]],
+        record: Mapping[str, Any],
+    ) -> dict[str, str]:
+        """Push each image's provenance as an OCI referrer (0.22.0); the
+        referrer digest of each image the registry took."""
+        if self.attest is None or _nodes(entry):
+            return {}  # node deliveries have no registry to attach to
+        from piceli.infra import provenance
+
+        found: dict[str, str] = {}
+        for name, image in sorted(images.items()):
+            pull_ref = str(image.get("pull_ref") or "")
+            digest = str(image.get("manifest_digest") or "")
+            repository = pull_ref.split("@", 1)[0].split("/", 1)[-1]
+            body = provenance.statement(repository, digest, record)
+            try:
+                result = self.attest(repository, digest, body) or {}
+            except Exception as error:  # never fails the delivery
+                result = {"state": "skipped", "reason": type(error).__name__}
+            if result.get("state") == "attached" and result.get("digest"):
+                found[name] = str(result["digest"])
+            else:
+                self.say(
+                    f"builder: provenance of {name} not attached "
+                    f"({result.get('reason') or 'refused'})"
+                )
+        return found
 
     def build(self, entry: Mapping[str, Any], tail: deque[str]) -> dict[str, Any]:
         from piceli.artifacts.cluster_build import RECEIPT_MARKER, decode_receipt
@@ -368,17 +550,25 @@ class BuilderServe:
                 sources[name] = checkout
             receipt_line: list[str] = []
 
+            from piceli.dev.pod import health_signal
+
             def line(text: str) -> None:
                 if text.startswith(RECEIPT_MARKER):
                     receipt_line.append(text)
                     return
                 tail.append(text)
                 self.say(text)
+                signal = health_signal((text,)) if len(self.signals) < 8 else None
+                if signal is not None and all(
+                    item["kind"] != signal["kind"] for item in self.signals
+                ):
+                    self.signals.append(signal)
 
             code = self.container(job_argv(entry), sources, out, line)
             if code != 0 or not receipt_line:
                 raise BuildFailed(f"the build exited {code}", "\n".join(tail))
             receipt = decode_receipt(receipt_line[-1][len(RECEIPT_MARKER) :])
+            self.toolchains = dict(receipt.get("toolchains") or {})
             return self.deliver(entry, receipt, out)
 
     def deliver(
@@ -396,6 +586,13 @@ class BuilderServe:
                 }
                 for item in entry.get("components") or ()
             }  # fmt: skip
+        if _nodes(entry):
+            return self.deliver_nodes(entry, keys, archives, out)
+        if self.push is None or self.index is None:
+            raise BuildFailed(
+                "the controller delivers to its registry and this host has none "
+                "to push to (Registry.in_cluster(...))"
+            )
         by_repository = {item["repository"]: name for name, item in keys.items()}
         found: dict[str, dict[str, Any]] = {}
         per_platform: dict[str, dict[str, str]] = {}
@@ -428,6 +625,93 @@ class BuilderServe:
                 "pull_ref": pull_ref,
                 "manifest_digest": digest,
                 "platforms": dict(sorted(digests.items())),
+            }
+        return found
+
+    def deliver_nodes(
+        self,
+        entry: Mapping[str, Any],
+        keys: Mapping[str, Mapping[str, Any]],
+        archives: Sequence[Mapping[str, Any]],
+        out: Path,
+    ) -> dict[str, Any]:
+        """Import every image into every node the wanted build names, the
+        archive of each node's platform (0.22.0)."""
+        from piceli.infra.remote_builds import node_identity, node_reference
+
+        if self.node_import is None:
+            raise BuildFailed(
+                "the controller delivers into the nodes and this host knows no "
+                "node targets (Node(target=...))"
+            )
+        nodes = _nodes(entry)
+        found: dict[str, dict[str, Any]] = {}
+        for name, item in sorted(keys.items()):
+            repository = str(item["repository"])
+            by_platform = {
+                str(archive["platform"]): archive
+                for archive in archives
+                if str(archive["repository"]) == repository
+            }
+            if not by_platform:
+                raise BuildFailed(f"the build made no image {name}")
+            configs = {
+                platform: str(archive["image_id"])
+                for platform, archive in sorted(by_platform.items())
+            }
+            reference = node_reference(repository, configs)
+            receipts: dict[str, dict[str, Any]] = {}
+            for node, platform in sorted(nodes.items()):
+                archive = by_platform.get(platform)
+                if archive is None:
+                    raise BuildFailed(
+                        f"node {node} runs {platform}; the build made {name} for "
+                        f"{', '.join(sorted(by_platform))}"
+                    )
+                self.say(f"builder: importing {name} ({platform}) into node {node}")
+                try:
+                    receipt = dict(
+                        self.node_import(
+                            node, configs[platform], reference, out / archive["archive"]
+                        )
+                    )
+                except BuildFailed:
+                    raise
+                except Exception as error:  # a tool or target refused
+                    raise BuildFailed(
+                        f"import of {name} into node {node} failed: {error}"
+                    ) from None
+                image = receipt.get("image") or {}
+                if receipt.get("state") != "succeeded" or receipt.get("result") not in {
+                    "imported",
+                    "already-present",
+                }:
+                    raise BuildFailed(
+                        f"import of {name} into node {node} ended "
+                        f"{receipt.get('result') or receipt.get('state')} "
+                        f"({receipt.get('reason')})"
+                    )
+                if image.get("config_digest") != configs[platform]:
+                    raise BuildFailed(
+                        f"node {node} reports config {image.get('config_digest')} "
+                        f"for {name}, not {configs[platform]}"
+                    )
+                receipts[node] = {
+                    "platform": platform,
+                    "result": receipt.get("result"),
+                    "reference": image.get("reference"),
+                    "config_digest": image.get("config_digest"),
+                    "node_target_digest": image.get("node_target_digest"),
+                    "target": receipt.get("target"),
+                    "seconds": receipt.get("seconds"),
+                }
+            found[name] = {
+                "key": item["key"],
+                "delivery": "nodes",
+                "pull_ref": reference,
+                "manifest_digest": node_identity(configs),
+                "platforms": configs,
+                "nodes": receipts,
             }
         return found
 

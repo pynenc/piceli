@@ -110,3 +110,71 @@ def test_a_failed_install_says_why(
     assert "no such toolchain" in str(raised.value)
     assert not list((tmp_path / "cache" / "toolchains").glob("*.done"))
     assert json is not None
+
+
+# --------------------------------------------- 0.22: the profile's other tools
+
+
+def test_a_profile_pins_node_binaryen_and_wasm_bindgen() -> None:
+    from piceli.dev import jobs
+    from piceli.dev.model import DevBuilds, DevProfile
+    from piceli.infra.cluster import ClusterError
+
+    profile = DevProfile(
+        "web", toolchains={"wasm-bindgen": "shop/Cargo.lock", "node": "shop/.nvmrc"}
+    )
+    assert profile.toolchains == {
+        "node": "shop/.nvmrc",
+        "wasm-bindgen": "shop/Cargo.lock",
+    }
+    dev = DevBuilds(
+        node="builder-1",
+        image="ghcr.io/example/builder@sha256:" + "a" * 64,
+        profiles=[profile],
+    )
+    assert DevBuilds.from_dict(dev.describe()).profile("web").toolchains == (
+        profile.toolchains
+    )
+    job = jobs.run_job(
+        dev, dev.profile("web"), run="r1", spec={}, requester="me", priority="agent"
+    )
+    env = job["spec"]["template"]["spec"]["containers"][0]["env"]
+    spec = json.loads(next(e["value"] for e in env if e["name"] == "PICELI_DEV_SPEC"))
+    assert spec["toolchains"] == profile.toolchains
+    # Without pins the profile and the run spec are as before.
+    assert "toolchains" not in DevProfile("plain").describe()
+    for bad in ({"rust": "rust-toolchain.toml"}, {"node": "../.nvmrc"}, {"go": "1"}):
+        with pytest.raises(ClusterError):
+            DevProfile("web", toolchains=bad)
+
+
+def test_a_run_installs_the_profiles_tools_and_puts_them_first_on_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.dev import toolchains
+    from tests.unit.dev.test_pod import _archive, _run, _spec
+    from tests.unit.test_toolchains import releases
+
+    opener = releases()
+    monkeypatch.setattr(toolchains, "_open_url", opener)
+    monkeypatch.setattr(toolchains, "host_platform", lambda: ("linux", "amd64"))
+    data = _archive({"app/a.txt": "x", "app/.nvmrc": "24.11.0\n"})
+    spec = _spec(
+        data,
+        ["sh", "-c", "node; wasm-opt"],
+        toolchains={"node": "app/.nvmrc", "binaryen": "123"},
+        isolation_check=False,
+    )
+    result, lines = _run(tmp_path, data, spec)
+    assert result["state"] == "passed", result
+    assert "v24.11.0" in lines and "wasm-opt version 123" in lines
+    assert result["toolchain"]["node"]["version"] == "24.11.0"
+    assert result["toolchain"]["binaryen"]["installed"] is True
+    assert "[piceli-dev] installing node 24.11.0 (app/.nvmrc)" in lines
+    # A bad checksum is the run's reason.
+    monkeypatch.setattr(toolchains, "_open_url", releases(node_sha="0" * 64))
+    spec = _spec(
+        data, ["true"], toolchains={"node": "app/.nvmrc"}, isolation_check=False
+    )
+    result, _ = _run(tmp_path / "again", data, spec)
+    assert result["reason"] == "dev-toolchain-checksum"

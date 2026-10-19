@@ -133,6 +133,12 @@ noted.
   (exit 1), or `approval-required` with `plan_hash` (exit 3: ask the owner).
   Controller retries are waited through. Read-only; end an integration
   round with it instead of polling `gitops status` yourself.
+- `piceli gitops suspects --host NAME [--since ISO] [--json]` and `piceli
+  gitops hosts [--json]` (0.22.0): the deployed images a build host (or the
+  builder node) built, from the provenance the controller recorded, and the
+  health events and quarantine of each build host; read-only. When a host is
+  quarantined, report it and the suspects to the owner: never release it or
+  rebuild on your own.
 - `piceli explain`, `piceli help-json`; `piceli explain --run ID --spec …`
   reads why a past execution failed from local state (same as
   `release status --run`).
@@ -329,6 +335,9 @@ Exporting deploy events (`--otlp-endpoint`, or `OTEL_EXPORTER_OTLP_*` in the env
 | `piceli dev run` (0.18.0) | Creates one Job in `piceli-dev` that runs your build or test command on the builder node in the shared development cache (isolated: non-root, no token, no Secret, no cluster network); it is removed afterwards | Approved **once**: the owner's approval of `Cluster(dev=DevBuilds(...))` in `piceli cluster init` covers every run inside that declaration. After that, run it as often as you need, with the commits and commands of your task; never change the declaration or the profiles yourself. A failing command is `dev-command-failed` (exit 1): read `log_tail`, fix, run again; see {doc}`dev_builds` |
 | `piceli dev cache clear` (0.19.0) | Empties the development builds' cargo cache (every free lineage, one, or some crates); the next runs are cold | When a run reports `cache.suspect` or keeps failing on a cached artifact; prefer `--lineage` and `--crate` to clearing everything |
 | `piceli builder serve` (0.21.0) | Runs on a build host: reads the builds the GitOps controller waits for, claims one, builds it in the builder image on that host's container engine, pushes the images (and an OCI index) to the cluster registry through a port-forward and answers the controller | The owner's go-ahead to serve that cluster from that host; the deploy still needs the environment's usual approval. A failed build is answered as `build-failed` with its log tail: report it, do not retry blindly; see {doc}`gitops` |
+| `piceli gitops rebuild` (0.22.0) | Asks the controller to rebuild every deployed image a build host (or the builder node) built (`--since`: builds that ended later): it drops their cached builds and deploys each environment that runs one | The owner's go-ahead after `piceli gitops suspects --host NAME` showed the images; the deploys still need each environment's usual approval and checks |
+| `piceli gitops release-host` (0.22.0) | Asks the controller to forget a build host's or the builder node's health events: it claims and builds again | Only when the owner says the machine is fixed or innocent (a memory test passed); never to get a build through |
+| `piceli dev release-host` (0.22.0) | Clears a docker or native build host's health events: `dev run` and `builder serve` use it again | Same as `gitops release-host`: the owner's word that the machine is sound |
 | `piceli gitops cache clear` (0.19.0) | Asks the controller to empty the cluster build cache (or some crates); the next release builds are cold | When a release build keeps failing on a cached artifact; prefer `--crate` |
 | `piceli dev cancel` (0.18.0) | Deletes a queued or running development run's Job | Your own runs only (the id `dev run` printed), when you no longer need the result; never another requester's |
 | `piceli dev schedule` (0.18.0) | Runs the development-run queue in your process: starts queued runs, records finished ones, deletes their Jobs | Only when the owner asked (a cluster without the GitOps controller, which runs the queue itself) |

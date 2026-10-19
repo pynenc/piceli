@@ -26,7 +26,7 @@ server is a test double, not a conformance-tested API server (see
 
    ```python
    from piceli.testing import fake_cluster, manifest
-   from piceli.k8s.ops.discovery import ResourceIdentity
+   from piceli.k8s.ops import ResourceIdentity
 
 
    def test_settings_are_readable():

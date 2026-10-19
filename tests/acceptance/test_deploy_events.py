@@ -189,7 +189,9 @@ def test_dead_endpoint_does_not_fail_or_slow_the_deploy(shop, monkeypatch) -> No
 def test_slow_endpoint_is_bounded(shop, monkeypatch) -> None:
     _api, tmp_path = shop
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "300")
-    with receiver(delay=5) as (url, _requests):
+    # The endpoint answers after 30 s; the 0.3 s export timeout ends the
+    # deploy long before (a loaded runner needs a few seconds).
+    with receiver(delay=30) as (url, _requests):
         started = time.monotonic()
         code, events, result = deploy(
             tmp_path, "--auto-approve", "--otlp-endpoint", url
@@ -197,7 +199,7 @@ def test_slow_endpoint_is_bounded(shop, monkeypatch) -> None:
         elapsed = time.monotonic() - started
     assert code == 0 and events[-1]["state"] == "ready"
     assert "deploy-events-export-failed" in result.stderr
-    assert elapsed < 4.5
+    assert elapsed < 15
 
 
 def test_error_status_and_bad_configuration_only_warn(shop, monkeypatch) -> None:

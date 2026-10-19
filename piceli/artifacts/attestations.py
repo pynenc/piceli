@@ -204,8 +204,14 @@ def provenance(
     sources: Sequence[Mapping[str, Any]],
     started_at: str,
     finished_at: str,
+    toolchains: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """The in-toto / SLSA provenance statement of one image."""
+    """The in-toto / SLSA provenance statement of one image.
+
+    ``toolchains`` (0.22) is what provisioning reported per pinned tool: the
+    pins join the external parameters, the downloads (URL, sha256) the
+    resolved dependencies.
+    """
     spec = plan.spec
     dependencies: list[dict[str, Any]] = []
     for source in sources:
@@ -221,6 +227,12 @@ def provenance(
         dependencies.append(
             {"name": f"context:{name}", "digest": {"sha256": manifest.sha256[7:]}}
         )
+    pins: dict[str, Any] = {}
+    if plan.toolchains:
+        from piceli.artifacts.host_toolchains import provenance as toolchain_provenance
+
+        pins, downloads = toolchain_provenance(plan.toolchains, toolchains or {})
+        dependencies.extend(downloads)
     base = image.get("base")
     if isinstance(base, Mapping):
         dependencies.append(
@@ -245,6 +257,7 @@ def provenance(
                     "commands": [list(item) for item in plan.commands],
                     "env": dict(plan.env),
                     "source_date_epoch": spec.source_date_epoch,
+                    **({"toolchains": pins} if pins else {}),
                 },
                 "internalParameters": {
                     "node_facts": plan.facts.to_dict(),

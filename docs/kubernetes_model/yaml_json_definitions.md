@@ -35,21 +35,21 @@ This Service definition specifies a ClusterIP type service named test-service, w
 
 ## Integration with Piceli
 
-Load a folder of YAML or JSON files with `piceli.k8s.ops.loader` and put the
+Load a folder of YAML or JSON files with `piceli.k8s.ops.load_all` and put the
 objects into a composition with `component_from_objects`. The composition
 function is what `piceli render` and `piceli release` run:
 
 ```python
 from pathlib import Path
 
-from piceli.k8s.ops import loader
-from piceli.k8s.ops.plan import DeploymentComposition, component_from_objects
+from piceli.k8s.ops import load_all
+from piceli.k8s.ops import DeploymentComposition, component_from_objects
 
 MANIFESTS = Path(__file__).parent / "manifests"
 
 
 def build(ctx):
-    objects = loader.load_all(
+    objects = load_all(
         module_name="", module_path="", folder_path=str(MANIFESTS)
     )
     return DeploymentComposition((component_from_objects("app", objects),))
@@ -59,7 +59,7 @@ def build(ctx):
 piceli render infra.py:build --namespace my-app
 ```
 
-`loader.load_all` also accepts `module_name` (dotted import path) and
+`load_all` also accepts `module_name` (dotted import path) and
 `module_path` (a file or folder of Python modules), and loads every Piceli
 template and `kubernetes.client` object they define. `sub_elements=False`
 skips sub-folders and sub-modules. Key considerations:

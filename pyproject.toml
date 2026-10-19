@@ -1,6 +1,6 @@
 [project]
 name = "piceli"
-version = "0.21.1"
+version = "0.22.0"
 description = "Kubernetes infrastructure as typed Python: model, plan, apply and observe"
 authors = [{ name = "Jose Diaz" }]
 license = "MIT"
@@ -153,7 +153,9 @@ strict_equality = true
 [tool.pytest.ini_options]
 testpaths = ["tests/unit", "tests/acceptance"]
 log_cli = false
-timeout = 30
+# A hang guard, not a speed check: a starved CI runner took over 30 s to set
+# up a test with two Git repositories (setup counts too).
+timeout = 120
 markers = [
     "integration: needs a real disposable cluster (kind) via kubeconfig",
     "maintainer: needs the private companion workspace; skipped by default",

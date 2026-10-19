@@ -76,21 +76,102 @@ for _name, _base in _INVENTORIES.items():
 # -- Autodoc settings ---------------------------------------------------
 autodoc2_render_plugin = "myst"
 autodoc2_packages = [{"path": "../piceli"}]
-# The generated reference (329 module pages) is kept out of the global
-# toctree: Furo copies that tree into every page's sidebar, which made the
-# site 166 MB. docs/api.md links to it; the index is an orphan page.
+# Only the public modules (piceli/public_api.py); the rest is internal. A
+# public module documents what its ``__all__`` exports, so the modules those
+# names are defined in are documented too (piceli.infra's BuildHost comes from
+# piceli.dev.model).
+import importlib as _importlib  # noqa: E402
+
+from piceli.public_api import PUBLIC_MODULES  # noqa: E402
+
+
+def _documented() -> list[str]:
+    names = set(PUBLIC_MODULES)
+    for name in PUBLIC_MODULES:
+        module = _importlib.import_module(name)
+        for export in getattr(module, "__all__", ()):
+            home = getattr(getattr(module, export, None), "__module__", None) or ""
+            if home.startswith("piceli."):
+                names.add(home)
+    # autodoc2 does not look inside a skipped package: keep the parents too.
+    for name in list(names):
+        parts = name.split(".")
+        names.update(".".join(parts[:end]) for end in range(2, len(parts)))
+    return sorted(names)
+
+
+_DOCUMENTED = _documented()
+
+
+def _exact(names: list[str]) -> str:
+    return "^(?:" + "|".join(name.replace(".", r"\.") for name in names) + ")$"
+
+
+autodoc2_skip_module_regexes = ["^(?!" + _exact(_DOCUMENTED)[1:] + ")piceli\\..+"]
+# Only where ``__all__`` names are imported statically: autodoc2 reads the
+# source. A module that loads its exports lazily through a module
+# ``__getattr__`` (the piceli/_lazy.py facades, piceli.testing) has them
+# listed in the API index instead, linked to where they are defined.
+autodoc2_module_all_regexes = [
+    _exact(
+        [
+            name
+            for name in PUBLIC_MODULES
+            if hasattr(module := _importlib.import_module(name), "__all__")
+            and "__getattr__" not in vars(module)
+        ]
+    )
+]
+
+
+# The reference is kept out of the global toctree (Furo copies that tree into
+# every page's sidebar); docs/api.md links to its index, an orphan page that
+# lists every documented module.
+def _exports() -> str:
+    """Each public module's exports, linked to where they are documented."""
+    lines = []
+    for name in PUBLIC_MODULES:
+        module = _importlib.import_module(name)
+        exported = sorted(getattr(module, "__all__", ()))
+        if not exported:
+            continue
+        lines += [f"``{name}``", "^" * (len(name) + 4), ""]
+        for export in exported:
+            home = getattr(getattr(module, export, None), "__module__", None) or ""
+            if home in _DOCUMENTED:
+                lines.append(f"- :py:obj:`{export} <{home}.{export}>`")
+            else:
+                lines.append(f"- ``{export}``")
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
 autodoc2_index_template = (
     ":orphan:\n\n"
     "API Reference\n"
     "=============\n"
     "\n"
-    "Generated from the docstrings with sphinx-autodoc2.\n"
+    "The public modules (``piceli/public_api.py``), generated from the\n"
+    "docstrings. Import from these.\n"
     "\n"
     ".. toctree::\n"
     "   :titlesonly:\n"
-    "{% for package in top_level %}\n"
-    "   {{ package }}\n"
-    "{%- endfor %}\n"
+    "\n" + "".join(f"   piceli/{name}\n" for name in PUBLIC_MODULES) + "\n"
+    "What each public module exports\n"
+    "-------------------------------\n"
+    "\n" + _exports() + "\n"
+    "Where the names are defined\n"
+    "---------------------------\n"
+    "\n"
+    "Internal modules, which may move in any release: import from the public\n"
+    "modules above.\n"
+    "\n"
+    ".. toctree::\n"
+    "   :titlesonly:\n"
+    "\n"
+    + "".join(
+        f"   piceli/{name}\n" for name in _DOCUMENTED if name not in PUBLIC_MODULES
+    )
 )
 # Regex constants render as MyST link syntax and break the -W build.
 # Builtins such as `type`/`bytes` in annotations collide with same-named model

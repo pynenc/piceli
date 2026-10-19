@@ -4,6 +4,80 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.22.0
+
+- **The toolchain follows the source, for builds too.** A host build spec
+  declares its pins: `[build] toolchains = { rust = "app/rust-toolchain.toml",
+  node = "app/.nvmrc", wasm-bindgen = "app/Cargo.lock", binaryen = "123" }`
+  (paths relative to the stage root, or versions). Each tool is installed
+  once into `<cache>/toolchains` under a lock: Rust with rustup, node and
+  binaryen from their official tarballs checked against the published
+  sha256, wasm-bindgen-cli with `cargo install --locked` and the pinned
+  Rust. It works for local builds, the cluster build Job and `piceli
+  builder serve`. The pins bind the plan hash and the image change key (a
+  changed pin rebuilds); the receipt and the SLSA provenance record them.
+  `DevProfile(toolchains=...)` pins node, wasm-bindgen and binaryen for
+  development runs. New codes `host-toolchain-invalid`,
+  `host-toolchain-checksum`, `host-toolchain-failed`,
+  `dev-toolchain-checksum`.
+- **Where each image was built.** The controller records every image's
+  provenance (build host or node, builder image, commits, toolchains,
+  times) with the component: `piceli gitops status --json`, the history and
+  its image cache. `piceli builder serve` also pushes it as an in-toto OCI
+  1.1 referrer (`application/vnd.in-toto+json`); a registry that refuses
+  referrers only loses the copy.
+- **Faulty machines are quarantined.** Machine-health signs in a build or a
+  development run (internal compiler error, segfault, illegal instruction,
+  bus error, machine check, a corrupt or repaired cache) record a health
+  event for the host. After `quarantine_after` events within
+  `quarantine_window` (`BuildHost` and `Controller`, default 2 in 24 h) the
+  host is quarantined: `dev run` skips it, `builder serve` claims nothing,
+  the controller refuses its claims and does not fall back to a quarantined
+  builder node (`build-host-quarantined`). `piceli dev hosts` and `piceli
+  gitops hosts` show it; `piceli dev release-host` and `piceli gitops
+  release-host` end it.
+- **Suspect images.** `piceli gitops suspects --host NAME [--since ISO]`
+  lists the deployed images a machine built; `piceli gitops rebuild --host
+  NAME [--since]` drops their cached builds and redeploys them through the
+  usual plan, approval and checks.
+- **Verified caches.** Host builds re-hash cached blobs before reusing them;
+  a mismatch is discarded, rebuilt and counted against the build host.
+- **Delivery into the nodes, without a registry.**
+  `Controller(builds=("hosts",), delivery="nodes")` with
+  `Node(target="ssh://user@host?runtime=k3s-containerd")` on every node:
+  `piceli builder serve` imports each image into each node's containerd
+  over SSH (`ctr images import`, through the validating relay), the
+  platform of each node's architecture. Nodes know it by a content tag of
+  its config digests (`node.piceli.invalid/<repository>:sha256-…`). The
+  controller accepts the answer only when each node's import receipt shows
+  its platform's config digest; such a controller needs no registry.
+- **`piceli gitops run --local-build` builds every platform** and pushes
+  one OCI index per image.
+- **The builder image ships Rust 1.97.0 and lld.**
+- **One public API.** `piceli/public_api.py` lists the 13 modules code
+  imports from: `piceli`, `piceli.app`, `piceli.artifacts`, `piceli.checks`,
+  `piceli.envs`, `piceli.infra`, `piceli.k8s`, `piceli.k8s.ops`,
+  `piceli.k8s.release_spec`, `piceli.k8s.templates`, `piceli.pipeline`,
+  `piceli.server.cluster_install`, `piceli.testing`. `piceli.k8s`,
+  `piceli.k8s.ops`, `piceli.artifacts` and `piceli.infra` now also export
+  what the guides imported from internal modules (`DeploymentComposition`,
+  `PlanExecutor`, `load_all`, `DeliveryGrant`, `register_cluster`, ...),
+  loaded on first use, so importing them stays cheap. The old import paths
+  keep working. The API reference documents these modules (90 pages
+  instead of 329), and the eval harness checks their exports.
+- `dir(piceli.envs)` and `dir(piceli.pipeline)` list their lazily loaded
+  names.
+- Reliable tests: seven tests that failed on busy CI runners are fixed
+  (wall-clock bounds, leases and fakes that assumed an idle machine). A
+  nightly `Stress` workflow runs the suites on twice as many workers as
+  cores (`make test-stress` locally), and a test rejects elapsed-time
+  bounds under 1 s. The kind shards also run on pushes to main.
+- **The build queue reaches the current build.** `builds_wanted` drops
+  what no step waits for any more (a superseded commit, an environment that
+  moved on, leftovers of an older controller after three polls); a failed
+  build shows `failed` with its tail and is not offered again until its
+  inputs change or `piceli gitops sync` retries it; a host never rebuilds
+  what it just delivered while the controller still lists it.
 ## Version 0.21.1
 
 - **`piceli builder serve` builds specs with inputs.** Each source is

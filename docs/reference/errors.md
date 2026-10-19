@@ -64,6 +64,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`blob-source-truncated`](#error-blob-source-truncated) | artifacts-registry | yes |
 | [`build-builder-mismatch`](#error-build-builder-mismatch) | host-build | no |
 | [`build-failed`](#error-build-failed) | build-spec | no |
+| [`build-host-quarantined`](#error-build-host-quarantined) | composition | yes |
 | [`build-platforms-invalid`](#error-build-platforms-invalid) | host-build | no |
 | [`build-timed-out`](#error-build-timed-out) | build-spec | yes |
 | [`builder-not-approved`](#error-builder-not-approved) | build-spec | no |
@@ -204,6 +205,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`dev-run-unknown`](#error-dev-run-unknown) | dev | no |
 | [`dev-source-invalid`](#error-dev-source-invalid) | dev | no |
 | [`dev-tool-missing`](#error-dev-tool-missing) | dev | no |
+| [`dev-toolchain-checksum`](#error-dev-toolchain-checksum) | dev | yes |
 | [`dev-toolchain-failed`](#error-dev-toolchain-failed) | dev | no |
 | [`dev-toolchain-invalid`](#error-dev-toolchain-invalid) | dev | no |
 | [`dev-upload-failed`](#error-dev-upload-failed) | dev | yes |
@@ -317,6 +319,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`host-build-invalid`](#error-host-build-invalid) | host-build | no |
 | [`host-output-missing`](#error-host-output-missing) | host-build | no |
 | [`host-tool-missing`](#error-host-tool-missing) | host-build | no |
+| [`host-toolchain-checksum`](#error-host-toolchain-checksum) | host-build | yes |
+| [`host-toolchain-failed`](#error-host-toolchain-failed) | host-build | yes |
+| [`host-toolchain-invalid`](#error-host-toolchain-invalid) | host-build | no |
 | [`identity-mismatch`](#error-identity-mismatch) | kubernetes | no |
 | [`image-declared-twice`](#error-image-declared-twice) | images | no |
 | [`image-digest-mismatch`](#error-image-digest-mismatch) | images | no |
@@ -4529,6 +4534,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Install the tool or put it on `PATH` (for example `nix shell nixpkgs#zig nixpkgs#cargo-zigbuild`), then plan again.
 - **Retry-safe:** no
 
+(error-host-toolchain-checksum)=
+### `host-toolchain-checksum`
+
+**Toolchain download does not match its checksum.** A node or binaryen tarball downloaded for `build.toolchains` does not match the sha256 its release publishes (`SHASUMS256.txt`, the `.sha256` file): a corrupted download, a proxy rewriting it, or a changed release. Nothing was installed. The message names the file and both digests.
+
+- **Fix:** Run the build again; when it fails the same way, check the network path to nodejs.org and github.com.
+- **Retry-safe:** yes
+
+(error-host-toolchain-failed)=
+### `host-toolchain-failed`
+
+**Toolchain install failed.** Piceli could not install a tool `build.toolchains` pins into the build cache: `rustup` or `cargo` is not on PATH, the download failed (no network, an unknown version, no build for this machine), or `rustup toolchain install` or `cargo install wasm-bindgen-cli` failed. The message has the version and the installer's last lines.
+
+- **Fix:** Check the version exists for this machine (`linux`/`darwin`, `amd64`/`arm64`); the build needs public HTTPS to install a toolchain once. Put `rustup` next to `cargo` on PATH.
+- **Retry-safe:** yes
+
+(error-host-toolchain-invalid)=
+### `host-toolchain-invalid`
+
+**Toolchain pin unreadable.** A pin of `build.toolchains` cannot be read: the path is not a file a declared context includes (paths are relative to the stage root, `<context>/<file>`), the `rust-toolchain.toml` is not valid TOML or names a channel, target or component that is not a plain name, the `.nvmrc` holds no exact version (an alias or a major alone is not reproducible), or the `Cargo.lock` pins no single `wasm-bindgen` version. The message names the file.
+
+- **Fix:** Fix the file or the path; add the file to its context's `include`. Versions are exact: node `24.11.0`, binaryen `123`, wasm-bindgen `0.2.114`.
+- **Retry-safe:** no
+
 (error-node-facts-unavailable)=
 ### `node-facts-unavailable`
 
@@ -5007,10 +5036,18 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Use an image with the tool or remove it from the profile.
 - **Retry-safe:** no
 
+(error-dev-toolchain-checksum)=
+### `dev-toolchain-checksum`
+
+**Toolchain download does not match its checksum.** A node or binaryen tarball the profile pins (`DevProfile(toolchains=...)`, 0.22.0) does not match the sha256 its release publishes. Nothing was installed. The message names the file and both digests.
+
+- **Fix:** Run again; when it fails the same way, check the network path to nodejs.org and github.com.
+- **Retry-safe:** yes
+
 (error-dev-toolchain-failed)=
 ### `dev-toolchain-failed`
 
-**Toolchain install failed.** rustup could not install the toolchain the source pins into the cache (0.20.0): no network (a profile with `network="none"`), an unknown channel or a target or component that does not exist for it. The message has rustup's last lines.
+**Toolchain install failed.** rustup could not install the toolchain the source pins into the cache (0.20.0): no network (a profile with `network="none"`), an unknown channel or a target or component that does not exist for it; or a tool of `DevProfile(toolchains=...)` could not be downloaded or built (0.22.0). The message has the installer's last lines.
 
 - **Fix:** Check the pin's channel, targets and components; runs need public HTTPS to install a toolchain once.
 - **Retry-safe:** no
@@ -5018,7 +5055,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-dev-toolchain-invalid)=
 ### `dev-toolchain-invalid`
 
-**Toolchain pin unreadable.** The source's `rust-toolchain.toml` (or `rust-toolchain`) is not valid TOML, or its channel, targets or components are not plain names (0.20.0). The message names the file.
+**Toolchain pin unreadable.** The source's `rust-toolchain.toml` (or `rust-toolchain`) is not valid TOML, or its channel, targets or components are not plain names (0.20.0); or a pin of `DevProfile(toolchains=...)` cannot be read (0.22.0: no such file in the tree, no exact node version, no single `wasm-bindgen` in the `Cargo.lock`). The message names the file.
 
 - **Fix:** Fix the file; `channel` is a version (1.97.0), `stable`, `beta` or `nightly-YYYY-MM-DD`.
 - **Retry-safe:** no
@@ -5651,6 +5688,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 
 ## Compositions: sources, component contracts (`piceli.toml`) and change-aware builds (`piceli.infra`, `piceli gitops enable infra.py`)
+
+(error-build-host-quarantined)=
+### `build-host-quarantined`
+
+**Builder node quarantined.** The GitOps controller builds nothing on its cluster builder node: the node is quarantined (0.22.0) after repeated machine-health signs in failed builds (an internal compiler error, a segfault, an illegal instruction, a machine check). The message names the node, the events and since when.
+
+- **Fix:** Check the node's hardware (memory test, `dmesg` for machine checks), or build on hosts (`Controller(builds=("hosts", ...))`). `piceli gitops release-host NODE` ends the quarantine; `piceli gitops suspects --host NODE` lists the images it built.
+- **Retry-safe:** yes
 
 (error-component-build-failed)=
 ### `component-build-failed`

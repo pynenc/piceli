@@ -78,7 +78,8 @@ runs need no hash of their own.
 `tools` (checked before the command runs: `dev-tool-missing`), `env`,
 `prefetch="cargo"` (`cargo fetch --locked` first, so `--offline` commands
 find their crates), `toolchain` (the command whose output keys the cache,
-default `rustc --version`), `cpu`, `memory`, `timeout`.
+default `rustc --version`), `cpu`, `memory`, `timeout`, `toolchains`
+(node, wasm-bindgen and binaryen pins; see below).
 
 ## Build hosts
 
@@ -138,6 +139,57 @@ capabilities, `no-new-privileges`, a PID limit and the profile's memory
 registry secret is mounted (the source fetch then only reaches public
 remotes; private ones travel as bundles from the client).
 
+### Faulty hosts: health events and quarantine (0.22.0)
+
+A machine with bad memory or a failing CPU keeps building, but its builds
+fail in odd ways or, worse, pass with a corrupt artifact. When a run on a
+docker or native host fails with a sign that points at the machine rather
+than the code, or its cache had to be repaired, `piceli dev run` records a
+**health event** for that host:
+
+| Kind | Output that counts |
+| --- | --- |
+| `internal-compiler-error` | `internal compiler error`, `thread 'rustc' panicked` |
+| `segfault` | `Segmentation fault`, `SIGSEGV`, `signal: 11` |
+| `illegal-instruction` | `Illegal instruction`, `SIGILL`, `signal: 4` |
+| `bus-error` | `Bus error`, `SIGBUS`, `signal: 7` |
+| `machine-check` | `mce:`, `Machine check`, `Hardware Error` |
+| `link-symbol` | `undefined symbol`, `undefined hidden symbol`: only when the cache was repaired (alone it is usually the code's own error) |
+| `cache-*` | a repaired cache (`cache-link`, `cache-loader`, ...), or a cached blob whose bytes no longer match their digest (`cache-corrupt`) |
+
+The result says so (`health: {"kind", "line", "repaired"}`) and stderr
+names the host. After `quarantine_after` events within `quarantine_window`
+(default **2 in 24 hours**) the host is **quarantined**: `piceli dev run`
+skips it as if it were down and prints why (`--host NAME` on it is refused
+with `dev-host-unavailable`), and `piceli builder serve` on it claims no
+GitOps builds. `piceli dev hosts` shows the state and the reason:
+
+```text
+mini         docker   up, linux/amd64; 0/3 busy, 0 waiting
+             QUARANTINED: 2 health events within 24h (segfault); last 2026-10-18T09:12:40Z: collect2: fatal error: ld terminated with signal 11 [Segmentation fault] (piceli dev release-host mini)
+```
+
+Once the machine is fixed (or a memory test found nothing), clear its
+events:
+
+```sh
+piceli dev release-host mini --cluster infra.py:k_lab
+```
+
+The events live **with the host**, so they hold with the cluster down and
+every client of the host sees the same ones: on a docker host one empty,
+labelled volume per event (`piceli-health-mini-...`, created and listed
+with the engine's CLI, locally or over `ssh://`), on a native host
+`health.json` in its `state_dir`. The policy is per host:
+
+```python
+BuildHost.docker("mini", context="ssh://me@mini", quarantine_after=3, quarantine_window="12h")
+BuildHost.native("macos", quarantine_after=None)   # never quarantined
+```
+
+The in-cluster builder node's health is the GitOps controller's: see
+{doc}`gitops` (`piceli gitops hosts`, `piceli gitops release-host`).
+
 ### The toolchain the source pins
 
 When the source has a `rust-toolchain.toml` (or a legacy `rust-toolchain`)
@@ -155,6 +207,22 @@ native host's own rustup reads the file itself.
 channel = "1.97.0"
 targets = ["wasm32-unknown-unknown"]
 components = ["clippy", "rustfmt"]
+```
+
+A profile can pin node, wasm-bindgen and binaryen the same way a host build
+does ({doc}`host_builds`, "The toolchain the source pins"): paths relative
+to the run's tree root, or versions. Each is installed once into the cache
+(node and binaryen from their official tarballs, checked against the
+published sha256; wasm-bindgen-cli with `cargo install --locked` and the
+pinned Rust) and its `bin` directory comes first on the command's `PATH`.
+The result's `toolchain` lists each one. Rust always follows the source's
+own `rust-toolchain.toml`.
+
+```python
+DevProfile(
+    "web",
+    toolchains={"node": "shop/.nvmrc", "wasm-bindgen": "shop/Cargo.lock", "binaryen": "123"},
+)
 ```
 
 ## Run
@@ -527,7 +595,8 @@ its `tests`, `durations` and `log_tail`.
 | `dev-run-invalid` | No command, a bad priority, `--cwd` or `--node` | Fix the argument |
 | `dev-host-unavailable` | No declared build host could take the run (engine down, ssh unreachable, builder cordoned); the message names each | `piceli dev hosts`; start the engine or pass `--host` |
 | `dev-host-unknown` | `--host` names an undeclared host | Use one from `piceli dev hosts` |
-| `dev-toolchain-invalid` | The source's `rust-toolchain.toml` cannot be read | Fix the file the message names |
-| `dev-toolchain-failed` | rustup could not install the pinned toolchain | Check channel, targets, components; runs need public HTTPS once |
+| `dev-toolchain-invalid` | The source's `rust-toolchain.toml` or a profile's pin cannot be read | Fix the file the message names |
+| `dev-toolchain-failed` | rustup (or a profile's tool) could not be installed | Check channel, targets, components or the version; runs need public HTTPS once |
+| `dev-toolchain-checksum` | A profile's toolchain download does not match its published sha256 | Run again; check the network path |
 | `dev-run-unknown` | No such run queued, running or recorded | `piceli dev status` |
 | `dev-not-enabled` | No `DevBuilds` installed on the cluster | Ask the owner to declare it and run `cluster init` |

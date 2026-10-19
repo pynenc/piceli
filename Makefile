@@ -24,6 +24,10 @@ typecheck: ## Run mypy
 test: ## Unit + acceptance tests in parallel (no cluster needed)
 	uv run pytest -n auto
 
+.PHONY: test-stress
+test-stress: ## Unit + acceptance three times on twice as many workers as cores (finds timing flakes)
+	uv run python scripts/test_stress.py
+
 .PHONY: test-unit
 test-unit: ## Unit tests only
 	uv run pytest -n auto tests/unit

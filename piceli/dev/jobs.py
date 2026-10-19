@@ -52,15 +52,26 @@ def wrapper_source() -> str:
     """The stdlib-only wrapper the run's pod executes (:mod:`piceli.dev.pod`),
     as a ``python3 -c`` program: compressed (0.20.0), so the one argument
     stays far below Linux's 128 KiB limit for a single argument
-    (``MAX_ARG_STRLEN``) however the wrapper grows, and the Job is small."""
+    (``MAX_ARG_STRLEN``) however the wrapper grows, and the Job is small.
+
+    0.22: :mod:`piceli.dev.toolchains` travels with it, registered as the
+    module ``piceli_dev_toolchains`` before the wrapper runs."""
     import base64
     import zlib
 
-    raw = (Path(__file__).with_name("pod.py")).read_bytes()
-    blob = base64.b64encode(zlib.compress(raw, 9)).decode("ascii")
+    def packed(name: str) -> str:
+        raw = (Path(__file__).with_name(name)).read_bytes()
+        return base64.b64encode(zlib.compress(raw, 9)).decode("ascii")
+
     return (
-        "import base64,zlib;exec(compile(zlib.decompress(base64.b64decode("
-        f"'{blob}')),'piceli-dev-wrapper','exec'))"
+        "import base64,sys,types,zlib\n"
+        "def _unpack(blob):\n"
+        " return zlib.decompress(base64.b64decode(blob))\n"
+        "_m=types.ModuleType('piceli_dev_toolchains')\n"
+        "sys.modules['piceli_dev_toolchains']=_m\n"
+        f"exec(compile(_unpack('{packed('toolchains.py')}'),"
+        "'piceli-dev-toolchains','exec'),_m.__dict__)\n"
+        f"exec(compile(_unpack('{packed('pod.py')}'),'piceli-dev-wrapper','exec'))"
     )
 
 
@@ -216,6 +227,7 @@ def run_job(
         if profile.toolchain is None
         else list(profile.toolchain),
         "tools": list(profile.tools),
+        **({"toolchains": dict(profile.toolchains)} if profile.toolchains else {}),
         "artifacts": [],
         # No code from the repository runs until the API server is cut off.
         "isolation_check": True,

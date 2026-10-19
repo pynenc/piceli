@@ -288,7 +288,19 @@ def run(
         return
     if node is not None and node != dev.node:
         reject("dev-run-invalid", f"--node {node}: runs go to the builder {dev.node}")
-    from piceli.dev.hosts import UNAVAILABLE, candidates, probe
+    from piceli.dev.hosts import UNAVAILABLE, HostState, candidates, probe
+
+    probed: list[HostState] = []
+
+    def probe_one(item: Any) -> HostState:
+        state = probe(
+            item,
+            cluster_up=lambda: _cluster_up(
+                declared, item.node, transport, allow_exec, exec_sha256
+            ),
+        )
+        probed.append(state)
+        return state
 
     try:
         states = candidates(
@@ -298,15 +310,16 @@ def run(
                 node and next((h.name for h in dev.hosts if h.kind == "cluster"), None)
             ),
             platform=platform,
-            probe=lambda item: probe(
-                item,
-                cluster_up=lambda: _cluster_up(
-                    declared, item.node, transport, allow_exec, exec_sha256
-                ),
-            ),
+            probe=probe_one,
         )
     except DevError as error:
         reject(error.code, str(error))
+    for skipped in probed:
+        if skipped.up and skipped.quarantined is not None:
+            say(
+                f"piceli: skipping build host {skipped.host.name}: quarantined: "
+                f"{skipped.quarantined} (piceli dev release-host {skipped.host.name})"
+            )
     result = {}
     for index, state in enumerate(states):
         chosen = state.host
@@ -342,6 +355,7 @@ def run(
                 )  # fmt: skip
         except DevError as error:
             reject(error.code, str(error))
+        _record_health(chosen, result)
         if result.get("reason") == UNAVAILABLE and index + 1 < len(states):
             # 0.20: the host went down between the check and the run.
             say(
@@ -350,6 +364,30 @@ def run(
             continue
         break
     _finish_run(result, quiet, as_json)
+
+
+def _record_health(chosen: Any, result: dict[str, Any]) -> None:
+    """0.22: a run that showed a machine-health signature records an event on
+    its docker or native host; the host may now be quarantined."""
+    signal = result.get("health")
+    if not isinstance(signal, dict) or chosen.kind == "cluster":
+        return
+    from piceli.dev.health import Health, describe_quarantine
+    from piceli.dev.model import DevError
+
+    try:
+        health = Health.of(chosen)
+        found = None if health is None else health.record(signal, "dev-run")
+    except (DevError, OSError) as error:
+        say(f"piceli: the health event of {chosen.name} was not recorded ({error})")
+        return
+    say(
+        f"piceli: health event on build host {chosen.name}: {signal.get('kind')}"
+        + (f" ({signal.get('line')})" if signal.get("line") else "")
+    )
+    if found is not None:
+        result["host_quarantined"] = found
+        say(f"piceli: {describe_quarantine(chosen.name, found)}")
 
 
 def _finish_run(result: dict[str, Any], quiet: bool, as_json: bool) -> None:
@@ -502,11 +540,64 @@ def hosts(
                 else f"down: {state.detail}"
             )
         )
+        health = state.health or {}
+        if state.quarantined is not None:
+            say(
+                f"{'':<12} QUARANTINED: {state.quarantined} "
+                f"(piceli dev release-host {state.host.name})"
+            )
+        elif health.get("recent"):
+            say(
+                f"{'':<12} {health['recent']} health event(s) within the window "
+                f"(quarantined at {(health.get('policy') or {}).get('after')})"
+            )
     if as_json:
         emit_json(
             {
                 "schema": "piceli.dev-hosts.v1",
                 "hosts": [state.describe() for state in states],
+            }
+        )
+
+
+@app.command("release-host")
+def release_host(
+    name: Annotated[str, typer.Argument(help="The declared docker or native host")],
+    cluster: ClusterOption,
+    as_json: JsonOption = False,
+) -> None:
+    """Clear a build host's health events: it is no longer quarantined (0.22.0)."""
+    from piceli.dev.health import Health
+    from piceli.dev.model import DevError
+
+    declared = load_cluster(cluster)
+    dev = declared.dev
+    chosen = dev.host(name) if dev is not None else None
+    if chosen is None:
+        reject("dev-host-unknown", f"no build host {name!r} is declared")
+    if chosen.kind == "cluster":
+        reject(
+            "dev-host-unknown",
+            f"{name} is the cluster's builder node: its health is the GitOps "
+            f"controller's (piceli gitops release-host {chosen.node})",
+        )
+    try:
+        health = Health.of(chosen)
+        before = None if health is None else health.quarantined()
+        cleared = 0 if health is None else health.release()
+    except (DevError, OSError) as error:
+        reject("dev-host-unavailable", f"build host {name}: {error}")
+    say(
+        f"build host {name}: {cleared} health event(s) cleared"
+        + ("; no longer quarantined" if before is not None else "")
+    )
+    if as_json:
+        emit_json(
+            {
+                "schema": "piceli.dev-host-release.v1",
+                "host": name,
+                "cleared": cleared,
+                "was_quarantined": before is not None,
             }
         )
 

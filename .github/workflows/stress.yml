@@ -1,0 +1,38 @@
+name: Stress
+
+# Nightly and manual: the unit and acceptance suites three times on twice as
+# many workers as cores (scripts/test_stress.py), on the oldest and newest
+# Python. A timing-dependent test fails here before it blocks a release.
+on:
+  schedule:
+    - cron: "47 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  UV_FROZEN: "1"
+
+jobs:
+  stress:
+    name: stress (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-extras --python ${{ matrix.python }}
+      - name: Install sops (the reference app's SOPS source)
+        run: |
+          curl -sSfL -o /tmp/sops https://github.com/getsops/sops/releases/download/v3.10.2/sops-v3.10.2.linux.amd64
+          echo "79b0f844237bd4b0446e4dc884dbc1765fc7dedc3968f743d5949c6f2e701739  /tmp/sops" | sha256sum -c -
+          sudo install -m 0755 /tmp/sops /usr/local/bin/sops
+      - run: python3 scripts/test_stress.py --rounds 3

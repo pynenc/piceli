@@ -115,7 +115,7 @@ Registering a provisioned machine from Python does the same as `piceli
 login` plus `piceli secrets cluster`:
 
 ```python
-from piceli.infra.multicluster import register_cluster
+from piceli.infra import register_cluster
 
 register_cluster(edge_b, kubeconfig=Path("edge-b.yaml"), context="default", home=home)
 ```

@@ -258,7 +258,18 @@ def test_old_free_lineages_are_evicted_over_the_cache_size(tmp_path: Path) -> No
 
 def test_the_wrapper_imports_nothing_but_the_standard_library() -> None:
     source = Path(pod.__file__).read_text()
+    # 0.22: one exception, the shared toolchain module the wrapper bundles.
+    bundled = (
+        "try:  # in a pod: the wrapper bundles it under this name (jobs.wrapper_source)\n"
+        "    import piceli_dev_toolchains as toolchains  # type: ignore[import-not-found]\n"
+        "except ImportError:\n"
+        "    from piceli.dev import toolchains\n"
+    )
+    assert source.count(bundled) == 1
+    source = source.replace(bundled, "")
     assert "import piceli" not in source and "from piceli" not in source
+    shared = Path(pod.__file__).with_name("toolchains.py").read_text()
+    assert "import piceli" not in shared and "from piceli" not in shared
     # Shipped as one compressed `python3 -c` argument (Linux caps one
     # argument at 128 KiB); the source itself may grow.
     from piceli.dev.jobs import wrapper_source

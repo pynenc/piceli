@@ -13,8 +13,9 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
+from piceli._lazy import lazy_exports
 from piceli.dev.model import BuildHost, DevBuilds, DevProfile
 from piceli.pipeline.errors import PipelineError
 from piceli.pipeline.model import Registry
@@ -56,16 +57,26 @@ __all__ = [
     "Source",
     "Ssh",
     "Ui",
+    "register_cluster",
 ]
 
 
 @dataclass(frozen=True)
 class Node:
-    """A cluster node; each role becomes the label ``piceli.io/role-<role>=true``."""
+    """A cluster node; each role becomes the label ``piceli.io/role-<role>=true``.
+
+    ``target`` (0.22.0) is where a build host imports images into the
+    node's containerd with ``ctr images import`` when the controller
+    delivers into the nodes (``Controller(delivery="nodes")``):
+    ``ssh://[user@]host[:port]?runtime=containerd|k3s-containerd`` (also
+    ``namespace=`` and ``sudo=``, as for ``NodeImport``), or
+    ``docker://<container>?runtime=containerd`` for a kind node.
+    """
 
     name: str
     arch: Literal["amd64", "arm64"]
     roles: tuple[str, ...] = ()
+    target: str | None = None
 
     def __post_init__(self) -> None:
         from piceli.infra.cluster import as_tuple, check_node
@@ -163,6 +174,18 @@ class Controller:
     running ``piceli builder serve`` takes the build the controller
     publishes). ``("hosts", "cluster")`` waits ``host_wait`` for a host,
     then builds in the cluster.
+
+    ``delivery`` (0.22.0) is how build hosts deliver what they build:
+    ``"registry"`` (the default) pushes to the cluster's in-cluster
+    registry; ``"nodes"`` imports each image straight into every declared
+    node (``Node(target=...)``) over SSH with ``ctr images import``, the
+    platform of each node's architecture, with no registry involved.
+    ``quarantine_after`` health events of a build host or of the builder
+    node within ``quarantine_window`` (0.22.0; a crashed compiler, a
+    segfault, a machine check in a failed build's output, see
+    :mod:`piceli.dev.health`) quarantine it: the controller refuses its
+    build claims, or builds nothing on the node, until ``piceli gitops
+    release-host NAME``. ``None``: never quarantined.
     """
 
     on: str
@@ -173,6 +196,9 @@ class Controller:
     telemetry: Otlp | None = None
     builds: Sequence[str] = ("cluster",)
     host_wait: str = "30m"
+    delivery: Literal["registry", "nodes"] = "registry"
+    quarantine_after: int | None = 2
+    quarantine_window: str = "24h"
 
     def __post_init__(self) -> None:
         from piceli.infra.cluster import check_controller
@@ -364,3 +390,13 @@ from piceli.infra.machines import (  # noqa: E402
     Server,
     Ssh,
 )
+
+# Loaded on first use (piceli/_lazy.py): importing the facade stays cheap and
+# loads no Kubernetes client.
+_LAZY = {
+    "register_cluster": "piceli.infra.multicluster",
+}
+__getattr__, __dir__ = lazy_exports(__name__, _LAZY, globals())
+
+if TYPE_CHECKING:
+    from piceli.infra.multicluster import register_cluster

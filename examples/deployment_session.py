@@ -1,12 +1,12 @@
 """Provider-free session construction; execution is deliberately separate."""
 
-from piceli.k8s.ops.plan import (
+from piceli.k8s.ops import (
     DeploymentComponent,
     DeploymentComposition,
+    DeploymentSession,
     PlanAuthorization,
     ResourceIntent,
 )
-from piceli.k8s.ops.session import DeploymentSession
 
 
 def composition(inputs):

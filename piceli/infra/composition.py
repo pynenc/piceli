@@ -48,7 +48,7 @@ from piceli.envs.model import (
     Stack,
     Tag,
 )
-from piceli.infra import Cluster, Component, CompositionError, Source
+from piceli.infra import Cluster, Component, CompositionError, Node, Source
 
 COMPOSITION_SCHEMA = "piceli.composition.v1"
 _LABEL = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
@@ -562,6 +562,20 @@ def _cluster_dict(cluster: Cluster, *, remote: bool = False) -> dict[str, Any]:
             "builds": list(controller.builds),
             "host_wait": controller.host_wait,
         }
+        if controller.delivery == "nodes":
+            # 0.22.0: the nodes build hosts import into, with their
+            # architecture; the targets without their SSH user.
+            from piceli.infra.cluster import node_target_identity
+
+            body["controller"]["delivery"] = "nodes"
+            body["nodes"] = [
+                {
+                    "name": node.name,
+                    "arch": node.arch,
+                    "target": node_target_identity(str(node.target)),
+                }
+                for node in cluster.nodes
+            ]
     return body
 
 
@@ -595,11 +609,17 @@ def _cluster_from(value: Any) -> Cluster | None:
             on=found_controller["on"],
             builds=tuple(found_controller.get("builds") or ("cluster",)),
             host_wait=str(found_controller.get("host_wait") or "30m"),
+            delivery=found_controller.get("delivery") or "registry",
         )
+    nodes = tuple(
+        Node(item["name"], arch=item["arch"], target=item.get("target"))
+        for item in value.get("nodes") or ()
+    )
     return Cluster(
         name=value["name"],
         api=value["api"],
         credentials=IN_CLUSTER_CONTEXT,
+        nodes=nodes,
         registry=registry,
         controller=controller,
     )

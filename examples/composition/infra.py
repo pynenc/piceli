@@ -31,7 +31,7 @@ import os
 
 from piceli.envs import Branches, Environment, Stack, Tag
 from piceli.infra import Cluster, Component, Controller, Source
-from piceli.pipeline.model import Registry
+from piceli.pipeline import Registry
 
 REGISTRY_NODE = os.environ.get("COMPOSITION_REGISTRY_NODE", "my-cluster-worker")
 BRANCH_NODE = os.environ.get("COMPOSITION_BRANCH_NODE", "my-cluster-worker2")

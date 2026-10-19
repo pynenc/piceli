@@ -3785,6 +3785,31 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         False,
         "host-build",
     ),
+    # --- 0.22.0 toolchains the source pins ---
+    _E(
+        "host-toolchain-invalid",
+        "Toolchain pin unreadable",
+        "A pin of `build.toolchains` cannot be read: the path is not a file a declared context includes (paths are relative to the stage root, `<context>/<file>`), the `rust-toolchain.toml` is not valid TOML or names a channel, target or component that is not a plain name, the `.nvmrc` holds no exact version (an alias or a major alone is not reproducible), or the `Cargo.lock` pins no single `wasm-bindgen` version. The message names the file.",
+        "Fix the file or the path; add the file to its context's `include`. Versions are exact: node `24.11.0`, binaryen `123`, wasm-bindgen `0.2.114`.",
+        False,
+        "host-build",
+    ),
+    _E(
+        "host-toolchain-checksum",
+        "Toolchain download does not match its checksum",
+        "A node or binaryen tarball downloaded for `build.toolchains` does not match the sha256 its release publishes (`SHASUMS256.txt`, the `.sha256` file): a corrupted download, a proxy rewriting it, or a changed release. Nothing was installed. The message names the file and both digests.",
+        "Run the build again; when it fails the same way, check the network path to nodejs.org and github.com.",
+        True,
+        "host-build",
+    ),
+    _E(
+        "host-toolchain-failed",
+        "Toolchain install failed",
+        "Piceli could not install a tool `build.toolchains` pins into the build cache: `rustup` or `cargo` is not on PATH, the download failed (no network, an unknown version, no build for this machine), or `rustup toolchain install` or `cargo install wasm-bindgen-cli` failed. The message has the version and the installer's last lines.",
+        "Check the version exists for this machine (`linux`/`darwin`, `amd64`/`arm64`); the build needs public HTTPS to install a toolchain once. Put `rustup` next to `cargo` on PATH.",
+        True,
+        "host-build",
+    ),
     _E(
         "publish-invalid",
         "Invalid publish request",
@@ -4965,6 +4990,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "composition",
     ),
     _E(
+        "build-host-quarantined",
+        "Builder node quarantined",
+        "The GitOps controller builds nothing on its cluster builder node: the node is quarantined (0.22.0) after repeated machine-health signs in failed builds (an internal compiler error, a segfault, an illegal instruction, a machine check). The message names the node, the events and since when.",
+        'Check the node\'s hardware (memory test, `dmesg` for machine checks), or build on hosts (`Controller(builds=("hosts", ...))`). `piceli gitops release-host NODE` ends the quarantine; `piceli gitops suspects --host NODE` lists the images it built.',
+        True,
+        "composition",
+    ),
+    _E(
         "composition-ref-unresolved",
         "Environment ref not found",
         "An environment's `follow` names a branch or tag pattern that the source does not have (yet), so the environment has no commit for that source and is not deployed.",
@@ -5584,7 +5617,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "dev-toolchain-invalid",
         "Toolchain pin unreadable",
-        "The source's `rust-toolchain.toml` (or `rust-toolchain`) is not valid TOML, or its channel, targets or components are not plain names (0.20.0). The message names the file.",
+        "The source's `rust-toolchain.toml` (or `rust-toolchain`) is not valid TOML, or its channel, targets or components are not plain names (0.20.0); or a pin of `DevProfile(toolchains=...)` cannot be read (0.22.0: no such file in the tree, no exact node version, no single `wasm-bindgen` in the `Cargo.lock`). The message names the file.",
         "Fix the file; `channel` is a version (1.97.0), `stable`, `beta` or `nightly-YYYY-MM-DD`.",
         False,
         "dev",
@@ -5592,9 +5625,17 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "dev-toolchain-failed",
         "Toolchain install failed",
-        'rustup could not install the toolchain the source pins into the cache (0.20.0): no network (a profile with `network="none"`), an unknown channel or a target or component that does not exist for it. The message has rustup\'s last lines.',
+        'rustup could not install the toolchain the source pins into the cache (0.20.0): no network (a profile with `network="none"`), an unknown channel or a target or component that does not exist for it; or a tool of `DevProfile(toolchains=...)` could not be downloaded or built (0.22.0). The message has the installer\'s last lines.',
         "Check the pin's channel, targets and components; runs need public HTTPS to install a toolchain once.",
         False,
+        "dev",
+    ),
+    _E(
+        "dev-toolchain-checksum",
+        "Toolchain download does not match its checksum",
+        "A node or binaryen tarball the profile pins (`DevProfile(toolchains=...)`, 0.22.0) does not match the sha256 its release publishes. Nothing was installed. The message names the file and both digests.",
+        "Run again; when it fails the same way, check the network path to nodejs.org and github.com.",
+        True,
         "dev",
     ),
     _E(

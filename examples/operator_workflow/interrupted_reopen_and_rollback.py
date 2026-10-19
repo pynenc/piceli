@@ -3,9 +3,13 @@
 import json
 from pathlib import Path
 
-from piceli.k8s.automation import health_aware_rollback
-from piceli.k8s.ops.session import DeploymentSessionArchive
-from piceli.k8s.release import ReleaseCatalog, ReleaseRecord, ReleaseSource
+from piceli.k8s import (
+    ReleaseCatalog,
+    ReleaseRecord,
+    ReleaseSource,
+    health_aware_rollback,
+)
+from piceli.k8s.ops import DeploymentSessionArchive
 
 
 def run_reopen_and_rollback(state_dir: Path) -> None:

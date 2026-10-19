@@ -55,7 +55,8 @@ local Docker engine. A spec written for one builder is refused by the other
    the caller's environment only locators pass (`HOME`, `USER`, `TMPDIR`,
    `CARGO_HOME`, `RUSTUP_HOME`, `RUSTUP_TOOLCHAIN`, `SSL_CERT_FILE`,
    `NIX_SSL_CERT_FILE`). A tool whose binary changes during the build fails
-   it (`tool-pin-mismatch`).
+   it (`tool-pin-mismatch`). Before the first command, the toolchains the
+   spec pins are installed into the cache and selected (below).
 4. **Assemble.** Each image is its base, pulled once by its pinned digest
    into `<cache>/blobs`, plus **one layer per declared file mapping**
    (sorted by destination, directories first). Layers are deterministic:
@@ -150,6 +151,7 @@ commands = [
 env = { CARGO_TERM_COLOR = "never", JEMALLOC_SYS_WITH_LG_PAGE = "{page_size_log2}" }
 # platform = "linux/arm64"   # optional: refuse a node with another platform
 # workdir = "."              # relative to the stage root
+# toolchains = { rust = "app/rust-toolchain.toml", node = "app/.nvmrc" }   # optional, below
 source_date_epoch = 0
 timeout_seconds = 1800
 
@@ -187,6 +189,61 @@ env = { RUST_LOG = "info" }
 
 A full example: `examples/builds/rust-hello/host-build.toml`.
 
+## The toolchain the source pins
+
+By default a command uses whatever Rust, node or wasm tools the build
+machine has: on a laptop your own, in the cluster the builder image's. A spec
+can instead pin them in `[build]`, so the build follows the source:
+
+```toml
+[build]
+tools = ["cargo", "sh"]
+commands = [["sh", "-c", "cargo build --release --target wasm32-unknown-unknown && wasm-bindgen … && wasm-opt …"]]
+toolchains = { rust = "app/rust-toolchain.toml", node = "app/.nvmrc", wasm-bindgen = "app/Cargo.lock", binaryen = "123" }
+```
+
+Every key is optional. A value is a path relative to the stage root
+(`<context>/<file>`, and the context must include the file) or, except for
+`rust`, a version:
+
+| Key | Reads | Installs |
+| --- | --- | --- |
+| `rust` | a `rust-toolchain.toml` (or legacy `rust-toolchain`): channel, targets, components, profile; plus the build platform's `<arch>-unknown-linux-gnu`, which a host build links for | `rustup toolchain install` into `<cache>/toolchains/rustup` |
+| `node` | a `.nvmrc` or `.node-version` holding an exact version, or `"24.11.0"` | the `nodejs.org` tarball, checked against that release's `SHASUMS256.txt` |
+| `wasm-bindgen` | the `wasm-bindgen` version of a `Cargo.lock`, or `"0.2.114"` | `cargo install --locked wasm-bindgen-cli --version …`, with the pinned Rust |
+| `binaryen` | a file holding a version, or `"123"` | the GitHub release tarball, checked against its published `.sha256` |
+
+- **Plan.** The versions are read from the scanned contexts. The plan hash
+  and the preview cover them, and a composition's image change key covers
+  the pin files (even in a context the image does not read), so changing a
+  pin rebuilds. A node alias (`lts/*`) or a major alone (`24`) is refused:
+  it would not give the same tool tomorrow.
+- **Install.** Each tool is installed once per cache, keyed by its version
+  (Rust: by the parsed pin), under a file lock, so concurrent builds install
+  it once; a done-marker lets the next build skip it. Downloads are for the
+  machine that runs the commands (`linux` or `darwin`, `amd64` or `arm64`);
+  in the cluster that is the builder node. `rustup` and `cargo` are looked
+  up on the commands' `PATH`, then on yours.
+- **Run.** `RUSTUP_HOME` and `RUSTUP_TOOLCHAIN` select the pinned Rust (the
+  rustup proxies of a declared `cargo` honour them; `build.env` cannot set
+  them), and the `bin` directories of node, wasm-bindgen and binaryen come
+  first on `PATH`. Commands still start declared tools only: call `node`,
+  `wasm-bindgen` or `wasm-opt` from a declared `sh`, a build script or a
+  cargo command.
+
+```text
+<cache>/toolchains/rustup/                          RUSTUP_HOME
+<cache>/toolchains/node/<version>-<os>-<arch>/bin
+<cache>/toolchains/binaryen/<version>-<os>-<arch>/bin
+<cache>/toolchains/wasm-bindgen/<version>-<os>-<arch>/bin
+<cache>/toolchains/<tool>-<key>.done
+```
+
+Installing needs public HTTPS once per version. The receipt's `toolchains`
+records each tool's pin, whether this build installed it, how long it took,
+and the download's URL and sha256; the provenance records the pins and the
+downloads (below). Development runs read the same pins ({doc}`dev_builds`).
+
 ## Several platforms
 
 A `host-build.toml` may declare `platforms = ["linux/amd64", "linux/arm64"]`
@@ -209,6 +266,21 @@ target directory is `<cache>/target/<architecture>-<page size>` (for example
 instead of recompiling jemalloc and everything above it on each switch. A `.lock` file per build name keeps two runs from
 syncing the same stage at once. Deleting the directory is always safe: the
 next build compiles and pulls again.
+
+**Nothing cached is trusted by its name alone (0.22.0).** A staged file is
+reused only when its size and sha256 match the context's; a blob (a base
+layer, a manifest, a config) only after its bytes were hashed again and
+matched its digest. A blob that does not match (a faulty disk or memory, a
+write cut short) is removed, fetched or written again, and the build says
+so in its log:
+
+```text
+[piceli] cache-corrupt: blob sha256:3c1f… discarded (content hashes to sha256:9a0e…); fetching or writing it again
+```
+
+On a build host (`piceli builder serve`) that line is a health event for
+the machine, as it is for the cluster's builder node when its build Job
+fails (see {doc}`dev_builds` and {doc}`gitops`).
 
 ## Building in the cluster
 
@@ -277,7 +349,8 @@ lockfiles pin a superset of what one binary links), and
 `attestations/<image>.provenance.json`, an in-toto Statement v1 with a SLSA
 provenance v1 predicate (subject: the manifest digest; the spec and plan
 hashes, commands, `env`, node facts, tool digests, source commits,
-contexts and base). The receipt records both by path and sha256. They hold
+contexts and base; the pinned toolchains, and each toolchain download by URL
+and sha256). The receipt records both by path and sha256. They hold
 no local path, secret or process output. The SBOM is deterministic; the
 provenance records the build's start and end times.
 
@@ -290,6 +363,9 @@ provenance records the build's start and end times.
 | `node-platform-mismatch` | `build.platform` differs from the node's |
 | `host-tool-missing` | A declared tool is not on `PATH` at plan time |
 | `host-output-missing` | An image file does not exist after the build |
+| `host-toolchain-invalid` | A pin of `build.toolchains` cannot be read (the message names the file) |
+| `host-toolchain-checksum` | A toolchain download does not match its published sha256 |
+| `host-toolchain-failed` | A pinned tool could not be installed |
 | `base-image-unavailable`, `base-image-invalid`, `base-platform-unavailable`, `base-layer-unsupported` | The base image cannot be used |
 | `build-builder-mismatch` | The spec was written for the other builder |
 

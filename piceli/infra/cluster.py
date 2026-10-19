@@ -69,6 +69,23 @@ def check_node(node: Node) -> None:
             )
     if len(set(node.roles)) != len(node.roles):
         raise _invalid(f"Node {node.name}: a role is listed twice")
+    if node.target is not None:
+        from piceli.artifacts.node_transport import NodeTarget
+
+        try:
+            NodeTarget.parse(node.target)
+        except ValueError as error:
+            raise _invalid(
+                f"Node {node.name}: target= is ssh://[user@]host?runtime=containerd "
+                f"(or k3s-containerd) or docker://name?runtime=containerd ({error})"
+            ) from None
+
+
+def node_target_identity(target: str) -> str:
+    """``target`` without its SSH user: what the controller's config keeps."""
+    from piceli.artifacts.node_transport import NodeTarget
+
+    return NodeTarget.parse(target).identity
 
 
 def node_labels(node: Node) -> dict[str, str]:
@@ -113,6 +130,22 @@ def check_controller(controller: Controller) -> None:
         parse_duration(controller.host_wait)
     except GitOpsError:
         raise _invalid("Controller(host_wait=) must be like 30m or 2h") from None
+    if controller.delivery not in {"registry", "nodes"}:
+        raise _invalid('Controller(delivery=) is "registry" or "nodes"')
+    if controller.delivery == "nodes" and "hosts" not in builds:
+        raise _invalid(
+            'Controller(delivery="nodes") is how build hosts deliver: it needs '
+            'builds=("hosts",) or ("hosts", "cluster")'
+        )
+    after = controller.quarantine_after
+    if after is not None and (
+        not isinstance(after, int) or isinstance(after, bool) or after < 1
+    ):
+        raise _invalid("Controller(quarantine_after=) is a positive integer or None")
+    try:
+        parse_duration(controller.quarantine_window)
+    except GitOpsError:
+        raise _invalid("Controller(quarantine_window=) must be like 24h") from None
 
 
 def check_ui(ui: Ui) -> None:
@@ -157,6 +190,25 @@ def check_cluster(cluster: Cluster) -> None:
     for what, node in placed.items():
         if node is not None and names and node not in names:
             raise _invalid(f"{what} names {node!r}, which is not one of the nodes")
+    controller = cluster.controller
+    if controller is not None and controller.delivery == "nodes":
+        if not cluster.nodes:
+            raise _invalid(
+                'Controller(delivery="nodes") imports images into the declared '
+                "nodes: declare them with Node(name, arch=, target=...)"
+            )
+        missing = [node.name for node in cluster.nodes if node.target is None]
+        if missing:
+            raise _invalid(
+                f'Controller(delivery="nodes"): node {missing[0]} has no target= '
+                "(a workload can land on any node, so every node receives the images)"
+            )
+        if "cluster" in controller.builds and cluster.registry is None:
+            raise _invalid(
+                'Controller(builds=("hosts", "cluster")) falls back to the in-cluster '
+                "build, which pushes to the registry: declare "
+                'registry=Registry.in_cluster(...) or use builds=("hosts",)'
+            )
     if cluster.access is not None:
         from piceli.envs.access import Access
 
@@ -216,7 +268,17 @@ def describe(cluster: Cluster) -> dict[str, Any]:
         "api": cluster.api,
         "credentials": cluster.credentials,
         "nodes": [
-            {"name": node.name, "arch": node.arch, "roles": list(node.roles)}
+            {
+                "name": node.name,
+                "arch": node.arch,
+                "roles": list(node.roles),
+                # 0.22.0, only when declared (same hashes); never the SSH user.
+                **(
+                    {"target": node_target_identity(node.target)}
+                    if node.target is not None
+                    else {}
+                ),
+            }
             for node in cluster.nodes
         ],
         "storage_class": cluster.storage_class,
@@ -240,6 +302,16 @@ def describe(cluster: Cluster) -> dict[str, Any]:
         if tuple(cluster.controller.builds) != ("cluster",):  # 0.21.0; same hashes
             body["controller"]["builds"] = list(cluster.controller.builds)
             body["controller"]["host_wait"] = cluster.controller.host_wait
+        if cluster.controller.delivery != "registry":  # 0.22.0; same hashes
+            body["controller"]["delivery"] = cluster.controller.delivery
+        if (
+            cluster.controller.quarantine_after,
+            cluster.controller.quarantine_window,
+        ) != (2, "24h"):  # 0.22.0; same hashes
+            body["controller"]["quarantine_after"] = cluster.controller.quarantine_after
+            body["controller"]["quarantine_window"] = (
+                cluster.controller.quarantine_window
+            )
     if cluster.dev is not None:  # 0.18.0; absent when off: same hashes
         body["dev"] = cluster.dev.describe()
     if cluster.access is not None:  # 0.19.0; absent when off: same hashes

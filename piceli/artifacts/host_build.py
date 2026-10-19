@@ -75,6 +75,9 @@ from piceli.artifacts.build_spec import (
     _now,
     _rel_path,
 )
+from piceli.artifacts.host_toolchains import RUST_ENV
+from piceli.artifacts.host_toolchains import parse as parse_toolchains
+from piceli.artifacts.host_toolchains import resolve as resolve_toolchains
 from piceli.artifacts.node_facts import PLACEHOLDERS, NodeFacts
 from piceli.artifacts.plan import canonical, digest
 from piceli.artifacts.process import ToolPin
@@ -220,6 +223,9 @@ class HostBuildSpec:
     (:mod:`piceli.artifacts.multi_platform`); empty keeps one platform."""
     cache_dir: Path | None = field(default=None, compare=False, repr=False)
     """Shared stage, target and blob directory; default `default_cache_dir`."""
+    toolchains: tuple[tuple[str, str], ...] = ()
+    """``build.toolchains`` (0.22): ``(tool, stage path or version)`` pairs
+    (:mod:`piceli.artifacts.host_toolchains`)."""
 
     builder_kind: ClassVar[str] = "host"
     network: ClassVar[str] = "host"
@@ -267,6 +273,11 @@ class HostBuildSpec:
                 )
         if _RESERVED & set(self.env):
             raise _fail(f"build.env cannot set {sorted(_RESERVED & set(self.env))}")
+        if dict(self.toolchains).get("rust") and RUST_ENV & set(self.env):
+            raise _fail(
+                f"build.env cannot set {sorted(RUST_ENV & set(self.env))}: "
+                "build.toolchains pins rust"
+            )
         if (
             not isinstance(self.source_date_epoch, int)
             or isinstance(self.source_date_epoch, bool)
@@ -317,6 +328,7 @@ class HostBuildSpec:
                 "env",
                 "source_date_epoch",
                 "timeout_seconds",
+                "toolchains",
             },
             "build",
         )
@@ -368,6 +380,9 @@ class HostBuildSpec:
             timeout_seconds=build.get("timeout_seconds", DEFAULT_TIMEOUT),
             inputs=inputs,
             base=base,
+            toolchains=parse_toolchains(build["toolchains"])
+            if "toolchains" in build
+            else (),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -390,6 +405,7 @@ class HostBuildSpec:
                 if self.declared_platforms
                 else {}
             ),
+            **({"toolchains": dict(self.toolchains)} if self.toolchains else {}),
         }
 
     @property
@@ -497,8 +513,25 @@ class HostBuildSpec:
             )
             for image in self.images
         )
+        pins = resolve_toolchains(self, manifests, roots)
+        rust = pins.get("rust")
+        if rust is not None:
+            # A pinned Rust also gets the build platform's target: a host
+            # build links for its node (cross-compiling with zigbuild), which
+            # a rust-toolchain file written for development rarely lists.
+            target = f"{substitute('{rust_arch}', facts)}-unknown-linux-gnu"
+            if target not in rust["targets"]:
+                pins["rust"] = {**rust, "targets": sorted([*rust["targets"], target])}
         return HostBuildPlan(
-            self, facts, manifests, roots, tools, commands, env, images
+            self,
+            facts,
+            manifests,
+            roots,
+            tools,
+            commands,
+            env,
+            images,
+            pins,
         )
 
     # --- execution -------------------------------------------------------
@@ -552,7 +585,15 @@ class HostBuildSpec:
             with heavy.section(f"host build {self.name}"):
                 outputs = execution.execute(output_dir)
         finished_at = _now()
-        self._attest(plan, outputs, output_dir, start, started_at, finished_at)
+        self._attest(
+            plan,
+            outputs,
+            output_dir,
+            start,
+            started_at,
+            finished_at,
+            execution.toolchains,
+        )
         receipt = {
             "revision": BUILD_RECEIPT_REVISION,
             "state": "succeeded",
@@ -573,6 +614,8 @@ class HostBuildSpec:
             "source_date_epoch": self.source_date_epoch,
             "outputs": outputs,
             "steps": list(execution.steps),
+            # 0.22: the toolchains the spec pins, as installed for this build.
+            **({"toolchains": execution.toolchains} if self.toolchains else {}),
             "started_at": started_at,
             "finished_at": finished_at,
         }
@@ -586,6 +629,7 @@ class HostBuildSpec:
         start: InputsLock | None,
         started_at: str,
         finished_at: str,
+        toolchains: Mapping[str, Any] | None = None,
     ) -> None:
         """Write each image's SBOM and provenance; record them in ``outputs``."""
         from piceli.artifacts import attestations
@@ -617,6 +661,7 @@ class HostBuildSpec:
                         sources,
                         started_at,
                         finished_at,
+                        toolchains,
                     ),
                 ),
             ):
@@ -772,6 +817,8 @@ class HostBuildPlan:
     commands: tuple[tuple[str, ...], ...]
     env: Mapping[str, str]
     images: tuple[HostImage, ...]
+    #: 0.22: ``{tool: pin}`` of ``build.toolchains`` (versions read at plan time).
+    toolchains: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
     @property
     def platform(self) -> str:
@@ -799,6 +846,12 @@ class HostBuildPlan:
                     "commands": [list(item) for item in self.commands],
                     "env": dict(self.env),
                     "images": [item.to_dict() for item in self.images],
+                    # Only when declared: every other plan hash is unchanged.
+                    **(
+                        {"toolchains": {k: dict(v) for k, v in self.toolchains.items()}}
+                        if self.toolchains
+                        else {}
+                    ),
                 }
             )
         )
@@ -830,6 +883,11 @@ class HostBuildPlan:
                 for image in self.images
             },
             "source_date_epoch": spec.source_date_epoch,
+            **(
+                {"toolchains": {k: dict(v) for k, v in self.toolchains.items()}}
+                if self.toolchains
+                else {}
+            ),
             "executes_code": True,
             "uses_container_engine": False,
             "push": False,

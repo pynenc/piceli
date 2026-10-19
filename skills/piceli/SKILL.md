@@ -3,7 +3,7 @@ name: piceli
 description: Deploy and operate Kubernetes apps described as typed Python with Piceli, safely, from an agent. Covers installing piceli, describing an App and a Pipeline, rendering without a cluster, planning and showing the plan to the owner, deploying only with the hash the owner approved (or inside the owner's declared auto_approve policy), checking status and access, diagnosing failures with `piceli explain` and the JSON output contract, resuming interrupted runs and rolling back. Use when a project imports piceli or has a Pipeline or release.toml, or when asked to deploy, plan, roll back or debug a Piceli release.
 license: MIT
 metadata:
-  piceli-version: "0.21"
+  piceli-version: "0.22"
 ---
 
 # Piceli
@@ -260,6 +260,13 @@ waits for a build host: `piceli gitops status` shows `builds_wanted` and the
 step `build-waiting`. `piceli builder serve` on a build host builds them;
 ask the owner before starting it. A `build-failed` answer carries the log
 tail: report it, do not retry blindly.
+
+Since 0.22 a build host whose builds show machine-health signs (a crashed
+compiler, a segfault, a machine check) is quarantined: `piceli dev hosts`
+and `piceli gitops hosts` say why. Report it; only the owner releases a
+host (`release-host`). `piceli gitops suspects --host NAME` lists what a
+host built; `piceli gitops rebuild --host NAME` needs the owner's
+go-ahead.
 
 `piceli gitops wait ENV COMMIT` fails with `cause: gitops-git-failed` and
 `controller_error` when the controller cannot read Git (an expired token):

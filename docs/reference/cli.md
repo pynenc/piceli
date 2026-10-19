@@ -55,6 +55,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli dev cancel`](#cli-dev-cancel) | Cancel a queued or running run (its Job and pod are deleted). | writes | no |
 | [`piceli dev hosts`](#cli-dev-hosts) | Each declared build host: up or down (why), platforms, slots, runs and queue. | reads | no |
 | [`piceli dev logs`](#cli-dev-logs) | A run's output (stdout): live, or the recorded tail of a finished run. | reads | no |
+| [`piceli dev release-host`](#cli-dev-release-host) | Clear a build host's health events: it is no longer quarantined (0.22.0). | none | no |
 | [`piceli dev run`](#cli-dev-run) | Run COMMAND on the builder for a commit (--ref) or a working tree (default: here). | writes | no |
 | [`piceli dev schedule`](#cli-dev-schedule) | Run the queue yourself (a cluster without the GitOps controller, which runs it). | writes | no |
 | [`piceli dev status`](#cli-dev-status) | Slots, running and queued runs (with their position), recent runs and cache use. | reads | no |
@@ -71,8 +72,12 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli gitops cache clear`](#cli-gitops-cache-clear) | Ask the controller to empty its build cache (a corrupted cargo cache). | writes | no |
 | [`piceli gitops disable`](#cli-gitops-disable) | Remove the controller (plan first; --approve HASH removes). Never an environment. | writes | yes |
 | [`piceli gitops enable`](#cli-gitops-enable) | Install the GitOps controller (plan first; --approve HASH installs). | writes | yes |
+| [`piceli gitops hosts`](#cli-gitops-hosts) | The health events and quarantine the controller recorded per build host. | reads | no |
+| [`piceli gitops rebuild`](#cli-gitops-rebuild) | Ask the controller to rebuild the images a host built and deploy them. | writes | no |
+| [`piceli gitops release-host`](#cli-gitops-release-host) | Ask the controller to forget a build host's health events (end its quarantine). | writes | no |
 | [`piceli gitops run`](#cli-gitops-run) | Run the controller loop (the Deployment's entrypoint); --once for one poll. | writes | no |
 | [`piceli gitops status`](#cli-gitops-status) | Controller health, repository, last poll and every branch's state. | reads | no |
+| [`piceli gitops suspects`](#cli-gitops-suspects) | List the deployed images a build host (or node) built, in every environment. | reads | no |
 | [`piceli gitops sync`](#cli-gitops-sync) | Ask the controller to deploy ENV now at its revision (--component: rebuild one). | writes | no |
 | [`piceli gitops wait`](#cli-gitops-wait) | Wait until ENV runs COMMIT: deployed, failed (stage, cause) or timed out. | reads | no |
 | [`piceli heavy run`](#cli-heavy-run) | Run COMMAND once the lock is free; exit with its exit code. | none | no |
@@ -655,13 +660,13 @@ Take the builds the controller publishes, build and deliver them, answer it.
 **Contract**
 
 - **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=DevBuilds(hosts=[...])), credential profile, the controller's status, each source with this machine's Git access
-- **Writes:** the controller's requests (build-claim, built, build-failed), images in the cluster's registry (through a port-forward), ~/.cache/piceli/builder (Git mirrors), the piceli-build-cache volume
+- **Writes:** the controller's requests (build-claim, built, build-failed), images in the cluster's registry (through a port-forward), ~/.cache/piceli/builder (Git mirrors), the piceli-build-cache volume, the host's health record (piceli-health-* volumes)
 - **Cluster:** writes
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.21.0. Runs until Ctrl-C (--once: one build). The builder image must be the controller's Piceli version.
+- **Notes:** 0.21.0. Runs until Ctrl-C (--once: one build). The builder image must be the controller's Piceli version. 0.22.0: each delivered image's provenance is pushed as an OCI referrer when the registry takes it; a build showing a machine-health signature records a health event on the host, and a quarantined host claims nothing (quarantined in --once --json).
 
 (cli-bundle)=
 ### `piceli bundle`
@@ -1041,7 +1046,7 @@ Each declared build host: up or down (why), platforms, slots, runs and queue.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.20.0. Read-only. A docker host is asked with its CLI (`info`, `ps`), locally or over its ssh:// context.
+- **Notes:** 0.20.0. Read-only. A docker host is asked with its CLI (`info`, `ps`, `volume ls`), locally or over its ssh:// context. 0.22.0: each host's health events and quarantine (health).
 
 (cli-dev-logs)=
 ### `piceli dev logs`
@@ -1068,6 +1073,28 @@ A run's output (stdout): live, or the recorded tail of a finished run.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Read-only. The log on stdout; dev-run-unknown for a run that is neither live nor among the last 50 recorded.
+
+(cli-dev-release-host)=
+### `piceli dev release-host`
+
+Clear a build host's health events: it is no longer quarantined (0.22.0).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster with dev=DevBuilds(...) (or PICELI_DEV_CLUSTER) |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=)
+- **Writes:** the host's health record (its piceli-health-* volumes on a docker host, health.json in a native host's state_dir)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.22.0. Never contacts the cluster. The builder node's health is the GitOps controller's: piceli gitops release-host.
 
 (cli-dev-run)=
 ### `piceli dev run`
@@ -1103,13 +1130,13 @@ Run COMMAND on the builder for a commit (--ref) or a working tree (default: here
 **Contract**
 
 - **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=), credential profile, the local Git repositories of the sources
-- **Writes:** --artifacts-dir RUN/ (with --artifact)
+- **Writes:** --artifacts-dir RUN/ (with --artifact), the build host's health record (0.22.0, after a machine-health sign)
 - **Cluster:** writes
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** Safe for agents: the owner approved what runs may do when piceli cluster init applied Cluster(dev=DevBuilds(...)); each run is an isolated pod in piceli-dev (non-root, no token, no Secret, no cluster network) that only builds in the shared dev cache, never in release caches. Exit 0 the command passed; 1 it failed (dev-command-failed), timed out, ran out of memory, was cancelled or the run broke; 2 refused (dev-not-enabled, dev-ref-unknown, dev-source-invalid, dev-profile-unknown, dev-run-invalid). The run's Job is removed on every outcome.
+- **Notes:** Safe for agents: the owner approved what runs may do when piceli cluster init applied Cluster(dev=DevBuilds(...)); each run is an isolated pod in piceli-dev (non-root, no token, no Secret, no cluster network) that only builds in the shared dev cache, never in release caches. Exit 0 the command passed; 1 it failed (dev-command-failed), timed out, ran out of memory, was cancelled or the run broke; 2 refused (dev-not-enabled, dev-ref-unknown, dev-source-invalid, dev-profile-unknown, dev-run-invalid). The run's Job is removed on every outcome. 0.22.0: a quarantined build host is skipped (said on stderr); a run showing a machine-health sign records an event on its host (health and host_quarantined in the result).
 
 (cli-dev-schedule)=
 ### `piceli dev schedule`
@@ -1504,6 +1531,82 @@ Install the GitOps controller (plan first; --approve HASH installs).
 - **Output contract:** conforms
 - **Notes:** Reads the pipeline's named environments and idle_stop from the working tree (--root, default .) into the controller config (gitops-pipeline-invalid when the file is there and does not load). Without --approve prints the install plan (Namespace, ServiceAccount, scoped Role/ClusterRole and bindings, state PersistentVolumeClaim, config ConfigMap, one-replica Deployment) and its hash, exit 3. --image must be pinned by digest (gitops-image-unpinned); --repo must carry no credentials (gitops-repo-invalid): they come from the Secret named by --credentials-secret, which is mounted and never read or printed. A changed plan is refused (gitops-plan-changed). Given a composition module (infra.py, no :ATTR) the controller config holds every source, component and environment of it instead (composition-invalid when it does not load); without --kubeconfig the composition's Cluster credentials profile is used. `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
 
+(cli-gitops-hosts)=
+### `piceli gitops hosts`
+
+The health events and quarantine the controller recorded per build host.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir, the controller's status
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.22.0. Read-only (controller.build_health in gitops status).
+
+(cli-gitops-rebuild)=
+### `piceli gitops rebuild`
+
+Ask the controller to rebuild the images a host built and deploy them.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--host` | text | required | Rebuild every deployed image this host (or node) built |
+| `--since` | text |  | Only images whose build ended at or after this ISO time (2026-10-01, 2026-10-01T12:00:00Z) |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir
+- **Writes:** --state-dir requests (local controller)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.22.0. Writes a request to the ConfigMap piceli-gitops-requests; the controller drops those images' cached build results and deploys each environment that runs one with its usual approval and checks (trigger 'sync rebuild HOST'; controller.last_rebuild in gitops status). No such image: gitops-request-invalid in gitops status.
+
+(cli-gitops-release-host)=
+### `piceli gitops release-host`
+
+Ask the controller to forget a build host's health events (end its quarantine).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `HOST` | text | required |  |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir
+- **Writes:** --state-dir requests (local controller)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.22.0. Writes a request to the ConfigMap piceli-gitops-requests. A docker or native host's own record is cleared with piceli dev release-host.
+
 (cli-gitops-run)=
 ### `piceli gitops run`
 
@@ -1557,6 +1660,33 @@ Controller health, repository, last poll and every branch's state.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Read-only. Reads the ConfigMap piceli-gitops-status and the controller Deployment (or a local --state-dir). Health: healthy, degraded (last poll failed), stale (no poll for 3 intervals), starting, down. gitops-not-installed without a controller.
+
+(cli-gitops-suspects)=
+### `piceli gitops suspects`
+
+List the deployed images a build host (or node) built, in every environment.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--host` | text | required | The build host or builder node whose images to list |
+| `--since` | text |  | Only images whose build ended at or after this ISO time (2026-10-01, 2026-10-01T12:00:00Z) |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir, the controller's status
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.22.0. Read-only. Each image names its environment (and cluster), component, pull reference, digest and provenance (host, node, builder image, commits, times).
 
 (cli-gitops-sync)=
 ### `piceli gitops sync`

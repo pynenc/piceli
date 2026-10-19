@@ -1,5 +1,19 @@
 {
  "classes": {
+  "APIRequestVerb": {
+   "attrs": [
+    "CREATE",
+    "DELETE",
+    "DELETE_COLLECTION",
+    "GET",
+    "LIST",
+    "PATCH",
+    "UPDATE",
+    "WATCH"
+   ],
+   "init": [],
+   "methods": {}
+  },
   "Access": {
    "attrs": [
     "forward"
@@ -20,6 +34,160 @@
    },
    "returns": {
     "forward": "Forward"
+   }
+  },
+  "ActionGrant": {
+   "attr_types": {
+    "operation": "PlanOperation",
+    "precondition": "ResourcePrecondition",
+    "resource": "ResourceRef"
+   },
+   "attrs": [
+    "artifact_digest",
+    "for_action",
+    "operation",
+    "precondition",
+    "private_bindings",
+    "resource"
+   ],
+   "init": [
+    "artifact_digest",
+    "operation",
+    "precondition",
+    "private_bindings",
+    "resource"
+   ],
+   "methods": {
+    "for_action": [
+     "action"
+    ]
+   },
+   "returns": {
+    "for_action": "ActionGrant"
+   }
+  },
+  "Adoption": {
+   "attr_types": {
+    "mode": "AdoptionMode"
+   },
+   "attrs": [
+    "metadata_changes",
+    "mode",
+    "previous_owner",
+    "summary",
+    "transferred_managers"
+   ],
+   "init": [
+    "metadata_changes",
+    "mode",
+    "previous_owner",
+    "transferred_managers"
+   ],
+   "methods": {
+    "summary": []
+   }
+  },
+  "AdoptionMode": {
+   "attrs": [
+    "METADATA_ONLY",
+    "TAKEOVER",
+    "capitalize",
+    "casefold",
+    "center",
+    "count",
+    "encode",
+    "endswith",
+    "expandtabs",
+    "find",
+    "format",
+    "format_map",
+    "index",
+    "isalnum",
+    "isalpha",
+    "isascii",
+    "isdecimal",
+    "isdigit",
+    "isidentifier",
+    "islower",
+    "isnumeric",
+    "isprintable",
+    "isspace",
+    "istitle",
+    "isupper",
+    "join",
+    "ljust",
+    "lower",
+    "lstrip",
+    "maketrans",
+    "partition",
+    "removeprefix",
+    "removesuffix",
+    "replace",
+    "rfind",
+    "rindex",
+    "rjust",
+    "rpartition",
+    "rsplit",
+    "rstrip",
+    "split",
+    "splitlines",
+    "startswith",
+    "strip",
+    "swapcase",
+    "title",
+    "translate",
+    "upper",
+    "zfill"
+   ],
+   "init": [],
+   "methods": {
+    "capitalize": null,
+    "casefold": null,
+    "center": null,
+    "count": null,
+    "encode": null,
+    "endswith": null,
+    "expandtabs": null,
+    "find": null,
+    "format": null,
+    "format_map": null,
+    "index": null,
+    "isalnum": null,
+    "isalpha": null,
+    "isascii": null,
+    "isdecimal": null,
+    "isdigit": null,
+    "isidentifier": null,
+    "islower": null,
+    "isnumeric": null,
+    "isprintable": null,
+    "isspace": null,
+    "istitle": null,
+    "isupper": null,
+    "join": null,
+    "ljust": null,
+    "lower": null,
+    "lstrip": null,
+    "maketrans": null,
+    "partition": null,
+    "removeprefix": null,
+    "removesuffix": null,
+    "replace": null,
+    "rfind": null,
+    "rindex": null,
+    "rjust": null,
+    "rpartition": null,
+    "rsplit": null,
+    "rstrip": null,
+    "split": null,
+    "splitlines": null,
+    "startswith": null,
+    "strip": null,
+    "swapcase": null,
+    "title": null,
+    "translate": null,
+    "upper": null,
+    "zfill": null
    }
   },
   "ApiDefaultedField": {
@@ -614,6 +782,33 @@
     "from_value": "ApprovalPolicy"
    }
   },
+  "ArchiveSource": {
+   "attrs": [
+    "max_bytes",
+    "path"
+   ],
+   "init": [
+    "max_bytes",
+    "path"
+   ],
+   "methods": {}
+  },
+  "ArtifactFile": {
+   "attr_types": {
+    "source": "SourcePin"
+   },
+   "attrs": [
+    "destination",
+    "executable",
+    "source"
+   ],
+   "init": [
+    "destination",
+    "executable",
+    "source"
+   ],
+   "methods": {}
+  },
   "AutoApproveSpec": {
    "attrs": [
     "allow",
@@ -701,6 +896,19 @@
    },
    "pydantic": true
   },
+  "BlobUpload": {
+   "attrs": [
+    "digest",
+    "mode",
+    "size"
+   ],
+   "init": [
+    "digest",
+    "mode",
+    "size"
+   ],
+   "methods": {}
+  },
   "Branch": {
    "attrs": [
     "describe",
@@ -711,6 +919,134 @@
    ],
    "methods": {
     "describe": []
+   }
+  },
+  "BranchEnv": {
+   "attr_types": {
+    "config": "EnvConfig",
+    "stack": "Stack"
+   },
+   "attrs": [
+    "access",
+    "api_endpoints",
+    "branch",
+    "config",
+    "environment",
+    "exposed",
+    "exposed_http",
+    "images",
+    "isolated",
+    "main_namespace",
+    "mirrors",
+    "namespace",
+    "on_nodes",
+    "pin_node",
+    "prebuilt",
+    "quota",
+    "replicas",
+    "stack"
+   ],
+   "init": [
+    "access",
+    "api_endpoints",
+    "branch",
+    "config",
+    "environment",
+    "exposed",
+    "exposed_http",
+    "images",
+    "isolated",
+    "main_namespace",
+    "mirrors",
+    "namespace",
+    "on_nodes",
+    "pin_node",
+    "prebuilt",
+    "quota",
+    "replicas",
+    "stack"
+   ],
+   "methods": {}
+  },
+  "BranchEnvironments": {
+   "attr_types": {
+    "branches": "Branches",
+    "stack": "Stack"
+   },
+   "attrs": [
+    "access",
+    "allow_api",
+    "allow_egress",
+    "auto_approve",
+    "branches",
+    "claim_sizes",
+    "cluster",
+    "clusters",
+    "describe",
+    "env_config",
+    "follow",
+    "idle_stop",
+    "limit",
+    "name",
+    "namespace",
+    "on_nodes",
+    "pipeline",
+    "prefix",
+    "quota",
+    "replicas",
+    "restore_points",
+    "rollout",
+    "secrets",
+    "settings",
+    "sources",
+    "stack"
+   ],
+   "init": [
+    "access",
+    "allow_api",
+    "allow_egress",
+    "auto_approve",
+    "branches",
+    "claim_sizes",
+    "cluster",
+    "clusters",
+    "follow",
+    "idle_stop",
+    "limit",
+    "name",
+    "namespace",
+    "on_nodes",
+    "pipeline",
+    "quota",
+    "replicas",
+    "restore_points",
+    "rollout",
+    "secrets",
+    "settings",
+    "stack"
+   ],
+   "methods": {
+    "describe": [],
+    "env_config": []
+   },
+   "returns": {
+    "env_config": "EnvConfig"
+   }
+  },
+  "Branches": {
+   "attrs": [
+    "fallback",
+    "matches",
+    "patterns"
+   ],
+   "init": [
+    "fallback",
+    "patterns"
+   ],
+   "methods": {
+    "matches": [
+     "branch"
+    ]
    }
   },
   "Build": {
@@ -765,27 +1101,413 @@
    },
    "returns": {
     "dockerfile": "Build",
+    "load": "BuildSpec",
     "spec": "Build"
+   }
+  },
+  "BuildCommand": {
+   "attr_types": {
+    "tool": "ToolPin"
+   },
+   "attrs": [
+    "arguments",
+    "execute",
+    "inputs",
+    "plan_hash",
+    "preview",
+    "tool"
+   ],
+   "init": [
+    "arguments",
+    "inputs",
+    "tool"
+   ],
+   "methods": {
+    "execute": [
+     "cancel",
+     "grant",
+     "limits",
+     "root"
+    ],
+    "preview": []
+   }
+  },
+  "BuildGrant": {
+   "attrs": [
+    "allow_network",
+    "builder_digest",
+    "expires_at",
+    "plan_hash"
+   ],
+   "init": [
+    "allow_network",
+    "builder_digest",
+    "expires_at",
+    "plan_hash"
+   ],
+   "methods": {}
+  },
+  "BuildHost": {
+   "attrs": [
+    "cli",
+    "cluster",
+    "context",
+    "cpu",
+    "describe",
+    "docker",
+    "from_dict",
+    "image",
+    "kind",
+    "memory",
+    "name",
+    "native",
+    "node",
+    "platforms",
+    "quarantine_after",
+    "quarantine_policy",
+    "quarantine_window",
+    "slots",
+    "state_dir"
+   ],
+   "init": [
+    "cli",
+    "context",
+    "cpu",
+    "image",
+    "kind",
+    "memory",
+    "name",
+    "node",
+    "platforms",
+    "quarantine_after",
+    "quarantine_window",
+    "slots",
+    "state_dir"
+   ],
+   "methods": {
+    "cluster": null,
+    "describe": [],
+    "docker": null,
+    "from_dict": [
+     "value"
+    ],
+    "native": null,
+    "quarantine_policy": []
+   },
+   "returns": {
+    "cluster": "BuildHost",
+    "docker": "BuildHost",
+    "from_dict": "BuildHost",
+    "native": "BuildHost"
+   }
+  },
+  "BuildPlan": {
+   "attrs": [
+    "entrypoint",
+    "files",
+    "from_dict",
+    "max_bytes",
+    "plan_hash",
+    "platform",
+    "preview",
+    "revision",
+    "user"
+   ],
+   "init": [
+    "entrypoint",
+    "files",
+    "max_bytes",
+    "platform",
+    "revision",
+    "user"
+   ],
+   "methods": {
+    "from_dict": [
+     "value"
+    ],
+    "preview": []
+   },
+   "returns": {
+    "from_dict": "BuildPlan"
+   }
+  },
+  "BuildReceipt": {
+   "attrs": [
+    "data",
+    "files",
+    "from_json",
+    "images",
+    "to_dict",
+    "to_json"
+   ],
+   "init": [
+    "data"
+   ],
+   "methods": {
+    "from_json": [
+     "raw"
+    ],
+    "to_dict": [],
+    "to_json": []
+   },
+   "returns": {
+    "from_json": "BuildReceipt"
+   }
+  },
+  "BuildSpec": {
+   "attr_types": {
+    "builder": "PinnedImage",
+    "pinned_args": "PinnedImage"
+   },
+   "attrs": [
+    "args",
+    "base",
+    "base_images",
+    "builder",
+    "builder_arg",
+    "builder_kind",
+    "buildx_builder",
+    "caches",
+    "commands",
+    "context_root",
+    "contexts",
+    "dockerfile",
+    "dockerfile_context",
+    "env",
+    "files",
+    "from_dict",
+    "from_toml",
+    "images",
+    "inputs",
+    "invocation",
+    "load_inputs",
+    "name",
+    "network",
+    "origin",
+    "pinned_args",
+    "plan",
+    "platform_override",
+    "platforms",
+    "render",
+    "run",
+    "smoke_argv",
+    "source_date_epoch",
+    "spec_sha256",
+    "timeout_seconds",
+    "to_dict",
+    "with_platform",
+    "workdir"
+   ],
+   "init": [
+    "args",
+    "base",
+    "builder",
+    "builder_arg",
+    "buildx_builder",
+    "caches",
+    "commands",
+    "contexts",
+    "dockerfile",
+    "dockerfile_context",
+    "env",
+    "files",
+    "images",
+    "inputs",
+    "name",
+    "network",
+    "origin",
+    "pinned_args",
+    "platform_override",
+    "platforms",
+    "source_date_epoch",
+    "timeout_seconds",
+    "workdir"
+   ],
+   "methods": {
+    "base_images": [],
+    "context_root": [
+     "context",
+     "inputs"
+    ],
+    "from_dict": [
+     "base",
+     "value"
+    ],
+    "from_toml": [
+     "path"
+    ],
+    "invocation": [
+     "builder",
+     "docker",
+     "image",
+     "kind",
+     "pending",
+     "platform",
+     "staging"
+    ],
+    "load_inputs": [],
+    "plan": [
+     "inputs"
+    ],
+    "render": [
+     "manifests",
+     "platform",
+     "roots"
+    ],
+    "run": [
+     "cancel",
+     "docker",
+     "grant",
+     "inputs",
+     "lock",
+     "log",
+     "output_dir",
+     "progress",
+     "raw_output",
+     "runner"
+    ],
+    "smoke_argv": [
+     "docker",
+     "image",
+     "image_id",
+     "name",
+     "platform"
+    ],
+    "to_dict": [],
+    "with_platform": [
+     "platform"
+    ]
+   },
+   "returns": {
+    "base_images": "PinnedImage",
+    "from_dict": "BuildSpec",
+    "from_toml": "BuildSpec",
+    "load_inputs": "InputsSpec",
+    "plan": "BuildPlan",
+    "run": "BuildReceipt",
+    "with_platform": "BuildSpec"
+   }
+  },
+  "CacheMount": {
+   "attrs": [
+    "flag",
+    "id",
+    "sharing",
+    "target"
+   ],
+   "init": [
+    "id",
+    "sharing",
+    "target"
+   ],
+   "methods": {
+    "flag": []
+   }
+  },
+  "CacheSpec": {
+   "attrs": [
+    "id",
+    "mount",
+    "name",
+    "sharing",
+    "target",
+    "to_dict"
+   ],
+   "init": [
+    "id",
+    "name",
+    "sharing",
+    "target"
+   ],
+   "methods": {
+    "mount": [
+     "platform",
+     "spec_name"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "mount": "CacheMount"
    }
   },
   "CheckContext": {
    "attrs": [
-    "app",
-    "base",
-    "state_dir"
+    "api_client",
+    "backend",
+    "close",
+    "exec",
+    "forward",
+    "forward_get",
+    "http_get",
+    "proxy_get",
+    "ready_pod",
+    "resolve_port"
    ],
    "init": [
-    "app",
+    "api_client",
     "base",
     "context",
+    "exec_policy",
+    "executor",
+    "forward_seconds",
+    "forwarder",
     "images",
     "kubeconfig",
+    "kubectl",
     "namespace",
     "release",
-    "state_dir",
-    "target"
+    "request_seconds",
+    "transport",
+    "values"
    ],
-   "methods": {}
+   "methods": {
+    "api_client": [],
+    "backend": [
+     "port",
+     "target"
+    ],
+    "close": [],
+    "exec": [
+     "command",
+     "container",
+     "target",
+     "timeout"
+    ],
+    "forward": [
+     "port",
+     "target"
+    ],
+    "forward_get": [
+     "path",
+     "port",
+     "target",
+     "timeout"
+    ],
+    "http_get": [
+     "path",
+     "port",
+     "target",
+     "timeout"
+    ],
+    "proxy_get": [
+     "path",
+     "port",
+     "target",
+     "timeout"
+    ],
+    "ready_pod": [
+     "target"
+    ],
+    "resolve_port": [
+     "target"
+    ]
+   },
+   "returns": {
+    "exec": "ExecResult",
+    "forward_get": "HttpResponse",
+    "http_get": "HttpResponse",
+    "proxy_get": "HttpResponse"
+   }
   },
   "CheckError": {
    "attrs": [
@@ -940,6 +1662,49 @@
    },
    "pydantic": true
   },
+  "Cluster": {
+   "attr_types": {
+    "controller": "Controller",
+    "dev": "DevBuilds",
+    "registry": "Registry",
+    "ui": "Ui"
+   },
+   "attrs": [
+    "access",
+    "api",
+    "controller",
+    "credentials",
+    "describe",
+    "dev",
+    "name",
+    "node",
+    "nodes",
+    "registry",
+    "storage_class",
+    "ui"
+   ],
+   "init": [
+    "access",
+    "api",
+    "controller",
+    "credentials",
+    "dev",
+    "name",
+    "nodes",
+    "registry",
+    "storage_class",
+    "ui"
+   ],
+   "methods": {
+    "describe": [],
+    "node": [
+     "name"
+    ]
+   },
+   "returns": {
+    "node": "Node"
+   }
+  },
   "ClusterIdentity": {
    "attr_types": {
     "egress": "NetworkRule",
@@ -968,6 +1733,69 @@
    "returns": {
     "rule": "Rule"
    }
+  },
+  "ClusterInstallConfig": {
+   "attr_types": {
+    "build": "InstalledBuildConfig",
+    "manual": "ManualDeliveryConfig"
+   },
+   "attrs": [
+    "api_egress_cidrs",
+    "api_server",
+    "authorized_access_subjects",
+    "authorized_subjects",
+    "backend_tls_annotation_key",
+    "backend_tls_annotation_value",
+    "build",
+    "dns_namespace",
+    "experimental",
+    "gateway_image",
+    "ingress_class",
+    "ingress_namespace",
+    "ingress_pod_labels",
+    "manual",
+    "namespace",
+    "oidc_client_id",
+    "oidc_egress_cidrs",
+    "oidc_issuer",
+    "oidc_metadata_url",
+    "origin",
+    "state_claim",
+    "state_size",
+    "storage_class",
+    "tls_secret",
+    "ui_image",
+    "url_prefix"
+   ],
+   "init": [
+    "api_egress_cidrs",
+    "api_server",
+    "authorized_access_subjects",
+    "authorized_subjects",
+    "backend_tls_annotation_key",
+    "backend_tls_annotation_value",
+    "build",
+    "dns_namespace",
+    "experimental",
+    "gateway_image",
+    "ingress_class",
+    "ingress_namespace",
+    "ingress_pod_labels",
+    "manual",
+    "namespace",
+    "oidc_client_id",
+    "oidc_egress_cidrs",
+    "oidc_issuer",
+    "oidc_metadata_url",
+    "origin",
+    "state_claim",
+    "state_size",
+    "storage_class",
+    "tls_secret",
+    "ui_image",
+    "url_prefix"
+   ],
+   "methods": {}
   },
   "ClusterRegistry": {
    "attrs": [
@@ -1054,6 +1882,70 @@
     "to_dict": []
    }
   },
+  "Component": {
+   "attr_types": {
+    "source": "Source"
+   },
+   "attrs": [
+    "image",
+    "image_ref",
+    "mirrored",
+    "name",
+    "options",
+    "pin",
+    "settings",
+    "source"
+   ],
+   "init": [
+    "image_ref",
+    "name",
+    "options",
+    "pin",
+    "settings",
+    "source"
+   ],
+   "methods": {
+    "image": [
+     "contract",
+     "name",
+     "pin",
+     "ref",
+     "settings"
+    ]
+   },
+   "returns": {
+    "image": "Component"
+   }
+  },
+  "CompositionError": {
+   "attrs": [
+    "add_note",
+    "args",
+    "with_traceback"
+   ],
+   "init": [
+    "code",
+    "details",
+    "failed",
+    "message"
+   ],
+   "methods": {
+    "add_note": null,
+    "with_traceback": null
+   }
+  },
+  "ConcurrentWriterError": {
+   "attrs": [
+    "add_note",
+    "args",
+    "with_traceback"
+   ],
+   "init": null,
+   "methods": {
+    "add_note": null,
+    "with_traceback": null
+   }
+  },
   "Config": {
    "attrs": [
     "component",
@@ -1091,6 +1983,25 @@
    ],
    "methods": {
     "manifest": []
+   },
+   "pydantic": true
+  },
+  "ConfigMap": {
+   "attrs": [
+    "api_data",
+    "data",
+    "get",
+    "labels",
+    "name"
+   ],
+   "init": [
+    "data",
+    "labels",
+    "name"
+   ],
+   "methods": {
+    "api_data": [],
+    "get": []
    },
    "pydantic": true
   },
@@ -1185,6 +2096,124 @@
     "manifest": []
    },
    "pydantic": true
+  },
+  "ContextFile": {
+   "attrs": [
+    "executable",
+    "path",
+    "sha256",
+    "size",
+    "to_dict"
+   ],
+   "init": [
+    "executable",
+    "path",
+    "sha256",
+    "size"
+   ],
+   "methods": {
+    "to_dict": []
+   }
+  },
+  "ContextManifest": {
+   "attrs": [
+    "files",
+    "pruned_directories",
+    "sha256",
+    "skipped_private",
+    "skipped_symlinks",
+    "summary",
+    "total_bytes"
+   ],
+   "init": [
+    "files",
+    "pruned_directories",
+    "skipped_private",
+    "skipped_symlinks"
+   ],
+   "methods": {
+    "summary": []
+   }
+  },
+  "ContextSelection": {
+   "attrs": [
+    "exclude",
+    "include",
+    "max_bytes",
+    "max_files",
+    "scan",
+    "to_dict"
+   ],
+   "init": [
+    "exclude",
+    "include",
+    "max_bytes",
+    "max_files"
+   ],
+   "methods": {
+    "scan": [
+     "root"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "scan": "ContextManifest"
+   }
+  },
+  "ContextSpec": {
+   "attr_types": {
+    "selection": "ContextSelection"
+   },
+   "attrs": [
+    "name",
+    "path",
+    "selection",
+    "source",
+    "target",
+    "to_dict"
+   ],
+   "init": [
+    "name",
+    "path",
+    "selection",
+    "source",
+    "target"
+   ],
+   "methods": {
+    "to_dict": []
+   }
+  },
+  "Controller": {
+   "attr_types": {
+    "telemetry": "Otlp"
+   },
+   "attrs": [
+    "builds",
+    "delete_volumes",
+    "delivery",
+    "host_wait",
+    "image",
+    "on",
+    "poll",
+    "quarantine_after",
+    "quarantine_window",
+    "sync",
+    "telemetry"
+   ],
+   "init": [
+    "builds",
+    "delete_volumes",
+    "delivery",
+    "host_wait",
+    "image",
+    "on",
+    "poll",
+    "quarantine_after",
+    "quarantine_window",
+    "sync",
+    "telemetry"
+   ],
+   "methods": {}
   },
   "CronJob": {
    "attr_types": {
@@ -1300,7 +2329,8 @@
    },
    "pydantic": true,
    "returns": {
-    "claim_templates": "ClaimTemplate"
+    "claim_templates": "ClaimTemplate",
+    "volumes": "Volume"
    }
   },
   "DaemonSet": {
@@ -1388,8 +2418,61 @@
    },
    "pydantic": true,
    "returns": {
-    "claim_templates": "ClaimTemplate"
+    "claim_templates": "ClaimTemplate",
+    "volumes": "Volume"
    }
+  },
+  "DefaultedField": {
+   "attr_types": {
+    "resource": "ResourceRef"
+   },
+   "attrs": [
+    "json_pointer",
+    "resource"
+   ],
+   "init": [
+    "json_pointer",
+    "resource"
+   ],
+   "methods": {}
+  },
+  "DeliveryGrant": {
+   "attrs": [
+    "approved_digest",
+    "expires_at",
+    "target"
+   ],
+   "init": [
+    "approved_digest",
+    "expires_at",
+    "target"
+   ],
+   "methods": {}
+  },
+  "DeployResourceRule": {
+   "attrs": [
+    "api_group",
+    "resource",
+    "verbs"
+   ],
+   "init": [
+    "api_group",
+    "resource",
+    "verbs"
+   ],
+   "methods": {}
+  },
+  "Deployable": {
+   "attrs": [
+    "api_data",
+    "get"
+   ],
+   "init": [],
+   "methods": {
+    "api_data": [],
+    "get": []
+   },
+   "pydantic": true
   },
   "Deployment": {
    "attr_types": {
@@ -1481,7 +2564,8 @@
    },
    "pydantic": true,
    "returns": {
-    "claim_templates": "ClaimTemplate"
+    "claim_templates": "ClaimTemplate",
+    "volumes": "Volume"
    }
   },
   "DeploymentComponent": {
@@ -1505,6 +2589,282 @@
     "components"
    ],
    "methods": {}
+  },
+  "DeploymentPlan": {
+   "attr_types": {
+    "approval_policy": "ApprovalPolicy",
+    "target": "PlanTarget"
+   },
+   "attrs": [
+    "actions",
+    "approval_policy",
+    "levels",
+    "plan_hash",
+    "protected_resources",
+    "schema_version",
+    "snapshot_hash",
+    "summary",
+    "target",
+    "validate_for"
+   ],
+   "init": [
+    "actions",
+    "approval_policy",
+    "levels",
+    "protected_resources",
+    "schema_version",
+    "snapshot_hash",
+    "target"
+   ],
+   "methods": {
+    "summary": [],
+    "validate_for": [
+     "snapshot"
+    ]
+   }
+  },
+  "DeploymentRevision": {
+   "attr_types": {
+    "authorization": "ExecutionAuthorization",
+    "plan": "DeploymentPlan",
+    "snapshot": "ObservedSnapshot"
+   },
+   "attrs": [
+    "authorization",
+    "create",
+    "from_json",
+    "material",
+    "plan",
+    "revision_id",
+    "snapshot",
+    "to_dict",
+    "to_json"
+   ],
+   "init": [
+    "authorization",
+    "plan",
+    "snapshot"
+   ],
+   "methods": {
+    "create": [
+     "authorization",
+     "plan",
+     "snapshot"
+    ],
+    "from_json": [
+     "authorization",
+     "encoded",
+     "plan",
+     "snapshot"
+    ],
+    "material": [],
+    "to_dict": [],
+    "to_json": []
+   },
+   "returns": {
+    "create": "DeploymentRevision",
+    "from_json": "DeploymentRevision"
+   }
+  },
+  "DeploymentSession": {
+   "attr_types": {
+    "archive": "DeploymentSessionArchive",
+    "bundle": "ExecutionBundle",
+    "composition": "DeploymentComposition",
+    "journal": "ExecutionJournal",
+    "revision": "DeploymentRevision",
+    "secrets": "SecretVersionStore"
+   },
+   "attrs": [
+    "apply",
+    "archive",
+    "bundle",
+    "composition",
+    "create",
+    "journal",
+    "open",
+    "preview",
+    "report",
+    "resume",
+    "revision",
+    "rotate",
+    "secrets",
+    "stop"
+   ],
+   "init": [
+    "archive",
+    "bundle",
+    "composition",
+    "journal",
+    "revision",
+    "secrets"
+   ],
+   "methods": {
+    "apply": [
+     "executor"
+    ],
+    "create": [
+     "authorization_factory",
+     "composition_factory",
+     "execution_id",
+     "journal",
+     "plan_authorization",
+     "private_inputs",
+     "secrets",
+     "session_id",
+     "snapshot"
+    ],
+    "open": [
+     "archive",
+     "authorization_factory",
+     "composition_factory",
+     "journal",
+     "plan_authorization",
+     "secrets",
+     "snapshot"
+    ],
+    "preview": [],
+    "report": [],
+    "resume": [
+     "executor"
+    ],
+    "rotate": [
+     "authorization_factory",
+     "composition_factory",
+     "execution_id",
+     "plan_authorization",
+     "private_inputs",
+     "session_id",
+     "snapshot"
+    ],
+    "stop": [
+     "executor"
+    ]
+   },
+   "returns": {
+    "create": "DeploymentSession",
+    "open": "DeploymentSession",
+    "rotate": "DeploymentSession"
+   }
+  },
+  "DeploymentSessionArchive": {
+   "attrs": [
+    "create",
+    "from_json",
+    "inputs",
+    "preview",
+    "report",
+    "session_id",
+    "to_dict",
+    "to_json"
+   ],
+   "init": [
+    "_encoded"
+   ],
+   "methods": {
+    "create": [
+     "bundle",
+     "composition",
+     "inputs",
+     "session_id"
+    ],
+    "from_json": [
+     "encoded"
+    ],
+    "inputs": [],
+    "preview": [],
+    "report": [],
+    "to_dict": [],
+    "to_json": []
+   },
+   "returns": {
+    "create": "DeploymentSessionArchive",
+    "from_json": "DeploymentSessionArchive",
+    "inputs": "SecretVersionRef"
+   }
+  },
+  "DevBuilds": {
+   "attr_types": {
+    "hosts": "BuildHost",
+    "profiles": "DevProfile"
+   },
+   "attrs": [
+    "cache_size",
+    "describe",
+    "from_dict",
+    "host",
+    "hosts",
+    "image",
+    "network",
+    "node",
+    "profile",
+    "profiles",
+    "run_cpu",
+    "run_memory",
+    "run_storage",
+    "slots",
+    "timeout"
+   ],
+   "init": [
+    "cache_size",
+    "hosts",
+    "image",
+    "network",
+    "node",
+    "profiles",
+    "run_cpu",
+    "run_memory",
+    "run_storage",
+    "slots",
+    "timeout"
+   ],
+   "methods": {
+    "describe": [],
+    "from_dict": [
+     "value"
+    ],
+    "host": [
+     "name"
+    ],
+    "profile": [
+     "name"
+    ]
+   },
+   "returns": {
+    "from_dict": "DevBuilds",
+    "host": "BuildHost",
+    "profile": "DevProfile"
+   }
+  },
+  "DevProfile": {
+   "attrs": [
+    "cpu",
+    "describe",
+    "env",
+    "image",
+    "memory",
+    "name",
+    "prefetch",
+    "timeout",
+    "toolchain",
+    "toolchains",
+    "tools"
+   ],
+   "init": [
+    "cpu",
+    "env",
+    "image",
+    "memory",
+    "name",
+    "prefetch",
+    "timeout",
+    "toolchain",
+    "toolchains",
+    "tools"
+   ],
+   "methods": {
+    "describe": []
+   }
   },
   "DiscoveredResource": {
    "attr_types": {
@@ -1545,6 +2905,115 @@
     "from_manifest": "DiscoveredResource",
     "from_public_dict": "DiscoveredResource"
    }
+  },
+  "DiscoveryArtifact": {
+   "attr_types": {
+    "coverage": "DiscoveryCoverage",
+    "limits": "DiscoveryLimits",
+    "provenance": "DiscoveryProvenance",
+    "target": "PlanTarget"
+   },
+   "attrs": [
+    "captured_at",
+    "coverage",
+    "defaulted_fields",
+    "execution_authoritative",
+    "from_dict",
+    "from_json",
+    "from_private_json",
+    "limits",
+    "provenance",
+    "resources",
+    "schema_version",
+    "server_dry_runs",
+    "target",
+    "to_dict",
+    "to_json",
+    "to_private_json"
+   ],
+   "init": [
+    "captured_at",
+    "coverage",
+    "defaulted_fields",
+    "limits",
+    "provenance",
+    "resources",
+    "schema_version",
+    "server_dry_runs",
+    "target"
+   ],
+   "methods": {
+    "from_dict": [
+     "value"
+    ],
+    "from_json": [
+     "max_bytes",
+     "value"
+    ],
+    "from_private_json": [
+     "encoded"
+    ],
+    "to_dict": [],
+    "to_json": [],
+    "to_private_json": []
+   },
+   "returns": {
+    "from_dict": "DiscoveryArtifact",
+    "from_json": "DiscoveryArtifact",
+    "from_private_json": "DiscoveryArtifact"
+   }
+  },
+  "DiscoveryCoverage": {
+   "attrs": [
+    "api_resources",
+    "capture_id",
+    "complete",
+    "completed",
+    "failures",
+    "from_dict",
+    "identity_dict",
+    "is_complete_for",
+    "policy_revision",
+    "provider_id",
+    "requested"
+   ],
+   "init": [
+    "api_resources",
+    "capture_id",
+    "completed",
+    "failures",
+    "policy_revision",
+    "provider_id",
+    "requested"
+   ],
+   "methods": {
+    "from_dict": [
+     "value"
+    ],
+    "identity_dict": [],
+    "is_complete_for": [
+     "api_version",
+     "kind"
+    ]
+   },
+   "returns": {
+    "from_dict": "DiscoveryCoverage"
+   }
+  },
+  "DiscoveryFailure": {
+   "attr_types": {
+    "kind": "DiscoveryFailureKind",
+    "resource_type": "ResourceType"
+   },
+   "attrs": [
+    "kind",
+    "resource_type"
+   ],
+   "init": [
+    "kind",
+    "resource_type"
+   ],
+   "methods": {}
   },
   "DiscoveryFailureKind": {
    "attrs": [
@@ -1653,6 +3122,27 @@
     "zfill": null
    }
   },
+  "DiscoveryLimits": {
+   "attrs": [
+    "call_seconds",
+    "max_artifact_bytes",
+    "max_pages",
+    "max_resource_types",
+    "max_resources",
+    "max_seconds",
+    "page_size"
+   ],
+   "init": [
+    "call_seconds",
+    "max_artifact_bytes",
+    "max_pages",
+    "max_resource_types",
+    "max_resources",
+    "max_seconds",
+    "page_size"
+   ],
+   "methods": {}
+  },
   "DiscoveryPage": {
    "attr_types": {
     "api_resource": "ApiResource",
@@ -1676,6 +3166,24 @@
     "list_resource_version",
     "resources",
     "target"
+   ],
+   "methods": {}
+  },
+  "DiscoveryProvenance": {
+   "attr_types": {
+    "source": "EvidenceSource"
+   },
+   "attrs": [
+    "cluster_uid",
+    "endpoint_id",
+    "namespace_uid",
+    "source"
+   ],
+   "init": [
+    "cluster_uid",
+    "endpoint_id",
+    "namespace_uid",
+    "source"
    ],
    "methods": {}
   },
@@ -1719,6 +3227,131 @@
     ]
    },
    "pydantic": true
+  },
+  "DnsRecord": {
+   "attrs": [
+    "describe",
+    "key",
+    "provider",
+    "resource_name",
+    "server",
+    "servers",
+    "ttl",
+    "value"
+   ],
+   "init": [
+    "name",
+    "provider",
+    "server",
+    "servers",
+    "ttl",
+    "type",
+    "value",
+    "zone"
+   ],
+   "methods": {
+    "describe": []
+   }
+  },
+  "DockerArchiveOciBuilder": {
+   "attrs": [
+    "build"
+   ],
+   "init": [],
+   "methods": {
+    "build": [
+     "base_archive",
+     "base_config_digest",
+     "cancel",
+     "max_base_bytes",
+     "output",
+     "plan",
+     "root"
+    ]
+   },
+   "returns": {
+    "build": "RunnableOciReceipt"
+   }
+  },
+  "DockerImageSource": {
+   "attrs": [
+    "is_id",
+    "reference"
+   ],
+   "init": [
+    "reference"
+   ],
+   "methods": {}
+  },
+  "DockerLocalImporter": {
+   "attr_types": {
+    "tool": "ToolPin"
+   },
+   "attrs": [
+    "import_archive",
+    "import_image",
+    "import_runnable_image",
+    "preview",
+    "socket",
+    "tool"
+   ],
+   "init": [
+    "socket",
+    "tool"
+   ],
+   "methods": {
+    "import_archive": [
+     "archive",
+     "cancel",
+     "grant",
+     "limits",
+     "max_bytes"
+    ],
+    "import_image": [
+     "_runtime_layers",
+     "cancel",
+     "grant",
+     "layout",
+     "limits"
+    ],
+    "import_runnable_image": [
+     "cancel",
+     "grant",
+     "layout",
+     "limits"
+    ],
+    "preview": [
+     "layout"
+    ]
+   }
+  },
+  "DockerLocalRunner": {
+   "attr_types": {
+    "tool": "ToolPin"
+   },
+   "attrs": [
+    "inspect_image",
+    "run_image",
+    "socket",
+    "tool"
+   ],
+   "init": [
+    "socket",
+    "tool"
+   ],
+   "methods": {
+    "inspect_image": [
+     "expected_platform",
+     "image_id",
+     "limits"
+    ],
+    "run_image": [
+     "arguments",
+     "cancel",
+     "grant",
+     "limits"
+    ]
+   }
   },
   "EnvConfig": {
    "attr_types": {
@@ -1793,6 +3426,61 @@
     "named": "Environment"
    }
   },
+  "EnvError": {
+   "attrs": [
+    "add_note",
+    "args",
+    "with_traceback"
+   ],
+   "init": [
+    "code",
+    "details",
+    "failed",
+    "message"
+   ],
+   "methods": {
+    "add_note": null,
+    "with_traceback": null
+   }
+  },
+  "EnvStatus": {
+   "attrs": [
+    "age_seconds",
+    "branch",
+    "build",
+    "commit",
+    "created_at",
+    "deploy",
+    "fixed",
+    "gitops",
+    "health",
+    "main",
+    "namespace",
+    "pushed_at",
+    "state",
+    "to_dict",
+    "workloads"
+   ],
+   "init": [
+    "age_seconds",
+    "branch",
+    "build",
+    "commit",
+    "created_at",
+    "deploy",
+    "fixed",
+    "gitops",
+    "health",
+    "main",
+    "namespace",
+    "pushed_at",
+    "state",
+    "workloads"
+   ],
+   "methods": {
+    "to_dict": []
+   }
+  },
   "Environment": {
    "attr_types": {
     "autoscalers": "Scaling",
@@ -1831,6 +3519,110 @@
     "values": []
    },
    "pydantic": true
+  },
+  "EvidenceSource": {
+   "attrs": [
+    "LIVE",
+    "LOOPBACK",
+    "SYNTHETIC",
+    "capitalize",
+    "casefold",
+    "center",
+    "count",
+    "encode",
+    "endswith",
+    "expandtabs",
+    "find",
+    "format",
+    "format_map",
+    "index",
+    "isalnum",
+    "isalpha",
+    "isascii",
+    "isdecimal",
+    "isdigit",
+    "isidentifier",
+    "islower",
+    "isnumeric",
+    "isprintable",
+    "isspace",
+    "istitle",
+    "isupper",
+    "join",
+    "ljust",
+    "lower",
+    "lstrip",
+    "maketrans",
+    "partition",
+    "removeprefix",
+    "removesuffix",
+    "replace",
+    "rfind",
+    "rindex",
+    "rjust",
+    "rpartition",
+    "rsplit",
+    "rstrip",
+    "split",
+    "splitlines",
+    "startswith",
+    "strip",
+    "swapcase",
+    "title",
+    "translate",
+    "upper",
+    "zfill"
+   ],
+   "init": [],
+   "methods": {
+    "capitalize": null,
+    "casefold": null,
+    "center": null,
+    "count": null,
+    "encode": null,
+    "endswith": null,
+    "expandtabs": null,
+    "find": null,
+    "format": null,
+    "format_map": null,
+    "index": null,
+    "isalnum": null,
+    "isalpha": null,
+    "isascii": null,
+    "isdecimal": null,
+    "isdigit": null,
+    "isidentifier": null,
+    "islower": null,
+    "isnumeric": null,
+    "isprintable": null,
+    "isspace": null,
+    "istitle": null,
+    "isupper": null,
+    "join": null,
+    "ljust": null,
+    "lower": null,
+    "lstrip": null,
+    "maketrans": null,
+    "partition": null,
+    "removeprefix": null,
+    "removesuffix": null,
+    "replace": null,
+    "rfind": null,
+    "rindex": null,
+    "rjust": null,
+    "rpartition": null,
+    "rsplit": null,
+    "rstrip": null,
+    "split": null,
+    "splitlines": null,
+    "startswith": null,
+    "strip": null,
+    "swapcase": null,
+    "title": null,
+    "translate": null,
+    "upper": null,
+    "zfill": null
+   }
   },
   "ExecCheck": {
    "attrs": [
@@ -1891,6 +3683,205 @@
     "stdout"
    ],
    "methods": {}
+  },
+  "ExecutionAuthorization": {
+   "attr_types": {
+    "provenance": "DiscoveryProvenance",
+    "target": "PlanTarget"
+   },
+   "attrs": [
+    "actions",
+    "authorization_id",
+    "cluster_resources",
+    "compensation_resources",
+    "expires_at",
+    "field_manager",
+    "inherited_owner_ids",
+    "max_evidence_age_seconds",
+    "owner_id",
+    "plan_hash",
+    "provenance",
+    "resume_revision_id",
+    "snapshot_hash",
+    "target"
+   ],
+   "init": [
+    "actions",
+    "authorization_id",
+    "cluster_resources",
+    "compensation_resources",
+    "expires_at",
+    "field_manager",
+    "inherited_owner_ids",
+    "max_evidence_age_seconds",
+    "owner_id",
+    "plan_hash",
+    "provenance",
+    "resume_revision_id",
+    "snapshot_hash",
+    "target"
+   ],
+   "methods": {}
+  },
+  "ExecutionBundle": {
+   "attr_types": {
+    "authorization": "ExecutionAuthorization",
+    "revision": "DeploymentRevision"
+   },
+   "attrs": [
+    "action_ids",
+    "authorization",
+    "create",
+    "execution_id",
+    "from_json",
+    "journal_binding",
+    "revision",
+    "to_dict",
+    "to_json",
+    "with_authorization"
+   ],
+   "init": [
+    "action_ids",
+    "authorization",
+    "execution_id",
+    "revision"
+   ],
+   "methods": {
+    "create": [
+     "execution_id",
+     "revision"
+    ],
+    "from_json": [
+     "authorization",
+     "encoded",
+     "revision"
+    ],
+    "journal_binding": [],
+    "to_dict": [],
+    "to_json": [],
+    "with_authorization": [
+     "authorization"
+    ]
+   },
+   "returns": {
+    "create": "ExecutionBundle",
+    "from_json": "ExecutionBundle",
+    "with_authorization": "ExecutionBundle"
+   }
+  },
+  "ExecutionGrant": {
+   "attrs": [
+    "allow_code_execution",
+    "allow_network",
+    "expires_at",
+    "plan_hash"
+   ],
+   "init": [
+    "allow_code_execution",
+    "allow_network",
+    "expires_at",
+    "plan_hash"
+   ],
+   "methods": {}
+  },
+  "ExecutionJournal": {
+   "attrs": [
+    "actions",
+    "cancel",
+    "cancelled",
+    "clear_diagnosis",
+    "close",
+    "diagnosis",
+    "exclusive",
+    "export_execution",
+    "import_legacy_execution",
+    "migration_lineage",
+    "on_commit",
+    "record",
+    "record_diagnosis",
+    "record_failure",
+    "resume",
+    "session",
+    "set_state",
+    "start",
+    "store_session",
+    "summary"
+   ],
+   "init": [
+    "max_bytes",
+    "path"
+   ],
+   "methods": {
+    "actions": [
+     "execution"
+    ],
+    "cancel": [
+     "execution"
+    ],
+    "cancelled": [
+     "execution"
+    ],
+    "clear_diagnosis": [
+     "execution"
+    ],
+    "close": [],
+    "diagnosis": [
+     "execution"
+    ],
+    "exclusive": [],
+    "export_execution": [
+     "execution"
+    ],
+    "import_legacy_execution": [
+     "actions",
+     "archive",
+     "binding",
+     "cancelled",
+     "execution",
+     "source_binding",
+     "source_execution",
+     "state"
+    ],
+    "migration_lineage": [
+     "execution"
+    ],
+    "record": [
+     "execution",
+     "ordinal",
+     "payload",
+     "state"
+    ],
+    "record_diagnosis": [
+     "diagnosis",
+     "execution"
+    ],
+    "record_failure": [
+     "category",
+     "execution"
+    ],
+    "resume": [
+     "execution"
+    ],
+    "session": [
+     "session_id"
+    ],
+    "set_state": [
+     "execution",
+     "state"
+    ],
+    "start": [
+     "binding",
+     "execution",
+     "operation_ids"
+    ],
+    "store_session": [
+     "archive",
+     "session_id"
+    ],
+    "summary": [
+     "execution"
+    ]
+   }
   },
   "ExecutionSpec": {
    "attrs": [
@@ -2058,6 +4049,22 @@
     ]
    }
   },
+  "FieldManagerEntry": {
+   "attrs": [
+    "fields",
+    "fields_json",
+    "manager",
+    "operation",
+    "subresource"
+   ],
+   "init": [
+    "fields_json",
+    "manager",
+    "operation",
+    "subresource"
+   ],
+   "methods": {}
+  },
   "FieldRef": {
    "attrs": [
     "field_path",
@@ -2070,6 +4077,65 @@
     "manifest": []
    },
    "pydantic": true
+  },
+  "FileOutput": {
+   "attrs": [
+    "source",
+    "stage",
+    "to",
+    "to_dict"
+   ],
+   "init": [
+    "source",
+    "stage",
+    "to"
+   ],
+   "methods": {
+    "to_dict": []
+   }
+  },
+  "FileStateStore": {
+   "attrs": [
+    "create_backup",
+    "ensure_directories",
+    "load_data",
+    "restore_backup",
+    "save_data"
+   ],
+   "init": [
+    "base_dir"
+   ],
+   "methods": {
+    "create_backup": [
+     "target_archive"
+    ],
+    "ensure_directories": [],
+    "load_data": [
+     "key"
+    ],
+    "restore_backup": [
+     "backup_archive",
+     "destination"
+    ],
+    "save_data": [
+     "data",
+     "key"
+    ]
+   }
+  },
+  "Firewall": {
+   "attrs": [
+    "describe",
+    "name",
+    "rules"
+   ],
+   "init": [
+    "name",
+    "rules"
+   ],
+   "methods": {
+    "describe": []
+   }
   },
   "Forward": {
    "attr_types": {
@@ -2129,6 +4195,29 @@
    },
    "pydantic": true
   },
+  "HPA": {
+   "attrs": [
+    "get_hpa",
+    "max_replicas",
+    "min_replicas",
+    "target_cpu_utilization_percentage"
+   ],
+   "init": [
+    "max_replicas",
+    "min_replicas",
+    "target_cpu_utilization_percentage"
+   ],
+   "methods": {
+    "get_hpa": [
+     "name",
+     "target_kind"
+    ]
+   },
+   "pydantic": true,
+   "returns": {
+    "get_hpa": "HorizontalPodAutoscaler"
+   }
+  },
   "HealthProbe": {
    "attrs": [
     "expect_status",
@@ -2153,6 +4242,142 @@
    ],
    "methods": {
     "public_dict": []
+   },
+   "pydantic": true
+  },
+  "Hetzner": {
+   "attrs": [
+    "address",
+    "check_server",
+    "credentials",
+    "describe",
+    "endpoint",
+    "labels_of",
+    "location",
+    "name",
+    "pin",
+    "poll_interval",
+    "prices",
+    "provider_block",
+    "render_firewall",
+    "render_primary_ip",
+    "render_record",
+    "render_server",
+    "render_ssh_key",
+    "server_id",
+    "server_status",
+    "server_types",
+    "token_env"
+   ],
+   "init": [
+    "credentials",
+    "endpoint",
+    "location",
+    "poll_interval",
+    "server_types"
+   ],
+   "methods": {
+    "address": [
+     "family",
+     "server"
+    ],
+    "check_server": [
+     "server"
+    ],
+    "describe": [],
+    "labels_of": [
+     "values"
+    ],
+    "pin": [],
+    "prices": [
+     "token"
+    ],
+    "provider_block": [],
+    "render_firewall": [
+     "firewall",
+     "labels"
+    ],
+    "render_primary_ip": [
+     "ip",
+     "labels",
+     "server"
+    ],
+    "render_record": [
+     "labels",
+     "record",
+     "values"
+    ],
+    "render_server": [
+     "firewall",
+     "ips",
+     "labels",
+     "server",
+     "ssh_keys"
+    ],
+    "render_ssh_key": [
+     "digest",
+     "labels",
+     "name",
+     "public_key"
+    ],
+    "server_id": [
+     "server"
+    ],
+    "server_status": [
+     "server"
+    ],
+    "token_env": []
+   },
+   "returns": {
+    "pin": "Pin",
+    "prices": "Prices",
+    "render_firewall": "Resource",
+    "render_primary_ip": "Resource",
+    "render_record": "Resource",
+    "render_server": "Resource",
+    "render_ssh_key": "Resource"
+   }
+  },
+  "Hook": {
+   "attrs": [
+    "argv",
+    "render",
+    "timeout"
+   ],
+   "init": [
+    "argv",
+    "timeout"
+   ],
+   "methods": {
+    "render": [
+     "values"
+    ]
+   }
+  },
+  "HorizontalPodAutoscaler": {
+   "attrs": [
+    "api_data",
+    "get",
+    "labels",
+    "max_replicas",
+    "min_replicas",
+    "name",
+    "target_cpu_utilization_percentage",
+    "target_kind",
+    "target_name"
+   ],
+   "init": [
+    "labels",
+    "max_replicas",
+    "min_replicas",
+    "name",
+    "target_cpu_utilization_percentage",
+    "target_kind",
+    "target_name"
+   ],
+   "methods": {
+    "api_data": [],
+    "get": []
    },
    "pydantic": true
   },
@@ -2224,6 +4449,33 @@
     ]
    },
    "pydantic": true
+  },
+  "HttpState": {
+   "attrs": [
+    "address",
+    "credentials",
+    "describe",
+    "env",
+    "kind",
+    "lock_address",
+    "render",
+    "secrets",
+    "unlock_address",
+    "username"
+   ],
+   "init": [
+    "address",
+    "credentials",
+    "lock_address",
+    "unlock_address",
+    "username"
+   ],
+   "methods": {
+    "describe": [],
+    "env": [],
+    "render": [],
+    "secrets": []
+   }
   },
   "ImageHandle": {
    "attrs": [
@@ -2345,6 +4597,50 @@
     "with_traceback": null
    }
   },
+  "ImageOutput": {
+   "attr_types": {
+    "base": "PinnedImage",
+    "smoke": "SmokeCheck"
+   },
+   "attrs": [
+    "base",
+    "cmd",
+    "entrypoint",
+    "files",
+    "name",
+    "ref",
+    "repository",
+    "smoke",
+    "tag",
+    "target",
+    "templated",
+    "to_dict",
+    "user",
+    "workdir"
+   ],
+   "init": [
+    "base",
+    "cmd",
+    "entrypoint",
+    "files",
+    "name",
+    "repository",
+    "smoke",
+    "tag",
+    "target",
+    "user",
+    "workdir"
+   ],
+   "methods": {
+    "ref": [
+     "image_id",
+     "multi",
+     "pending",
+     "platform"
+    ],
+    "to_dict": []
+   }
+  },
   "ImageRef": {
    "attrs": [
     "digest",
@@ -2419,6 +4715,41 @@
    },
    "pydantic": true
   },
+  "Infrastructure": {
+   "attrs": [
+    "backend",
+    "describe",
+    "firewalls",
+    "home",
+    "providers",
+    "records",
+    "server",
+    "servers",
+    "state_dir",
+    "state_key"
+   ],
+   "init": [
+    "backend",
+    "home",
+    "name",
+    "records",
+    "servers",
+    "state_dir",
+    "state_key"
+   ],
+   "methods": {
+    "describe": [],
+    "firewalls": [],
+    "providers": [],
+    "server": [
+     "name"
+    ]
+   },
+   "returns": {
+    "firewalls": "Firewall",
+    "server": "Server"
+   }
+  },
   "Ingress": {
    "attrs": [
     "class_name",
@@ -2445,6 +4776,144 @@
     ]
    },
    "pydantic": true
+  },
+  "InputsLock": {
+   "attrs": [
+    "from_dict",
+    "from_json",
+    "only",
+    "source",
+    "sources",
+    "spec_sha256",
+    "to_dict",
+    "to_json"
+   ],
+   "init": [
+    "only",
+    "sources",
+    "spec_sha256"
+   ],
+   "methods": {
+    "from_dict": [
+     "value"
+    ],
+    "from_json": [
+     "raw"
+    ],
+    "source": [
+     "name"
+    ],
+    "to_dict": [],
+    "to_json": []
+   },
+   "returns": {
+    "from_dict": "InputsLock",
+    "from_json": "InputsLock",
+    "source": "SourceIdentity"
+   }
+  },
+  "InputsSpec": {
+   "attrs": [
+    "base",
+    "declared",
+    "from_dict",
+    "from_toml",
+    "resolve",
+    "roots",
+    "select",
+    "sources",
+    "spec_sha256"
+   ],
+   "init": [
+    "base",
+    "roots",
+    "sources"
+   ],
+   "methods": {
+    "declared": [
+     "source"
+    ],
+    "from_dict": [
+     "base",
+     "value"
+    ],
+    "from_toml": [
+     "path"
+    ],
+    "resolve": [
+     "source"
+    ],
+    "select": [
+     "only"
+    ]
+   },
+   "returns": {
+    "from_dict": "InputsSpec",
+    "from_toml": "InputsSpec"
+   }
+  },
+  "InputsVerification": {
+   "attr_types": {
+    "actual": "InputsLock",
+    "expected": "InputsLock"
+   },
+   "attrs": [
+    "actual",
+    "drifts",
+    "expected",
+    "ok",
+    "raise_for_drift",
+    "summary",
+    "to_dict"
+   ],
+   "init": [
+    "actual",
+    "drifts",
+    "expected"
+   ],
+   "methods": {
+    "raise_for_drift": [
+     "context"
+    ],
+    "summary": [],
+    "to_dict": []
+   }
+  },
+  "InstalledBuildConfig": {
+   "attrs": [
+    "cache_size",
+    "git_secret",
+    "image",
+    "node_arch",
+    "platforms",
+    "registry_url",
+    "repo",
+    "spec_path"
+   ],
+   "init": [
+    "cache_size",
+    "git_secret",
+    "image",
+    "node_arch",
+    "platforms",
+    "registry_url",
+    "repo",
+    "spec_path"
+   ],
+   "methods": {}
+  },
+  "InstanceLock": {
+   "attrs": [
+    "acquire",
+    "release"
+   ],
+   "init": [
+    "lock_file"
+   ],
+   "methods": {
+    "acquire": [],
+    "release": []
+   }
   },
   "Job": {
    "attr_types": {
@@ -2546,7 +5015,8 @@
    },
    "pydantic": true,
    "returns": {
-    "claim_templates": "ClaimTemplate"
+    "claim_templates": "ClaimTemplate",
+    "volumes": "Volume"
    }
   },
   "KubeconfigTarget": {
@@ -2742,6 +5212,70 @@
     "write": "DiscoveredResource"
    }
   },
+  "LegacyEvidenceInsufficient": {
+   "attrs": [
+    "add_note",
+    "args",
+    "with_traceback"
+   ],
+   "init": [
+    "code"
+   ],
+   "methods": {
+    "add_note": null,
+    "with_traceback": null
+   }
+  },
+  "LegacyExecutionArchive": {
+   "attrs": [
+    "from_dict",
+    "from_json",
+    "from_revision",
+    "to_dict",
+    "to_json"
+   ],
+   "init": [
+    "_encoded"
+   ],
+   "methods": {
+    "from_dict": [
+     "value"
+    ],
+    "from_json": [
+     "encoded"
+    ],
+    "from_revision": [
+     "revision"
+    ],
+    "to_dict": [],
+    "to_json": []
+   },
+   "returns": {
+    "from_dict": "LegacyExecutionArchive",
+    "from_json": "LegacyExecutionArchive",
+    "from_revision": "LegacyExecutionArchive"
+   }
+  },
+  "LegacyExecutionImport": {
+   "attr_types": {
+    "bundle": "ExecutionBundle",
+    "revision": "DeploymentRevision"
+   },
+   "attrs": [
+    "bundle",
+    "lineage",
+    "report",
+    "revision"
+   ],
+   "init": [
+    "bundle",
+    "lineage",
+    "revision"
+   ],
+   "methods": {
+    "report": []
+   }
+  },
   "LiveSecretKey": {
    "attrs": [
     "key",
@@ -2753,6 +5287,72 @@
    ],
    "methods": {},
    "pydantic": true
+  },
+  "LocalImportGrant": {
+   "attrs": [
+    "expires_at",
+    "manifest_digest",
+    "socket"
+   ],
+   "init": [
+    "expires_at",
+    "manifest_digest",
+    "socket"
+   ],
+   "methods": {}
+  },
+  "LocalRunGrant": {
+   "attrs": [
+    "expires_at",
+    "image_id",
+    "platform",
+    "socket"
+   ],
+   "init": [
+    "expires_at",
+    "image_id",
+    "platform",
+    "socket"
+   ],
+   "methods": {}
+  },
+  "LocalState": {
+   "attrs": [
+    "describe",
+    "env",
+    "kind",
+    "render",
+    "secrets"
+   ],
+   "init": [],
+   "methods": {
+    "describe": [],
+    "env": [],
+    "render": [],
+    "secrets": []
+   }
+  },
+  "ManualDeliveryConfig": {
+   "attrs": [
+    "authorized_deploy_subjects",
+    "deploy_resources",
+    "namespace",
+    "release_definition_toml",
+    "renderer_image",
+    "renderer_platform",
+    "source_file_allowlist",
+    "source_files"
+   ],
+   "init": [
+    "authorized_deploy_subjects",
+    "deploy_resources",
+    "release_definition_toml",
+    "renderer_image",
+    "renderer_platform",
+    "source_file_allowlist",
+    "source_files"
+   ],
+   "methods": {}
   },
   "MemoryVolume": {
    "attrs": [
@@ -2943,6 +5543,68 @@
     "dns": "NetworkRule"
    }
   },
+  "Node": {
+   "attrs": [
+    "arch",
+    "labels",
+    "name",
+    "roles",
+    "target"
+   ],
+   "init": [
+    "arch",
+    "name",
+    "roles",
+    "target"
+   ],
+   "methods": {}
+  },
+  "NodeDelivery": {
+   "attr_types": {
+    "docker": "ToolPin",
+    "runner": "Runner",
+    "ssh": "ToolPin"
+   },
+   "attrs": [
+    "deliver",
+    "docker",
+    "docker_socket",
+    "inspect_node",
+    "preview",
+    "runner",
+    "ssh",
+    "ssh_agent_socket"
+   ],
+   "init": [
+    "docker",
+    "docker_socket",
+    "runner",
+    "ssh",
+    "ssh_agent_socket"
+   ],
+   "methods": {
+    "deliver": [
+     "cancel",
+     "grant",
+     "limits",
+     "reference",
+     "source",
+     "target"
+    ],
+    "inspect_node": [
+     "reference",
+     "target"
+    ],
+    "preview": [
+     "approved_digest",
+     "reference",
+     "target"
+    ]
+   },
+   "returns": {
+    "inspect_node": "NodeImage"
+   }
+  },
   "NodeExpectation": {
    "attrs": [
     "name",
@@ -2951,6 +5613,21 @@
    "init": [
     "name",
     "uid"
+   ],
+   "methods": {}
+  },
+  "NodeImage": {
+   "attrs": [
+    "config_digests",
+    "media_type",
+    "reference",
+    "target_digest"
+   ],
+   "init": [
+    "config_digests",
+    "media_type",
+    "reference",
+    "target_digest"
    ],
    "methods": {}
   },
@@ -2968,6 +5645,128 @@
    "methods": {
     "describe": []
    }
+  },
+  "NodeLocalRegistry": {
+   "attrs": [
+    "KIND",
+    "address",
+    "api_data",
+    "claim_name",
+    "component",
+    "config_map_name",
+    "config_yaml",
+    "cpu_request",
+    "default_selector_labels",
+    "existing_claim",
+    "garbage_collection",
+    "get",
+    "get_claim",
+    "get_config_map",
+    "get_deployment",
+    "host_path",
+    "image",
+    "index_platforms",
+    "labels",
+    "memory_limit",
+    "memory_request",
+    "name",
+    "node_name",
+    "object_labels",
+    "port",
+    "pull_reference",
+    "read_only",
+    "registry_config",
+    "resource_intents",
+    "rolling_update",
+    "run_as_user",
+    "selector",
+    "selector_labels",
+    "stopped",
+    "storage",
+    "storage_class",
+    "upload_purge_age"
+   ],
+   "init": [
+    "cpu_request",
+    "existing_claim",
+    "host_path",
+    "image",
+    "index_platforms",
+    "labels",
+    "memory_limit",
+    "memory_request",
+    "name",
+    "node_name",
+    "port",
+    "read_only",
+    "rolling_update",
+    "run_as_user",
+    "selector",
+    "stopped",
+    "storage",
+    "storage_class",
+    "upload_purge_age"
+   ],
+   "methods": {
+    "api_data": [],
+    "component": [
+     "component_name",
+     "dependencies",
+     "namespace"
+    ],
+    "config_yaml": [],
+    "garbage_collection": null,
+    "get": [],
+    "get_claim": [],
+    "get_config_map": [],
+    "get_deployment": [],
+    "pull_reference": [
+     "digest",
+     "repository"
+    ],
+    "registry_config": [],
+    "resource_intents": [
+     "namespace"
+    ]
+   },
+   "pydantic": true,
+   "returns": {
+    "component": "DeploymentComponent",
+    "garbage_collection": "NodeLocalRegistryGarbageCollection"
+   }
+  },
+  "NodeLocalRegistryGarbageCollection": {
+   "attr_types": {
+    "registry": "NodeLocalRegistry"
+   },
+   "attrs": [
+    "KIND",
+    "api_data",
+    "claims_registry_port",
+    "cleanup_after_seconds",
+    "command",
+    "delete_untagged",
+    "dry_run",
+    "get",
+    "get_job",
+    "job_name",
+    "name",
+    "registry"
+   ],
+   "init": [
+    "cleanup_after_seconds",
+    "delete_untagged",
+    "dry_run",
+    "name",
+    "registry"
+   ],
+   "methods": {
+    "api_data": [],
+    "command": [],
+    "get": [],
+    "get_job": []
+   },
+   "pydantic": true
   },
   "NodeLoopbackRegistry": {
    "attrs": [
@@ -3029,6 +5828,212 @@
    ],
    "methods": {},
    "pydantic": true
+  },
+  "NodeTarget": {
+   "attrs": [
+    "address",
+    "identity",
+    "namespace",
+    "parse",
+    "port",
+    "public",
+    "runtime",
+    "runtime_argv",
+    "sudo",
+    "transport",
+    "user"
+   ],
+   "init": [
+    "address",
+    "namespace",
+    "port",
+    "runtime",
+    "sudo",
+    "transport",
+    "user"
+   ],
+   "methods": {
+    "parse": [
+     "url"
+    ],
+    "public": [],
+    "runtime_argv": []
+   },
+   "returns": {
+    "parse": "NodeTarget"
+   }
+  },
+  "ObservedResource": {
+   "attr_types": {
+    "intent": "ResourceIntent",
+    "ownership": "Ownership",
+    "precondition": "ResourcePrecondition"
+   },
+   "attrs": [
+    "field_managers",
+    "from_manifest",
+    "intent",
+    "owner",
+    "owner_uids",
+    "ownership",
+    "precondition",
+    "retained"
+   ],
+   "init": [
+    "field_managers",
+    "intent",
+    "owner",
+    "owner_uids",
+    "ownership",
+    "precondition",
+    "retained"
+   ],
+   "methods": {
+    "from_manifest": [
+     "manifest",
+     "ownership",
+     "retained",
+     "scope"
+    ]
+   },
+   "returns": {
+    "from_manifest": "ObservedResource"
+   }
+  },
+  "ObservedSnapshot": {
+   "attr_types": {
+    "coverage": "DiscoveryCoverage",
+    "discovery": "DiscoveryArtifact",
+    "provenance": "DiscoveryProvenance",
+    "target": "PlanTarget"
+   },
+   "attrs": [
+    "captured_at",
+    "coverage",
+    "defaulted_fields",
+    "discovery",
+    "from_discovery",
+    "incomplete_content",
+    "provenance",
+    "resources",
+    "server_dry_run",
+    "server_dry_runs",
+    "snapshot_hash",
+    "target"
+   ],
+   "init": [
+    "captured_at",
+    "coverage",
+    "defaulted_fields",
+    "discovery",
+    "incomplete_content",
+    "provenance",
+    "resources",
+    "server_dry_runs",
+    "target"
+   ],
+   "methods": {
+    "from_discovery": [
+     "artifact"
+    ],
+    "server_dry_run": [
+     "ref"
+    ]
+   },
+   "returns": {
+    "from_discovery": "ObservedSnapshot",
+    "server_dry_run": "ServerDryRun"
+   }
+  },
+  "OciBuilder": {
+   "attrs": [
+    "build"
+   ],
+   "init": [],
+   "methods": {
+    "build": [
+     "cancel",
+     "output",
+     "plan",
+     "root"
+    ]
+   },
+   "returns": {
+    "build": "OciReceipt"
+   }
+  },
+  "OciReceipt": {
+   "attrs": [
+    "bytes",
+    "config_digest",
+    "layers",
+    "manifest_digest",
+    "plan_hash",
+    "platform",
+    "summary"
+   ],
+   "init": [
+    "bytes",
+    "config_digest",
+    "layers",
+    "manifest_digest",
+    "plan_hash",
+    "platform"
+   ],
+   "methods": {
+    "summary": []
+   }
+  },
+  "OperatorUser": {
+   "attrs": [
+    "created_at",
+    "policies",
+    "role",
+    "salt",
+    "token_hash",
+    "username",
+    "verify_token"
+   ],
+   "init": [
+    "created_at",
+    "policies",
+    "role",
+    "salt",
+    "token_hash",
+    "username"
+   ],
+   "methods": {
+    "verify_token": [
+     "token"
+    ]
+   }
+  },
+  "Otlp": {
+   "attrs": [
+    "ca_secret",
+    "endpoint",
+    "from_dict",
+    "headers_secret",
+    "insecure",
+    "protocol",
+    "to_dict"
+   ],
+   "init": [
+    "ca_secret",
+    "endpoint",
+    "headers_secret",
+    "insecure",
+    "protocol"
+   ],
+   "methods": {
+    "from_dict": [
+     "value"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "from_dict": "Otlp"
+   }
   },
   "Ownership": {
    "attrs": [
@@ -3131,6 +6136,112 @@
     "translate": null,
     "upper": null,
     "zfill": null
+   }
+  },
+  "PersistentVolume": {
+   "attrs": [
+    "api_data",
+    "disk_name",
+    "get",
+    "get_volume_capacity",
+    "labels",
+    "name",
+    "storage"
+   ],
+   "init": [
+    "disk_name",
+    "labels",
+    "name",
+    "storage"
+   ],
+   "methods": {
+    "api_data": [],
+    "get": [],
+    "get_volume_capacity": [
+     "volume"
+    ]
+   },
+   "pydantic": true
+  },
+  "PersistentVolumeClaim": {
+   "attrs": [
+    "api_data",
+    "get",
+    "get_volume_capacity",
+    "labels",
+    "name",
+    "storage"
+   ],
+   "init": [
+    "labels",
+    "name",
+    "storage"
+   ],
+   "methods": {
+    "api_data": [],
+    "get": [],
+    "get_volume_capacity": [
+     "volume"
+    ]
+   },
+   "pydantic": true
+  },
+  "PersistentVolumeClaimTemplate": {
+   "attrs": [
+    "get_template",
+    "labels",
+    "name",
+    "storage"
+   ],
+   "init": [
+    "labels",
+    "name",
+    "storage"
+   ],
+   "methods": {
+    "get_template": []
+   },
+   "pydantic": true
+  },
+  "Pin": {
+   "attrs": [
+    "hashes",
+    "local_name",
+    "lock_block",
+    "source",
+    "version"
+   ],
+   "init": [
+    "hashes",
+    "local_name",
+    "source",
+    "version"
+   ],
+   "methods": {
+    "lock_block": []
+   }
+  },
+  "PinnedImage": {
+   "attrs": [
+    "digest",
+    "from_dict",
+    "image",
+    "ref",
+    "to_dict"
+   ],
+   "init": [
+    "digest",
+    "image"
+   ],
+   "methods": {
+    "from_dict": [
+     "value",
+     "where"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "from_dict": "PinnedImage"
    }
   },
   "Pipeline": {
@@ -3244,6 +6355,238 @@
     "policy_decision": "PolicyDecision"
    }
   },
+  "Placement": {
+   "attrs": [
+    "cluster",
+    "describe",
+    "name",
+    "namespace",
+    "on_nodes",
+    "pipeline",
+    "replicas",
+    "values"
+   ],
+   "init": [
+    "cluster",
+    "namespace",
+    "on_nodes",
+    "pipeline",
+    "replicas",
+    "values"
+   ],
+   "methods": {
+    "describe": []
+   }
+  },
+  "PlanAction": {
+   "attr_types": {
+    "adoption": "Adoption",
+    "operation": "PlanOperation",
+    "precondition": "ResourcePrecondition",
+    "resource": "ResourceIntent"
+   },
+   "attrs": [
+    "adoption",
+    "dependencies",
+    "metadata_changes",
+    "operation",
+    "precondition",
+    "removals",
+    "resource",
+    "summary"
+   ],
+   "init": [
+    "adoption",
+    "dependencies",
+    "metadata_changes",
+    "operation",
+    "precondition",
+    "removals",
+    "resource"
+   ],
+   "methods": {
+    "summary": []
+   }
+  },
+  "PlanAuthorization": {
+   "attr_types": {
+    "approval_policy": "ApprovalPolicy",
+    "target": "PlanTarget"
+   },
+   "attrs": [
+    "adopt_resources",
+    "approval_policy",
+    "field_manager",
+    "inherited_owner_ids",
+    "previous",
+    "prune_managed",
+    "replace_resources",
+    "target"
+   ],
+   "init": [
+    "adopt_resources",
+    "approval_policy",
+    "field_manager",
+    "inherited_owner_ids",
+    "previous",
+    "prune_managed",
+    "replace_resources",
+    "target"
+   ],
+   "methods": {}
+  },
+  "PlanExecutor": {
+   "attrs": [
+    "cancel",
+    "compensate",
+    "preview",
+    "run",
+    "run_bundle"
+   ],
+   "init": [
+    "after_response",
+    "backups",
+    "journal",
+    "limits",
+    "progress",
+    "progress_seconds",
+    "provider",
+    "secrets",
+    "telemetry"
+   ],
+   "methods": {
+    "cancel": [
+     "execution"
+    ],
+    "compensate": [
+     "authorization",
+     "execution",
+     "plan",
+     "snapshot"
+    ],
+    "preview": [
+     "plan"
+    ],
+    "run": [
+     "authorization",
+     "execution",
+     "plan",
+     "resume",
+     "snapshot"
+    ],
+    "run_bundle": [
+     "bundle",
+     "resume"
+    ]
+   }
+  },
+  "PlanOperation": {
+   "attrs": [
+    "ADOPT",
+    "APPLY",
+    "CREATE",
+    "DELETE",
+    "NOOP",
+    "REPLACE",
+    "capitalize",
+    "casefold",
+    "center",
+    "count",
+    "encode",
+    "endswith",
+    "expandtabs",
+    "find",
+    "format",
+    "format_map",
+    "index",
+    "isalnum",
+    "isalpha",
+    "isascii",
+    "isdecimal",
+    "isdigit",
+    "isidentifier",
+    "islower",
+    "isnumeric",
+    "isprintable",
+    "isspace",
+    "istitle",
+    "isupper",
+    "join",
+    "ljust",
+    "lower",
+    "lstrip",
+    "maketrans",
+    "partition",
+    "removeprefix",
+    "removesuffix",
+    "replace",
+    "rfind",
+    "rindex",
+    "rjust",
+    "rpartition",
+    "rsplit",
+    "rstrip",
+    "split",
+    "splitlines",
+    "startswith",
+    "strip",
+    "swapcase",
+    "title",
+    "translate",
+    "upper",
+    "zfill"
+   ],
+   "init": [],
+   "methods": {
+    "capitalize": null,
+    "casefold": null,
+    "center": null,
+    "count": null,
+    "encode": null,
+    "endswith": null,
+    "expandtabs": null,
+    "find": null,
+    "format": null,
+    "format_map": null,
+    "index": null,
+    "isalnum": null,
+    "isalpha": null,
+    "isascii": null,
+    "isdecimal": null,
+    "isdigit": null,
+    "isidentifier": null,
+    "islower": null,
+    "isnumeric": null,
+    "isprintable": null,
+    "isspace": null,
+    "istitle": null,
+    "isupper": null,
+    "join": null,
+    "ljust": null,
+    "lower": null,
+    "lstrip": null,
+    "maketrans": null,
+    "partition": null,
+    "removeprefix": null,
+    "removesuffix": null,
+    "replace": null,
+    "rfind": null,
+    "rindex": null,
+    "rjust": null,
+    "rpartition": null,
+    "rsplit": null,
+    "rstrip": null,
+    "split": null,
+    "splitlines": null,
+    "startswith": null,
+    "strip": null,
+    "swapcase": null,
+    "title": null,
+    "translate": null,
+    "upper": null,
+    "zfill": null
+   }
+  },
   "PlanTarget": {
    "attrs": [
     "cluster_id",
@@ -3254,6 +6597,48 @@
     "namespace"
    ],
    "methods": {}
+  },
+  "Pod": {
+   "attr_types": {
+    "containers": "Container",
+    "init_containers": "Container",
+    "restart_policy": "RestartPolicy",
+    "service_account": "ServiceAccount"
+   },
+   "attrs": [
+    "automount_service_account_token",
+    "container_map",
+    "containers",
+    "get_label_selector",
+    "get_pod_spec",
+    "image_pull_secrets",
+    "init_containers",
+    "name",
+    "port",
+    "restart_policy",
+    "security_context_uid",
+    "service_account",
+    "template_labels",
+    "termination_grace_period_seconds"
+   ],
+   "init": [
+    "automount_service_account_token",
+    "containers",
+    "image_pull_secrets",
+    "init_containers",
+    "name",
+    "port",
+    "restart_policy",
+    "security_context_uid",
+    "service_account",
+    "template_labels",
+    "termination_grace_period_seconds"
+   ],
+   "methods": {
+    "get_label_selector": [],
+    "get_pod_spec": []
+   },
+   "pydantic": true
   },
   "PodDefaults": {
    "attr_types": {
@@ -3294,6 +6679,20 @@
     "to_dict": []
    }
   },
+  "Port": {
+   "attrs": [
+    "name",
+    "port",
+    "target_port"
+   ],
+   "init": [
+    "name",
+    "port",
+    "target_port"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
   "PreRollout": {
    "attr_types": {
     "upgrade": "UpgradeCheck"
@@ -3315,6 +6714,43 @@
     "describe": []
    },
    "pydantic": true
+  },
+  "Prices": {
+   "attrs": [
+    "currency",
+    "primary_ip",
+    "primary_ips",
+    "server",
+    "servers"
+   ],
+   "init": [
+    "currency",
+    "primary_ips",
+    "servers"
+   ],
+   "methods": {
+    "primary_ip": [
+     "kind",
+     "location"
+    ],
+    "server": [
+     "location",
+     "type_"
+    ]
+   }
+  },
+  "PrimaryIp": {
+   "attrs": [
+    "kind",
+    "name",
+    "protect"
+   ],
+   "init": [
+    "kind",
+    "name",
+    "protect"
+   ],
+   "methods": {}
   },
   "Probe": {
    "attrs": [
@@ -3357,6 +6793,17 @@
     "http": "Probe",
     "tcp": "Probe"
    }
+  },
+  "ProcessLimits": {
+   "attrs": [
+    "max_output_bytes",
+    "max_seconds"
+   ],
+   "init": [
+    "max_output_bytes",
+    "max_seconds"
+   ],
+   "methods": {}
   },
   "Promote": {
    "attrs": [
@@ -3622,6 +7069,223 @@
     "in_cluster": "ClusterRegistry"
    }
   },
+  "RegistryCredentials": {
+   "attrs": [
+    "basic_header",
+    "load",
+    "password",
+    "scheme",
+    "token",
+    "username"
+   ],
+   "init": [
+    "password",
+    "token",
+    "username"
+   ],
+   "methods": {
+    "basic_header": [],
+    "load": [
+     "path"
+    ]
+   },
+   "returns": {
+    "load": "RegistryCredentials"
+   }
+  },
+  "RegistryDelivery": {
+   "attr_types": {
+    "client_factory": "StreamedOciRegistryClient",
+    "credentials": "RegistryCredentials",
+    "docker": "ToolPin",
+    "forward": "RegistryForward",
+    "forwarder": "RegistryForward",
+    "runner": "Runner"
+   },
+   "attrs": [
+    "attach_referrer",
+    "ca_file",
+    "client_factory",
+    "credentials",
+    "deliver",
+    "docker",
+    "docker_socket",
+    "forward",
+    "forwarder",
+    "has_manifest",
+    "preview",
+    "push_index",
+    "runner"
+   ],
+   "init": [
+    "ca_file",
+    "client_factory",
+    "credentials",
+    "docker",
+    "docker_socket",
+    "forward",
+    "forwarder",
+    "runner"
+   ],
+   "methods": {
+    "attach_referrer": [
+     "body",
+     "kind",
+     "subject",
+     "target",
+     "title"
+    ],
+    "deliver": [
+     "cancel",
+     "grant",
+     "limits",
+     "node_registry",
+     "source",
+     "target"
+    ],
+    "forwarder": [
+     "forward",
+     "local_port"
+    ],
+    "has_manifest": [
+     "digest",
+     "target"
+    ],
+    "preview": [
+     "approved_digest",
+     "node_registry",
+     "target"
+    ],
+    "push_index": [
+     "manifests",
+     "target"
+    ]
+   }
+  },
+  "RegistryEndpoint": {
+   "attr_types": {
+    "credentials": "RegistryCredentials"
+   },
+   "attrs": [
+    "auth_scheme",
+    "auth_token",
+    "base_url",
+    "ca_file",
+    "credentials",
+    "host",
+    "port",
+    "timeout",
+    "use_tls"
+   ],
+   "init": [
+    "auth_token",
+    "ca_file",
+    "credentials",
+    "host",
+    "port",
+    "timeout",
+    "use_tls"
+   ],
+   "methods": {}
+  },
+  "RegistryForward": {
+   "attr_types": {
+    "kubectl": "ToolPin"
+   },
+   "attrs": [
+    "context",
+    "kubeconfig",
+    "kubectl",
+    "namespace",
+    "public",
+    "remote_port",
+    "startup_seconds",
+    "target"
+   ],
+   "init": [
+    "context",
+    "kubeconfig",
+    "kubectl",
+    "namespace",
+    "remote_port",
+    "startup_seconds",
+    "target"
+   ],
+   "methods": {
+    "public": [
+     "local_port"
+    ]
+   }
+  },
+  "RegistryTarget": {
+   "attrs": [
+    "effective_port",
+    "endpoint",
+    "host",
+    "identity",
+    "parse",
+    "port",
+    "public",
+    "registry",
+    "repository",
+    "tag",
+    "tls"
+   ],
+   "init": [
+    "host",
+    "port",
+    "repository",
+    "tag",
+    "tls"
+   ],
+   "methods": {
+    "endpoint": [
+     "ca_file",
+     "credentials",
+     "timeout"
+    ],
+    "parse": [
+     "url"
+    ],
+    "public": []
+   },
+   "returns": {
+    "endpoint": "RegistryEndpoint",
+    "parse": "RegistryTarget"
+   }
+  },
+  "ReleaseCatalog": {
+   "attrs": [
+    "add",
+    "get",
+    "records",
+    "select",
+    "selected"
+   ],
+   "init": [
+    "path"
+   ],
+   "methods": {
+    "add": [
+     "record",
+     "select"
+    ],
+    "get": [
+     "name"
+    ],
+    "records": [],
+    "select": [
+     "name"
+    ],
+    "selected": []
+   },
+   "returns": {
+    "add": "ReleaseRecord",
+    "get": "ReleaseRecord",
+    "select": "ReleaseRecord",
+    "selected": "ReleaseRecord"
+   }
+  },
   "ReleaseContext": {
    "attr_types": {
     "images": "ImageRef",
@@ -3654,6 +7318,40 @@
    },
    "returns": {
     "secret": "SecretVersionRef"
+   }
+  },
+  "ReleaseRecord": {
+   "attr_types": {
+    "archive": "DeploymentSessionArchive",
+    "source": "ReleaseSource"
+   },
+   "attrs": [
+    "archive",
+    "from_dict",
+    "name",
+    "namespace",
+    "release_id",
+    "retained_pvc_policy",
+    "source",
+    "to_dict",
+    "ttl_seconds"
+   ],
+   "init": [
+    "archive",
+    "name",
+    "namespace",
+    "retained_pvc_policy",
+    "source",
+    "ttl_seconds"
+   ],
+   "methods": {
+    "from_dict": [
+     "value"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "from_dict": "ReleaseRecord"
    }
   },
   "ReleaseSettings": {
@@ -3701,6 +7399,35 @@
    ],
    "methods": {},
    "pydantic": true
+  },
+  "ReleaseSource": {
+   "attrs": [
+    "artifact_archive_sha256",
+    "artifact_digest",
+    "dirty_closure_sha256",
+    "identity",
+    "image_set",
+    "images",
+    "kind",
+    "to_dict"
+   ],
+   "init": [
+    "artifact_archive_sha256",
+    "artifact_digest",
+    "dirty_closure_sha256",
+    "identity",
+    "images",
+    "kind"
+   ],
+   "methods": {
+    "image_set": [
+     "images"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "image_set": "ReleaseSource"
+   }
   },
   "ReleaseSpec": {
    "attr_types": {
@@ -3807,6 +7534,166 @@
    "methods": {},
    "pydantic": true
   },
+  "ReleaseWorkflow": {
+   "attr_types": {
+    "authorization_factory": "DeploymentPlan",
+    "catalog": "ReleaseCatalog",
+    "composition_factory": "SecretVersionRef",
+    "journal": "ExecutionJournal",
+    "plan_authorization": "PlanAuthorization",
+    "secrets": "SecretVersionStore",
+    "snapshot": "ObservedSnapshot"
+   },
+   "attrs": [
+    "apply",
+    "authorization_factory",
+    "catalog",
+    "composition_factory",
+    "create",
+    "inspect",
+    "journal",
+    "namespace",
+    "plan_authorization",
+    "preview",
+    "reopen",
+    "resume",
+    "rollback",
+    "secrets",
+    "select",
+    "snapshot",
+    "stop"
+   ],
+   "init": [
+    "authorization_factory",
+    "catalog",
+    "composition_factory",
+    "journal",
+    "namespace",
+    "plan_authorization",
+    "secrets",
+    "snapshot"
+   ],
+   "methods": {
+    "apply": [
+     "executor",
+     "name"
+    ],
+    "create": [
+     "execution_id",
+     "name",
+     "private_inputs",
+     "retained_pvc_policy",
+     "session_id",
+     "source",
+     "ttl_seconds"
+    ],
+    "inspect": [
+     "name"
+    ],
+    "preview": [
+     "name"
+    ],
+    "reopen": [
+     "name"
+    ],
+    "resume": [
+     "executor",
+     "name"
+    ],
+    "rollback": [
+     "execution_id",
+     "executor",
+     "name",
+     "restrict"
+    ],
+    "select": [
+     "name"
+    ],
+    "stop": [
+     "executor",
+     "name"
+    ]
+   },
+   "returns": {
+    "create": "ReleaseRecord",
+    "reopen": "DeploymentSession"
+   }
+  },
+  "ReplicaManager": {
+   "attr_types": {
+    "containers": "Container",
+    "hpa": "HPA",
+    "init_containers": "Container",
+    "restart_policy": "RestartPolicy",
+    "service_account": "ServiceAccount",
+    "vpa": "VPA"
+   },
+   "attrs": [
+    "KIND",
+    "automount_service_account_token",
+    "check_service_name",
+    "container_map",
+    "containers",
+    "create_service",
+    "get",
+    "get_hpa",
+    "get_label_selector",
+    "get_pod_spec",
+    "get_replica_manager",
+    "get_service",
+    "get_vpa",
+    "hpa",
+    "image_pull_secrets",
+    "init_containers",
+    "labels",
+    "name",
+    "port",
+    "ports",
+    "replicas",
+    "restart_policy",
+    "security_context_uid",
+    "service_account",
+    "target_kind",
+    "template_labels",
+    "termination_grace_period_seconds",
+    "vpa"
+   ],
+   "init": [
+    "automount_service_account_token",
+    "containers",
+    "create_service",
+    "hpa",
+    "image_pull_secrets",
+    "init_containers",
+    "labels",
+    "name",
+    "port",
+    "replicas",
+    "restart_policy",
+    "security_context_uid",
+    "service_account",
+    "template_labels",
+    "termination_grace_period_seconds",
+    "vpa"
+   ],
+   "methods": {
+    "check_service_name": [],
+    "get": [],
+    "get_hpa": [],
+    "get_label_selector": [],
+    "get_pod_spec": [],
+    "get_replica_manager": [],
+    "get_service": [],
+    "get_vpa": []
+   },
+   "pydantic": true,
+   "returns": {
+    "check_service_name": "ReplicaManager",
+    "get_hpa": "HorizontalPodAutoscaler",
+    "get_service": "Service",
+    "get_vpa": "VerticalPodAutoscaler"
+   }
+  },
   "Resource": {
    "attrs": [
     "annotations",
@@ -3904,6 +7791,19 @@
     "from_manifest": "ResourceIntent",
     "with_secret": "ResourceIntent"
    }
+  },
+  "ResourcePrecondition": {
+   "attrs": [
+    "must_not_exist",
+    "resource_version",
+    "uid"
+   ],
+   "init": [
+    "must_not_exist",
+    "resource_version",
+    "uid"
+   ],
+   "methods": {}
   },
   "ResourceRef": {
    "attrs": [
@@ -4068,24 +7968,12 @@
   },
   "RestartPolicy": {
    "attrs": [
-    "backoff_initial",
-    "backoff_max",
-    "delay",
-    "forever",
-    "max_restarts"
+    "ALWAYS",
+    "NEVER",
+    "ON_FAILURE"
    ],
-   "init": [
-    "backoff_initial",
-    "backoff_max",
-    "forever",
-    "max_restarts"
-   ],
-   "methods": {
-    "delay": [
-     "attempt"
-    ]
-   },
-   "pydantic": true
+   "init": [],
+   "methods": {}
   },
   "RestorePoints": {
    "attrs": [
@@ -4132,6 +8020,79 @@
    },
    "pydantic": true
   },
+  "Role": {
+   "attr_types": {
+    "verbs": "APIRequestVerb"
+   },
+   "attrs": [
+    "api_data",
+    "api_group",
+    "from_deployable",
+    "get",
+    "labels",
+    "name",
+    "resource",
+    "resource_names",
+    "verbs"
+   ],
+   "init": [
+    "api_group",
+    "labels",
+    "name",
+    "resource",
+    "resource_names",
+    "verbs"
+   ],
+   "methods": {
+    "api_data": [],
+    "from_deployable": [
+     "auth_verbs",
+     "template"
+    ],
+    "get": []
+   },
+   "pydantic": true,
+   "returns": {
+    "from_deployable": "Role"
+   }
+  },
+  "RoleBinding": {
+   "attrs": [
+    "api_data",
+    "get",
+    "labels",
+    "name",
+    "resource_names",
+    "role_name",
+    "service_account_name",
+    "users"
+   ],
+   "init": [
+    "labels",
+    "name",
+    "resource_names",
+    "role_name",
+    "service_account_name",
+    "users"
+   ],
+   "methods": {
+    "api_data": [],
+    "get": []
+   },
+   "pydantic": true
+  },
+  "Rollout": {
+   "attrs": [
+    "describe",
+    "order"
+   ],
+   "init": [
+    "order"
+   ],
+   "methods": {
+    "describe": []
+   }
+  },
   "Route": {
    "attrs": [
     "match",
@@ -4168,6 +8129,98 @@
     "manifest": []
    },
    "pydantic": true
+  },
+  "RunResult": {
+   "attrs": [
+    "exit_code",
+    "seconds",
+    "state",
+    "stdout"
+   ],
+   "init": [
+    "exit_code",
+    "seconds",
+    "state",
+    "stdout"
+   ],
+   "methods": {}
+  },
+  "RunnableBuild": {
+   "attr_types": {
+    "command": "BuildCommand"
+   },
+   "attrs": [
+    "command",
+    "execute",
+    "output_archive",
+    "platform"
+   ],
+   "init": [
+    "command",
+    "output_archive",
+    "platform"
+   ],
+   "methods": {
+    "execute": [
+     "cancel",
+     "grant",
+     "limits",
+     "max_bytes",
+     "root"
+    ]
+   }
+  },
+  "RunnableOciReceipt": {
+   "attr_types": {
+    "oci": "OciReceipt"
+   },
+   "attrs": [
+    "entrypoint",
+    "oci",
+    "summary",
+    "user"
+   ],
+   "init": [
+    "entrypoint",
+    "oci",
+    "user"
+   ],
+   "methods": {
+    "summary": []
+   }
+  },
+  "Runner": {
+   "attrs": [
+    "capture",
+    "feed",
+    "read"
+   ],
+   "init": null,
+   "methods": {
+    "capture": [
+     "argv",
+     "env",
+     "limits"
+    ],
+    "feed": [
+     "argv",
+     "cancel",
+     "env",
+     "limits",
+     "writer"
+    ],
+    "read": [
+     "argv",
+     "cancel",
+     "env",
+     "limits",
+     "reader"
+    ]
+   },
+   "returns": {
+    "capture": "RunResult",
+    "feed": "RunResult"
+   }
   },
   "Scaling": {
    "attrs": [
@@ -4258,6 +8311,62 @@
    ],
    "methods": {}
   },
+  "SecretVersionStore": {
+   "attrs": [
+    "close",
+    "contains",
+    "discard",
+    "put",
+    "put_once",
+    "resolve",
+    "session_reference",
+    "values"
+   ],
+   "init": [
+    "max_bytes",
+    "path"
+   ],
+   "methods": {
+    "close": [],
+    "contains": [
+     "reference",
+     "target"
+    ],
+    "discard": [
+     "references",
+     "session_id",
+     "target"
+    ],
+    "put": [
+     "target",
+     "value"
+    ],
+    "put_once": [
+     "input_name",
+     "session_id",
+     "target",
+     "value"
+    ],
+    "resolve": [
+     "reference",
+     "target"
+    ],
+    "session_reference": [
+     "input_name",
+     "session_id",
+     "target"
+    ],
+    "values": [
+     "limit",
+     "target"
+    ]
+   },
+   "returns": {
+    "put": "SecretVersionRef",
+    "put_once": "SecretVersionRef",
+    "session_reference": "SecretVersionRef"
+   }
+  },
   "SecretVolume": {
    "attrs": [
     "default_mode",
@@ -4346,6 +8455,67 @@
    "returns": {
     "layered": "Security",
     "restricted": "Security"
+   }
+  },
+  "Server": {
+   "attrs": [
+    "cluster",
+    "describe",
+    "firewall",
+    "install",
+    "ipv4",
+    "ipv6",
+    "location",
+    "primary_ips",
+    "ssh_keys"
+   ],
+   "init": [
+    "cluster",
+    "firewall",
+    "image",
+    "install",
+    "ipv4",
+    "ipv6",
+    "labels",
+    "location",
+    "name",
+    "provider",
+    "ssh",
+    "ssh_keys",
+    "type"
+   ],
+   "methods": {
+    "describe": [],
+    "primary_ips": []
+   }
+  },
+  "ServerDryRun": {
+   "attr_types": {
+    "resource": "ResourceIdentity"
+   },
+   "attrs": [
+    "desired_digest",
+    "from_dict",
+    "manifest",
+    "manifest_json",
+    "resource",
+    "resource_version",
+    "to_dict"
+   ],
+   "init": [
+    "desired_digest",
+    "manifest_json",
+    "resource",
+    "resource_version"
+   ],
+   "methods": {
+    "from_dict": [
+     "value"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "from_dict": "ServerDryRun"
    }
   },
   "Service": {
@@ -4455,6 +8625,35 @@
     "to_table": []
    }
   },
+  "SmokeCheck": {
+   "attrs": [
+    "command",
+    "entrypoint",
+    "env",
+    "expect_exit",
+    "expect_stderr",
+    "expect_stdout",
+    "timeout_seconds",
+    "to_dict",
+    "unmatched"
+   ],
+   "init": [
+    "command",
+    "entrypoint",
+    "env",
+    "expect_exit",
+    "expect_stderr",
+    "expect_stdout",
+    "timeout_seconds"
+   ],
+   "methods": {
+    "to_dict": [],
+    "unmatched": [
+     "stderr",
+     "stdout"
+    ]
+   }
+  },
   "SopsSecretSpec": {
    "attrs": [
     "encoding",
@@ -4484,6 +8683,167 @@
    },
    "pydantic": true
   },
+  "Source": {
+   "attrs": [
+    "key",
+    "name",
+    "url"
+   ],
+   "init": [
+    "name",
+    "url"
+   ],
+   "methods": {}
+  },
+  "SourceDrift": {
+   "attrs": [
+    "actual",
+    "expected",
+    "field",
+    "name",
+    "to_dict"
+   ],
+   "init": [
+    "actual",
+    "expected",
+    "field",
+    "name"
+   ],
+   "methods": {
+    "to_dict": []
+   }
+  },
+  "SourceDriftError": {
+   "attrs": [
+    "add_note",
+    "args",
+    "code",
+    "with_traceback"
+   ],
+   "init": [
+    "message",
+    "verification"
+   ],
+   "methods": {
+    "add_note": null,
+    "with_traceback": null
+   }
+  },
+  "SourceIdentity": {
+   "attrs": [
+    "changed_paths",
+    "commit",
+    "diff_sha256",
+    "dirty",
+    "from_dict",
+    "name",
+    "path",
+    "remote_url",
+    "repository",
+    "subpath",
+    "to_dict"
+   ],
+   "init": [
+    "changed_paths",
+    "commit",
+    "diff_sha256",
+    "dirty",
+    "name",
+    "path",
+    "remote_url",
+    "repository",
+    "subpath"
+   ],
+   "methods": {
+    "from_dict": [
+     "value"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "from_dict": "SourceIdentity"
+   }
+  },
+  "SourceIdentityError": {
+   "attrs": [
+    "add_note",
+    "args",
+    "code",
+    "with_traceback"
+   ],
+   "init": [
+    "code",
+    "message"
+   ],
+   "methods": {
+    "add_note": null,
+    "with_traceback": null
+   }
+  },
+  "SourcePin": {
+   "attrs": [
+    "capture",
+    "path",
+    "public",
+    "read",
+    "sha256",
+    "size"
+   ],
+   "init": [
+    "path",
+    "public",
+    "sha256",
+    "size"
+   ],
+   "methods": {
+    "capture": [
+     "path",
+     "public",
+     "root"
+    ],
+    "read": [
+     "root"
+    ]
+   },
+   "returns": {
+    "capture": "SourcePin"
+   }
+  },
+  "SourceSpec": {
+   "attrs": [
+    "allow_dirty",
+    "name",
+    "path",
+    "ref",
+    "subpath",
+    "to_dict"
+   ],
+   "init": [
+    "allow_dirty",
+    "name",
+    "path",
+    "ref",
+    "subpath"
+   ],
+   "methods": {
+    "to_dict": []
+   }
+  },
+  "Ssh": {
+   "attrs": [
+    "address",
+    "kubeconfig_path",
+    "port",
+    "user"
+   ],
+   "init": [
+    "address",
+    "kubeconfig_path",
+    "port",
+    "user"
+   ],
+   "methods": {}
+  },
   "Stack": {
    "attrs": [
     "components",
@@ -4498,6 +8858,35 @@
    ],
    "methods": {
     "describe": []
+   }
+  },
+  "StandingPolicy": {
+   "attrs": [
+    "allowed_branches",
+    "allowed_namespaces",
+    "allowed_operations",
+    "allowed_registries",
+    "authorize",
+    "name",
+    "require_pr_approval"
+   ],
+   "init": [
+    "allowed_branches",
+    "allowed_namespaces",
+    "allowed_operations",
+    "allowed_registries",
+    "name",
+    "require_pr_approval"
+   ],
+   "methods": {
+    "authorize": [
+     "action",
+     "approved",
+     "branch",
+     "is_pr",
+     "namespace",
+     "registry"
+    ]
    }
   },
   "StatefulSet": {
@@ -4591,7 +8980,8 @@
    },
    "pydantic": true,
    "returns": {
-    "claim_templates": "ClaimTemplate"
+    "claim_templates": "ClaimTemplate",
+    "volumes": "Volume"
    }
   },
   "StaticSecretSpec": {
@@ -4607,6 +8997,97 @@
    ],
    "methods": {},
    "pydantic": true
+  },
+  "StreamedOciRegistryClient": {
+   "attrs": [
+    "authenticate",
+    "blob_size",
+    "check_v2_support",
+    "delete_manifest",
+    "get_manifest",
+    "has_blob",
+    "list_repositories",
+    "list_tags",
+    "manifest_digest",
+    "open_blob",
+    "push_blob",
+    "push_blob_stream",
+    "push_manifest",
+    "put_manifest",
+    "referrers"
+   ],
+   "init": [
+    "actions",
+    "chunk_size",
+    "endpoint",
+    "monolithic_max"
+   ],
+   "methods": {
+    "authenticate": [
+     "repository"
+    ],
+    "blob_size": [
+     "digest",
+     "repository"
+    ],
+    "check_v2_support": [],
+    "delete_manifest": [
+     "digest",
+     "repository"
+    ],
+    "get_manifest": [
+     "reference",
+     "repository"
+    ],
+    "has_blob": [
+     "digest",
+     "repository"
+    ],
+    "list_repositories": [],
+    "list_tags": [
+     "repository"
+    ],
+    "manifest_digest": [
+     "reference",
+     "repository"
+    ],
+    "open_blob": [
+     "digest",
+     "max_redirects",
+     "repository"
+    ],
+    "push_blob": [
+     "cancel",
+     "digest",
+     "repository",
+     "size",
+     "source"
+    ],
+    "push_blob_stream": [
+     "expected_digest",
+     "repository",
+     "stream"
+    ],
+    "push_manifest": [
+     "manifest_bytes",
+     "media_type",
+     "reference",
+     "repository"
+    ],
+    "put_manifest": [
+     "manifest_bytes",
+     "media_type",
+     "reference",
+     "repository"
+    ],
+    "referrers": [
+     "digest",
+     "repository"
+    ]
+   },
+   "returns": {
+    "push_blob": "BlobUpload"
+   }
   },
   "Tag": {
    "attrs": [
@@ -4852,6 +9333,40 @@
    "methods": {},
    "pydantic": true
   },
+  "ToolPin": {
+   "attrs": [
+    "capture",
+    "path",
+    "sha256",
+    "verify"
+   ],
+   "init": [
+    "path",
+    "sha256"
+   ],
+   "methods": {
+    "capture": [
+     "path"
+    ],
+    "verify": []
+   },
+   "returns": {
+    "capture": "ToolPin"
+   }
+  },
+  "Ui": {
+   "attrs": [
+    "access",
+    "image",
+    "on"
+   ],
+   "init": [
+    "access",
+    "image",
+    "on"
+   ],
+   "methods": {}
+  },
   "UiShortcut": {
    "attr_types": {
     "health": "HealthProbe",
@@ -4904,6 +9419,65 @@
    "methods": {},
    "pydantic": true
   },
+  "UserStore": {
+   "attrs": [
+    "authenticate",
+    "create_user",
+    "load_users",
+    "save_users"
+   ],
+   "init": [
+    "store"
+   ],
+   "methods": {
+    "authenticate": [
+     "token"
+    ],
+    "create_user": [
+     "policies",
+     "role",
+     "token",
+     "username"
+    ],
+    "load_users": [],
+    "save_users": [
+     "users"
+    ]
+   },
+   "returns": {
+    "authenticate": "OperatorUser",
+    "load_users": "OperatorUser"
+   }
+  },
+  "VPA": {
+   "attr_types": {
+    "max_allowed": "Resources",
+    "min_allowed": "Resources"
+   },
+   "attrs": [
+    "control_cpu",
+    "control_memory",
+    "get_vpa",
+    "max_allowed",
+    "min_allowed"
+   ],
+   "init": [
+    "control_cpu",
+    "control_memory",
+    "max_allowed",
+    "min_allowed"
+   ],
+   "methods": {
+    "get_vpa": [
+     "name",
+     "target_kind"
+    ]
+   },
+   "pydantic": true,
+   "returns": {
+    "get_vpa": "VerticalPodAutoscaler"
+   }
+  },
   "VaultSecretSpec": {
    "attrs": [
     "address",
@@ -4937,6 +9511,148 @@
    "methods": {
     "source": []
    },
+   "pydantic": true
+  },
+  "VerticalPodAutoscaler": {
+   "attr_types": {
+    "max_allowed": "Resources",
+    "min_allowed": "Resources"
+   },
+   "attrs": [
+    "api_data",
+    "container_name",
+    "control_cpu",
+    "control_memory",
+    "get",
+    "max_allowed",
+    "min_allowed",
+    "name",
+    "target_kind",
+    "target_name"
+   ],
+   "init": [
+    "container_name",
+    "control_cpu",
+    "control_memory",
+    "max_allowed",
+    "min_allowed",
+    "name",
+    "target_kind",
+    "target_name"
+   ],
+   "methods": {
+    "api_data": [],
+    "get": []
+   },
+   "pydantic": true
+  },
+  "Volume": {
+   "attrs": [
+    "get_volume_capacity",
+    "labels",
+    "name",
+    "storage"
+   ],
+   "init": [
+    "labels",
+    "name",
+    "storage"
+   ],
+   "methods": {
+    "get_volume_capacity": [
+     "volume"
+    ]
+   },
+   "pydantic": true
+  },
+  "VolumeMount": {
+   "attrs": [
+    "mount_path"
+   ],
+   "init": [
+    "mount_path"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "VolumeMountConfigMap": {
+   "attr_types": {
+    "config_map": "ConfigMap"
+   },
+   "attrs": [
+    "config_map",
+    "default_mode",
+    "mount_path"
+   ],
+   "init": [
+    "config_map",
+    "default_mode",
+    "mount_path"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "VolumeMountEmptyDir": {
+   "attrs": [
+    "mount_path",
+    "name"
+   ],
+   "init": [
+    "mount_path",
+    "name"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "VolumeMountPVC": {
+   "attr_types": {
+    "pvc": "PersistentVolumeClaim"
+   },
+   "attrs": [
+    "mount_path",
+    "pvc",
+    "sub_path"
+   ],
+   "init": [
+    "mount_path",
+    "pvc",
+    "sub_path"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "VolumeMountPVCTemplate": {
+   "attr_types": {
+    "pvc_template": "PersistentVolumeClaimTemplate"
+   },
+   "attrs": [
+    "mount_path",
+    "pvc_template",
+    "sub_path"
+   ],
+   "init": [
+    "mount_path",
+    "pvc_template",
+    "sub_path"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "VolumeMountSecret": {
+   "attr_types": {
+    "secret": "Secret"
+   },
+   "attrs": [
+    "default_mode",
+    "mount_path",
+    "secret"
+   ],
+   "init": [
+    "default_mode",
+    "mount_path",
+    "secret"
+   ],
+   "methods": {},
    "pydantic": true
   },
   "Workload": {
@@ -5020,7 +9736,8 @@
    },
    "pydantic": true,
    "returns": {
-    "claim_templates": "ClaimTemplate"
+    "claim_templates": "ClaimTemplate",
+    "volumes": "Volume"
    }
   }
  },
@@ -5593,6 +10310,7 @@
      "cancel",
      "hosts",
      "logs",
+     "release-host",
      "run",
      "schedule",
      "status"
@@ -5654,6 +10372,16 @@
      "--follow",
      "--tail",
      "--transport"
+    ],
+    "subcommands": []
+   },
+   "dev release-host": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--cluster",
+     "--json"
     ],
     "subcommands": []
    },
@@ -5839,8 +10567,12 @@
      "cache",
      "disable",
      "enable",
+     "hosts",
+     "rebuild",
+     "release-host",
      "run",
      "status",
+     "suspects",
      "sync",
      "wait"
     ]
@@ -5928,6 +10660,44 @@
     ],
     "subcommands": []
    },
+   "gitops hosts": {
+    "arguments": [],
+    "flags": [
+     "--context",
+     "--json",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops rebuild": {
+    "arguments": [],
+    "flags": [
+     "--context",
+     "--host",
+     "--kubeconfig",
+     "--namespace",
+     "--since",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops release-host": {
+    "arguments": [
+     "host"
+    ],
+    "flags": [
+     "--context",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
    "gitops run": {
     "arguments": [],
     "flags": [
@@ -5951,6 +10721,20 @@
      "--json",
      "--kubeconfig",
      "--namespace",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops suspects": {
+    "arguments": [],
+    "flags": [
+     "--context",
+     "--host",
+     "--json",
+     "--kubeconfig",
+     "--namespace",
+     "--since",
      "--state-dir",
      "--transport"
     ],
@@ -7128,6 +11912,7 @@
    "blob-source-truncated",
    "build-builder-mismatch",
    "build-failed",
+   "build-host-quarantined",
    "build-platforms-invalid",
    "build-timed-out",
    "builder-not-approved",
@@ -7268,6 +12053,7 @@
    "dev-run-unknown",
    "dev-source-invalid",
    "dev-tool-missing",
+   "dev-toolchain-checksum",
    "dev-toolchain-failed",
    "dev-toolchain-invalid",
    "dev-upload-failed",
@@ -7381,6 +12167,9 @@
    "host-build-invalid",
    "host-output-missing",
    "host-tool-missing",
+   "host-toolchain-checksum",
+   "host-toolchain-failed",
+   "host-toolchain-invalid",
    "identity-mismatch",
    "image-declared-twice",
    "image-digest-mismatch",
@@ -8055,6 +12844,7 @@
    "pipeline": {},
    "process_group": {},
    "profiles": {},
+   "public_api": {},
    "restore": {},
    "server": {},
    "services": {},
@@ -8210,6 +13000,187 @@
     "class": "Workload"
    }
   },
+  "piceli.artifacts": {
+   "ArchiveSource": {
+    "class": "ArchiveSource"
+   },
+   "ArtifactFile": {
+    "class": "ArtifactFile"
+   },
+   "BuildCommand": {
+    "class": "BuildCommand"
+   },
+   "BuildGrant": {
+    "class": "BuildGrant"
+   },
+   "BuildPlan": {
+    "class": "BuildPlan"
+   },
+   "BuildSpec": {
+    "class": "BuildSpec"
+   },
+   "DeliveryGrant": {
+    "class": "DeliveryGrant"
+   },
+   "DockerArchiveOciBuilder": {
+    "class": "DockerArchiveOciBuilder"
+   },
+   "DockerImageSource": {
+    "class": "DockerImageSource"
+   },
+   "DockerLocalImporter": {
+    "class": "DockerLocalImporter"
+   },
+   "DockerLocalRunner": {
+    "class": "DockerLocalRunner"
+   },
+   "ExecutionGrant": {
+    "class": "ExecutionGrant"
+   },
+   "InputsLock": {
+    "class": "InputsLock"
+   },
+   "InputsSpec": {
+    "class": "InputsSpec"
+   },
+   "InputsVerification": {
+    "class": "InputsVerification"
+   },
+   "LocalImportGrant": {
+    "class": "LocalImportGrant"
+   },
+   "LocalRunGrant": {
+    "class": "LocalRunGrant"
+   },
+   "NodeDelivery": {
+    "class": "NodeDelivery"
+   },
+   "NodeTarget": {
+    "class": "NodeTarget"
+   },
+   "OciBuilder": {
+    "class": "OciBuilder"
+   },
+   "OciReceipt": {
+    "class": "OciReceipt"
+   },
+   "ProcessLimits": {
+    "class": "ProcessLimits"
+   },
+   "RegistryCredentials": {
+    "class": "RegistryCredentials"
+   },
+   "RegistryDelivery": {
+    "class": "RegistryDelivery"
+   },
+   "RegistryForward": {
+    "class": "RegistryForward"
+   },
+   "RegistryTarget": {
+    "class": "RegistryTarget"
+   },
+   "RunnableBuild": {
+    "class": "RunnableBuild"
+   },
+   "RunnableOciReceipt": {
+    "class": "RunnableOciReceipt"
+   },
+   "SourceDrift": {
+    "class": "SourceDrift"
+   },
+   "SourceDriftError": {
+    "class": "SourceDriftError"
+   },
+   "SourceIdentity": {
+    "class": "SourceIdentity"
+   },
+   "SourceIdentityError": {
+    "class": "SourceIdentityError"
+   },
+   "SourcePin": {
+    "class": "SourcePin"
+   },
+   "SourceSpec": {
+    "class": "SourceSpec"
+   },
+   "ToolPin": {
+    "class": "ToolPin"
+   },
+   "append_journal": {
+    "params": [
+     "path",
+     "receipt"
+    ]
+   },
+   "capture_source_identity": {
+    "params": [
+     "declared_path",
+     "name",
+     "path",
+     "repository",
+     "subpath",
+     "timeout"
+    ],
+    "returns": "SourceIdentity"
+   },
+   "compare_inputs": {
+    "params": [
+     "actual",
+     "expected",
+     "only"
+    ],
+    "returns": "InputsVerification"
+   },
+   "inspect_oci": {
+    "params": [
+     "layout",
+     "max_bytes",
+     "runtime_layers"
+    ],
+    "returns": "OciReceipt"
+   },
+   "inspect_runnable_oci": {
+    "params": [
+     "expected_platform",
+     "layout",
+     "max_bytes"
+    ],
+    "returns": "RunnableOciReceipt"
+   },
+   "pinned_sources": {
+    "params": [
+     "lock",
+     "spec",
+     "timeout"
+    ],
+    "returns": "InputsLock"
+   },
+   "record_inputs": {
+    "params": [
+     "only",
+     "spec",
+     "timeout"
+    ],
+    "returns": "InputsLock"
+   },
+   "unpack_oci_archive": {
+    "params": [
+     "archive_path",
+     "max_bytes",
+     "output"
+    ],
+    "returns": "OciReceipt"
+   },
+   "verify_inputs": {
+    "params": [
+     "lock",
+     "only",
+     "spec",
+     "timeout"
+    ],
+    "returns": "InputsVerification"
+   }
+  },
   "piceli.checks": {
    "Check": {
     "params": null
@@ -8274,6 +13245,356 @@
      "sleep"
     ],
     "returns": "CheckReport"
+   }
+  },
+  "piceli.envs": {
+   "Access": {
+    "class": "Access"
+   },
+   "Branch": {
+    "class": "Branch"
+   },
+   "BranchEnv": {
+    "class": "BranchEnv"
+   },
+   "BranchEnvironments": {
+    "class": "BranchEnvironments"
+   },
+   "Branches": {
+    "class": "Branches"
+   },
+   "EnvConfig": {
+    "class": "EnvConfig"
+   },
+   "EnvError": {
+    "class": "EnvError"
+   },
+   "EnvStatus": {
+    "class": "EnvStatus"
+   },
+   "Environment": {
+    "class": "Environment"
+   },
+   "Placement": {
+    "class": "Placement"
+   },
+   "Promote": {
+    "class": "Promote"
+   },
+   "Rollout": {
+    "class": "Rollout"
+   },
+   "Stack": {
+    "class": "Stack"
+   },
+   "Tag": {
+    "class": "Tag"
+   },
+   "env_down": {
+    "params": [
+     "approve",
+     "approve_if_policy",
+     "branch",
+     "cluster",
+     "pipeline",
+     "say"
+    ]
+   },
+   "env_pipeline": {
+    "params": [
+     "api_endpoints",
+     "branch",
+     "build_receipt",
+     "digests",
+     "pipeline"
+    ],
+    "returns": "Pipeline"
+   },
+   "env_start": {
+    "params": [
+     "branch",
+     "cluster",
+     "now",
+     "pipeline"
+    ]
+   },
+   "env_stop": {
+    "params": [
+     "approve",
+     "approve_if_policy",
+     "branch",
+     "cluster",
+     "named",
+     "now",
+     "pipeline",
+     "reason"
+    ]
+   },
+   "env_up": {
+    "params": [
+     "approve",
+     "approve_if_policy",
+     "branch",
+     "build_receipt",
+     "cluster",
+     "commit",
+     "digests",
+     "now",
+     "pipeline",
+     "plan_only",
+     "runner_options",
+     "say",
+     "seed_from",
+     "wait"
+    ]
+   },
+   "list_envs": {
+    "params": [
+     "cluster",
+     "now",
+     "pipeline"
+    ],
+    "returns": "EnvStatus"
+   },
+   "namespace_for": {
+    "params": [
+     "branch",
+     "pipeline"
+    ]
+   },
+   "seed_env": {
+    "params": [
+     "approve",
+     "approve_if_policy",
+     "branch",
+     "cluster",
+     "now",
+     "pipeline",
+     "restore_cluster",
+     "say",
+     "source"
+    ]
+   }
+  },
+  "piceli.infra": {
+   "BuildHost": {
+    "class": "BuildHost"
+   },
+   "Cluster": {
+    "class": "Cluster"
+   },
+   "Component": {
+    "class": "Component"
+   },
+   "CompositionError": {
+    "class": "CompositionError"
+   },
+   "Controller": {
+    "class": "Controller"
+   },
+   "DevBuilds": {
+    "class": "DevBuilds"
+   },
+   "DevProfile": {
+    "class": "DevProfile"
+   },
+   "DnsRecord": {
+    "class": "DnsRecord"
+   },
+   "Firewall": {
+    "class": "Firewall"
+   },
+   "Hetzner": {
+    "class": "Hetzner"
+   },
+   "Hook": {
+    "class": "Hook"
+   },
+   "HttpState": {
+    "class": "HttpState"
+   },
+   "Infrastructure": {
+    "class": "Infrastructure"
+   },
+   "LocalState": {
+    "class": "LocalState"
+   },
+   "Node": {
+    "class": "Node"
+   },
+   "Otlp": {
+    "class": "Otlp"
+   },
+   "PrimaryIp": {
+    "class": "PrimaryIp"
+   },
+   "Rule": {
+    "class": "Rule"
+   },
+   "Server": {
+    "class": "Server"
+   },
+   "Source": {
+    "class": "Source"
+   },
+   "Ssh": {
+    "class": "Ssh"
+   },
+   "Ui": {
+    "class": "Ui"
+   },
+   "register_cluster": {
+    "params": [
+     "cluster",
+     "context",
+     "home",
+     "kubeconfig",
+     "namespace",
+     "server",
+     "transport"
+    ]
+   }
+  },
+  "piceli.k8s": {
+   "ConcurrentWriterError": {
+    "class": "ConcurrentWriterError"
+   },
+   "FileStateStore": {
+    "class": "FileStateStore"
+   },
+   "InstanceLock": {
+    "class": "InstanceLock"
+   },
+   "RELEASE_CATALOG_SCHEMA_VERSION": {},
+   "ReleaseCatalog": {
+    "class": "ReleaseCatalog"
+   },
+   "ReleaseRecord": {
+    "class": "ReleaseRecord"
+   },
+   "ReleaseSource": {
+    "class": "ReleaseSource"
+   },
+   "ReleaseWorkflow": {
+    "class": "ReleaseWorkflow"
+   },
+   "StandingPolicy": {
+    "class": "StandingPolicy"
+   },
+   "UserStore": {
+    "class": "UserStore"
+   },
+   "health_aware_rollback": {
+    "params": [
+     "check_health_fn",
+     "executor",
+     "health_timeout_seconds",
+     "migration_compatible_fn",
+     "target_release_name",
+     "workflow"
+    ]
+   },
+   "load_release_input": {
+    "params": [
+     "value"
+    ]
+   },
+   "promote_release": {
+    "params": [
+     "catalog",
+     "policy",
+     "select",
+     "source_name",
+     "target_name"
+    ],
+    "returns": "ReleaseRecord"
+   }
+  },
+  "piceli.k8s.ops": {
+   "DEPLOYMENT_SESSION_SCHEMA_VERSION": {},
+   "DeploymentComponent": {
+    "class": "DeploymentComponent"
+   },
+   "DeploymentComposition": {
+    "class": "DeploymentComposition"
+   },
+   "DeploymentPlan": {
+    "class": "DeploymentPlan"
+   },
+   "DeploymentRevision": {
+    "class": "DeploymentRevision"
+   },
+   "DeploymentSession": {
+    "class": "DeploymentSession"
+   },
+   "DeploymentSessionArchive": {
+    "class": "DeploymentSessionArchive"
+   },
+   "ExecutionAuthorization": {
+    "class": "ExecutionAuthorization"
+   },
+   "ExecutionBundle": {
+    "class": "ExecutionBundle"
+   },
+   "ExecutionJournal": {
+    "class": "ExecutionJournal"
+   },
+   "LEGACY_EXECUTION_ARCHIVE_SCHEMA_VERSION": {},
+   "LegacyEvidenceInsufficient": {
+    "class": "LegacyEvidenceInsufficient"
+   },
+   "LegacyExecutionArchive": {
+    "class": "LegacyExecutionArchive"
+   },
+   "LegacyExecutionImport": {
+    "class": "LegacyExecutionImport"
+   },
+   "ObservedSnapshot": {
+    "class": "ObservedSnapshot"
+   },
+   "PlanAuthorization": {
+    "class": "PlanAuthorization"
+   },
+   "PlanExecutor": {
+    "class": "PlanExecutor"
+   },
+   "ResourceIdentity": {
+    "class": "ResourceIdentity"
+   },
+   "ResourceIntent": {
+    "class": "ResourceIntent"
+   },
+   "SecretVersionRef": {
+    "class": "SecretVersionRef"
+   },
+   "SecretVersionStore": {
+    "class": "SecretVersionStore"
+   },
+   "component_from_objects": {
+    "params": [
+     "dependencies",
+     "name",
+     "resources"
+    ],
+    "returns": "DeploymentComponent"
+   },
+   "import_legacy_execution": {
+    "params": [
+     "archive",
+     "journal",
+     "legacy_execution_id",
+     "legacy_journal",
+     "secrets"
+    ],
+    "returns": "LegacyExecutionImport"
+   },
+   "load_all": {
+    "params": [
+     "folder_path",
+     "module_name",
+     "module_path",
+     "sub_elements"
+    ]
    }
   },
   "piceli.k8s.release_spec": {
@@ -8485,6 +13806,143 @@
     ]
    }
   },
+  "piceli.k8s.templates": {
+   "ConfigMap": {
+    "class": "ConfigMap"
+   },
+   "Container": {
+    "class": "Container"
+   },
+   "CronJob": {
+    "class": "CronJob"
+   },
+   "CronTab": {
+    "params": null
+   },
+   "DNSLabel": {
+    "params": null
+   },
+   "DNSSubdomain": {
+    "params": null
+   },
+   "Deployable": {
+    "class": "Deployable"
+   },
+   "Deployment": {
+    "class": "Deployment"
+   },
+   "FieldPath": {
+    "params": null
+   },
+   "HPA": {
+    "class": "HPA"
+   },
+   "HorizontalPodAutoscaler": {
+    "class": "HorizontalPodAutoscaler"
+   },
+   "IANASvcName": {
+    "params": null
+   },
+   "Job": {
+    "class": "Job"
+   },
+   "Labels": {
+    "params": null
+   },
+   "Name": {
+    "params": null
+   },
+   "NodeLocalRegistry": {
+    "class": "NodeLocalRegistry"
+   },
+   "NodeLocalRegistryGarbageCollection": {
+    "class": "NodeLocalRegistryGarbageCollection"
+   },
+   "PersistentVolume": {
+    "class": "PersistentVolume"
+   },
+   "PersistentVolumeClaim": {
+    "class": "PersistentVolumeClaim"
+   },
+   "PersistentVolumeClaimTemplate": {
+    "class": "PersistentVolumeClaimTemplate"
+   },
+   "Pod": {
+    "class": "Pod"
+   },
+   "Port": {
+    "class": "Port"
+   },
+   "Quantity": {
+    "params": null
+   },
+   "ReplicaManager": {
+    "class": "ReplicaManager"
+   },
+   "Resources": {
+    "class": "Resources"
+   },
+   "Role": {
+    "class": "Role"
+   },
+   "RoleBinding": {
+    "class": "RoleBinding"
+   },
+   "Secret": {
+    "class": "Secret"
+   },
+   "Service": {
+    "class": "Service"
+   },
+   "ServiceAccount": {
+    "class": "ServiceAccount"
+   },
+   "StatefulSet": {
+    "class": "StatefulSet"
+   },
+   "VPA": {
+    "class": "VPA"
+   },
+   "VerticalPodAutoscaler": {
+    "class": "VerticalPodAutoscaler"
+   },
+   "Volume": {
+    "class": "Volume"
+   },
+   "VolumeMount": {
+    "class": "VolumeMount"
+   },
+   "VolumeMountConfigMap": {
+    "class": "VolumeMountConfigMap"
+   },
+   "VolumeMountEmptyDir": {
+    "class": "VolumeMountEmptyDir"
+   },
+   "VolumeMountPVC": {
+    "class": "VolumeMountPVC"
+   },
+   "VolumeMountPVCTemplate": {
+    "class": "VolumeMountPVCTemplate"
+   },
+   "VolumeMountSecret": {
+    "class": "VolumeMountSecret"
+   },
+   "check_labels": {
+    "params": [
+     "v"
+    ]
+   },
+   "crontab": {},
+   "env_vars": {},
+   "pod_security_context": {},
+   "pull_reference": {
+    "params": [
+     "digest",
+     "port",
+     "repository"
+    ]
+   }
+  },
   "piceli.pipeline": {
    "ALL_STAGES": {},
    "ApprovalPolicy": {
@@ -8616,6 +14074,52 @@
     "returns": "VaultSecretSpec"
    }
   },
+  "piceli.server.cluster_install": {
+   "Any": {
+    "class": "Any"
+   },
+   "ClusterInstallConfig": {
+    "class": "ClusterInstallConfig"
+   },
+   "DeployResourceRule": {
+    "class": "DeployResourceRule"
+   },
+   "InstalledBuildConfig": {
+    "class": "InstalledBuildConfig"
+   },
+   "ManualDeliveryConfig": {
+    "class": "ManualDeliveryConfig"
+   },
+   "Mapping": {
+    "class": "Mapping"
+   },
+   "MappingProxyType": {
+    "class": "mappingproxy"
+   },
+   "annotations": {},
+   "cluster_install_yaml": {
+    "params": [
+     "config"
+    ]
+   },
+   "dataclass": {
+    "params": null
+   },
+   "hashlib": {},
+   "ipaddress": {},
+   "json": {},
+   "re": {},
+   "render_cluster_install": {
+    "params": [
+     "config"
+    ]
+   },
+   "tomllib": {},
+   "urlsplit": {
+    "params": null
+   },
+   "yaml": {}
+  },
   "piceli.testing": {
    "FakeAPI": {
     "class": "FakeAPI"
@@ -8679,6 +14183,7 @@
  "modules": [
   "piceli",
   "piceli.__main__",
+  "piceli._lazy",
   "piceli.app",
   "piceli.app.access",
   "piceli.app.app",
@@ -8704,6 +14209,7 @@
   "piceli.artifacts.gc",
   "piceli.artifacts.host_build",
   "piceli.artifacts.host_execution",
+  "piceli.artifacts.host_toolchains",
   "piceli.artifacts.image_manifest",
   "piceli.artifacts.local_import",
   "piceli.artifacts.mirror",
@@ -8746,12 +14252,14 @@
   "piceli.dev.client",
   "piceli.dev.cluster",
   "piceli.dev.delta",
+  "piceli.dev.health",
   "piceli.dev.hosts",
   "piceli.dev.jobs",
   "piceli.dev.model",
   "piceli.dev.pack",
   "piceli.dev.pod",
   "piceli.dev.scheduler",
+  "piceli.dev.toolchains",
   "piceli.dev.worktree",
   "piceli.envs",
   "piceli.envs.access",
@@ -8806,6 +14314,7 @@
   "piceli.infra.machines.tofu",
   "piceli.infra.multicluster",
   "piceli.infra.pipelines",
+  "piceli.infra.provenance",
   "piceli.infra.remote_builds",
   "piceli.infra.render",
   "piceli.infra.sources",
@@ -8945,6 +14454,7 @@
   "piceli.pipeline.summary",
   "piceli.process_group",
   "piceli.profiles",
+  "piceli.public_api",
   "piceli.reference_docs",
   "piceli.restore",
   "piceli.restore.claims",
@@ -9036,5 +14546,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.21.1"
+ "version": "0.22.0"
 }

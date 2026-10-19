@@ -373,6 +373,12 @@ def image_keys(
             "image": image.to_dict(),
             "contexts": {name: files[name] for name in reads},
         }
+        if spec.toolchains:
+            # 0.22: a pin file in a context the image does not read still
+            # rebuilds it when it changes.
+            from piceli.artifacts.host_toolchains import key_files
+
+            body["toolchains"] = key_files(spec, files)
         keys[image.name] = ImageKey(
             build.name,
             image.name,
@@ -470,6 +476,7 @@ def run_spec_build(
     results: dict[str, Any] = {}
     per_platform: dict[str, dict[str, str]] = {}
     commands: list[dict[str, Any]] = []
+    installed: dict[str, str] = {}
     declared = NodeFacts.from_dict(request.facts) if request.facts else None
     for platform in platforms:
         facts = (
@@ -492,6 +499,10 @@ def run_spec_build(
             raise build_failed(
                 f"build {request.spec}: host build failed ({error.code})", error
             ) from None
+        if receipt.get("toolchains"):  # 0.22: the versions, for provenance
+            from piceli.dev.toolchains import versions
+
+            installed.update(versions(receipt["toolchains"]))
         steps = [item for item in receipt.get("steps") or () if isinstance(item, dict)]
         ran: list[dict[str, Any]] = [
             {
@@ -551,7 +562,10 @@ def run_spec_build(
                 platform=None,
                 platforms=dict(sorted(digests.items())),
             )
-    return {"images": results, "commands": commands}
+    built: dict[str, Any] = {"images": results, "commands": commands}
+    if installed:
+        built["toolchains"] = dict(sorted(installed.items()))
+    return built
 
 
 # ---------------------------------------------------------------- render

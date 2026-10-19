@@ -9,9 +9,14 @@ from __future__ import annotations
 
 import json
 
-from piceli.k8s.ops.executor import ExecutionAuthorization, PlanExecutor
-from piceli.k8s.ops.plan import DeploymentPlan, ObservedSnapshot
-from piceli.k8s.ops.revision import DeploymentRevision, ExecutionBundle
+from piceli.k8s.ops import (
+    DeploymentPlan,
+    DeploymentRevision,
+    ExecutionAuthorization,
+    ExecutionBundle,
+    ObservedSnapshot,
+    PlanExecutor,
+)
 
 
 def create_bundle(

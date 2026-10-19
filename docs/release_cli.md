@@ -300,7 +300,7 @@ The plan of the rebuilt release lists `Deployment/beta` as `no-op` and
 ### The composition function
 
 ```python
-from piceli.k8s.ops.plan import (
+from piceli.k8s.ops import (
     DeploymentComponent,
     DeploymentComposition,
     ResourceIntent,

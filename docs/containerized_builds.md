@@ -218,7 +218,7 @@ Python API:
 ```python
 import time
 from pathlib import Path
-from piceli.artifacts.build_spec import BuildGrant, BuildSpec
+from piceli.artifacts import BuildGrant, BuildSpec
 
 spec = BuildSpec.from_toml(Path("build.toml"))
 plan = spec.plan()  # reads files, writes nothing, runs nothing

@@ -541,6 +541,50 @@ class RegistryDelivery:
                 client.push_manifest(target.repository, found, index, OCI_INDEX)
             return found
 
+    def attach_referrer(
+        self,
+        target: RegistryTarget,
+        subject: str,
+        body: bytes,
+        *,
+        kind: str = "provenance",
+        title: str = "provenance.json",
+    ) -> dict[str, Any]:
+        """Push ``body`` as an OCI 1.1 referrer of the manifest ``subject``
+        (``artifactType`` from :data:`piceli.artifacts.publish.ATTESTATION_TYPES`,
+        ``application/vnd.in-toto+json`` for provenance; 0.22.0).
+
+        A registry that refuses it (an old one, a read-only one) does not fail
+        the delivery: the result is ``{"state": "skipped", "reason": ...}``.
+        """
+        from piceli.artifacts.multi_platform import IndexEntry
+        from piceli.artifacts.publish import attach
+
+        validate_digest(subject)
+        forwarded: AbstractContextManager[None] = (
+            self.forwarder(self.forward, target.effective_port)
+            if self.forward is not None
+            else nullcontext()
+        )
+        try:
+            with forwarded:
+                client = self.client_factory(
+                    target.endpoint(
+                        credentials=self.credentials, ca_file=self.ca_file, timeout=60.0
+                    )
+                )
+                client.authenticate(target.repository)
+                manifest, media = client.get_manifest(target.repository, subject)
+                if "sha256:" + hashlib.sha256(manifest).hexdigest() != subject:
+                    raise RegistryError("digest-mismatch", 0)
+                entry = IndexEntry(
+                    "", subject, len(manifest), media.split(";")[0].strip()
+                )
+                attached = attach(client, target.repository, entry, kind, body, title)
+        except RegistryError as error:
+            return {"state": "skipped", "reason": error.reason}
+        return {"state": "attached", **attached}
+
     def has_manifest(self, target: RegistryTarget, digest: str) -> bool:
         """Whether ``target``'s repository holds the manifest ``digest``."""
         forwarded: AbstractContextManager[None] = (

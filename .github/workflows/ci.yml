@@ -140,11 +140,11 @@ jobs:
           echo "nodes=$(jq -c "$select" .github/kind-nodes.json)" >> "$GITHUB_OUTPUT"
 
   integration:
-    name: integration (k8s ${{ matrix.node.minor }}, ${{ matrix.shard }}/4)
+    name: integration (k8s ${{ matrix.node.minor }}, shard ${{ matrix.shard }}/4)
     needs: kind-nodes
-    # The same tree already passed on its pull request; main and releases do
-    # not wait for kind again. Nightly and manual runs cover every version.
-    if: github.event_name != 'push'
+    # Every event, also pushes to main (a skipped matrix job shows its name
+    # unexpanded); in four shards it ends with the unit tests. Nightly and
+    # manual runs cover every Kubernetes version.
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -196,7 +196,7 @@ jobs:
           files=$(python3 scripts/kind_shard.py "$SHARD" 4)
           # The Rust image build (up to 25 min) runs nightly and on demand only.
           args=""
-          if [ "$EVENT" = pull_request ]; then
+          if [ "$EVENT" = pull_request ] || [ "$EVENT" = push ]; then
             args="--deselect tests/integration/test_release_pipeline_kind.py"
           fi
           uv run pytest $files --cov --cov-report=term --durations=15 $args
@@ -348,7 +348,6 @@ jobs:
 
   coverage:
     needs: [test, integration]
-    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

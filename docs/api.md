@@ -1,7 +1,8 @@
 # API reference
 
-The Python API, generated from the docstrings: every module of the
-`piceli` package with its classes, functions and constants.
+The Python API, generated from the docstrings: the public modules listed in
+{src}`piceli/public_api.py` and the modules their names come from. Other
+`piceli.*` modules are internal and may change in any release.
 
 **[Open the API reference](apidocs/index.rst)**
 
