@@ -18,7 +18,10 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `piceli.io/roll-on-change: "false"` on a raw workload) opts out;
   `piceli import` sets it for imported workloads that read configuration.
   **Upgrade note:** the first release after upgrading rolls every workload
-  that reads a ConfigMap or Secret of its release once.
+  that reads a ConfigMap or Secret of its release once. A new release's plan
+  dry-runs the final pod templates of Secret consumers, so an unrelated
+  change leaves them a no-op. A Secret or ConfigMap declared without content
+  (adopted metadata only) adds no digest.
 - **Generated Secrets survive an empty state.** When the state has no
   record of a `random`, `tls-self-signed` or `tls-ca` generator but a live
   Secret the app declares carries this release's owner annotation and field
