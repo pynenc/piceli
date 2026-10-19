@@ -66,6 +66,7 @@ from piceli.k8s.ops.content_digest import (
     content_digests,
     has_secret_digests,
     strip_roll_markers,
+    version_token,
 )
 from piceli.k8s.ops.diagnosis import compact
 from piceli.k8s.ops.discovery import (
@@ -1443,6 +1444,65 @@ class ReleaseRunner:
             {item.intent.ref: item.intent.manifest for item in snapshot.resources},
         )
 
+    def _recapture_dry_runs(
+        self,
+        binding: ProviderBinding,
+        artifact: DiscoveryArtifact,
+        composition: DeploymentComposition,
+        store: SecretVersionStore,
+        values: Mapping[str, Any],
+        unavailable: list[dict[str, Any]],
+    ) -> tuple[DiscoveryArtifact, ObservedSnapshot, list[dict[str, Any]]]:
+        """Dry runs of the final pod templates, once the values are known.
+
+        The placeholder build (observed before any value is read, so a
+        refused plan reads none) carries offline tokens in
+        ``piceli.io/secrets-digest``; the release carries keyed fingerprints
+        of the values (see ``session_factory`` in :meth:`_plan_create`). The
+        workloads whose template differs are dry-run again with the final
+        digests, so their evidence is for exactly the manifest that is
+        planned and applied (a stale one is ignored by the planner, which
+        then compares literally and reports server defaults as changes).
+        """
+        by_ref = {ref: name for name, ref in self._placeholders().items()}
+
+        def token(reference: SecretVersionRef) -> str:
+            name = by_ref.get(reference)
+            if name is None or name not in values:
+                return version_token(reference)
+            return store.fingerprint_value(values[name])
+
+        final = content_digests(composition, token, refresh=True)
+        before = {
+            resource.ref: resource
+            for component in composition.components
+            for resource in component.resources
+        }
+        changed = {
+            resource.ref
+            for component in final.components
+            for resource in component.resources
+            if before.get(resource.ref) != resource
+        }
+        if changed:
+            artifact, again = capture_server_dry_runs(
+                binding.provider,
+                artifact,
+                final,
+                deadline=time.monotonic() + self.spec.model.discovery.max_seconds,
+                exclude=lambda resource: resource.ref not in changed,
+            )
+            unavailable = sorted(
+                [
+                    item
+                    for item in unavailable
+                    if ResourceRef(**item["resource"]) not in changed
+                ]
+                + [item.to_dict() for item in again],
+                key=lambda item: tuple(item["resource"].values()),
+            )
+        return artifact, ObservedSnapshot.from_discovery(artifact), unavailable
+
     def _observe(
         self,
         binding: ProviderBinding,
@@ -2028,6 +2088,9 @@ class ReleaseRunner:
         }
         bound = {n for n, ref in placeholders.items() if ref in bound_refs}
         values = {n: v for n, v in secrets.values.items() if n in bound}
+        artifact, snapshot, unavailable = self._recapture_dry_runs(
+            binding, artifact, composition, store, values, unavailable
+        )
         session_id = uuid.uuid4().hex
         internal: dict[str, SecretVersionRef] = {}
         try:

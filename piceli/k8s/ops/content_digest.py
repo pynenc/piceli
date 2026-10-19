@@ -9,7 +9,9 @@ value would otherwise reach the pods only at their next restart.
 :func:`content_digests` writes, on the pod template of every such workload,
 a digest of the content of the ConfigMaps and Secrets *of the same
 composition* that the pods read (volumes, projected volumes, ``envFrom`` and
-``env.valueFrom`` of every container):
+``env.valueFrom`` of every container), when the composition declares their
+content (an object declared with its metadata only, such as a Secret adopted
+without its value, is left out):
 
 ``piceli.io/configmaps-digest``
     ``sha256:<hex>`` of the consumed ConfigMaps' ``data`` and ``binaryData``.
@@ -23,7 +25,9 @@ composition* that the pods read (volumes, projected volumes, ``envFrom`` and
     private store, so the annotation changes exactly when a value changes and
     says nothing about the value without that key. Offline renders use the
     opaque version id of the reference (:func:`version_token`), which holds
-    no value at all.
+    no value at all; a plan observes the cluster with those, then captures
+    the server dry runs of the workloads again once their final digests are
+    known, so the evidence is for exactly the manifest that is applied.
 
 Unchanged content gives the same annotations, so the pod template does not
 change and nothing rolls. A workload whose own metadata carries
@@ -164,6 +168,25 @@ def _secret_content(resource: ResourceIntent, token: Token) -> dict[str, Any]:
     }
 
 
+def _declares_content(resource: ResourceIntent) -> bool:
+    """Whether the composition declares any key of the object's content.
+
+    An object declared with its metadata only (a Secret adopted without its
+    value, whose content another tool manages) has no content Piceli knows:
+    a digest of it would never change, so it only adds an annotation.
+    """
+    manifest = resource.manifest
+    fields = (
+        ("data", "binaryData")
+        if resource.ref.kind == "ConfigMap"
+        else (
+            "data",
+            "stringData",
+        )
+    )
+    return any(manifest.get(field) for field in fields)
+
+
 def _digests(
     pod: Mapping[str, Any],
     namespace: str,
@@ -176,6 +199,8 @@ def _digests(
         resource = objects.get((kind, namespace, name))
         if resource is None:
             continue  # not part of this composition: never ours to roll for
+        if not _declares_content(resource):
+            continue  # metadata only: its content is managed elsewhere
         if kind == "ConfigMap":
             configs[name] = _config_content(resource)
         else:

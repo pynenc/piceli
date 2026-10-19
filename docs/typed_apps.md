@@ -553,8 +553,15 @@ containers included):
   workload reads a Secret. `piceli release diff` of a new release keeps the
   live `secrets-digest` for the same reason (it never reads secret values),
   while the plan computes the real one.
-- **Only objects of the release count.** A Secret created by another tool is
-  not hashed: Piceli cannot see its content.
+- **The plan's evidence is for the final template.** A plan observes the
+  cluster before it reads any value, so the server dry runs it captures
+  first carry the offline digest; once the values are read, the workloads
+  whose `secrets-digest` changed are dry-run again with the real one. The
+  plan then compares exactly what it applies, server defaults included.
+- **Only content the release declares counts.** A Secret created by another
+  tool is not hashed: Piceli cannot see its content. Neither is a Secret or
+  ConfigMap the release declares with its metadata only (adopted without
+  its value): adopting it leaves its consumers' pod templates as they are.
 - **Jobs and CronJobs carry no digest.** Every run starts new pods that read
   the current content, and a Job's pod template is immutable.
 - **Raw compositions get it too.** The release engine annotates every

@@ -239,9 +239,20 @@ class SecretVersionStore:
         new release keeps it; workloads use it to roll only when a value
         they read changes (``piceli.io/secrets-digest``).
         """
-        value = self.resolve(target, reference)
+        return self.fingerprint_value(self.resolve(target, reference))
+
+    def fingerprint_value(self, value: Any) -> str:
+        """:meth:`fingerprint` of a value before it is stored.
+
+        The value is canonicalized exactly as :meth:`put` stores it, so the
+        result equals the fingerprint of the version it becomes: a plan uses
+        it to know the final pod templates before any value is stored.
+        """
+        stored = json.loads(
+            json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        )
         encoded = json.dumps(
-            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+            stored, sort_keys=True, separators=(",", ":"), allow_nan=False
         )
         mac = hmac.new(self._fingerprint_key(), encoded.encode(), hashlib.sha256)
         return "hmac-sha256:" + mac.hexdigest()
