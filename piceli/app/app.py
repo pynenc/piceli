@@ -56,6 +56,7 @@ from piceli.app.prerollout import (
 from piceli.app.resource import Resource, Scope
 from piceli.bundle.rules import RULES as SAFETY_RULES
 from piceli.bundle.rules import SAFETY_ANNOTATION_PREFIX
+from piceli.k8s.ops.content_digest import ROLL_ON_CHANGE_ANNOTATION, content_digests
 from piceli.k8s.ops.discovery import RELEASE_NAMESPACE_ANNOTATION, ResourceScope
 from piceli.k8s.ops.plan import (
     DeploymentComponent,
@@ -405,6 +406,7 @@ class App(BaseModel):
         labels: Mapping[str, str] | None = None,
         component: str | None = None,
         access: Forward | None = None,
+        roll_on_change: bool = True,
     ) -> Deployment:
         """Declare a Deployment whose main container is named after it.
 
@@ -423,6 +425,14 @@ class App(BaseModel):
 
         ``replicas`` defaults to 1; leave it unset on a Deployment that an
         :meth:`autoscaler` targets.
+
+        ``roll_on_change`` (default ``True``): the pod template carries a
+        digest of the ConfigMaps and Secrets of this app that the pods read
+        (``piceli.io/configmaps-digest``, ``piceli.io/secrets-digest``), so a
+        changed value rolls the pods and an unchanged one does not. Set it
+        to ``False`` for a program that reloads its configuration itself.
+        The same argument exists on :meth:`stateful_set` and
+        :meth:`daemon_set`.
         """
         fields = self._pod_fields(
             name,
@@ -460,6 +470,7 @@ class App(BaseModel):
                     "strategy": strategy,
                     "selector": dict(selector) if selector is not None else None,
                     "access": access,
+                    "roll_on_change": roll_on_change,
                 }
             )
         )
@@ -499,6 +510,7 @@ class App(BaseModel):
         selector: Mapping[str, str] | None = None,
         labels: Mapping[str, str] | None = None,
         component: str | None = None,
+        roll_on_change: bool = True,
     ) -> StatefulSet:
         """Declare a StatefulSet (and its governing headless Service).
 
@@ -565,6 +577,7 @@ class App(BaseModel):
                 "update_strategy": update_strategy,
                 "min_ready_seconds": min_ready_seconds,
                 "selector": dict(selector) if selector is not None else None,
+                "roll_on_change": roll_on_change,
             }
         )
         service = None
@@ -634,6 +647,7 @@ class App(BaseModel):
         selector: Mapping[str, str] | None = None,
         labels: Mapping[str, str] | None = None,
         component: str | None = None,
+        roll_on_change: bool = True,
     ) -> DaemonSet:
         """Declare a DaemonSet: one pod on every node that matches.
 
@@ -677,6 +691,7 @@ class App(BaseModel):
                     "update_strategy": update_strategy,
                     "min_ready_seconds": min_ready_seconds,
                     "selector": dict(selector) if selector is not None else None,
+                    "roll_on_change": roll_on_change,
                 }
             )
         )
@@ -1904,7 +1919,7 @@ class App(BaseModel):
                         "an ExistingClaim and must never be managed by the release; "
                         "remove it from the composition"
                     )
-        return DeploymentComposition(tuple(components))
+        return content_digests(DeploymentComposition(tuple(components)))
 
     def _intents(
         self,
@@ -1976,6 +1991,9 @@ class App(BaseModel):
             for target_kind, name, rule, reason in self._safety_exceptions
             if (target_kind, name) == (kind, item.name)
         }
+        if isinstance(item, Workload) and not item.roll_on_change:
+            # After the overrides: an override cannot turn the opt-out off.
+            exceptions[ROLL_ON_CHANGE_ANNOTATION] = "false"
         if exceptions:
             manifest, *extra = (
                 merge_override(value, {"metadata": {"annotations": exceptions}})

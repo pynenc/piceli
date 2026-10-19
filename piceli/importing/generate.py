@@ -40,6 +40,13 @@ from piceli.importing.codegen import (
     one_tuple,
     statement,
 )
+from piceli.k8s.ops.content_digest import (
+    ROLL_ON_CHANGE_ANNOTATION,
+    ROLLED_KINDS,
+    pod_references,
+    rolls_on_change,
+    strip_roll_markers,
+)
 
 
 class ImportFailure(ValueError):
@@ -890,6 +897,9 @@ class _Generator:
             if selector != {"app.kubernetes.io/name": name}
             else None,
             labels=literal(extra_labels) if extra_labels else None,
+            # Adopting stays a no-op: no content digest is added to the pod
+            # template (that would roll the pods once). Removing it opts in.
+            roll_on_change=literal(False) if pod_references(pod) else None,
         )
         for container in containers:
             self._record_image(name, container)
@@ -1058,12 +1068,27 @@ class _Generator:
         kind = str(item["kind"])
         name = str(item["metadata"]["name"])
         component = f"{kind.lower()}-{name}"[:253]
+        manifest = dict(item)
+        pod = ((manifest.get("spec") or {}).get("template") or {}).get("spec")
+        if (
+            kind in ROLLED_KINDS
+            and isinstance(pod, Mapping)
+            and pod_references(pod)
+            and rolls_on_change(manifest)
+        ):
+            # As for a typed Deployment: adopting adds no content digest.
+            metadata = dict(manifest["metadata"])
+            metadata["annotations"] = {
+                **(metadata.get("annotations") or {}),
+                ROLL_ON_CHANGE_ANNOTATION: "false",
+            }
+            manifest["metadata"] = metadata
         expr = call(
             "app.add",
             call(
                 "DeploymentComponent",
                 literal(component),
-                one_tuple(call("ResourceIntent.from_manifest", literal(dict(item)))),
+                one_tuple(call("ResourceIntent.from_manifest", literal(manifest))),
             ),
         )
         return _Decl(kind, name, None, expr, typed=False, reason=reason)
@@ -1119,7 +1144,7 @@ class _Generator:
         )
 
     def _rendered(self, app: Any) -> dict[tuple[str, str], dict[str, Any]]:
-        composition = app.render(self.namespace)
+        composition = strip_roll_markers(app.render(self.namespace))
         return {
             (resource.ref.kind, resource.ref.name): resource.manifest
             for component in composition.components
@@ -1294,7 +1319,7 @@ class _Generator:
         namespace: dict[str, Any] = {"__name__": "_piceli_import_check"}
         try:
             exec(compile(source, "<piceli-import>", "exec"), namespace)
-            composition = namespace["build"](self._context())
+            composition = strip_roll_markers(namespace["build"](self._context()))
         except Exception as error:
             raise ImportFailure(
                 "import-roundtrip-mismatch",

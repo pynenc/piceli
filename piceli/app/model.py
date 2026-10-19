@@ -1002,6 +1002,15 @@ class Workload(_Model):
         a pod bound to a service account declared on the app gets ``True``;
         any other pod gets the app's ``PodDefaults.automount_token``.
     :param component: Deployment component; defaults to ``name``.
+    :param roll_on_change: Roll the pods when a ConfigMap or Secret of the
+        release that they read changes (default ``True``): the pod template
+        of a Deployment, StatefulSet or DaemonSet carries a digest of that
+        content (``piceli.io/configmaps-digest``,
+        ``piceli.io/secrets-digest``). ``False`` declares
+        ``piceli.io/roll-on-change: "false"``, which the release engine reads
+        and removes: no digest, for programs that reload their configuration
+        themselves. Jobs and CronJobs never carry a digest: every run starts
+        new pods.
 
     Selector rule: the selector is ``{"app.kubernetes.io/name": <name>}`` unless
     ``selector`` is given. It never depends on the app name, the component or
@@ -1028,6 +1037,7 @@ class Workload(_Model):
     termination_grace_seconds: NonNegativeInt | None = None
     automount_token: bool | None = None
     component: Name | None = None
+    roll_on_change: bool = True
 
     @model_validator(mode="after")
     def _pod(self) -> Workload:

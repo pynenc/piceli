@@ -60,6 +60,12 @@ from piceli.checks import (
     run_checks,
 )
 from piceli.k8s.ops.bounds import timestamp
+from piceli.k8s.ops.content_digest import (
+    carry_live_secret_digests,
+    content_digests,
+    has_secret_digests,
+    strip_roll_markers,
+)
 from piceli.k8s.ops.diagnosis import compact
 from piceli.k8s.ops.discovery import (
     RELEASE_CLUSTER_KINDS,
@@ -1231,7 +1237,11 @@ class ReleaseRunner:
                     "the composition function must return an App or a DeploymentComposition",
                     code="invalid-composition",
                 )
-            return scoped_composition(composition, self.spec.model.target.namespace)
+            scoped = scoped_composition(composition, self.spec.model.target.namespace)
+            # Offline tokens (version ids); a plan replaces them with keyed
+            # fingerprints of the stored values (see ``_plan_create``). The
+            # opt-out markers are instructions, never applied.
+            return strip_roll_markers(content_digests(scoped))
 
         return factory
 
@@ -1386,6 +1396,20 @@ class ReleaseRunner:
             deadline=time.monotonic() + self.spec.model.discovery.max_seconds,
         )
         return artifact, [item.to_dict() for item in unavailable]
+
+    @staticmethod
+    def _carry_secret_digests(
+        composition: DeploymentComposition, artifact: DiscoveryArtifact
+    ) -> DeploymentComposition:
+        """A preview without secret values keeps the live secret digests.
+
+        See :func:`~piceli.k8s.ops.content_digest.carry_live_secret_digests`.
+        """
+        snapshot = ObservedSnapshot.from_discovery(artifact)
+        return carry_live_secret_digests(
+            composition,
+            {item.intent.ref: item.intent.manifest for item in snapshot.resources},
+        )
 
     def _observe(
         self,
@@ -1686,6 +1710,10 @@ class ReleaseRunner:
             kinds = self._kinds(composition)
             if settings.prune:
                 kinds |= self._prune_kinds(records.values())
+            if existing is None and has_secret_digests(composition):
+                composition = self._carry_secret_digests(
+                    composition, self._discover(binding, set(kinds), composition)
+                )
             artifact, unavailable = self._observe(binding, composition, kinds)
             snapshot = ObservedSnapshot.from_discovery(artifact)
             inherited = list(settings.inherited_owners)
@@ -1762,6 +1790,7 @@ class ReleaseRunner:
             if settings.prune:
                 kinds |= self._prune_kinds(catalog.records())
             artifact = self._discover(binding, kinds, composition)
+            composition = self._carry_secret_digests(composition, artifact)
             skipped = sorted(
                 {
                     (resource.ref.kind, resource.ref.name)
@@ -1918,7 +1947,14 @@ class ReleaseRunner:
                 refs: Mapping[str, SecretVersionRef],
             ) -> DeploymentComposition:
                 exposed = {n: r for n, r in internal.items() if n in placeholders}
-                return factory({**exposed, **refs})
+                # Pod templates carry keyed fingerprints of the values their
+                # Secrets hold: a changed value rolls the workload, a value
+                # carried over to this release does not.
+                return content_digests(
+                    factory({**exposed, **refs}),
+                    lambda ref: store.fingerprint(binding.target, ref),
+                    refresh=True,
+                )
 
             workflow = ReleaseWorkflow(
                 catalog,

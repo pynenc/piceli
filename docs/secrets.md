@@ -384,6 +384,13 @@ a new name (for example bump `cache-auth-1` to `cache-auth-2` through
 {doc}`release_cli`. Templates and static values are not rotated themselves:
 rotate what they use, or edit the spec.
 
+Workloads that read a Secret roll when its content changes, also when the
+Secret keeps its name (for example one you deleted so the release creates it
+again with the rotated value): their pod template carries
+`piceli.io/secrets-digest`, a digest of keyed fingerprints of the values, so
+the pods restart with the new value and a carried-over value rolls nothing.
+See {ref}`roll-on-change`.
+
 ## Origins in the plan
 
 `plan` prints one line per generator, and the JSON output has the same values

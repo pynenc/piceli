@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import sqlite3
 import stat
 import uuid
@@ -132,6 +135,8 @@ class SecretVersionStore:
                 session_id TEXT NOT NULL, input_name TEXT NOT NULL,
                 version TEXT NOT NULL REFERENCES versions(version),
                 PRIMARY KEY(session_id, input_name));
+            CREATE TABLE IF NOT EXISTS fingerprint_key (
+                id INTEGER PRIMARY KEY CHECK (id = 1), key TEXT NOT NULL);
         """
         )
         with self.connection:
@@ -223,6 +228,38 @@ class SecretVersionStore:
         if row is None:
             raise ValueError("private version missing or outside target")
         return strict_json(row[0], 1_000_000)
+
+    def fingerprint(self, target: PlanTarget, reference: SecretVersionRef) -> str:
+        """A keyed digest of one stored value: ``hmac-sha256:<hex>``.
+
+        The key is random, created once per store and never leaves it, so
+        the digest reveals nothing about the value (no dictionary attack on
+        a short password) to anyone without the store. Two versions with the
+        same value have the same fingerprint, so a value carried over to a
+        new release keeps it; workloads use it to roll only when a value
+        they read changes (``piceli.io/secrets-digest``).
+        """
+        value = self.resolve(target, reference)
+        encoded = json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        mac = hmac.new(self._fingerprint_key(), encoded.encode(), hashlib.sha256)
+        return "hmac-sha256:" + mac.hexdigest()
+
+    def _fingerprint_key(self) -> bytes:
+        row = self.connection.execute(
+            "SELECT key FROM fingerprint_key WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            with self.connection:
+                self.connection.execute(
+                    "INSERT OR IGNORE INTO fingerprint_key VALUES (1, ?)",
+                    (secrets.token_hex(32),),
+                )
+            row = self.connection.execute(
+                "SELECT key FROM fingerprint_key WHERE id = 1"
+            ).fetchone()
+        return bytes.fromhex(row[0])
 
     def values(self, target: PlanTarget, *, limit: int = 10_000) -> list[Any]:
         """Every stored value of ``target`` (at most ``limit``), for redaction only.
