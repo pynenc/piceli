@@ -374,3 +374,72 @@ def test_a_short_host_wait_is_the_real_wait(
     controller.poll_once()
     assert ports.builder.built, "the fallback did not build at host_wait"
     assert controller.state["envs"]["main"]["state"] == "deployed"
+
+
+def test_a_newer_commit_mid_build_is_what_gets_deployed(
+    world: dict[str, Any], tmp_path: Path
+) -> None:
+    """The shape a real user hit (0.23.0): a build host builds commit A, a
+    newer commit B arrives while it builds; A's late answer is refused, B is
+    built once and deployed, and nothing is left in the queue. The real
+    controller, the real builder serve, real Git repositories; only the
+    container and the registry are fakes."""
+    import json
+
+    from piceli.artifacts.cluster_build import encode_receipt
+    from piceli.infra.builder_serve import BuilderServe
+
+    controller, channel, clock = world["controller"], world["channel"], world["clock"]
+    controller.poll_once()
+    (first,) = controller.state["host_builds"].values()
+    builds: list[str] = []
+
+    def container(argv: list[str], sources: Any, out: Path, line: Any) -> int:
+        builds.append(argv[-1] if argv else "")
+        if len(builds) == 1:  # the newer commit lands while A builds
+            world["shop"].commit({"web/index.html": "<h1>v2</h1>\n"})
+            record = controller.state["envs"]["main"]
+            clock["now"] = max(clock["now"], float(record["next_attempt_at"])) + 1
+            controller.poll_once()
+        archives = [
+            {
+                "archive": f"{platform.replace('/', '-')}/{item['component']}.oci.tar",
+                "platform": platform,
+                "repository": item["repository"],
+                "image_id": "sha256:" + "1" * 64,
+                "digest": "sha256:" + ("a" if "amd" in platform else "b") * 64,
+            }
+            for item in (json.loads(a) for a in argv if a.startswith("{"))
+            for platform in ("linux/amd64", "linux/arm64")
+        ]
+        line(encode_receipt({"components": {}, "archives": archives}))
+        return 0
+
+    worker = BuilderServe(
+        host="laptop",
+        image="ghcr.io/x/builder@sha256:" + "e" * 64,
+        channel=channel,
+        container=container,
+        push=lambda _i, repository, archive: (
+            f"registry.example:5000/{repository}@sha256:"
+            + ("a" if "amd64" in str(archive) else "b") * 64
+        ),
+        # Each build's index digest names the build: 1 for A, 2 for B.
+        index=lambda _r, _d: "sha256:" + str(len(builds)) * 64,
+        root=tmp_path / "builder",
+        sleep=lambda _s: controller.poll_once(),
+    )
+    assert worker.once() == first["id"]  # A, answered after B superseded it
+    status = controller.poll_once()
+    refused = status["rejected_requests"][-1]
+    assert refused["kind"] == "built" and "no such wanted build" in refused["message"]
+    (second,) = status["controller"]["builds_wanted"]
+    assert second["id"] != first["id"]
+    assert worker.once() == second["id"]  # B, once
+    assert worker.once() is None
+    status = controller.poll_once()
+    main = status["envs"]["main"]
+    assert main["state"] == "deployed", main
+    assert main["components"]["web"]["digest"] == "sha256:" + "2" * 64
+    assert status["controller"]["builds_wanted"] == []
+    assert len(builds) == 2
