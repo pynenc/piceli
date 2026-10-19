@@ -38,7 +38,7 @@ exist in the version below.
 
 ## Requirements
 
-- `piceli` **0.14.x**, CPython 3.12+: `pip install "piceli>=0.14,<0.15"`.
+- `piceli` **0.22.x**, CPython 3.12+: `pip install "piceli>=0.22,<0.23"`.
 - The owner gives you a kubeconfig **file** and a **context** (here through
   `SHOP_KUBECONFIG` and `SHOP_CONTEXT`). A pipeline with `Build` objects also
   needs Docker; the example below uses pinned images only.
