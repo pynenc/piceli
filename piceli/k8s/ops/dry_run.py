@@ -131,6 +131,8 @@ def capture_server_dry_runs(
     provider without ``preview_update`` (a test double, an older adapter)
     yields the artifact unchanged. Objects for which ``exclude`` returns
     true are never sent, not even as a dry run (a placeholder preview).
+    Evidence already attached for objects not probed now is kept, so a
+    second call with ``exclude`` recaptures only the objects it probes.
     """
     preview = getattr(provider, "preview_update", None)
     if preview is None:
@@ -179,10 +181,15 @@ def capture_server_dry_runs(
             unavailable.append(
                 DryRunUnavailable(intent.ref, "invalid-dry-run-response")
             )
-    if not runs:
+    probed = {current.identity for _intent, current in candidates}
+    kept = tuple(run for run in artifact.server_dry_runs if run.resource not in probed)
+    if len(kept) == len(artifact.server_dry_runs) and not runs:
         return artifact, tuple(unavailable)
     try:
-        return replace(artifact, server_dry_runs=tuple(runs)), tuple(unavailable)
+        return (
+            replace(artifact, server_dry_runs=kept + tuple(runs)),
+            tuple(unavailable),
+        )
     except ValueError:
         # The evidence does not fit the discovery byte budget: plan without it.
         return artifact, tuple(

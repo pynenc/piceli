@@ -187,6 +187,8 @@ def test_the_annotation_never_holds_a_secret_value():
                 changed["Deployment/api"]
             ) != _template_annotations(one["Deployment/api"])
             assert store.fingerprint(target, first).startswith("hmac-sha256:")
+            # A plan knows the final digests before the value is stored.
+            assert store.fingerprint_value(value) == store.fingerprint(target, first)
         finally:
             store.close()
 
@@ -287,6 +289,43 @@ def test_raw_compositions_cover_projected_volumes_and_env_from():
         _template_annotations(_manifests(content_digests(opted_out))["Deployment/raw"])
         == {}
     )
+
+
+def test_objects_declared_without_content_add_no_digest():
+    """A Secret adopted for its metadata only: its value is managed elsewhere."""
+    pod = {
+        "containers": [
+            {
+                "name": "main",
+                "image": IMAGE,
+                "env": [
+                    {
+                        "name": "TOKEN",
+                        "valueFrom": {"secretKeyRef": {"name": "token", "key": "t"}},
+                    }
+                ],
+                "envFrom": [{"configMapRef": {"name": "settings"}}],
+            }
+        ]
+    }
+    adopted = ResourceIntent.from_manifest(
+        {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "type": "Opaque",
+            "metadata": {"name": "token", "namespace": "shop"},
+        }
+    )
+    composition = DeploymentComposition(
+        (
+            DeploymentComponent(
+                "raw",
+                (_workload(pod), adopted, _object("ConfigMap", "settings", {})),
+            ),
+        )
+    )
+    manifest = _manifests(content_digests(composition))["Deployment/raw"]
+    assert _template_annotations(manifest) == {}
 
 
 def test_a_preview_keeps_the_live_secret_digest():

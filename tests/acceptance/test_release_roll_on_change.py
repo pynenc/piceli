@@ -11,6 +11,10 @@ the content it reads, so:
   same digest;
 - a Secret recreated with a rotated value under the same name rolls its
   consumer, and the annotation never holds the value.
+
+The fake API adds server defaults, as a real one does: a workload is a no-op
+only when the server dry run of exactly its final pod template (the keyed
+digest, not the placeholder build's offline token) confirms it.
 """
 
 from __future__ import annotations
@@ -130,6 +134,7 @@ def test_a_rotated_secret_rolls_its_consumer_and_an_unchanged_deploy_is_a_no_op(
     tmp_path,
 ):
     with serve() as (api, url):
+        api.server_defaults = True
         spec = _spec(tmp_path, url, "hello")
         _deploy(spec)
         turn = _annotations(api, "turn")
@@ -161,8 +166,27 @@ def test_a_rotated_secret_rolls_its_consumer_and_an_unchanged_deploy_is_a_no_op(
         }
         assert operations[("Deployment", "turn")] == "no-op"
         assert operations[("Deployment", "web")] == "apply"
-        planned = _deploy(spec)
+        api.requests.clear()
+        code, planned, result = _run(spec, "plan")
+        assert code == 0, result.output
         assert planned["secrets"]["turn_secret"].startswith("carried:")
+        # Regression: the dry runs were captured for the placeholder build's
+        # digest only, so the planner ignored them, compared literally and
+        # showed the server defaults of every Secret consumer as changes.
+        assert planned["dry_run_unavailable"] == []
+        # The last dry run of the consumer was captured again with the final
+        # digest once the values were known: the live one, unchanged.
+        *_, probe = [
+            request
+            for request in api.requests
+            if request["method"] == "PATCH"
+            and request["path"].endswith("/deployments/turn")
+            and request["query"].get("dryRun") == ["All"]
+        ]
+        assert probe["body"]["spec"]["template"]["metadata"]["annotations"] == turn
+        code, applied, result = _run(spec, "apply", "--approve", planned["plan_hash"])
+        assert code == 0, result.output
+        assert applied["execution"]["state"] == "ready", applied
         assert _annotations(api, "turn") == turn
         assert _annotations(api, "web") != web
         changed = {
