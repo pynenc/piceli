@@ -316,3 +316,18 @@ def test_dev_run_skips_a_quarantined_host_and_release_host_clears_it(
     }  # fmt: skip
     again = runner.invoke(app, argv)
     assert again.exit_code == 1 and "health" in json.loads(again.stdout)
+
+
+def test_an_event_checked_at_once_or_from_a_clock_a_little_ahead_counts(
+    tmp_path: Path,
+) -> None:
+    """Rounding up made a just-written event look like the future, and a
+    fast check did not count it; another client's clock may run ahead too."""
+    at = 1_790_000_000.0006  # rounds up to ...0.001 at 3 decimals
+    stored = HealthEvent.from_dict(HealthEvent(at, "segfault").to_dict())
+    assert stored.at <= at
+    store = FileHealth(tmp_path / "health.json")
+    store.record(HealthEvent(at, "segfault"))
+    store.record(HealthEvent(at + 120, "machine-check"))  # a clock 2 min ahead
+    found = quarantine(store.events(), after=2, window=86400, now=at)
+    assert found is not None and found["events"] == 2

@@ -51,6 +51,16 @@ HEALTH_SOURCE_LABEL = "piceli.io/build-health-source"
 HEALTH_DETAIL_LABEL = "piceli.io/build-health-detail"
 #: Events older than this are dropped when a new one is recorded.
 KEEP_SECONDS = 30 * 86400
+#: Events up to this far ahead of ``now`` still count: hosts' clocks differ
+#: (a docker host's events are written by every client of it), and a check
+#: right after recording must see the event it just wrote.
+CLOCK_SKEW = 300.0
+
+
+def _recent(item: HealthEvent, now: float, window: float) -> bool:
+    return -CLOCK_SKEW <= now - item.at <= window
+
+
 #: Events a native host's file keeps at most.
 MAX_EVENTS = 200
 DETAIL_CHARS = 200
@@ -82,7 +92,8 @@ class HealthEvent:
     def to_dict(self) -> dict[str, Any]:
         return {
             "at": iso(self.at),
-            "epoch": round(self.at, 3),
+            # Down, never up: a stored time is never after the event.
+            "epoch": int(self.at * 1000) / 1000,
             "kind": self.kind,
             "detail": self.detail,
             "source": self.source,
@@ -126,7 +137,7 @@ def quarantine(
     if after is None:
         return None
     recent = sorted(
-        (item for item in events if 0 <= now - item.at <= window),
+        (item for item in events if _recent(item, now, window)),
         key=lambda item: item.at,
     )
     if len(recent) < after:
@@ -159,7 +170,7 @@ def view(
         "quarantined": found is not None,
         "reason": None if found is None else found["reason"],
         "since": None if found is None else found["since"],
-        "recent": sum(1 for item in events if 0 <= now - item.at <= window),
+        "recent": sum(1 for item in events if _recent(item, now, window)),
         "policy": {"after": after, "window_seconds": int(window)},
         "events": [item.to_dict() for item in ordered[-10:]],
     }

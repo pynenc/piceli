@@ -13,8 +13,12 @@ install-pre-commit: install ## Install git hooks (pre-commit and commit-msg)
 	uv run pre-commit install --hook-type pre-commit --hook-type commit-msg
 
 .PHONY: lint
-lint: ## Run every pre-commit hook on all files
-	uv run pre-commit run --all-files
+lint: ## Run every pre-commit hook on all files, also new ones not yet added to git
+	# --all-files sees only what git tracks: a new file was skipped locally
+	# and failed in CI. Every file git does not ignore, tracked or not.
+	git ls-files -z --cached --others --exclude-standard \
+	  | xargs -0 sh -c 'for f; do [ -e "$$f" ] && printf "%s\0" "$$f"; done' sh \
+	  | xargs -0 uv run pre-commit run --files
 
 .PHONY: typecheck
 typecheck: ## Run mypy

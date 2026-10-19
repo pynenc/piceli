@@ -25,5 +25,7 @@ def test_every_install_pin_in_the_skill_is_the_current_release() -> None:
 
 
 def test_the_readme_says_what_is_new_in_this_minor() -> None:
-    headings = re.findall(r"^## What's new in ([0-9.]+)", (ROOT / "README.md").read_text(), re.M)
+    headings = re.findall(
+        r"^## What's new in ([0-9.]+)", (ROOT / "README.md").read_text(), re.M
+    )
     assert headings == [MINOR], headings
