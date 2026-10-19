@@ -23,6 +23,14 @@ platform, page size) are read at plan time; commands, ``env`` and image file
 paths may use ``{platform}``, ``{arch}``, ``{rust_arch}``, ``{page_size}``
 and ``{page_size_log2}``, and the plan hash covers the substituted values.
 
+``build.shared_commands`` (0.23) are commands whose result is the same for
+every platform (a ``wasm32`` browser bundle, generated assets). They use no
+placeholder, run before ``build.commands`` with their own target directory,
+``<cache>/target/shared`` (``$CARGO_TARGET_DIR`` for them,
+``$PICELI_SHARED_TARGET_DIR`` for every command), and an image copies their
+outputs with ``shared_files``. A multi-platform build runs them once, with its
+first platform (:mod:`piceli.artifacts.multi_platform`).
+
 * `HostBuildSpec.from_toml` parses and validates; nothing runs.
 * `HostBuildSpec.plan` scans the contexts and pins the tools (hashes them). It
   starts no process and contacts nothing.
@@ -109,8 +117,12 @@ _PASSTHROUGH = (
     "SSL_CERT_FILE",
     "NIX_SSL_CERT_FILE",
 )
+#: The shared commands' target directory, for every command (0.23).
+SHARED_TARGET_ENV = "PICELI_SHARED_TARGET_DIR"
 #: Set by Piceli; a build's ``env`` cannot override them.
-_RESERVED = frozenset({"PATH", "CARGO_TARGET_DIR", "SOURCE_DATE_EPOCH"})
+_RESERVED = frozenset(
+    {"PATH", "CARGO_TARGET_DIR", "SOURCE_DATE_EPOCH", SHARED_TARGET_ENV}
+)
 
 
 def _template(value: str, what: str, check: Callable[[Any, str], Any]) -> str:
@@ -120,6 +132,12 @@ def _template(value: str, what: str, check: Callable[[Any, str], Any]) -> str:
         raise _fail(f"{what}: only {{{'}, {'.join(PLACEHOLDERS)}}} may be in braces")
     check(rendered, what)
     return value
+
+
+def uses_placeholder(value: str) -> str | None:
+    """The first ``{placeholder}`` in ``value``, else ``None``."""
+    match = _PLACEHOLDER.search(value)
+    return match.group(0) if match else None
 
 
 def substitute(value: str, facts: NodeFacts) -> str:
@@ -159,6 +177,8 @@ class HostImage:
     #: The contexts this image reads (``contexts = [...]``; ``None``: all).
     #: Only a composition controller uses it: the image's change key.
     contexts: tuple[str, ...] | None = None
+    #: 0.23: files of the shared target directory (``build.shared_commands``).
+    shared_files: tuple[tuple[str, str], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -175,6 +195,11 @@ class HostImage:
             "env": dict(self.env),
             # Only when declared: every other spec's digest is unchanged.
             **({"contexts": list(self.contexts)} if self.contexts is not None else {}),
+            **(
+                {"shared_files": [list(item) for item in self.shared_files]}
+                if self.shared_files
+                else {}
+            ),
         }
 
     def reads(self, contexts: tuple[str, ...]) -> tuple[str, ...]:
@@ -226,6 +251,8 @@ class HostBuildSpec:
     toolchains: tuple[tuple[str, str], ...] = ()
     """``build.toolchains`` (0.22): ``(tool, stage path or version)`` pairs
     (:mod:`piceli.artifacts.host_toolchains`)."""
+    shared_commands: tuple[tuple[str, ...], ...] = ()
+    """``build.shared_commands`` (0.23): run once for every platform, first."""
 
     builder_kind: ClassVar[str] = "host"
     network: ClassVar[str] = "host"
@@ -265,11 +292,26 @@ class HostBuildSpec:
             raise _fail("declare build.commands")
         if not self.tools or len(set(self.tools)) != len(self.tools):
             raise _fail("declare build.tools, each once")
-        for command in self.commands:
+        for command in (*self.shared_commands, *self.commands):
             if command[0] not in self.tools:
                 raise _fail(
                     f"command {command[0]!r} is not a declared tool; add it to "
                     "build.tools"
+                )
+        for command in self.shared_commands:
+            for arg in command:
+                found = uses_placeholder(arg)
+                if found is not None:
+                    raise _fail(
+                        f"build.shared_commands: {found} in {arg!r}: a shared "
+                        "command runs once for every platform, so it cannot use "
+                        "the node's facts; move it to build.commands"
+                    )
+        for image in self.images:
+            if image.shared_files and not self.shared_commands:
+                raise _fail(
+                    f"image {image.name!r} copies shared_files; declare "
+                    "build.shared_commands"
                 )
         if _RESERVED & set(self.env):
             raise _fail(f"build.env cannot set {sorted(_RESERVED & set(self.env))}")
@@ -329,6 +371,7 @@ class HostBuildSpec:
                 "source_date_epoch",
                 "timeout_seconds",
                 "toolchains",
+                "shared_commands",
             },
             "build",
         )
@@ -346,6 +389,12 @@ class HostBuildSpec:
         # Other braces in a command stay literal (shell ``${VAR}``): only the
         # known placeholders are substituted.
         commands = tuple(_argv(item, "build.commands") for item in items)
+        shared = build.get("shared_commands", [])
+        if not isinstance(shared, list) or (
+            "shared_commands" in build and not 0 < len(shared) <= 64
+        ):
+            raise _fail("build.shared_commands must be a list of argv lists")
+        shared_commands = tuple(_argv(item, "build.shared_commands") for item in shared)
         env = build.get("env", {})
         if not isinstance(env, dict) or len(env) > 128:
             raise _fail("build.env must be a table")
@@ -371,6 +420,7 @@ class HostBuildSpec:
             contexts=tuple(context_specs),
             images=tuple(_image(item) for item in output["image"]),
             commands=commands,
+            shared_commands=shared_commands,
             tools=tuple(tools),
             platform=build.get("platform"),
             declared_platforms=tuple(platforms),
@@ -406,6 +456,11 @@ class HostBuildSpec:
                 else {}
             ),
             **({"toolchains": dict(self.toolchains)} if self.toolchains else {}),
+            **(
+                {"shared_commands": [list(item) for item in self.shared_commands]}
+                if self.shared_commands
+                else {}
+            ),
         }
 
     @property
@@ -503,6 +558,17 @@ class HostBuildSpec:
             for command in self.commands
         )
         env = {key: substitute(value, facts) for key, value in self.env.items()}
+        # A shared command sees no node fact: build.env values that use one
+        # are not set for it.
+        shared_env = (
+            {
+                key: value
+                for key, value in self.env.items()
+                if uses_placeholder(value) is None
+            }
+            if self.shared_commands
+            else {}
+        )
         images = tuple(
             dataclasses.replace(
                 image,
@@ -532,6 +598,8 @@ class HostBuildSpec:
             env,
             images,
             pins,
+            self.shared_commands,
+            shared_env,
         )
 
     # --- execution -------------------------------------------------------
@@ -549,8 +617,13 @@ class HostBuildSpec:
         progress: Callable[[str], None] | None = None,
         raw_output: Callable[[bytes], None] | None = None,
         client_factory: Callable[[str], Any] | None = None,
+        shared: bool = True,
     ) -> BuildReceipt:
-        """Build under ``grant``; write the image archives; return the receipt."""
+        """Build under ``grant``; write the image archives; return the receipt.
+
+        ``shared=False`` skips ``build.shared_commands``: an earlier platform
+        of the same build ran them into the shared target directory.
+        """
         from piceli.artifacts.host_execution import HostExecution
 
         inputs = inputs if inputs is not None else self.load_inputs()
@@ -581,6 +654,7 @@ class HostBuildSpec:
                 build_log,
                 cancel,
                 client_factory,
+                run_shared=shared,
             )
             with heavy.section(f"host build {self.name}"):
                 outputs = execution.execute(output_dir)
@@ -726,6 +800,7 @@ def _image(item: Any) -> HostImage:
             "workdir",
             "env",
             "contexts",
+            "shared_files",
         },
         "output.image",
     )
@@ -744,17 +819,19 @@ def _image(item: Any) -> HostImage:
         base = PinnedImage.from_dict(item["base"], "output.image.base")
     files = item.get("files", {})
     target_files = item.get("target_files", {})
+    shared_files = item.get("shared_files", {})
     dirs = item.get("dirs", {})
     env = item.get("env", {})
     for table, what in (
         (files, "files"),
         (target_files, "target_files"),
+        (shared_files, "shared_files"),
         (dirs, "dirs"),
         (env, "env"),
     ):
         if not isinstance(table, dict) or len(table) > 256:
             raise _fail(f"output.image.{what} must be a table")
-    if not files and not target_files and not dirs:
+    if not files and not target_files and not shared_files and not dirs:
         raise _fail(f"image {item['name']!r} adds nothing to its base")
     owned = []
     for path, value in dirs.items():
@@ -774,9 +851,15 @@ def _image(item: Any) -> HostImage:
     for key, value in env.items():
         _match(_ENV_KEY, key, "output.image.env name")
         _match(_ENV_VALUE, value, "output.image.env value")
-    destinations = [*files.values(), *target_files.values()]
+    destinations = [*files.values(), *target_files.values(), *shared_files.values()]
     for dest in destinations:
         _abs_path(dest, "output.image file destination")
+    for key in shared_files:
+        if uses_placeholder(key) is not None:
+            raise _fail(
+                f"output.image.shared_files: {key!r} uses a placeholder; shared "
+                "files are the same for every platform"
+            )
     if len(set(destinations)) != len(destinations):
         raise _fail(f"image {item['name']!r}: two files at one destination")
     return HostImage(
@@ -802,6 +885,12 @@ def _image(item: Any) -> HostImage:
         _abs_path(item["workdir"], "workdir") if "workdir" in item else None,
         tuple(sorted(env.items())),
         tuple(contexts) if contexts is not None else None,
+        tuple(
+            sorted(
+                (_rel_path(key, "output.image.shared_files key"), value)
+                for key, value in shared_files.items()
+            )
+        ),
     )
 
 
@@ -819,6 +908,10 @@ class HostBuildPlan:
     images: tuple[HostImage, ...]
     #: 0.22: ``{tool: pin}`` of ``build.toolchains`` (versions read at plan time).
     toolchains: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    #: 0.23: ``build.shared_commands`` and the ``build.env`` they see (the
+    #: values without a placeholder).
+    shared_commands: tuple[tuple[str, ...], ...] = ()
+    shared_env: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def platform(self) -> str:
@@ -852,9 +945,19 @@ class HostBuildPlan:
                         if self.toolchains
                         else {}
                     ),
+                    **self._shared(),
                 }
             )
         )
+
+    def _shared(self) -> dict[str, Any]:
+        """The shared commands and their env, only when declared."""
+        if not self.shared_commands:
+            return {}
+        return {
+            "shared_commands": [list(item) for item in self.shared_commands],
+            "shared_env": dict(self.shared_env),
+        }
 
     def preview(self) -> dict[str, Any]:
         spec = self.spec
@@ -878,6 +981,7 @@ class HostBuildPlan:
                     "base": image.base.to_dict() if image.base else None,
                     "layers": len(image.files)
                     + len(image.target_files)
+                    + len(image.shared_files)
                     + (1 if image.dirs else 0),
                 }
                 for image in self.images
@@ -888,6 +992,7 @@ class HostBuildPlan:
                 if self.toolchains
                 else {}
             ),
+            **self._shared(),
             "executes_code": True,
             "uses_container_engine": False,
             "push": False,

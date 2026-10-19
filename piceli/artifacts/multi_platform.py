@@ -18,6 +18,9 @@ and each node pulls the manifest of its own platform.
   lists each image once per platform (``<image>/<platform-slug>``, as a
   multi-platform ``build.toml`` does) and each image's index under
   ``outputs.indexes``.
+* ``build.shared_commands`` (0.23) run once, with the first platform, into
+  the shared target directory; the later platforms skip them and their images
+  copy the same outputs. The receipt's ``shared_commands`` holds their steps.
 * A Docker ``build.toml`` already builds every platform of its ``platforms``
   list; its per-platform images are joined in an index when they are
   published (:mod:`piceli.artifacts.publish`).
@@ -251,13 +254,16 @@ class MultiPlatformHostBuild:
             return specs[0].run(grant, output_dir, **options)
         started_at = _now()
         receipts: dict[str, dict[str, Any]] = {}
-        for item, item_plan in zip(specs, plan.plans, strict=True):
+        for position, (item, item_plan) in enumerate(
+            zip(specs, plan.plans, strict=True)
+        ):
             slug = platform_slug(item_plan.platform)
             # The combined approval covers this plan; `run` re-plans and
             # refuses a drift since.
             one = HostBuildGrant(item_plan.plan_hash, grant.expires_at)
+            # The shared commands run with the first platform only.
             receipts[item_plan.platform] = item.run(
-                one, output_dir / slug, **options
+                one, output_dir / slug, shared=position == 0, **options
             ).to_dict()
         return BuildReceipt(
             combine_receipts(self.spec, plan, receipts, started_at, output_dir)
@@ -328,9 +334,25 @@ def combine_receipts(
             for platform, receipt in receipts.items()
         },
         "steps": [step for receipt in receipts.values() for step in receipt["steps"]],
+        **_shared(spec, receipts),
         "started_at": started_at,
         "finished_at": _now(),
     }
+
+
+def _shared(
+    spec: HostBuildSpec, receipts: Mapping[str, Mapping[str, Any]]
+) -> dict[str, Any]:
+    """``{"shared_commands": {"ran_with", "steps"}}`` when the spec declares them."""
+    if not spec.shared_commands:
+        return {}
+    platform, first = next(iter(receipts.items()))
+    steps = [
+        step
+        for step in first["steps"]
+        if str(step.get("kind", "")).startswith("shared-")
+    ]
+    return {"shared_commands": {"ran_with": platform, "steps": steps}}
 
 
 def _changed(receipts: Iterable[Mapping[str, Any]]) -> list[str] | None:

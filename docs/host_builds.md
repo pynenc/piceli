@@ -179,7 +179,8 @@ env = { RUST_LOG = "info" }
   supported (`base-layer-unsupported`).
 - An `entrypoint` without `cmd` clears the base image's `Cmd`, as a
   Dockerfile `ENTRYPOINT` does.
-- `build.env` cannot set `PATH`, `CARGO_TARGET_DIR` or `SOURCE_DATE_EPOCH`.
+- `build.env` cannot set `PATH`, `CARGO_TARGET_DIR`, `SOURCE_DATE_EPOCH` or
+  `PICELI_SHARED_TARGET_DIR`.
 - `contexts = ["api", "config"]` (optional, default every context) names
   the contexts an image reads. A composition controller rebuilds an image
   only when the files of those contexts (or its tables) changed (see
@@ -188,6 +189,65 @@ env = { RUST_LOG = "info" }
   build machine without a VM. Use {doc}`checks` after the rollout.
 
 A full example: `examples/builds/rust-hello/host-build.toml`.
+
+## Steps that are the same for every platform
+
+Some steps give the same result whatever the node: a browser bundle compiled
+for `wasm32`, generated assets, a site. Declared in `build.commands`, a
+multi-platform build would run them once per platform. Declare them in
+`build.shared_commands` instead (0.23.0):
+
+```toml
+[build]
+tools = ["cargo", "cargo-zigbuild", "zig", "sh"]
+platforms = ["linux/amd64", "linux/arm64"]
+shared_commands = [
+    ["cargo", "build", "--release", "--locked", "--target", "wasm32-unknown-unknown",
+     "--manifest-path", "app/Cargo.toml", "-p", "web", "--lib"],
+    ["sh", "-ec", "mkdir -p \"$CARGO_TARGET_DIR/site\" && cp -R app/web/assets/. \"$CARGO_TARGET_DIR/site/\""],
+]
+commands = [
+    ["cargo", "zigbuild", "--release", "--locked",
+     "--target", "{rust_arch}-unknown-linux-gnu.2.36",
+     "--manifest-path", "app/Cargo.toml", "-p", "server"],
+]
+
+[[output.image]]
+name = "server"
+repository = "shop/server"
+target_files = { "{rust_arch}-unknown-linux-gnu/release/server" = "/usr/local/bin/server" }
+shared_files = { "site" = "/srv/site" }      # from the shared target directory
+```
+
+- Shared commands run before `build.commands`, from the same working
+  directory, with the same tools and toolchains. A build for several
+  platforms runs them once, with its first platform; the other platforms
+  skip them (their log says so) and copy the same outputs into their images.
+  A build for one platform (a deploy) runs them every time, first.
+- Their target directory is `<cache>/target/shared`, the same for every
+  platform: it is their `$CARGO_TARGET_DIR`, and every command of the build
+  finds it in `$PICELI_SHARED_TARGET_DIR` (set only when the spec declares
+  shared commands). A later per-platform command reads their outputs there,
+  and an image copies them with `shared_files` (paths relative to that
+  directory). Write their outputs there, not into the stage: the stage is
+  synchronised again for each platform, which removes anything the build
+  wrote into it.
+- They cannot use the node's facts: a placeholder (`{rust_arch}`,
+  `{page_size_log2}` …) in a shared command or a `shared_files` path is
+  refused (`invalid-spec`). A `build.env` value that uses a placeholder is
+  not set for them; the others are. The plan preview shows both
+  (`shared_commands`, `shared_env`).
+- The plan hash and the provenance cover them. Each runs as a step of kind
+  `shared-<n>` with platform `any`; a multi-platform receipt lists it once,
+  in `steps` and in `shared_commands` (`ran_with`: the platform whose run
+  ran it, and its steps with their times).
+- A spec without `shared_commands` builds, hashes and records exactly as
+  before.
+
+Piceli does not find such steps by itself: a command whose arguments are the
+same for every platform still sees its platform's `$CARGO_TARGET_DIR` and
+`build.env`, and its outputs land in that platform's target directory, so
+running it once is only correct when the spec says so.
 
 ## The toolchain the source pins
 
@@ -252,7 +312,9 @@ builds every platform (without a node: the platform's facts, 4 KiB pages)
 and joins each image's manifests in an OCI image index; `piceli artifacts
 publish` pushes them for other people's clusters. See
 {doc}`publishing_images`. A deploy still builds for its one node, and the
-node's platform must be in the list.
+node's platform must be in the list. Steps that are the same for every
+platform (a `wasm32` bundle) run once when declared in
+`build.shared_commands` (see above).
 
 ## The cache directory
 
@@ -263,7 +325,9 @@ under `toolchains` and `blobs`. Builds that share a cache share their
 compiled dependencies, except across architectures and page sizes: the shared
 target directory is `<cache>/target/<architecture>-<page size>` (for example
 `arm64-16384`), so builds for 4 KiB and 16 KiB pages keep separate caches
-instead of recompiling jemalloc and everything above it on each switch. A `.lock` file per build name keeps two runs from
+instead of recompiling jemalloc and everything above it on each switch.
+`build.shared_commands` use `<cache>/target/shared`, shared by every
+platform. A `.lock` file per build name keeps two runs from
 syncing the same stage at once. Deleting the directory is always safe: the
 next build compiles and pulls again.
 
