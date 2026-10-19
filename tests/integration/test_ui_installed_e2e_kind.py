@@ -191,10 +191,10 @@ def _forward(namespace: str, service: str, remote: int) -> Iterator[int]:
         if process.poll() is None:
             process.terminate()
         try:
-            process.communicate(timeout=5)
+            process.communicate(timeout=120)
         except subprocess.TimeoutExpired:
             process.kill()
-            process.communicate(timeout=5)
+            process.communicate(timeout=120)
 
 
 def _reachable(port: int) -> bool:

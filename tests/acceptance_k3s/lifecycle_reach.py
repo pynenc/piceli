@@ -571,7 +571,7 @@ class ReachStages:
                 # piceli and its forward watchdog (its process group): a
                 # killed piceli alone no longer leaves its kubectl (0.14.7).
                 kill_group(served.pid)
-                served.process.wait(timeout=10)
+                served.process.wait(timeout=60)
                 time.sleep(2)
                 held = port_open(ACCESS_PORT) and any(alive(p) for p in kubectl)
                 log(f"{env}: piceli access killed; its kubectl {'holds' if held else 'left'} "

@@ -2039,7 +2039,7 @@ class Lifecycle(
             # of the whole tree): piceli alone no longer leaves its kubectl
             # (stage 24 checks that).
             kill_group(first.pid)
-            first.process.wait(timeout=10)
+            first.process.wait(timeout=60)
             time.sleep(2)
             check(
                 any(alive(pid) for pid in kubectl) and port_open(UI_PORT),
@@ -2065,7 +2065,7 @@ class Lifecycle(
                         f"{label}: the second access ui reaped the stale forward and started"
                     )
                 return problems
-            second.process.wait(timeout=10)
+            second.process.wait(timeout=60)
             time.sleep(0.5)
             body = Result([], 0, "\n".join(second.out), "").json() or {}
             said = redact("\n".join(second.err))[-800:]

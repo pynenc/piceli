@@ -318,7 +318,7 @@ class OpsStages:
             check(len(kubectl) == len(ports), f"kubectl children {kubectl} for {ports}")
 
             os.kill(served.pid, signal.SIGKILL)  # piceli only, as a crash
-            served.process.wait(timeout=10)
+            served.process.wait(timeout=60)
             log(f"piceli access killed (SIGKILL); its kubectl were {kubectl}")
             wait_for(
                 "no kubectl left and every port free",

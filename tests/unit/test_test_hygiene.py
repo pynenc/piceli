@@ -27,3 +27,21 @@ def test_no_sub_second_elapsed_time_bounds() -> None:
         if float(match.group(1)) < MINIMUM
     ]
     assert not tight, f"elapsed-time bounds under {MINIMUM} s: {tight}"
+
+
+PROCESS_WAIT = re.compile(r"\.(?:wait|communicate)\(timeout=([0-9]*\.?[0-9]+)\)")
+PROCESS_MINIMUM = 30.0
+
+
+def test_no_short_process_waits() -> None:
+    """A process wait is a hang guard: a starved runner can take many seconds
+    to start or stop a Python process (0.23.0)."""
+    short = [
+        f"{path.relative_to(ROOT)}:{text[: match.start()].count(chr(10)) + 1}"
+        for path in sorted((ROOT / "tests").rglob("*.py"))
+        if path.name != Path(__file__).name
+        for text in [path.read_text(errors="ignore")]
+        for match in PROCESS_WAIT.finditer(text)
+        if float(match.group(1)) < PROCESS_MINIMUM
+    ]
+    assert not short, f"process waits under {PROCESS_MINIMUM} s: {short}"

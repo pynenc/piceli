@@ -262,10 +262,10 @@ def _tls_gateway_responds(namespace: str, pod: str, certificate: Path) -> None:
         if process.poll() is None:
             process.terminate()
         try:
-            process.communicate(timeout=5)
+            process.communicate(timeout=120)
         except subprocess.TimeoutExpired:
             process.kill()
-            process.communicate(timeout=5)
+            process.communicate(timeout=120)
 
 
 def test_installed_ui_pod_uses_private_pvc_and_survives_restart(tmp_path: Path) -> None:

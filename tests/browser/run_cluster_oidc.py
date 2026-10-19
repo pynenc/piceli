@@ -22,11 +22,11 @@ def _stop(process: subprocess.Popen[bytes]) -> None:
     with suppress(ProcessLookupError):
         os.killpg(process.pid, signal.SIGTERM)
     try:
-        process.wait(timeout=5)
+        process.wait(timeout=60)
     except subprocess.TimeoutExpired:
         with suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
-        process.wait(timeout=5)
+        process.wait(timeout=60)
 
 
 def _port() -> int:
