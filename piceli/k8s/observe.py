@@ -1215,7 +1215,7 @@ class ForwardSupervisor:
                     if foreign is not None:
                         self._conflict_locked(managed, foreign)
                     else:
-                        self._record_probe_locked(managed, outcome)
+                        self._record_probe_locked(managed, outcome, since=now)
 
     def _live_pods(self, forward: PortForward) -> tuple[str, ...] | None:
         """Ready pods now backing ``forward``, newest first (``None``: unknown)."""
@@ -1267,8 +1267,9 @@ class ForwardSupervisor:
                 self._start_locked(managed)
 
     def _record_probe_locked(
-        self, managed: _ManagedForward, outcome: str | None
+        self, managed: _ManagedForward, outcome: str | None, since: float | None = None
     ) -> None:
+        """``since``: when the probe started (monotonic)."""
         now = time.monotonic()
         probe = managed.probe
         managed.last_probe_at = time.time()
@@ -1280,9 +1281,14 @@ class ForwardSupervisor:
             managed.next_probe = now + probe.interval
             return
         managed.last_error = outcome
-        if managed.relay is not None and managed.relay.busy():
+        relay = managed.relay
+        last = None if relay is None else relay.last_byte
+        if relay is not None and (
+            relay.busy() or (since is not None and last is not None and last >= since)
+        ):
             # Moving bytes is the best health signal there is: a probe that
-            # waits behind a large transfer never restarts the forward.
+            # waits behind a large transfer never restarts the forward, also
+            # when the transfer ended just before the probe gave up.
             managed.health = "busy"
             managed.error = None
             managed.last_error = f"probe {outcome} while the forward moves bytes"

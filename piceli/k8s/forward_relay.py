@@ -127,9 +127,12 @@ class PortRelay:
                     data = source.recv(_CHUNK)
                     if not data:
                         break
+                    # Counted when it arrives, before it is passed on: whoever
+                    # gets the bytes on the other side sees them counted.
+                    with self._lock:
+                        self.bytes += len(data)
+                        self.last_byte = time.monotonic()
                     sink.sendall(data)
-                    self.bytes += len(data)
-                    self.last_byte = time.monotonic()
             except OSError:
                 how = socket.SHUT_RDWR  # broken: end both directions
             finally:

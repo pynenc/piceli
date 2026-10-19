@@ -234,3 +234,27 @@ def test_a_restart_is_reported_with_its_reason(
     finally:
         _Slow.downloading.clear()
         supervisor.close()
+
+
+def test_a_probe_that_waited_while_bytes_moved_is_not_a_failure(
+    tmp_path: Path, fake_kubectl: Path
+) -> None:
+    """The transfer ended just before the probe timed out: the probe waited
+    behind it, which says nothing about the forward being broken."""
+    from types import SimpleNamespace
+
+    supervisor = _supervisor(tmp_path, fake_kubectl, _free_port())
+    try:
+        managed = supervisor._managed(supervisor._shortcut_forward("api"))
+        managed.relay = SimpleNamespace(busy=lambda: False, last_byte=100.0)  # type: ignore[assignment]
+        with supervisor._lock:
+            supervisor._record_probe_locked(managed, "timed out", since=99.0)
+        assert managed.health == "busy" and managed.restart_history == []
+        with supervisor._lock:  # nothing moved since this probe started
+            supervisor._record_probe_locked(managed, "timed out", since=101.0)
+        # A failure (threshold 1): the forward is restarted.
+        assert [item["reason"] for item in managed.restart_history] == [
+            "health probe failed 1x: timed out"
+        ]
+    finally:
+        supervisor.close()
