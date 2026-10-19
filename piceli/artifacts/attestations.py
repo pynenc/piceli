@@ -256,6 +256,16 @@ def provenance(
                     "platform": plan.platform,
                     "commands": [list(item) for item in plan.commands],
                     "env": dict(plan.env),
+                    # 0.23: run once for every platform, only when declared.
+                    **(
+                        {
+                            "shared_commands": [
+                                list(item) for item in plan.shared_commands
+                            ]
+                        }
+                        if plan.shared_commands
+                        else {}
+                    ),
                     "source_date_epoch": spec.source_date_epoch,
                     **({"toolchains": pins} if pins else {}),
                 },

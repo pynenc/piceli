@@ -7,6 +7,9 @@ new file gets the current time, and a file no longer declared is removed. The
 compiler's freshness checks then see exactly the edited files, and the shared
 target directory keeps everything else.
 
+``build.shared_commands`` (0.23) run first, into ``<cache>/target/shared``,
+unless ``run_shared`` is false (a later platform of a multi-platform build).
+
 Importing this module runs nothing.
 """
 
@@ -38,6 +41,7 @@ from piceli.artifacts.build_spec import (
 )
 from piceli.artifacts.host_build import (
     _PASSTHROUGH,
+    SHARED_TARGET_ENV,
     HostBuildGrant,
     HostBuildPlan,
     HostBuildSpec,
@@ -225,6 +229,7 @@ class HostExecution:
         log: _BuildLog,
         cancel: threading.Event | None,
         client_factory: Callable[[str], Any] | None = None,
+        run_shared: bool = True,
     ) -> None:
         self.plan = plan
         self.spec: HostBuildSpec = plan.spec
@@ -249,6 +254,9 @@ class HostExecution:
         facts = plan.facts
         self.target = cache / "target" / f"{facts.architecture}-{facts.page_size}"
         self.total = len(plan.commands)
+        #: 0.23: the shared commands' target, the same for every platform.
+        self.shared_target = cache / "target" / "shared"
+        self.run_shared = run_shared
         #: 0.22: what provisioning did per pinned tool (the receipt's ``toolchains``).
         self.toolchains: dict[str, dict[str, Any]] = {}
 
@@ -268,8 +276,17 @@ class HostExecution:
             self.log.say(f"[piceli] stage: {changed} file(s) changed since last build")
             self.target.mkdir(parents=True, exist_ok=True)
             environment = self._environment()
+            shared = self._environment(shared=True)
+            before = dict(environment)
             self._toolchains(environment)
+            # The shared commands get the same toolchain selection.
+            shared.update(
+                (key, value)
+                for key, value in environment.items()
+                if before.get(key) != value
+            )
             cwd = self.stage.joinpath(*PurePosixPath(self.spec.workdir).parts)
+            self._shared_commands(cwd, shared)
             for index, command in enumerate(self.plan.commands, start=1):
                 self._command(index, command, cwd, environment)
             self._verify_consumed()
@@ -319,7 +336,22 @@ class HostExecution:
                 raise BuildSpecError(error.code, str(error)) from None
         return changed
 
-    def _environment(self) -> dict[str, str]:
+    def _shared_commands(self, cwd: Path, env: Mapping[str, str]) -> None:
+        if not self.plan.shared_commands:
+            return
+        if not self.run_shared:
+            text = (
+                f"[piceli] {self.plan.platform}: {len(self.plan.shared_commands)} "
+                "shared command(s) already ran for this build; skipped"
+            )
+            self.log.line(text)
+            self.log.say(text)
+            return
+        self.shared_target.mkdir(parents=True, exist_ok=True)
+        for index, command in enumerate(self.plan.shared_commands, start=1):
+            self._command(index, command, cwd, env, shared=True)
+
+    def _environment(self, shared: bool = False) -> dict[str, str]:
         environment = {
             key: os.environ[key] for key in _PASSTHROUGH if key in os.environ
         }
@@ -328,9 +360,12 @@ class HostExecution:
             if str(path.parent) not in directories:
                 directories.append(str(path.parent))
         environment["PATH"] = os.pathsep.join([*directories, os.defpath])
-        environment["CARGO_TARGET_DIR"] = str(self.target)
+        target = self.shared_target if shared else self.target
+        environment["CARGO_TARGET_DIR"] = str(target)
         environment["SOURCE_DATE_EPOCH"] = str(self.spec.source_date_epoch)
-        environment.update(self.plan.env)
+        if self.plan.shared_commands:
+            environment[SHARED_TARGET_ENV] = str(self.shared_target)
+        environment.update(self.plan.shared_env if shared else self.plan.env)
         return environment
 
     def _toolchains(self, environment: dict[str, str]) -> None:
@@ -367,6 +402,7 @@ class HostExecution:
         cwd: Path,
         env: Mapping[str, str],
         repaired: bool = False,
+        shared: bool = False,
     ) -> None:
         if self.cancel is not None and self.cancel.is_set():
             raise BuildSpecError(
@@ -376,12 +412,19 @@ class HostExecution:
             raise BuildSpecError("grant-expired", "build grant expired")
         path, pin = self.plan.tools[command[0]]
         self._verify_tools()
-        step = {
-            "platform": self.plan.platform,
-            "kind": f"command-{index}",
-            "tool": command[0],
-        }
-        label = f"{self.plan.platform} command {index}/{self.total} ({command[0]})"
+        if shared:
+            # 0.23: once for every platform of the build.
+            step = {"platform": "any", "kind": f"shared-{index}", "tool": command[0]}
+            total = len(self.plan.shared_commands)
+            label = f"shared command {index}/{total} ({command[0]})"
+        else:
+            step = {
+                "platform": self.plan.platform,
+                "kind": f"command-{index}",
+                "tool": command[0],
+            }
+            label = f"{self.plan.platform} command {index}/{self.total} ({command[0]})"
+        target = self.shared_target if shared else self.target
         self.log.line(f"### {label} started")
         self.log.say(f"[piceli] {label}: running")
         tail = OutputTail()
@@ -427,16 +470,16 @@ class HostExecution:
                 # not the code: clear those crates and run the step once more.
                 # 0.20: an ICE in rustc's incremental state: drop incremental/.
                 removed = (
-                    clear_incremental(self.target)
+                    clear_incremental(target)
                     if damage == "incremental"
-                    else clear_crates(self.target, crates)
+                    else clear_crates(target, crates)
                 )
                 self.log.say(
                     f"[piceli] {label}: corrupted cache ({damage}): cleared "
                     f"{', '.join(crates)} ({removed} entries); running once more"
                 )
                 self.steps[-1]["repaired"] = {"kind": damage, "crates": crates}
-                self._command(index, command, cwd, env, repaired=True)
+                self._command(index, command, cwd, env, repaired=True, shared=shared)
                 return
             code = "build-timed-out" if state == "timed-out" else "build-failed"
             secrets = [value for key, value in env.items() if _SECRET_NAME.search(key)]
@@ -525,9 +568,11 @@ class HostExecution:
             ]
             written = write_layer(self.store, entries, mtime=epoch, cancel=self.cancel)
             layers.append((written.descriptor, "directories"))
-        sources = [(self.stage, src, dest) for src, dest in image.files] + [
-            (self.target, src, dest) for src, dest in image.target_files
-        ]
+        sources = (
+            [(self.stage, src, dest) for src, dest in image.files]
+            + [(self.target, src, dest) for src, dest in image.target_files]
+            + [(self.shared_target, src, dest) for src, dest in image.shared_files]
+        )
         for root, src, dest in sorted(sources, key=lambda item: item[2]):
             entries = collect(self._source(root, src), dest)
             written = write_layer(self.store, entries, mtime=epoch, cancel=self.cancel)
