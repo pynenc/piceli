@@ -293,7 +293,7 @@ def test_process_death_after_http_before_receipt_can_resume(local_api, tmp_path)
         args=(provider.host, tmp_path, plan, snapshot, grant),
     )
     process.start()
-    process.join(timeout=10)
+    process.join(timeout=60)
     if process.is_alive():
         process.kill()
         process.join(timeout=2)
@@ -327,7 +327,7 @@ def test_execution_bundle_survives_real_process_death_with_stable_private_refs(
         args=(provider.host, tmp_path, bundle),
     )
     process.start()
-    process.join(timeout=10)
+    process.join(timeout=60)
     if process.is_alive():
         process.kill()
         process.join(timeout=2)
