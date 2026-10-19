@@ -517,6 +517,65 @@ them:
 Workload names are unique across kinds: a Job and a Deployment with the same
 name would share the `app.kubernetes.io/name` pod label.
 
+(roll-on-change)=
+## Roll pods when their configuration changes
+
+A container reads its environment once, when it starts, and many programs
+read a mounted file only once too. Kubernetes rolls a Deployment,
+StatefulSet or DaemonSet only when its pod template changes, so a changed
+ConfigMap or Secret would otherwise reach the pods only at their next
+restart: a server keeps the old password and refuses every client.
+
+Piceli puts a digest of the content the pods read on the pod template of
+every Deployment, StatefulSet and DaemonSet. It covers the ConfigMaps and
+Secrets **of the same release** that the pods read through a volume, a
+projected volume, `envFrom` or `env.valueFrom` (in any container, init
+containers included):
+
+| Pod template annotation | Digest of |
+| --- | --- |
+| `piceli.io/configmaps-digest` | `sha256` of the consumed ConfigMaps' `data` and `binaryData` (public, like the ConfigMaps) |
+| `piceli.io/secrets-digest` | `sha256` of the consumed Secrets' type, key names and, for each value, a keyed fingerprint (below) |
+
+- **A changed value rolls the pods; an unchanged one does not.** A value
+  carried over to a new release gets a new private version but the same
+  fingerprint, so a release that changes something else leaves the
+  consumers alone, and planning the same release again is a no-op.
+- **No value leaks.** A value's fingerprint is an HMAC-SHA256 under a random
+  key that Piceli creates once in the private secret store
+  (`secrets.sqlite` in the state directory) and that never leaves it; the
+  annotation is a digest of those fingerprints. Without the store it says
+  nothing about a value, short passwords included. A new store (a new state
+  directory) means a new key: every consumer rolls once.
+- **Offline renders** (`piceli render`, `piceli bundle`, a chart) have no
+  values: they use the opaque secret reference instead, so their
+  `secrets-digest` is stable for a given output name and only shows that a
+  workload reads a Secret. `piceli release diff` of a new release keeps the
+  live `secrets-digest` for the same reason (it never reads secret values),
+  while the plan computes the real one.
+- **Only objects of the release count.** A Secret created by another tool is
+  not hashed: Piceli cannot see its content.
+- **Jobs and CronJobs carry no digest.** Every run starts new pods that read
+  the current content, and a Job's pod template is immutable.
+- **Raw compositions get it too.** The release engine annotates every
+  workload of any composition the same way.
+
+Turn it off for a workload that reloads its configuration itself:
+
+```python
+app.deployment("proxy", image=ctx.image("proxy"), volumes=..., roll_on_change=False)
+```
+
+`roll_on_change=False` (also on `stateful_set` and `daemon_set`) declares
+`piceli.io/roll-on-change: "false"` on the object; the release engine (and
+`piceli render`) reads it, adds no digest and removes the marker, so the
+live object never carries it. A raw composition opts out with the same
+annotation.
+
+Upgrading to a Piceli version with these digests adds them to the pod
+templates on the next release: every workload that reads a ConfigMap or
+Secret of its release rolls once.
+
 ## Autoscale a workload
 
 ```python

@@ -12,6 +12,7 @@ from piceli.app.render import placeholder_inputs
 from piceli.importing import ImportFailure
 from piceli.importing.clean import scrub, strip_defaults
 from piceli.importing.generate import SAME, diff, generate
+from piceli.k8s.ops.content_digest import strip_roll_markers
 from piceli.k8s.release_spec import ReleaseContext
 from tests.unit.importing import objects
 from tests.unit.importing.objects import NS, SECRET_VALUE
@@ -38,7 +39,8 @@ def _render(result) -> dict[tuple[str, str], dict[str, Any]]:
             placeholder_inputs([item.input for item in result.secrets])
         ),
     )
-    composition = namespace["build"](ctx)
+    # What a release applies: the opt-out markers are removed.
+    composition = strip_roll_markers(namespace["build"](ctx))
     return {
         (resource.ref.kind, resource.ref.name): resource
         for component in composition.components
@@ -148,6 +150,27 @@ def test_other_kinds_are_kept_raw_and_service_without_workload_too(ruff_clean) -
     assert SECRET_VALUE not in result.module
     rendered = _render(result)
     assert ("StatefulSet", "queue") in rendered
+
+
+def test_adopting_workloads_that_read_a_config_adds_no_content_digest() -> None:
+    """A digest would roll the pods once: imported workloads opt out."""
+    queue = objects.stateful_set()
+    queue["spec"]["template"]["spec"]["volumes"] = [
+        {"name": "settings", "configMap": {"name": "settings"}}
+    ]
+    items = [queue, *objects.stack()]
+    result = _generate(items)
+    assert "roll_on_change=False" in result.module  # the typed Deployment
+    rendered = _render(result)
+    for item in items:
+        key = (item["kind"], item["metadata"]["name"])
+        if key[0] not in ("StatefulSet", "Deployment"):
+            continue
+        manifest = rendered[key].manifest
+        assert "annotations" not in manifest["spec"]["template"]["metadata"], key
+        assert "annotations" not in manifest["metadata"], key  # marker removed
+        target = strip_defaults(scrub(item, NS))
+        assert diff(manifest, target, key[0]) is SAME, key
 
 
 def test_values_the_typed_model_rejects_fall_back_to_raw() -> None:

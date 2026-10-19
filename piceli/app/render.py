@@ -18,6 +18,7 @@ from types import MappingProxyType
 from typing import Any
 
 from piceli.app.app import App
+from piceli.k8s.ops.content_digest import content_digests, strip_roll_markers
 from piceli.k8s.ops.plan import DeploymentComposition
 from piceli.k8s.ops.secret_versions import SecretVersionRef
 
@@ -151,6 +152,15 @@ def render_app_target(
         for the App's environments, ``environment-unsupported`` when ``env``
         is given and the target yields no App.
     """
+    composition, app = _render_app_target(target, context, env)
+    # As a release applies it: content digests on every workload (raw
+    # compositions included) and no opt-out marker.
+    return strip_roll_markers(content_digests(composition)), app
+
+
+def _render_app_target(
+    target: Any, context: Any, env: str | None
+) -> tuple[DeploymentComposition, App | None]:
     from piceli.app.environment import EnvironmentInvalid
 
     value = target

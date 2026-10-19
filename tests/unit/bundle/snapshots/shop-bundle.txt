@@ -112,6 +112,8 @@ spec:
   serviceName: cache
   template:
     metadata:
+      annotations:
+        piceli.io/secrets-digest: sha256:65cf9851f1cf68b41bd018faef99665166416021f118a56151dd8fec36ea6c50
       labels:
         app.kubernetes.io/name: cache
         app.kubernetes.io/part-of: shop
