@@ -590,6 +590,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`runner-memory-low`](#error-runner-memory-low) | maintenance | yes |
 | [`runner-tool-missing`](#error-runner-tool-missing) | maintenance | no |
 | [`scope-mismatch`](#error-scope-mismatch) | kubernetes | no |
+| [`secret-adoption-incomplete`](#error-secret-adoption-incomplete) | secrets | no |
+| [`secret-adoption-invalid`](#error-secret-adoption-invalid) | secrets | no |
 | [`secret-dependency-cycle`](#error-secret-dependency-cycle) | secrets | no |
 | [`secret-generator-failed`](#error-secret-generator-failed) | secrets | yes |
 | [`secret-import-unavailable`](#error-secret-import-unavailable) | secrets | yes |
@@ -2124,6 +2126,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Invalid Secret data.** A live Secret's data could not be decoded (not base64, or not UTF-8 where text is required).
 
 - **Fix:** Fix the live Secret, or import from a file or environment variable instead.
+- **Retry-safe:** no
+
+(error-secret-adoption-incomplete)=
+### `secret-adoption-incomplete`
+
+**Live secret values incomplete.** Only some of a generator's values are in live Secrets of an earlier release (a tls-ca CA key never is), so they cannot be kept without new values. Nothing was written.
+
+- **Fix:** Rotate the generator (--rotate NAME) into Secrets with new names.
+- **Retry-safe:** no
+
+(error-secret-adoption-invalid)=
+### `secret-adoption-invalid`
+
+**Live secret values not adoptable.** No release in the state records a generator, and the live Secret an earlier release of this owner wrote holds values the generator could not have made (another key set, a malformed value, or copies that differ). Nothing was adopted or written.
+
+- **Fix:** Fix or delete the live Secret, or rotate the generator into a Secret with a new name.
 - **Retry-safe:** no
 
 (error-secret-dependency-cycle)=
