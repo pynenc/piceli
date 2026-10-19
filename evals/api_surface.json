@@ -8351,6 +8351,7 @@
     "contains",
     "discard",
     "fingerprint",
+    "fingerprint_value",
     "put",
     "put_once",
     "resolve",
@@ -8375,6 +8376,9 @@
     "fingerprint": [
      "reference",
      "target"
+    ],
+    "fingerprint_value": [
+     "value"
     ],
     "put": [
      "target",
