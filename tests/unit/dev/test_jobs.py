@@ -143,9 +143,13 @@ def test_a_run_job_is_isolated() -> None:
     import re
     import zlib
 
-    blob = re.search(r"b64decode\('([^']+)'\)", container["command"][3])
-    assert blob is not None
-    assert b"def main(" in zlib.decompress(base64.b64decode(blob.group(1)))
+    blobs = [
+        zlib.decompress(base64.b64decode(item))
+        for item in re.findall(r"_unpack\('([^']+)'\)", container["command"][3])
+    ]
+    # 0.22: the shared toolchain module first, then the wrapper.
+    assert len(blobs) == 2
+    assert b"class ToolchainError" in blobs[0] and b"def main(" in blobs[1]
     labels = job["metadata"]["labels"]
     assert labels["piceli.io/dev-run"] == "20261008t071900-ab12"
     assert labels["piceli.io/dev-requester"] == "agent-7"

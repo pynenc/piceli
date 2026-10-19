@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from piceli.k8s.operator_state import (
+from piceli.k8s import (
     ConcurrentWriterError,
     FileStateStore,
     InstanceLock,

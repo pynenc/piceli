@@ -84,6 +84,11 @@ class DevProfile:
     :param cpu: CPU request of a run (default ``DevBuilds.run_cpu``).
     :param memory: Memory request and limit (default ``DevBuilds.run_memory``).
     :param timeout: The command's deadline (default ``DevBuilds.timeout``).
+    :param toolchains: 0.22: tools installed once into the cache and put
+        first on ``PATH``: ``{"node": ".nvmrc", "binaryen": "123",
+        "wasm-bindgen": "Cargo.lock"}``, each a path relative to the run's
+        tree root or a version (Rust follows the source's own
+        ``rust-toolchain.toml``).
     """
 
     name: str
@@ -95,10 +100,28 @@ class DevProfile:
     cpu: str | None = None
     memory: str | None = None
     timeout: str | None = None
+    toolchains: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _LABEL.fullmatch(self.name):
             raise _invalid(f"profile name {self.name!r} is not a DNS label")
+        if self.toolchains:
+            from piceli.dev.toolchains import ToolchainError, check_declared
+
+            try:
+                pins = check_declared(
+                    self.toolchains, f"profile {self.name}: toolchains"
+                )
+            except ToolchainError as error:
+                raise _invalid(str(error)) from None
+            if "rust" in pins:
+                raise _invalid(
+                    f"profile {self.name}: toolchains cannot pin rust; runs follow "
+                    "the source's rust-toolchain.toml"
+                )
+            object.__setattr__(self, "toolchains", pins)
+        else:
+            object.__setattr__(self, "toolchains", {})
         if self.image is not None and not _PINNED.fullmatch(str(self.image)):
             raise _invalid(f"profile {self.name}: image must be pinned by digest")
         tools = tuple(str(tool) for tool in self.tools)
@@ -133,6 +156,8 @@ class DevProfile:
             "cpu": self.cpu,
             "memory": self.memory,
             "timeout": self.timeout,
+            # 0.22: only when declared, so other configs are unchanged.
+            **({"toolchains": dict(self.toolchains)} if self.toolchains else {}),
         }
 
 
@@ -142,6 +167,10 @@ _CONTEXT = re.compile(
 )
 _CLI = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}")
 HOST_KINDS = ("docker", "native", "cluster")
+#: 0.22.0: health events within the window that quarantine a build host.
+QUARANTINE_AFTER = 2
+QUARANTINE_WINDOW = "24h"
+_DEFAULT = object()
 
 
 @dataclass(frozen=True)
@@ -174,6 +203,13 @@ class BuildHost:
     :param state_dir: ``native`` only: where its cache and queue live
         (default ``~/.cache/piceli/dev/NAME``).
     :param image: The run image here (default: the profile's).
+    :param quarantine_after: Health events (a crashed compiler, a segfault,
+        an illegal instruction, a machine check, a corrupt cached blob; see
+        :mod:`piceli.dev.health`) within ``quarantine_window`` that
+        quarantine the host (0.22.0): runs skip it and ``piceli builder
+        serve`` on it stops claiming builds until ``piceli dev release-host``.
+        ``None``: never quarantined.
+    :param quarantine_window: How far back events count (``24h``).
     """
 
     name: str
@@ -187,10 +223,26 @@ class BuildHost:
     platforms: Sequence[str] = ()
     state_dir: str | None = None
     image: str | None = None
+    quarantine_after: int | None = QUARANTINE_AFTER
+    quarantine_window: str = QUARANTINE_WINDOW
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _LABEL.fullmatch(self.name):
             raise _invalid("a build host's name is a DNS label")
+        if self.quarantine_after is not None and (
+            not isinstance(self.quarantine_after, int)
+            or isinstance(self.quarantine_after, bool)
+            or self.quarantine_after < 1
+        ):
+            raise _invalid(
+                f"host {self.name}: quarantine_after is a positive integer or None"
+            )
+        try:
+            parse_seconds(self.quarantine_window)
+        except Exception:
+            raise _invalid(
+                f"host {self.name}: quarantine_window is a duration (24h, 90m)"
+            ) from None
         if self.kind not in HOST_KINDS:
             raise _invalid(f"host {self.name}: kind is one of {', '.join(HOST_KINDS)}")
         if self.context is not None and (
@@ -259,9 +311,21 @@ class BuildHost:
                 "platforms": list(self.platforms),
                 "state_dir": self.state_dir,
                 "image": self.image,
+                # 0.22.0: only when changed, so earlier declarations keep
+                # their hashes.
+                "quarantine_after": self.quarantine_after
+                if self.quarantine_after != QUARANTINE_AFTER
+                else _DEFAULT,
+                "quarantine_window": self.quarantine_window
+                if self.quarantine_window != QUARANTINE_WINDOW
+                else _DEFAULT,
             }.items()
-            if value not in (None, [])
-        }
+            if value not in (None, []) and value is not _DEFAULT
+        } | ({"quarantine_after": None} if self.quarantine_after is None else {})
+
+    def quarantine_policy(self) -> tuple[int | None, int]:
+        """``(events, window seconds)`` that quarantine this host."""
+        return self.quarantine_after, parse_seconds(self.quarantine_window)
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> BuildHost:
@@ -277,6 +341,8 @@ class BuildHost:
             platforms=value.get("platforms") or (),
             state_dir=value.get("state_dir"),
             image=value.get("image"),
+            quarantine_after=value.get("quarantine_after", QUARANTINE_AFTER),
+            quarantine_window=str(value.get("quarantine_window") or QUARANTINE_WINDOW),
         )
 
 
@@ -394,6 +460,7 @@ class DevBuilds:
             cpu=found.cpu or self.run_cpu,
             memory=found.memory or self.run_memory,
             timeout=found.timeout or self.timeout,
+            toolchains=found.toolchains,
         )
 
     def host(self, name: str | None) -> BuildHost | None:
@@ -430,6 +497,7 @@ class DevBuilds:
                 cpu=item.get("cpu"),
                 memory=item.get("memory"),
                 timeout=item.get("timeout"),
+                toolchains=item.get("toolchains") or {},
             )
             for item in value.get("profiles") or ()
         ]

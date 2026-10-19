@@ -196,6 +196,12 @@ class Builder(Protocol):
     def mirror(self, items: Sequence[MirrorItem]) -> dict[str, BuiltImage]: ...
 
 
+def _utc() -> str:
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _pinned(receipt: Mapping[str, Any], what: str) -> BuiltImage:
     if receipt.get("state") != "succeeded" or not receipt.get("pull_ref"):
         raise CompositionError(
@@ -210,9 +216,15 @@ def _pinned(receipt: Mapping[str, Any], what: str) -> BuiltImage:
 class LocalBuilder:
     """Build on this machine; push through a route to the registry.
 
+    Every image is built for each of ``platforms`` (another architecture
+    cross-compiles, as in the cluster and on build hosts: a Rust build with
+    ``cargo zigbuild``) and, with several, pushed as one OCI index over
+    them (0.22.0), so its ``pull_ref`` serves every node's architecture.
+
     :param route: How this machine reaches the registry
         (:class:`piceli.pipeline.backend.RegistryRoute`).
-    :param platform: The nodes' platform (``linux/amd64`` or ``linux/arm64``).
+    :param platforms: The nodes' platforms (``linux/amd64``, ``linux/arm64``).
+    :param platform: One platform (the earlier form of ``platforms``).
     :param cache_dir: The host build cache (stage, target, blobs).
     :param work_dir: Where checkouts and archives go (removed after each build).
     :param backend: :class:`piceli.pipeline.backend.Backend` (tests: a fake).
@@ -222,18 +234,27 @@ class LocalBuilder:
         self,
         route: Any,
         *,
-        platform: str,
+        platforms: Sequence[str] = (),
+        platform: str | None = None,
         cache_dir: Path,
         work_dir: Path,
         backend: Any = None,
         say: Callable[[str], None] = lambda _: None,
     ) -> None:
+        if isinstance(platforms, str):
+            platforms = (platforms,)
+        wanted = tuple(platforms) or ((platform,) if platform else ("linux/amd64",))
         self.route = route
-        self.platform = platform
+        self.platforms: tuple[str, ...] = tuple(dict.fromkeys(wanted))
         self.cache_dir = cache_dir
         self.work_dir = work_dir
         self.backend = backend
         self.say = say
+
+    @property
+    def platform(self) -> str:
+        """The first platform (what a single-platform build uses)."""
+        return self.platforms[0]
 
     def _backend(self) -> Any:
         if self.backend is None:
@@ -241,6 +262,9 @@ class LocalBuilder:
 
             self.backend = Backend()
         return self.backend
+
+    def _index(self, repository: str, digests: Mapping[str, str]) -> str:
+        return str(self._backend().registry_index(self.route, repository, digests))
 
     def build(
         self, items: Sequence[BuildItem], checkout: Callable[[str, str, Path], Any]
@@ -250,10 +274,11 @@ class LocalBuilder:
         from piceli.artifacts.node_facts import NodeFacts
 
         built: dict[str, BuiltImage] = {}
-        facts = NodeFacts.for_platform(self.platform)
+        several = len(self.platforms) > 1
         self.work_dir.mkdir(parents=True, exist_ok=True)
         for item in items:
             self.say(f"[build] {item.component} from {item.source}@{item.commit[:12]}")
+            images: dict[str, BuiltImage] = {}
             with (
                 checkout(item.source, item.commit, self.work_dir) as tree,
                 tempfile.TemporaryDirectory(prefix="out-", dir=self.work_dir) as out,
@@ -261,25 +286,47 @@ class LocalBuilder:
                 document = host_build_document(
                     item.component, item.contract, Path(tree), item.repository
                 )
-                try:
-                    spec = HostBuildSpec.from_dict(document, Path(tree))
-                    spec = spec.for_node(facts).with_cache_dir(self.cache_dir)
-                    plan = spec.plan()
-                    grant = HostBuildGrant(plan.plan_hash, time.time() + 3600)
-                    receipt = spec.run(grant, Path(out), progress=self.say).to_dict()
-                except BuildSpecError as error:
-                    raise build_failed(
-                        f"component {item.component!r}: host build failed ({error.code})",
-                        error,
-                    ) from None
-                entry = receipt["outputs"]["images"][item.component]
-                delivered = self._backend().registry_deliver(
-                    self.route,
-                    entry["image_id"],
-                    item.repository,
-                    archive=Path(out) / entry["archive"],
-                )
-                built[item.component] = _pinned(delivered, item.component)
+                for platform in self.platforms:
+                    directory = (
+                        Path(out) / platform.replace("/", "-") if several else Path(out)
+                    )
+                    if several:
+                        self.say(f"[build] {item.component} for {platform}")
+                    try:
+                        spec = HostBuildSpec.from_dict(document, Path(tree))
+                        spec = spec.for_node(NodeFacts.for_platform(platform))
+                        spec = spec.with_cache_dir(self.cache_dir)
+                        plan = spec.plan()
+                        grant = HostBuildGrant(plan.plan_hash, time.time() + 3600)
+                        receipt = spec.run(
+                            grant, directory, progress=self.say
+                        ).to_dict()
+                    except BuildSpecError as error:
+                        raise build_failed(
+                            f"component {item.component!r}: host build failed "
+                            f"({error.code})",
+                            error,
+                        ) from None
+                    entry = receipt["outputs"]["images"][item.component]
+                    delivered = self._backend().registry_deliver(
+                        self.route,
+                        entry["image_id"],
+                        item.repository,
+                        archive=directory / entry["archive"],
+                    )
+                    images[platform] = _pinned(delivered, item.component)
+            if not several:
+                built[item.component] = images[self.platform]
+                continue
+            digests = {
+                platform: image.manifest_digest
+                for platform, image in sorted(images.items())
+            }
+            found = self._index(item.repository, digests)
+            base = images[self.platform].pull_ref.split("@", 1)[0]
+            built[item.component] = BuiltImage(
+                f"{base}@{found}", found, {"platforms": digests}
+            )
         return built
 
     def mirror(self, items: Sequence[MirrorItem]) -> dict[str, BuiltImage]:
@@ -302,6 +349,8 @@ class LocalBuilder:
         """Build a pipeline's host spec from checkouts of its sources; push the changed images.
 
         ``request`` is a :class:`piceli.infra.pipelines.SpecBuildRequest`.
+        With several platforms each image is built for every one and pushed
+        as one OCI index over them.
         """
         from contextlib import ExitStack
 
@@ -326,14 +375,21 @@ class LocalBuilder:
             receipt = run_spec_build(
                 request,
                 roots,
-                platforms=(self.platform,),
+                platforms=self.platforms,
                 cache=self.cache_dir,
                 out=Path(out),
                 deliver=deliver,
                 say=self.say,
+                index=self._index if len(self.platforms) > 1 else None,
             )
         return {
-            name: BuiltImage(str(entry["pull_ref"]), str(entry["manifest_digest"]))
+            name: BuiltImage(
+                str(entry["pull_ref"]),
+                str(entry["manifest_digest"]),
+                {"platforms": dict(entry["platforms"])}
+                if entry.get("platforms")
+                else {},
+            )
             for name, entry in receipt["images"].items()
         }
 
@@ -989,6 +1045,7 @@ class JobBuilder:
             f"[build] Job {job['metadata']['name']}: "
             + ", ".join(item.component for item in items)
         )
+        began = _utc()
         outcome = _run(self.cluster, job)
         if outcome.state != "passed" or self.cluster.receipt_text is None:
             raise _job_failed(outcome, "component")
@@ -1008,9 +1065,35 @@ class JobBuilder:
                     f"the build Job returned no image of {item.component!r}",
                 )
             built[item.component] = BuiltImage(
-                str(entry["pull_ref"]), str(entry["manifest_digest"])
+                str(entry["pull_ref"]),
+                str(entry["manifest_digest"]),
+                {
+                    "provenance": self._provenance(
+                        {item.source: item.commit}, began, entry
+                    )
+                },
             )
         return built
+
+    def _provenance(
+        self, commits: Mapping[str, str], began: str, entry: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Where a Job built an image (0.22.0): the node its pod ran on."""
+        from piceli.infra import provenance
+
+        node = getattr(self.cluster, "node_name", None)
+        toolchains = entry.get("toolchains")
+        return provenance.record(
+            builder="cluster-job",
+            host=str(node or "cluster"),
+            node=node,
+            builder_image=self.settings.image,
+            commits=commits,
+            started_at=began,
+            finished_at=_utc(),
+            toolchains=toolchains if isinstance(toolchains, Mapping) else None,
+            platforms=self.settings.platforms,
+        )
 
     def build_spec(
         self, request: Any, checkout: Callable[[str, str, Path], Any]
@@ -1029,6 +1112,7 @@ class JobBuilder:
             + ", ".join(sorted(request.images))
         )
         # Earlier failed Jobs (and their logs) stay until a build succeeds.
+        began = _utc()
         outcome = _run(self.cluster, job, keep_earlier=True)
         if outcome.state != "passed" or self.cluster.receipt_text is None:
             raise _job_failed(outcome, "image")
@@ -1053,7 +1137,9 @@ class JobBuilder:
                     f"the build Job returned no image {name!r}",
                 )
             built[name] = BuiltImage(
-                str(entry["pull_ref"]), str(entry["manifest_digest"])
+                str(entry["pull_ref"]),
+                str(entry["manifest_digest"]),
+                {"provenance": self._provenance(request.commits, began, entry)},
             )
         return built
 

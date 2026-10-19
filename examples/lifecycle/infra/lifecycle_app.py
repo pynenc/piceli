@@ -27,6 +27,7 @@ from lifecycle_site import SERVER
 
 from piceli import (
     App,
+    ApprovalPolicy,
     Build,
     Checks,
     ClaimTemplate,
@@ -43,7 +44,6 @@ from piceli import (
     Target,
     UpgradeCheck,
 )
-from piceli.approval_policy import ApprovalPolicy
 
 #: A third-party image, pinned by its index digest: copied into the
 #: in-cluster registry when an environment syncs.

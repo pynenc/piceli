@@ -16,7 +16,7 @@ Priorities may change. Progress is tracked in
 | --- | --- |
 | Define resources in Python, YAML or JSON | ✅ Available |
 | Typed apps (`App`, `piceli render`) that render to release intents | 🟡 Preview: Deployments, Services, ConfigMaps, Secrets, NetworkPolicies (per workload or by label), ServiceAccounts with typed RBAC (ClusterRole/ClusterRoleBinding scoped per namespace), app-level pod defaults |
-| Typed templates for common workloads | 🟡 Core kinds only; no Ingress/Gateway, NetworkPolicy, DaemonSet, PDB, Namespace or cluster-scoped RBAC yet |
+| Typed workloads and policies | 🟡 Preview: the typed `App` declares Deployments, DaemonSets, Jobs, CronJobs, Ingresses, Gateway API HTTPRoutes, NetworkPolicies, PodDisruptionBudgets, autoscalers and any other kind (`app.resource`); the lower-level `piceli.k8s.templates` cover the core kinds only. No Namespace, ResourceQuota or LimitRange templates yet |
 | Dependency-ordered plan and apply | ✅ Available |
 | Image handoff by digest (build → deliver → release, immutable references only) | 🟡 Preview |
 | One command from source to a verified release (`piceli deploy`) | 🟡 Preview: journaled, resumable, skips unchanged stages |
@@ -34,7 +34,7 @@ Priorities may change. Progress is tracked in
 | Local operations UI and JSON API | 🟡 Early preview |
 | Web workspace: infrastructure topology, compact Sources, resource inspection and saved deployment evidence | 🟡 Experimental: {doc}`ui`; one-command preview, exact version/configuration comparison, plans, journal transitions and captured logs |
 | Continuous delivery from Git | 🟡 Experimental: `piceli gitops enable` installs a controller that keeps one environment per branch ({doc}`gitops`, {doc}`environments`); `piceli publish` and `render --out` export manifests |
-| Cloud infrastructure lifecycle (Terraform/OpenTofu equivalent) | ❌ Not yet; GKE cluster helpers only |
+| Machines and cloud infrastructure | 🟡 Preview: Hetzner servers, fixed IPs, firewalls and DNS through OpenTofu (`piceli infra`, {doc}`infrastructure`); GKE cluster helpers. Other providers not yet |
 
 ## Feature status
 
@@ -139,9 +139,10 @@ audience.
 
 ### 3. A complete model
 
-- Templates for Namespace, Ingress and Gateway API, NetworkPolicy, DaemonSet,
-  PodDisruptionBudget, ClusterRole/ClusterRoleBinding, ResourceQuota and
-  LimitRange.
+- ✅ Ingress and Gateway API routes, NetworkPolicy, DaemonSet,
+  PodDisruptionBudget and namespace-scoped ClusterRole bindings in the typed
+  `App` (preview).
+- Templates for Namespace, ResourceQuota and LimitRange.
 - ✅ A typed generic resource for any kind, including CRDs, with generated
   models (preview, see {doc}`crds`).
 - Namespaces, annotations and rollout strategies on every template.
@@ -156,8 +157,10 @@ audience.
 
 ### 5. Continuous delivery
 
-- An in-cluster controller that reconciles Git or OCI-published compositions,
-  with health assessment, sync status, history and rollback.
+- ✅ An in-cluster controller that reconciles Git compositions, with
+  per-branch environments, approvals, checks, history and rollback
+  (experimental, see {doc}`gitops`). OCI-published compositions are not yet
+  reconciled.
 - ✅ Experimental web workspace with infrastructure topology, resource ownership
   diagrams, per-resource diffs, saved plans, revision comparisons and recorded
   deployment journals/logs (see {doc}`ui`). History remains bounded by the
@@ -165,9 +168,11 @@ audience.
 
 ### 6. Beyond Kubernetes
 
-- Pluggable providers for cloud resources (clusters, networks, databases, DNS),
-  with shared state and locking. The aim is to interoperate with the
-  OpenTofu/Terraform ecosystem rather than replace it.
+- 🟡 Machines through OpenTofu: Hetzner servers, fixed IPs, firewalls and DNS
+  records, with encrypted state (preview, see {doc}`infrastructure`).
+- Pluggable providers for more clouds and resources (networks, databases),
+  interoperating with the OpenTofu/Terraform ecosystem rather than
+  replacing it.
 
 ## Getting involved
 

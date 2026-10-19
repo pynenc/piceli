@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -75,6 +76,7 @@ def serve(
         BuildFailed,
         docker_container,
         ensure_image,
+        node_importer,
         prepare_cache,
     )
     from piceli.pipeline.backend import Backend, RegistryRoute
@@ -95,10 +97,14 @@ def serve(
     from piceli.pipeline.model import ClusterRegistry
 
     registry = declared.registry
-    if not isinstance(registry, ClusterRegistry):
+    nodes_delivery = (
+        declared.controller is not None and declared.controller.delivery == "nodes"
+    )
+    if not isinstance(registry, ClusterRegistry) and not nodes_delivery:
         reject(
             "composition-invalid",
-            f"{declared.name} needs registry=Registry.in_cluster(...): built images go there",
+            f"{declared.name} needs registry=Registry.in_cluster(...): built images "
+            'go there (or Controller(delivery="nodes") with Node(target=...))',
         )
     builder_image = image or chosen.image or (dev.image if dev is not None else None)
     if not builder_image:
@@ -113,28 +119,56 @@ def serve(
     except BuildFailed as error:
         reject("dev-host-unavailable", str(error))
     profile = resolve(override() or declared.credentials)
-    route = RegistryRoute(
-        push=None,
-        node_registry=registry.host,
-        forward=f"service/{registry.name}",
-        namespace=registry.namespace,
-        remote_port=registry.port,
-        kubeconfig=profile.kubeconfig,
-        context=profile.context,
-    )
     backend = Backend()
-
-    def push(image_id: str, repository: str, archive: Path) -> str:
-        delivered: dict[str, Any] = backend.registry_deliver(
-            route, image_id, repository, archive=archive
+    push: Any = None
+    index: Any = None
+    if isinstance(registry, ClusterRegistry):
+        route = RegistryRoute(
+            push=None,
+            node_registry=registry.host,
+            forward=f"service/{registry.name}",
+            namespace=registry.namespace,
+            remote_port=registry.port,
+            kubeconfig=profile.kubeconfig,
+            context=profile.context,
         )
-        if delivered.get("state") != "succeeded" or not delivered.get("pull_ref"):
-            raise BuildFailed(
-                f"push of {repository} ended {delivered.get('result') or delivered.get('state')}"
+
+        def push(image_id: str, repository: str, archive: Path) -> str:
+            delivered: dict[str, Any] = backend.registry_deliver(
+                route, image_id, repository, archive=archive
             )
-        return str(delivered["pull_ref"])
+            if delivered.get("state") != "succeeded" or not delivered.get("pull_ref"):
+                raise BuildFailed(
+                    f"push of {repository} ended "
+                    f"{delivered.get('result') or delivered.get('state')}"
+                )
+            return str(delivered["pull_ref"])
+
+        def index(repository: str, digests: Any) -> str:
+            return str(backend.registry_index(route, repository, digests))
+
+    # 0.22.0: the nodes this host imports into (Controller(delivery="nodes")),
+    # over its own SSH access (its keys, its agent).
+    targets = {node.name: node.target for node in declared.nodes if node.target}
+    agent = os.environ.get("SSH_AUTH_SOCK") or ""
+    node_import = (
+        node_importer(
+            targets,
+            backend,
+            Path(agent) if agent and Path(agent).is_absolute() else None,
+        )
+        if targets
+        else None
+    )
 
     root = (state_dir or Path.home() / ".cache" / "piceli" / "builder").expanduser()
+    from piceli.dev.health import Health
+
+    health = Health.of(chosen, cli)
+
+    def attest(repository: str, digest: str, body: bytes) -> Any:
+        return backend.registry_attach(route, repository, digest, body)
+
     with connect(declared, transport, allow_exec, exec_sha256) as api, _cluster_guard():
         worker = BuilderServe(
             host=chosen.name,
@@ -142,16 +176,24 @@ def serve(
             channel=ConfigMapChannel(api.client, namespace),
             container=docker_container(cli, builder_image),
             push=push,
-            index=lambda repository, digests: backend.registry_index(
-                route, repository, digests
-            ),
+            index=index,
             root=root,
             say=say,
+            node_import=node_import,
+            health=health,
+            attest=attest,
         )
         if once:
             built = worker.once()
             if as_json:
-                emit_json({"schema": "piceli.builder-serve.v1", "built": built})
+                emit_json(
+                    {
+                        "schema": "piceli.builder-serve.v1",
+                        "built": built,
+                        # 0.22.0: why nothing was claimed, when quarantined.
+                        "quarantined": worker.quarantine,
+                    }
+                )
             return
         say(f"builder: serving {declared.name} from {chosen.name} (Ctrl-C stops)")
         try:

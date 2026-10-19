@@ -26,7 +26,7 @@ from piceli.k8s.observe import ForwardStatus, ForwardSupervisor
 from piceli.k8s.ui_config import HealthProbe, RestartPolicy, UiShortcut
 from tests.unit.ops.test_forward_health import FAKE_KUBECTL
 
-CHUNKS, CHUNK_DELAY = 30, 0.1  # a 3-second download
+CHUNKS, CHUNK_DELAY = 50, 0.1  # a 5-second download
 
 
 def _free_port() -> int:
@@ -35,7 +35,7 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _wait_for(predicate: Callable[[], bool], timeout: float = 10.0) -> bool:
+def _wait_for(predicate: Callable[[], bool], timeout: float = 30.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
@@ -56,10 +56,14 @@ class _Slow(BaseHTTPRequestHandler):
             self.end_headers()
             _Slow.downloading.set()
             try:
+                # Pause before each chunk, not after: the health endpoint must
+                # answer again as soon as the client has the last byte (a
+                # pause after it left a closed, idle forward whose probe
+                # still hung, and a loaded runner restarted it).
                 for _ in range(CHUNKS):
+                    time.sleep(CHUNK_DELAY)
                     self.wfile.write(b"x" * 1024)
                     self.wfile.flush()
-                    time.sleep(CHUNK_DELAY)
             finally:
                 _Slow.downloading.clear()
             return
@@ -109,8 +113,11 @@ def _supervisor(tmp_path: Path, kubectl: Path, remote: int) -> ForwardSupervisor
         health=HealthProbe(
             type="http",
             path="/healthz",
+            # The probe hangs for the whole download, so it fails there with
+            # any timeout; 1 s lets an idle probe answer on a loaded runner
+            # (0.2 s timed some out and restarted an idle forward).
             interval=0.3,
-            timeout=0.2,
+            timeout=1.0,
             failure_threshold=1,
             startup_grace=5.0,
         ),
@@ -226,4 +233,28 @@ def test_a_restart_is_reported_with_its_reason(
             assert probe.connect_ex(("127.0.0.1", local)) == 0
     finally:
         _Slow.downloading.clear()
+        supervisor.close()
+
+
+def test_a_probe_that_waited_while_bytes_moved_is_not_a_failure(
+    tmp_path: Path, fake_kubectl: Path
+) -> None:
+    """The transfer ended just before the probe timed out: the probe waited
+    behind it, which says nothing about the forward being broken."""
+    from types import SimpleNamespace
+
+    supervisor = _supervisor(tmp_path, fake_kubectl, _free_port())
+    try:
+        managed = supervisor._managed(supervisor._shortcut_forward("api"))
+        managed.relay = SimpleNamespace(busy=lambda: False, last_byte=100.0)  # type: ignore[assignment]
+        with supervisor._lock:
+            supervisor._record_probe_locked(managed, "timed out", since=99.0)
+        assert managed.health == "busy" and managed.restart_history == []
+        with supervisor._lock:  # nothing moved since this probe started
+            supervisor._record_probe_locked(managed, "timed out", since=101.0)
+        # A failure (threshold 1): the forward is restarted.
+        assert [item["reason"] for item in managed.restart_history] == [
+            "health probe failed 1x: timed out"
+        ]
+    finally:
         supervisor.close()

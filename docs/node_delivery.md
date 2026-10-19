@@ -325,10 +325,10 @@ In the Python API these are `piceli.artifacts.delivery_inputs.DeliveryInputError
 import time
 from pathlib import Path
 
-from piceli.artifacts.delivery import DeliveryGrant, DockerImageSource
-from piceli.artifacts.process import ToolPin
-from piceli.artifacts.registry import RegistryCredentials, RegistryTarget
-from piceli.artifacts.registry_delivery import RegistryDelivery, RegistryForward
+from piceli.artifacts import DeliveryGrant, DockerImageSource
+from piceli.artifacts import ToolPin
+from piceli.artifacts import RegistryCredentials, RegistryTarget
+from piceli.artifacts import RegistryDelivery, RegistryForward
 
 url = "oci://127.0.0.1:15000/team/app:1.4.2"
 delivery = RegistryDelivery(
@@ -500,15 +500,15 @@ rule and the refusal codes.
 import time
 from pathlib import Path
 
-from piceli.artifacts.delivery import (
+from piceli.artifacts import (
     ArchiveSource,
     DeliveryGrant,
     DockerImageSource,
     NodeDelivery,
     append_journal,
 )
-from piceli.artifacts.node_transport import NodeTarget
-from piceli.artifacts.process import ProcessLimits, ToolPin
+from piceli.artifacts import NodeTarget
+from piceli.artifacts import ProcessLimits, ToolPin
 
 url = "ssh://node-1.example?runtime=k3s-containerd"
 delivery = NodeDelivery(ssh=ToolPin.capture(Path("/usr/bin/ssh")))

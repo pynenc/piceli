@@ -1,11 +1,11 @@
 """Pure composition example. The caller supplies an image and a private version."""
 
-from piceli.k8s.ops.plan import (
+from piceli.k8s.ops import (
     DeploymentComponent,
     DeploymentComposition,
     ResourceIntent,
+    SecretVersionRef,
 )
-from piceli.k8s.ops.secret_versions import SecretVersionRef
 
 
 def composition(

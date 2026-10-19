@@ -12,12 +12,11 @@ CronJobs in Kubernetes allow you to run jobs on a time-based schedule. These job
 ### Example
 
 ```python
-from piceli.k8s.templates.auxiliary import crontab
-from piceli.k8s.templates.deployable import cronjob
+from piceli.k8s.templates import CronJob, CronTab
 
-my_cron_job = cronjob.CronJob(
+my_cron_job = CronJob(
     name="example-cronjob",
-    schedule=crontab.CronTab("0 */3 * * *"),  # Every 3 hours
+    schedule=CronTab("0 */3 * * *"),  # Every 3 hours
     labels={"app": "myapp"},
     backoff_limit=2,
 )

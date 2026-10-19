@@ -18,7 +18,28 @@ as its own builds: the next step deploys them through the same plan,
 approval and checks.
 
 ``("hosts", "cluster")`` falls back to the in-cluster Job when no host has
-delivered within ``host_wait`` seconds.
+delivered within ``host_wait`` seconds, unless the builder node is
+quarantined (0.22.0, :mod:`piceli.dev.health`): then the build keeps
+waiting for a host. A quarantined host's ``build-claim`` is refused.
+
+Delivery into the nodes (0.22.0, ``Controller(delivery="nodes")``): the
+wanted build also names every declared node and its platform
+(``deliver.nodes``). The host imports each image into each node's
+containerd over SSH (``ctr images import``, through the validating relay of
+:mod:`piceli.artifacts.delivery`), the platform of the node's architecture,
+under one name for every node: ``node.piceli.invalid/<repository>:sha256-<hex>``,
+a content tag of the image's config digests (:func:`node_reference`). It
+answers with each node's delivery receipt: the reference and the config
+digest the node itself reports after the import. The controller checks
+that every node it asked for is in the answer, that each node got its own
+platform and that each config digest is the one built for it
+(:func:`delivered`). The controller cannot reach the nodes' containerd (no
+SSH, no node credentials), and the API's ``node.status.images`` carries no
+config digest, lags the kubelet's status updates and lists at most 50
+images, so the node receipts are the evidence: the import itself verified
+the config digest on the node before answering. A node that lacks the
+image anyway cannot pull it from anywhere (the ``.invalid`` domain never
+resolves): its pod fails to start and the rollout's checks fail.
 
 Importing this module is side-effect free.
 """
@@ -27,6 +48,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
@@ -36,9 +58,16 @@ from piceli.infra import CompositionError
 
 #: Where the controller's state keeps the wanted builds.
 STATE_KEY = "host_builds"
+#: Builds a host reported failed, by id: the same inputs are not offered
+#: again until ``piceli gitops sync`` (0.22.0).
+FAILED_KEY = "host_builds_failed"
 #: A claim with no answer for this long may be claimed again.
 CLAIM_SECONDS = 4 * 3600
 WAITING = "build-waiting"
+#: The registry domain of images imported into the nodes: ``.invalid``
+#: never resolves, so a node without the image never pulls one from elsewhere.
+NODE_DOMAIN = "node.piceli.invalid"
+_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
 
 class BuildPending(Exception):
@@ -47,6 +76,23 @@ class BuildPending(Exception):
 
 def _iso(seconds: float) -> str:
     return datetime.fromtimestamp(seconds, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def node_identity(configs: Mapping[str, str]) -> str:
+    """The identity of an image imported into the nodes: its config digest
+    for one platform, else the SHA-256 of ``platform=config`` lines (sorted)."""
+    if len(configs) == 1:
+        return next(iter(configs.values()))
+    lines = "\n".join(f"{key}={value}" for key, value in sorted(configs.items()))
+    return "sha256:" + hashlib.sha256(lines.encode()).hexdigest()
+
+
+def node_reference(repository: str, configs: Mapping[str, str]) -> str:
+    """The name every node knows an imported image by (a content tag of
+    :func:`node_identity`, so it can never name other content)."""
+    from piceli.k8s.release_spec import content_tag
+
+    return f"{NODE_DOMAIN}/{repository}:{content_tag(node_identity(configs), 64)}"
 
 
 def build_id(kind: str, body: Mapping[str, Any]) -> str:
@@ -61,6 +107,8 @@ class HostBuilds:
     :param inner: The in-cluster builder (also the mirror), for the
         fallback and for third-party mirrors.
     :param order: ``("hosts",)`` or ``("hosts", "cluster")``.
+    :param nodes: ``{node: platform}`` when the hosts deliver into the
+        nodes (0.22.0, ``Controller(delivery="nodes")``).
     """
 
     def __init__(
@@ -73,8 +121,18 @@ class HostBuilds:
         host_wait: float = 1800.0,
         clock: Callable[[], float],
         urls: Mapping[str, str] | None = None,
+        nodes: Mapping[str, str] | None = None,
+        cluster_blocked: Callable[[], str | None] = lambda: None,
+        owner: Callable[[], str | None] = lambda: None,
     ) -> None:
+        #: 0.22.0: the environment whose step asks (its key), so a newer
+        #: build it asks for replaces the older one.
+        self.owner = owner
+        #: 0.22.0: why the in-cluster builder may not take the fallback (its
+        #: node is quarantined), or ``None``.
+        self.cluster_blocked = cluster_blocked
         self.urls = dict(urls or {})
+        self.nodes = dict(nodes or {})
         self.inner = inner
         self.state = state
         self.platforms = tuple(platforms)
@@ -115,9 +173,34 @@ class HostBuilds:
         """The wanted entry for this build (new, or the one already asked);
         raises the failure a host reported, or returns for the fallback."""
         wanted = self._wanted()
+        if self.nodes:
+            missing = sorted(set(self.nodes.values()) - set(self.platforms))
+            if missing:
+                raise CompositionError(
+                    "composition-invalid",
+                    f"the nodes run {', '.join(missing)} but the controller builds "
+                    f"{', '.join(self.platforms)}: enable it with every node's "
+                    "platform (piceli gitops enable --platform ...)",
+                )
+            body = {**body, "deliver": {"mode": "nodes", "nodes": dict(self.nodes)}}
         found = build_id(kind, {**body, "platforms": list(self.platforms)})
-        entry = wanted.get(found)
         now = self.clock()
+        owner = self.owner()
+        failure = (self.state.get(FAILED_KEY) or {}).get(found)
+        if failure is not None:
+            # 0.22.0: the same inputs failed on a host: not offered again
+            # until they change or `piceli gitops sync` retries them.
+            raise _failure_error(failure)
+        if owner is not None:
+            # 0.22.0: a newer build of this environment replaces the older
+            # one (a new commit, or the environment moved on).
+            for key in [
+                key
+                for key, item in wanted.items()
+                if key != found and item.get("owner") == owner
+            ]:
+                del wanted[key]
+        entry = wanted.get(found)
         if entry is None:
             entry = wanted[found] = {
                 "id": found,
@@ -128,16 +211,17 @@ class HostBuilds:
                 "requested_at": _iso(now),
                 "requested_epoch": now,
             }
+        entry["asked_epoch"] = now
+        if owner is not None:
+            entry["owner"] = owner
         failure = entry.get("failed")
         if failure:
             del wanted[found]
-            error = CompositionError(
-                "component-build-failed",
-                f"build host {failure.get('host')}: {failure.get('reason')}",
-                details={"outcome": {"log_tail": str(failure.get("log_tail") or "")}},
-            )
-            error.output_tail = str(failure.get("log_tail") or "")  # type: ignore[attr-defined]
-            raise error
+            failures = self.state.setdefault(FAILED_KEY, {})
+            failures[found] = {**failure, "owner": owner, "at": _iso(now)}
+            for key in sorted(failures, key=lambda k: str(failures[k].get("at")))[:-50]:
+                del failures[key]
+            raise _failure_error(failure)
         return entry
 
     def _fallback_due(self, entry: Mapping[str, Any], method: str) -> bool:
@@ -146,6 +230,7 @@ class HostBuilds:
             and callable(getattr(self.inner, method, None))
             and self.clock() - float(entry.get("requested_epoch") or 0) > self.host_wait
             and not entry.get("claimed")
+            and self.cluster_blocked() is None
         )
 
     def build_spec(self, request: Any, checkout: Any) -> dict[str, Any]:
@@ -189,6 +274,49 @@ class HostBuilds:
         )
 
 
+def _failure_error(failure: Mapping[str, Any]) -> CompositionError:
+    error = CompositionError(
+        "component-build-failed",
+        f"build host {failure.get('host')}: {failure.get('reason')}",
+        details={"outcome": {"log_tail": str(failure.get("log_tail") or "")}},
+    )
+    error.output_tail = str(failure.get("log_tail") or "")  # type: ignore[attr-defined]
+    error.from_host = str(failure.get("host") or "?")  # type: ignore[attr-defined]
+    return error
+
+
+def settle(state: dict[str, Any], owner: str) -> list[str]:
+    """``owner``'s step ended without waiting for a build (deployed, failed,
+    stopped): the builds it asked for are no longer wanted (0.22.0)."""
+    wanted = state.get(STATE_KEY) or {}
+    gone = [key for key, item in wanted.items() if item.get("owner") == owner]
+    for key in gone:
+        del wanted[key]
+    return gone
+
+
+def prune(state: dict[str, Any], now: float, max_age: float) -> list[str]:
+    """Drop the wanted builds no step asked for in ``max_age`` seconds
+    (0.22.0). A waiting step asks again at every poll, so only leftovers go:
+    builds of a superseded commit or of an environment that moved on, and
+    entries an older controller left without an owner."""
+    wanted = state.get(STATE_KEY) or {}
+    gone = [
+        key
+        for key, item in wanted.items()
+        if now - float(item.get("asked_epoch") or item.get("requested_epoch") or 0)
+        > max_age
+    ]
+    for key in gone:
+        del wanted[key]
+    return gone
+
+
+def clear_failures(state: dict[str, Any]) -> None:
+    """``piceli gitops sync``: failed builds may be offered again (0.22.0)."""
+    state.pop(FAILED_KEY, None)
+
+
 def public(state: Mapping[str, Any], now: float) -> list[dict[str, Any]]:
     """``builds_wanted`` in the controller's status (oldest first)."""
     found = []
@@ -199,14 +327,20 @@ def public(state: Mapping[str, Any], now: float) -> list[dict[str, Any]]:
         claimed = entry.get("claimed") or {}
         if claimed and now - float(claimed.get("epoch") or 0) > CLAIM_SECONDS:
             claimed = {}
-        found.append(
-            {
-                key: value
-                for key, value in entry.items()
-                if key not in {"requested_epoch", "failed"}
+        item = {
+            key: value
+            for key, value in entry.items()
+            if key not in {"requested_epoch", "asked_epoch", "failed"}
+        } | {"claimed": {k: v for k, v in claimed.items() if k != "epoch"} or None}
+        failure = entry.get("failed")
+        if failure:
+            # 0.22.0: shown, so hosts never offer it again and people see why.
+            item["failed"] = {
+                "host": failure.get("host"),
+                "reason": failure.get("reason"),
+                "log_tail": str(failure.get("log_tail") or "")[-2000:],
             }
-            | {"claimed": {k: v for k, v in claimed.items() if k != "epoch"} or None}
-        )
+        found.append(item)
     return found
 
 
@@ -266,9 +400,10 @@ def delivered(
             "gitops-request-invalid", "the build does not hold the images asked for"
         )
     keys = entry.get("keys") or {
-        item["component"]: {"key": item["digest"]}
+        item["component"]: {"key": item["digest"], "repository": item["repository"]}
         for item in entry.get("components") or ()
     }
+    nodes = dict((entry.get("deliver") or {}).get("nodes") or {})
     found: dict[str, dict[str, Any]] = {}
     for name, image in images.items():
         if not isinstance(image, Mapping):
@@ -278,6 +413,16 @@ def delivered(
             raise GitOpsError(
                 "gitops-request-invalid", f"image {name}: built from other inputs"
             )
+        if nodes or image.get("delivery") == "nodes":
+            found[name] = _node_delivered(
+                name,
+                image,
+                key=key,
+                repository=str((keys.get(name) or {}).get("repository") or ""),
+                nodes=nodes,
+                platforms=list(entry.get("platforms") or ()),
+            )
+            continue
         pull_ref = str(image.get("pull_ref") or "")
         digest = str(image.get("manifest_digest") or "")
         if not digest.startswith("sha256:") or not pull_ref.endswith("@" + digest):
@@ -297,3 +442,71 @@ def delivered(
         }
     del wanted[entry["id"]]
     return found
+
+
+def _node_delivered(
+    name: str,
+    image: Mapping[str, Any],
+    *,
+    key: str,
+    repository: str,
+    nodes: Mapping[str, str],
+    platforms: Sequence[str],
+) -> dict[str, Any]:
+    """Check one image a host imported into the nodes (see the module doc).
+
+    :raises GitOpsError: ``gitops-request-invalid``.
+    """
+
+    def refuse(reason: str) -> GitOpsError:
+        return GitOpsError("gitops-request-invalid", f"image {name}: {reason}")
+
+    if not nodes:
+        raise refuse(
+            "delivered into the nodes, but the controller delivers to its registry"
+        )
+    if image.get("delivery") != "nodes":
+        raise refuse("the controller asked for a delivery into the nodes")
+    configs = image.get("platforms")
+    if (
+        not isinstance(configs, Mapping)
+        or not configs
+        or not all(
+            isinstance(digest, str) and _DIGEST.fullmatch(digest)
+            for digest in configs.values()
+        )
+        or not set(configs) <= set(platforms)
+    ):
+        raise refuse(
+            "its platforms are not the config digests of the platforms asked for"
+        )
+    configs = {str(k): str(v) for k, v in configs.items()}
+    reference = node_reference(repository, configs)
+    identity = node_identity(configs)
+    if image.get("pull_ref") != reference or image.get("manifest_digest") != identity:
+        raise refuse("its reference is not the content tag of its config digests")
+    receipts = image.get("nodes")
+    if not isinstance(receipts, Mapping):
+        raise refuse("no node receipts")
+    for node, platform in sorted(nodes.items()):
+        receipt = receipts.get(node)
+        if not isinstance(receipt, Mapping):
+            raise refuse(f"not delivered into node {node}")
+        if receipt.get("platform") != platform:
+            raise refuse(f"node {node} runs {platform}, not {receipt.get('platform')}")
+        if receipt.get("result") not in {"imported", "already-present"}:
+            raise refuse(f"the import into node {node} ended {receipt.get('result')}")
+        if receipt.get("reference") != reference:
+            raise refuse(f"node {node} holds it under another name")
+        if receipt.get("config_digest") != configs.get(platform):
+            raise refuse(
+                f"node {node} holds config {receipt.get('config_digest')}, "
+                f"not the {platform} image built ({configs.get(platform)})"
+            )
+    return {
+        "key": key,
+        "pull_ref": reference,
+        "manifest_digest": identity,
+        "platforms": dict(sorted(configs.items())),
+        "nodes": sorted(nodes),
+    }

@@ -1,7 +1,7 @@
 from piceli.k8s.templates.auxiliary import crontab, env_vars, pod_security_context
 from piceli.k8s.templates.auxiliary.container import Container
 from piceli.k8s.templates.auxiliary.crontab import CronTab
-from piceli.k8s.templates.auxiliary.labels import Labels
+from piceli.k8s.templates.auxiliary.labels import Labels, check_labels
 from piceli.k8s.templates.auxiliary.names import (
     DNSLabel,
     DNSSubdomain,
@@ -88,6 +88,7 @@ __all__ = [
     "VolumeMountPVC",
     "VolumeMountPVCTemplate",
     "VolumeMountSecret",
+    "check_labels",
     "crontab",
     "env_vars",
     "pod_security_context",

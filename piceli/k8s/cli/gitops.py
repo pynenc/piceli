@@ -1278,6 +1278,159 @@ def sync(
     )
 
 
+HostArgument = Annotated[
+    str,
+    typer.Argument(help="The build host (as builder serve names it) or builder node"),
+]
+SinceOption = Annotated[
+    str | None,
+    typer.Option(
+        "--since",
+        help="Only images whose build ended at or after this ISO time "
+        "(2026-10-01, 2026-10-01T12:00:00Z)",
+    ),
+]
+
+
+@app.command("suspects")
+def suspects(
+    host: Annotated[
+        str,
+        typer.Option(
+            "--host", help="The build host or builder node whose images to list"
+        ),
+    ],
+    since: SinceOption = None,
+    kubeconfig: KubeconfigOption = None,
+    context: ContextOption = None,
+    namespace: NamespaceOption = "piceli-system",
+    state_dir: StateDirOption = None,
+    transport: TransportOption = "https",
+    as_json: JsonOption = False,
+) -> None:
+    """List the deployed images a build host (or node) built, in every environment."""
+    from piceli.infra import provenance
+
+    try:
+        moment = provenance.parse_since(since)
+    except ValueError as error:
+        reject("gitops-request-invalid", str(error))
+    with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
+        with _guard():
+            document = channel.read_status()
+    found = provenance.suspects(document, host, moment)
+    say(
+        f"{len(found)} deployed image(s) built on {host}"
+        + (f" since {since}" if since else "")
+        + (f"; rebuild them: piceli gitops rebuild --host {host}" if found else "")
+    )
+    for item in found:
+        built = item.get("provenance") or {}
+        say(
+            f"  {item['env']}"
+            + (f"@{item['cluster']}" if item.get("cluster") else "")
+            + f" {item['component']}: {item.get('image')} "
+            f"(built {built.get('started_at')} .. {built.get('finished_at')})"
+        )
+    if as_json:
+        emit_json(
+            {
+                "schema": "piceli.gitops-suspects.v1",
+                "host": host,
+                "since": since,
+                "images": found,
+            }
+        )
+
+
+@app.command("rebuild")
+def rebuild(
+    host: Annotated[
+        str,
+        typer.Option(
+            "--host", help="Rebuild every deployed image this host (or node) built"
+        ),
+    ],
+    since: SinceOption = None,
+    kubeconfig: KubeconfigOption = None,
+    context: ContextOption = None,
+    namespace: NamespaceOption = "piceli-system",
+    state_dir: StateDirOption = None,
+    transport: TransportOption = "https",
+) -> None:
+    """Ask the controller to rebuild the images a host built and deploy them."""
+    from piceli.gitops.state import rebuild_request
+
+    with _guard():
+        key, body = rebuild_request(host, since)
+    with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
+        with _guard():
+            channel.add_request(key, body)
+    say(
+        f"rebuild of the images built on {host}"
+        + (f" since {since}" if since else "")
+        + " recorded; the controller drops their cached builds and deploys each "
+        "environment that runs one on its next poll (an approval may still be "
+        "required; controller.last_rebuild in gitops status)"
+    )
+    emit_json({"state": "requested", "request": key, "host": host, "since": since})
+
+
+@app.command("hosts")
+def hosts(
+    kubeconfig: KubeconfigOption = None,
+    context: ContextOption = None,
+    namespace: NamespaceOption = "piceli-system",
+    state_dir: StateDirOption = None,
+    transport: TransportOption = "https",
+    as_json: JsonOption = False,
+) -> None:
+    """The health events and quarantine the controller recorded per build host."""
+    with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
+        with _guard():
+            document = channel.read_status() or {}
+    found = (document.get("controller") or {}).get("build_health") or {}
+    if not found:
+        say("no health events recorded for any build host or builder node")
+    for name, entry in sorted(found.items()):
+        line = f"{name:<16} {entry.get('kind') or '?':<5} "
+        if entry.get("quarantined"):
+            line += (
+                f"QUARANTINED since {entry.get('since')}: {entry.get('reason')} "
+                f"(piceli gitops release-host {name})"
+            )
+        else:
+            line += f"{entry.get('recent', 0)} recent health event(s)"
+        say(line)
+    if as_json:
+        emit_json({"schema": "piceli.gitops-hosts.v1", "hosts": found})
+
+
+@app.command("release-host")
+def release_host(
+    host: HostArgument,
+    kubeconfig: KubeconfigOption = None,
+    context: ContextOption = None,
+    namespace: NamespaceOption = "piceli-system",
+    state_dir: StateDirOption = None,
+    transport: TransportOption = "https",
+) -> None:
+    """Ask the controller to forget a build host's health events (end its quarantine)."""
+    from piceli.gitops.state import host_release_request
+
+    with _guard():
+        key, body = host_release_request(host)
+    with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
+        with _guard():
+            channel.add_request(key, body)
+    say(
+        f"release of {host} recorded; the controller forgets its health events "
+        "on its next poll (a docker or native host's own record: piceli dev "
+        "release-host)"
+    )
+    emit_json({"state": "requested", "request": key, "host": host})
+
+
 def promote(
     target: Annotated[
         str,
@@ -1617,6 +1770,21 @@ class _NoBuilder:
         return self._mirror.mirror(items)
 
 
+class _NoMirror:
+    """No registry to mirror into (``Controller(delivery="nodes")`` alone)."""
+
+    def mirror(self, items: Any) -> Any:
+        from piceli.infra import CompositionError
+
+        if not items:
+            return {}
+        raise CompositionError(
+            "composition-invalid",
+            "a third-party image (Component.image) is copied into the in-cluster "
+            "registry: declare registry=Registry.in_cluster(...)",
+        )
+
+
 def _composition_ports(
     target: tuple[Path, str],
     state_dir: Path,
@@ -1633,7 +1801,9 @@ def _composition_ports(
     from piceli.pipeline.backend import RegistryRoute
 
     registry = config.registry
-    if registry is None:
+    declared = (config.composition.get("cluster") or {}).get("controller") or {}
+    nodes_delivery = declared.get("delivery") == "nodes" and not local_build
+    if registry is None and not nodes_delivery:
         raise CompositionError(
             "composition-invalid",
             "the composition's Cluster needs registry=Registry.in_cluster(...)",
@@ -1647,7 +1817,11 @@ def _composition_ports(
         transport=transport,
         log=say,
     )
-    if local_build:
+    if registry is None:
+        # 0.22.0, Controller(delivery="nodes") without a registry: build hosts
+        # build and import into the nodes; nothing is pushed or mirrored here.
+        builder: Any = _NoBuilder(_NoMirror())
+    elif local_build:
         route = RegistryRoute(
             push=None,
             node_registry=registry.host,
@@ -1657,9 +1831,9 @@ def _composition_ports(
             kubeconfig=target[0],
             context=target[1],
         )
-        builder: Any = LocalBuilder(
+        builder = LocalBuilder(
             route,
-            platform=config.platforms[0],
+            platforms=tuple(config.platforms),
             cache_dir=state_dir / "build-cache",
             work_dir=state_dir / "work",
             say=say,
@@ -1671,7 +1845,7 @@ def _composition_ports(
         )
         mirror = LocalBuilder(
             route,
-            platform=config.platforms[0],
+            platforms=tuple(config.platforms),
             cache_dir=state_dir / "build-cache",
             work_dir=state_dir / "work",
             say=say,

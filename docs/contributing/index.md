@@ -20,6 +20,14 @@ make test                 # unit + fault-injected API acceptance tests
 `make test` never contacts a real cluster. The acceptance suite runs the real
 Kubernetes client against an in-process fake API server that injects faults.
 
+Tests run on busy CI runners, several at a time. A test that bounds how long
+something takes must leave room for that: the bound is at least 1 s and about
+three times what a loaded runner needs, and the broken behaviour it rules out
+takes at least twice the bound (make the hung call wait 30 s, not 5 s).
+Prefer an event, a fake clock or a counted call to a wall-clock bound.
+`tests/unit/test_test_hygiene.py` rejects bounds under 1 s, and `make
+test-stress` shows whether a new test is reliable.
+
 Other targets (`make help` lists them all):
 
 | Target | What it does |
@@ -27,6 +35,7 @@ Other targets (`make help` lists them all):
 | `make lint` | Every pre-commit hook on all files (ruff lint + format, uv lock check, YAML/TOML) |
 | `make typecheck` | mypy on the `piceli` package |
 | `make test-unit` / `make test-acceptance` | One test suite |
+| `make test-stress` | Unit + acceptance three times on twice as many workers as cores; lists every test that failed in any round (CI runs it nightly) |
 | `make test-integration` | Integration tests against the disposable cluster named by `PICELI_KIND_KUBECONFIG`, `PICELI_KIND_CONTEXT` (and `PICELI_KIND_NODE`); skipped without them, never the current context |
 | `make coverage` | Tests with an HTML coverage report in `htmlcov/` |
 | `make evals-check` | Self-tests of the cross-model eval harness in `evals/` (see {doc}`evals`) |

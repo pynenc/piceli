@@ -7,7 +7,7 @@ content becomes ready: only the post-deploy checks can catch it.
 from __future__ import annotations
 
 from piceli.app import App, Probe
-from piceli.k8s.ops.plan import DeploymentComposition
+from piceli.k8s.ops import DeploymentComposition
 from piceli.k8s.release_spec import ReleaseContext
 
 

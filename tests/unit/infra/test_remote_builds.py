@@ -19,6 +19,7 @@ from piceli.gitops.state import (
     build_claim_request,
     build_failed_request,
     built_request,
+    sync_request,
 )
 from piceli.infra.composition import load_composition
 from piceli.infra.controller import CompositionConfig, CompositionController
@@ -66,6 +67,7 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "ports": ports,
         "channel": channel,
         "clock": clock,
+        "shop": shop,
     }
 
 
@@ -199,7 +201,15 @@ def test_builder_serve_builds_delivers_and_the_controller_deploys(
                     }
                 )
         line("[build] compiling")
-        line(encode_receipt({"components": {}, "archives": archives}))
+        line(
+            encode_receipt(
+                {
+                    "components": {},
+                    "archives": archives,
+                    "toolchains": {"rust": "1.97.0"},
+                }
+            )
+        )
         return 0
 
     def push(image_id: str, repository: str, archive: Path) -> str:
@@ -231,9 +241,109 @@ def test_builder_serve_builds_delivers_and_the_controller_deploys(
     main = status["envs"]["main"]
     assert main["state"] == "deployed", main
     assert main["components"]["web"]["digest"] == "sha256:" + "9" * 64
+    # Where it was built, with the toolchain the build reported (0.22.0).
+    built_where = main["components"]["web"]["provenance"]
+    assert built_where["host"] == "laptop"
+    assert built_where["toolchains"] == {"rust": "1.97.0"}
     assert worker.once() is None  # nothing left to build
     # The Git mirrors and checkouts stay for the next build; nothing else does.
     assert sorted(p.name for p in (tmp_path / "builder").iterdir()) == [
         "checkouts",
         "git",
     ]
+
+
+# ---------------------------------------------------- the queue (0.22.0)
+
+
+def _next_try(world: dict[str, Any]) -> dict[str, Any]:
+    controller = world["controller"]
+    record = controller.state["envs"]["main"]
+    world["clock"]["now"] = (
+        max(world["clock"]["now"], float(record.get("next_attempt_at") or 0)) + 1
+    )
+    return controller.poll_once()
+
+
+def test_a_newer_commit_replaces_the_build_it_superseded(world: dict[str, Any]) -> None:
+    controller = world["controller"]
+    (first,) = controller.poll_once()["controller"]["builds_wanted"]
+    world["shop"].commit({"web/index.html": "<h1>v2</h1>\n"})
+    (current,) = _next_try(world)["controller"]["builds_wanted"]
+    assert current["id"] != first["id"]
+    assert current["owner"] == "main"
+
+
+def test_leftovers_no_step_asks_for_are_dropped(world: dict[str, Any]) -> None:
+    """An older controller left entries with no owner; the current one stays."""
+    controller = world["controller"]
+    controller.poll_once()
+    wanted = controller.state["host_builds"]
+    wanted["old0"] = {
+        "id": "old0", "kind": "components", "images": ["web"],
+        "requested_epoch": world["clock"]["now"] - 3600, "claimed": {"host": "mini"},
+    }  # fmt: skip
+    status = _next_try(world)
+    assert [item["id"] for item in status["controller"]["builds_wanted"]] == [
+        key for key in wanted if key != "old0"
+    ]
+    assert "old0" not in controller.state["host_builds"]
+
+
+def test_a_failed_build_is_shown_and_not_offered_again_until_a_sync(
+    world: dict[str, Any],
+) -> None:
+    from piceli.infra import remote_builds
+
+    controller, channel = world["controller"], world["channel"]
+    (wanted,) = controller.poll_once()["controller"]["builds_wanted"]
+    # Shown with its reason while listed (hosts skip it).
+    controller.state["host_builds"][wanted["id"]]["failed"] = {
+        "host": "mini", "reason": "the build exited 101", "log_tail": "boom",
+    }  # fmt: skip
+    (shown,) = remote_builds.public(controller.state, world["clock"]["now"])
+    assert shown["failed"]["reason"] == "the build exited 101"
+    del controller.state["host_builds"][wanted["id"]]["failed"]
+    channel.add_request(
+        *build_failed_request(wanted["id"], "mini", "the build exited 101", "boom")
+    )
+    status = controller.poll_once()
+    assert status["envs"]["main"]["reason"] == "component-build-failed"
+    for _ in range(3):  # automatic retries: failed at once, never offered
+        status = _next_try(world)
+        assert status["controller"]["builds_wanted"] == []
+        assert status["envs"]["main"]["reason"] == "component-build-failed"
+    channel.add_request(*sync_request("main"))
+    (again,) = _next_try(world)["controller"]["builds_wanted"]
+    assert again["id"] == wanted["id"]
+
+
+def test_a_delivered_build_is_not_built_again(
+    world: dict[str, Any], tmp_path: Path
+) -> None:
+    """The status still lists it until the controller's next poll."""
+    from piceli.infra.builder_serve import BuilderServe
+
+    controller, channel = world["controller"], world["channel"]
+    controller.poll_once()
+    builds: list[str] = []
+
+    class _Serve(BuilderServe):
+        def build(self, entry: Any, tail: Any) -> dict[str, Any]:
+            builds.append(str(entry["id"]))
+            return _images(entry)
+
+    worker = _Serve(
+        host="mini",
+        image="ghcr.io/x/builder@sha256:" + "e" * 64,
+        channel=channel,
+        container=lambda *_a: 0,
+        push=lambda *_a: "",
+        index=lambda *_a: "",
+        root=tmp_path / "builder",
+        sleep=lambda _s: controller.poll_once(),
+    )
+    built = worker.once()
+    assert built is not None and builds == [built]
+    assert worker.once() is None  # still listed, already answered
+    assert builds == [built]

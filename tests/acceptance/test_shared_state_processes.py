@@ -41,7 +41,7 @@ app.deployment("web", image="{IMAGE}", env={{"PASSWORD": credentials.key("passwo
 pipeline = Pipeline(
     app, target, secrets=secrets,
     state_dir=os.environ["DEPLOY_STATE_DIR"], state="cluster",
-    state_lease_seconds=int(os.environ.get("LEASE", "5")),
+    state_lease_seconds=int(os.environ.get("LEASE", "30")),
     execution={{
         "max_seconds": 120,
         "readiness_seconds": float(os.environ.get("READINESS", "2")),
@@ -72,8 +72,11 @@ def cluster(tmp_path: Path) -> Iterator[tuple[FakeAPI, Path]]:
 
 
 def start(
-    root: Path, runner: str, *args: str, readiness: float = 2, lease: int = 5
+    root: Path, runner: str, *args: str, readiness: float = 2, lease: int = 30
 ) -> subprocess.Popen[str]:
+    """A ``piceli deploy`` runner. The 30 s lease outlasts a starved process on
+    a busy runner (a 5 s one expired there and the holder gave the lock up);
+    only the takeover test waits for a lease to expire, with its own."""
     env = {
         key: value
         for key, value in os.environ.items()

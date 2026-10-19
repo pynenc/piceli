@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from piceli.k8s.ops.execution_journal import ExecutionJournal
-from piceli.k8s.ops.executor import PlanExecutor
-from piceli.k8s.ops.legacy_execution import (
+from piceli.k8s.ops import (
+    ExecutionJournal,
     LegacyExecutionArchive,
+    PlanExecutor,
+    SecretVersionStore,
     import_legacy_execution,
 )
-from piceli.k8s.ops.secret_versions import SecretVersionStore
 
 
 def import_and_resume(

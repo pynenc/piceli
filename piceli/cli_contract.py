@@ -1346,6 +1346,57 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(gitops-request-invalid in gitops status); --component needs a "
             "composition controller.",
         ),
+        "gitops suspects": _C(
+            "List the deployed images a build host (or the builder node) built, "
+            "in every environment and component, from the provenance the "
+            "controller recorded; --since narrows it to builds that ended later.",
+            reads=("kubeconfig or --state-dir", "the controller's status"),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.22.0. Read-only. Each image names its environment (and "
+            "cluster), component, pull reference, digest and provenance (host, "
+            "node, builder image, commits, times).",
+        ),
+        "gitops rebuild": _C(
+            "Ask the GitOps controller to rebuild every deployed image a build "
+            "host (or the builder node) built (--since: builds that ended "
+            "later) and deploy them.",
+            reads=("kubeconfig or --state-dir",),
+            writes=("--state-dir requests (local controller)",),
+            cluster="writes",
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.22.0. Writes a request to the ConfigMap "
+            "piceli-gitops-requests; the controller drops those images' cached "
+            "build results and deploys each environment that runs one with its "
+            "usual approval and checks (trigger 'sync rebuild HOST'; "
+            "controller.last_rebuild in gitops status). No such image: "
+            "gitops-request-invalid in gitops status.",
+        ),
+        "gitops hosts": _C(
+            "Show the health events and quarantine the GitOps controller "
+            "recorded for its build hosts and builder node.",
+            reads=("kubeconfig or --state-dir", "the controller's status"),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.22.0. Read-only (controller.build_health in gitops status).",
+        ),
+        "gitops release-host": _C(
+            "Ask the GitOps controller to forget a build host's or the builder "
+            "node's health events, ending its quarantine.",
+            reads=("kubeconfig or --state-dir",),
+            writes=("--state-dir requests (local controller)",),
+            cluster="writes",
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.22.0. Writes a request to the ConfigMap "
+            "piceli-gitops-requests. A docker or native host's own record is "
+            "cleared with piceli dev release-host.",
+        ),
         "env stop": _C(
             "Ask the GitOps controller to stop a composition's named "
             "environment: no replicas, claims kept, not planned or deployed.",
@@ -1465,7 +1516,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
                 "credential profile",
                 "the local Git repositories of the sources",
             ),
-            writes=("--artifacts-dir RUN/ (with --artifact)",),
+            writes=(
+                "--artifacts-dir RUN/ (with --artifact)",
+                "the build host's health record (0.22.0, after a machine-health sign)",
+            ),
             cluster="writes",
             approval_required=False,
             safe_to_retry=True,
@@ -1480,7 +1534,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(dev-command-failed), timed out, ran out of memory, was cancelled or "
             "the run broke; 2 refused (dev-not-enabled, dev-ref-unknown, "
             "dev-source-invalid, dev-profile-unknown, dev-run-invalid). The run's "
-            "Job is removed on every outcome.",
+            "Job is removed on every outcome. 0.22.0: a quarantined build host is "
+            "skipped (said on stderr); a run showing a machine-health sign "
+            "records an event on its host (health and host_quarantined in the "
+            "result).",
         ),
         "builder serve": _C(
             "On a build host: take the builds the GitOps controller publishes "
@@ -1497,12 +1554,17 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
                 "the controller's requests (build-claim, built, build-failed)",
                 "images in the cluster's registry (through a port-forward)",
                 "~/.cache/piceli/builder (Git mirrors), the piceli-build-cache volume",
+                "the host's health record (piceli-health-* volumes)",
             ),
             cluster="writes",
             contract="conforms",
             exit_codes=(0, 2),
             notes="0.21.0. Runs until Ctrl-C (--once: one build). The builder "
-            "image must be the controller's Piceli version.",
+            "image must be the controller's Piceli version. 0.22.0: each "
+            "delivered image's provenance is pushed as an OCI referrer when the "
+            "registry takes it; a build showing a machine-health signature "
+            "records a health event on the host, and a quarantined host claims "
+            "nothing (quarantined in --once --json).",
         ),
         "dev hosts": _C(
             "Show each declared build host: up or down (and why), its platforms, "
@@ -1516,7 +1578,21 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             contract="conforms",
             exit_codes=(0, 2),
             notes="0.20.0. Read-only. A docker host is asked with its CLI "
-            "(`info`, `ps`), locally or over its ssh:// context.",
+            "(`info`, `ps`, `volume ls`), locally or over its ssh:// context. "
+            "0.22.0: each host's health events and quarantine (health).",
+        ),
+        "dev release-host": _C(
+            "Clear a docker or native build host's health events: it is no "
+            "longer quarantined, so runs and builder serve use it again.",
+            reads=("MODULE:ATTR (piceli.infra.Cluster with dev=)",),
+            writes=(
+                "the host's health record (its piceli-health-* volumes on a "
+                "docker host, health.json in a native host's state_dir)",
+            ),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.22.0. Never contacts the cluster. The builder node's "
+            "health is the GitOps controller's: piceli gitops release-host.",
         ),
         "dev status": _C(
             "Show the development-run queue: slots, running and queued runs with "

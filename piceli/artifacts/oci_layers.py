@@ -76,11 +76,26 @@ class Descriptor:
 
 
 class BlobStore:
-    """``<root>/blobs/sha256/<hex>``: blobs written once, by content."""
+    """``<root>/blobs/sha256/<hex>``: blobs written once, by content.
 
-    def __init__(self, root: Path) -> None:
+    0.22.0: a blob is reused only after its bytes were hashed again
+    (:meth:`verified`): a blob whose content no longer matches its digest
+    (a faulty disk or memory, a write cut short) is discarded, reported
+    (``on_discard`` and :attr:`discarded`) and fetched or written again.
+    """
+
+    def __init__(
+        self,
+        root: Path,
+        on_discard: Callable[[str, str], None] | None = None,
+    ) -> None:
         self.root = root
         self.blobs = root / "blobs" / "sha256"
+        self.on_discard = on_discard
+        #: ``{"digest", "reason"}`` of each blob this store discarded.
+        self.discarded: list[dict[str, str]] = []
+        #: Blobs hashed (or written) by this store: not hashed twice.
+        self._checked: set[str] = set()
 
     def path(self, value: str) -> Path:
         validate_digest(value)
@@ -89,6 +104,31 @@ class BlobStore:
     def has(self, value: str, size: int | None = None) -> bool:
         path = self.path(value)
         return path.is_file() and (size is None or path.stat().st_size == size)
+
+    def verified(self, value: str, size: int | None = None) -> bool:
+        """Whether the store holds ``value`` with exactly its bytes; a blob
+        whose size or content does not match is removed (and reported)."""
+        path = self.path(value)
+        if not path.is_file():
+            return False
+        if value in self._checked:
+            return size is None or path.stat().st_size == size
+        reason = None
+        if size is not None and path.stat().st_size != size:
+            reason = f"size {path.stat().st_size} is not {size}"
+        else:
+            with path.open("rb") as stream:
+                found = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
+            if found != value:
+                reason = f"content hashes to {found}"
+        if reason is None:
+            self._checked.add(value)
+            return True
+        path.unlink(missing_ok=True)
+        self.discarded.append({"digest": value, "reason": reason})
+        if self.on_discard is not None:
+            self.on_discard(value, reason)
+        return False
 
     def temporary(self) -> Path:
         self.blobs.mkdir(parents=True, exist_ok=True)
@@ -100,11 +140,12 @@ class BlobStore:
     def commit(self, temporary: Path, value: str) -> Path:
         path = self.path(value)
         os.replace(temporary, path)
+        self._checked.add(value)  # hashed while it was written
         return path
 
     def put(self, body: bytes) -> str:
         value = digest(body)
-        if not self.has(value, len(body)):
+        if not self.verified(value, len(body)):
             temporary = self.temporary()
             temporary.write_bytes(body)
             self.commit(temporary, value)
@@ -373,7 +414,7 @@ def _pull(
     repository = source.repository
 
     def manifest(value: str) -> dict[str, Any]:
-        if store.has(value):
+        if store.verified(value):
             body = store.read(value)
         else:
             body, _ = client.get_manifest(repository, value)
@@ -453,7 +494,7 @@ def _descriptor(value: Any, allowed: Iterable[str]) -> Descriptor:
 
 
 def _fetch(client: Any, repository: str, item: Descriptor, store: BlobStore) -> None:
-    if store.has(item.digest, item.size):
+    if store.verified(item.digest, item.size):
         return
     temporary = store.temporary()
     try:

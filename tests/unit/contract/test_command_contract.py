@@ -662,6 +662,23 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["gitops", "sync", "Not_A_Label", "--state-dir", str(p)],
         "gitops-request-invalid",
     ),
+    "gitops suspects": (
+        lambda p: ["gitops", "suspects", "--host", "mini", "--since", "yesterday"],
+        "gitops-request-invalid",
+    ),
+    "gitops rebuild": (
+        lambda p: ["gitops", "rebuild", "--host", "Not_A_Host", "--state-dir", str(p)],
+        "gitops-request-invalid",
+    ),
+    "gitops hosts": (lambda p: ["gitops", "hosts"], "gitops-target-required"),
+    "gitops release-host": (
+        lambda p: ["gitops", "release-host", "Not_A_Host", "--state-dir", str(p)],
+        "gitops-request-invalid",
+    ),
+    "dev release-host": (
+        lambda p: ["dev", "release-host", "mini", "--cluster", "no_such_module:c"],
+        "cluster-not-found",
+    ),
     "env stop": (
         lambda p: ["env", "stop", "Not_A_Label", "--state-dir", str(p)],
         "gitops-request-invalid",

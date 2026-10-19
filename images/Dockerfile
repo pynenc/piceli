@@ -17,7 +17,7 @@
 # REGISTRY/piceli-builder@sha256:…` to `piceli gitops enable`.
 
 ARG PYTHON_IMAGE=docker.io/library/python:3.13-slim-bookworm@sha256:5024f48ba9441d4b13a95d3945abc6365538e3a31109833367a1923523c6efed
-ARG RUST_IMAGE=docker.io/library/rust:1.90-slim-bookworm@sha256:64232e656c058f4468e8d024e990acff04f0fd5a5c0a88a574dc37773d7325c9
+ARG RUST_IMAGE=docker.io/library/rust:1.97.0-slim-bookworm@sha256:6d220bf85c74e842a79da63997af8d2e74455c0b8847d8bb3a5888572334991d
 
 FROM ${RUST_IMAGE} AS rust
 
@@ -44,8 +44,11 @@ CMD ["piceli", "--help"]
 # --- builder: the controller plus the host-build tools for Rust and Python --
 # cargo (rustup, with the linux and wasm32 targets; clippy and rustfmt since
 # 0.19.0), cargo-zigbuild, zig, uv, python3, sh, and what crates with C
-# builds need (jemalloc-sys: make; aws-lc-sys: cmake; pkg-config, curl, xz)
-# and node with npm (development runs of small JS tests, 0.18.0). The
+# builds need (jemalloc-sys: make; aws-lc-sys: cmake; pkg-config, curl, xz),
+# lld (`-C link-arg=-fuse-ld=lld` links large Rust binaries faster than GNU
+# ld, 0.22.0) and node with npm (development runs of small JS tests,
+# 0.18.0). A source that pins its own Rust, node or wasm tools gets those
+# versions in the build cache instead (`[build] toolchains`, 0.22.0). The
 # toolchain is read-only; cargo
 # writes under $HOME, which the build Job points at its work directory.
 FROM controller AS builder
@@ -53,7 +56,7 @@ LABEL org.opencontainers.image.description="Piceli cluster build Job (Rust and P
 USER root
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       gcc g++ libc6-dev make cmake pkg-config curl xz-utils nodejs npm \
+       gcc g++ libc6-dev make cmake pkg-config curl xz-utils lld nodejs npm \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=rust /usr/local/rustup /usr/local/rustup
 COPY --from=rust /usr/local/cargo/bin /usr/local/cargo/bin

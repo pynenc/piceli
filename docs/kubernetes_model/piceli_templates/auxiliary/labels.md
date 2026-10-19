@@ -36,15 +36,15 @@ Labels are utilized throughout Kubernetes objects defined in Piceli, enhancing t
 Creating and validating labels for a Kubernetes pod:
 
 ```python
-from piceli.k8s.templates.auxiliary import labels
+from piceli.k8s.templates import Labels, check_labels
 
 # Define a set of labels
-pod_labels = labels.Labels(
+pod_labels = Labels(
     {"app": "my-application", "component": "web-server", "environment": "production"}
 )
 
 # Validate labels
-validated_labels = labels.check_labels(pod_labels)
+validated_labels = check_labels(pod_labels)
 ```
 
 In this example, a set of labels is defined and validated for use with a Kubernetes pod, ensuring they adhere to Kubernetes' and GCP's labeling requirements. This functionality is integral to managing Kubernetes resources within Piceli, facilitating the organization, selection, and operation of resources across clusters.

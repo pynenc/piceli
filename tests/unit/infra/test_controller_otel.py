@@ -702,9 +702,9 @@ def test_an_unreachable_endpoint_never_slows_or_fails_a_deploy(
         status = controller.poll_once()
         took = time.monotonic() - began
         assert status["envs"]["main"]["state"] == "deployed"
-        # Exports wait in the background: one blocking export alone would
-        # take the 10 s timeout (two runs, dozens of spans and records).
-        assert took < 5, took
+        # Exports wait in the background: blocking ones would take the 10 s
+        # timeout at least twice (two runs); a loaded runner needs ~7 s.
+        assert took < 15, took
         processor = providers.tracer_provider._active_span_processor._span_processors[0]
         queue = processor._batch_processor._queue
         assert queue.maxlen == otel.MAX_QUEUE
@@ -735,7 +735,9 @@ def test_the_queue_stays_bounded_while_the_endpoint_is_down(
         began = time.monotonic()
         for _ in range(5000):
             tracer.start_span("x").end()
-        assert time.monotonic() - began < 2
+        # A span that waited for the dead endpoint (1 s each) would take
+        # minutes; a loaded runner needs a few seconds.
+        assert time.monotonic() - began < 8
         processor = providers.tracer_provider._active_span_processor._span_processors[0]
         assert len(processor._batch_processor._queue) <= 64
     finally:

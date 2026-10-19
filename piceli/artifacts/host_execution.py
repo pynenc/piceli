@@ -235,7 +235,13 @@ class HostExecution:
         self.cancel = cancel
         self.client_factory = client_factory
         self.steps: list[dict[str, Any]] = []
-        self.store = BlobStore(cache)
+        # 0.22.0: a cached blob whose bytes no longer match its digest is
+        # discarded and made again; the line marks the build host's health
+        # (piceli.dev.pod.HEALTH_SIGNATURES, kind cache-corrupt).
+        self.store = BlobStore(
+            cache,
+            on_discard=self._discarded,
+        )
         self.stage = cache / "stage" / self.spec.name
         # One target directory per architecture and page size: a cache shared
         # by nodes with other page sizes would rebuild jemalloc and everything
@@ -243,6 +249,16 @@ class HostExecution:
         facts = plan.facts
         self.target = cache / "target" / f"{facts.architecture}-{facts.page_size}"
         self.total = len(plan.commands)
+        #: 0.22: what provisioning did per pinned tool (the receipt's ``toolchains``).
+        self.toolchains: dict[str, dict[str, Any]] = {}
+
+    def _discarded(self, value: str, reason: str) -> None:
+        text = (
+            f"[piceli] cache-corrupt: blob {value} discarded ({reason}); "
+            "fetching or writing it again"
+        )
+        self.log.line(text)
+        self.log.say(text)
 
     # ---------------------------------------------------------------- run
     def execute(self, output_dir: Path) -> dict[str, Any]:
@@ -252,6 +268,7 @@ class HostExecution:
             self.log.say(f"[piceli] stage: {changed} file(s) changed since last build")
             self.target.mkdir(parents=True, exist_ok=True)
             environment = self._environment()
+            self._toolchains(environment)
             cwd = self.stage.joinpath(*PurePosixPath(self.spec.workdir).parts)
             for index, command in enumerate(self.plan.commands, start=1):
                 self._command(index, command, cwd, environment)
@@ -315,6 +332,33 @@ class HostExecution:
         environment["SOURCE_DATE_EPOCH"] = str(self.spec.source_date_epoch)
         environment.update(self.plan.env)
         return environment
+
+    def _toolchains(self, environment: dict[str, str]) -> None:
+        """Install ``build.toolchains`` once into the cache and select them."""
+        if not self.plan.toolchains:
+            return
+        from piceli.artifacts.host_toolchains import provision
+
+        began = time.monotonic()
+        try:
+            self.toolchains = provision(
+                self.cache,
+                self.plan.toolchains,
+                environment,
+                self.log.say,
+            )
+        except BuildSpecError as error:
+            raise BuildSpecError(
+                error.code, str(error), steps=tuple(self.steps)
+            ) from None
+        self.steps.append(
+            {
+                "platform": self.plan.platform,
+                "kind": "toolchains",
+                "state": "succeeded",
+                "seconds": round(time.monotonic() - began, 3),
+            }
+        )
 
     def _command(
         self,

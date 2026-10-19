@@ -27,14 +27,9 @@ SNAPSHOT = Path(__file__).resolve().parent.parent / "api_surface.json"
 
 # Modules whose exports are checked name by name. Other ``piceli.*`` modules are
 # only checked for existence.
-PUBLIC_MODULES = (
-    "piceli",
-    "piceli.app",
-    "piceli.pipeline",
-    "piceli.checks",
-    "piceli.testing",
-    "piceli.k8s.release_spec",
-)
+# The same list as the API reference (piceli/public_api.py).
+from piceli.public_api import PUBLIC_MODULES  # noqa: E402
+
 # ``**kwargs`` parameters whose allowed keys are the fields of a model.
 KWARGS_FROM = {"App.environment": "Environment"}
 _OBJECT_ATTRS = set(dir(object))

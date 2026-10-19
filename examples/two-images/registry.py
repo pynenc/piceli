@@ -8,7 +8,7 @@ pulls from it, so a workload release never manages its own registry.
 from __future__ import annotations
 
 from piceli.k8s import templates
-from piceli.k8s.ops.plan import DeploymentComposition
+from piceli.k8s.ops import DeploymentComposition
 from piceli.k8s.release_spec import ReleaseContext
 
 

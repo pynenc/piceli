@@ -98,3 +98,7 @@ def __getattr__(name: str) -> Any:
 
         return getattr(ops, name)
     raise AttributeError(f"module 'piceli.envs' has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | _OPS)

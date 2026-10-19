@@ -64,6 +64,36 @@ def _text(value: Any, limit: int = 256) -> str | None:
     return value[:limit] if isinstance(value, str) and value else None
 
 
+def _provenance(value: Any) -> dict[str, Any] | None:
+    """A component's provenance in a history entry (0.22.0): bounded."""
+    item = _dict(value)
+    if not item.get("host"):
+        return None
+    found: dict[str, Any] = {
+        key: _text(item.get(key), 300)
+        for key in (
+            "builder",
+            "host",
+            "node",
+            "builder_image",
+            "started_at",
+            "finished_at",
+        )
+        if _text(item.get(key), 300)
+    }
+    commits = _dict(item.get("commits"))
+    if commits:
+        found["commits"] = {
+            str(k)[:64]: str(v)[:64] for k, v in sorted(commits.items())[:20]
+        }
+    toolchains = _dict(item.get("toolchains"))
+    if toolchains:
+        found["toolchains"] = {
+            str(k)[:64]: str(v)[:200] for k, v in sorted(toolchains.items())[:20]
+        }
+    return found
+
+
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
@@ -157,6 +187,10 @@ def event(
             "state": _text(item.get("state"), 32),
             "built": name in built_set,
         }
+        built_on = _provenance(item.get("provenance"))
+        if built_on:
+            # Added in 0.22.0: where the image was built.
+            entries[str(name)]["provenance"] = built_on
     state = str(record.get("state") or "unknown")
     if state == "deployed" and record.get("health") == "degraded":
         state = "degraded"

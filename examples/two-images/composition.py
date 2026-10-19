@@ -8,7 +8,7 @@ Deployment in the next plan.
 
 from __future__ import annotations
 
-from piceli.k8s.ops.plan import (
+from piceli.k8s.ops import (
     DeploymentComponent,
     DeploymentComposition,
     ResourceIntent,

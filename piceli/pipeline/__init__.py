@@ -87,3 +87,7 @@ def __getattr__(name: str) -> Any:
 
         return getattr(runner, name)
     raise AttributeError(f"module 'piceli.pipeline' has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | {"PipelineRunner", "CombinedPlan"})

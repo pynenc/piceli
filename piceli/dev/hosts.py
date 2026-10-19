@@ -937,6 +937,15 @@ class HostState:
     running: int = 0
     waiting: int = 0
     notes: list[str] = field(default_factory=list)
+    #: 0.22.0: :func:`piceli.dev.health.view` (``None``: not tracked here).
+    health: dict[str, Any] | None = None
+
+    @property
+    def quarantined(self) -> str | None:
+        """Why the host is quarantined, or ``None``."""
+        if self.health and self.health.get("quarantined"):
+            return str(self.health.get("reason") or "quarantined")
+        return None
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -948,6 +957,8 @@ class HostState:
             "slots": self.host.slots,
             "running": self.running,
             "waiting": self.waiting,
+            "quarantined": self.quarantined is not None,
+            "health": self.health,
         }
 
 
@@ -960,8 +971,19 @@ def native_platform() -> str:
     return f"{'darwin' if system == 'darwin' else 'linux'}/{arch}"
 
 
+def _health(host: BuildHost, cli: Any = None) -> dict[str, Any] | None:
+    """``host``'s health view (0.22.0); ``None`` when unreadable or untracked."""
+    from piceli.dev.health import Health
+
+    try:
+        found = Health.of(host, cli)
+        return None if found is None else found.view()
+    except (DevError, OSError):
+        return None
+
+
 def probe(host: BuildHost, cluster_up: Callable[[], bool] | None = None) -> HostState:
-    """Whether ``host`` can take a run now, and its queue."""
+    """Whether ``host`` can take a run now, its queue and its health."""
     if host.kind == "native":
         queue = FileQueue(
             Path(host.state_dir or Path.home() / ".cache/piceli/dev" / host.name)
@@ -970,6 +992,7 @@ def probe(host: BuildHost, cluster_up: Callable[[], bool] | None = None) -> Host
         return HostState(
             host, True, platforms=tuple(host.platforms) or (native_platform(),),
             running=len(queue.running()), waiting=len(queue.waiting()),
+            health=_health(host),
         )  # fmt: skip
     if host.kind == "cluster":
         up = cluster_up() if cluster_up is not None else True
@@ -986,6 +1009,7 @@ def probe(host: BuildHost, cluster_up: Callable[[], bool] | None = None) -> Host
     return HostState(
         host, True, platforms=tuple(host.platforms) or (own,),
         running=len(queue.running()), waiting=len(queue.waiting()),
+        health=_health(host, cli),
     )  # fmt: skip
 
 
@@ -997,8 +1021,8 @@ def candidates(
     probe: Callable[[BuildHost], HostState] = probe,
 ) -> list[HostState]:
     """The hosts to try for a run, best first: the requested one only, else
-    every host that is up and builds ``platform``, one with a free slot
-    first, then by declaration order.
+    every host that is up, not quarantined (0.22.0) and builds ``platform``,
+    one with a free slot first, then by declaration order.
 
     :raises DevError: ``dev-host-unknown`` (no such host), ``dev-host-unavailable``
         (none is up for the platform).
@@ -1017,6 +1041,7 @@ def candidates(
         state
         for state in states
         if state.up
+        and state.quarantined is None
         and (
             platform is None
             or platform in state.platforms
@@ -1025,7 +1050,14 @@ def candidates(
     ]
     if not usable:
         detail = "; ".join(
-            f"{s.host.name}: {s.detail or 'not ' + str(platform)}" for s in states
+            f"{s.host.name}: "
+            + (
+                f"quarantined: {s.quarantined} (piceli dev release-host "
+                f"{s.host.name} clears it)"
+                if s.up and s.quarantined is not None
+                else s.detail or "not " + str(platform)
+            )
+            for s in states
         )
         raise DevError(UNAVAILABLE, f"no build host can take the run ({detail})")
     order = {state.host.name: index for index, state in enumerate(states)}

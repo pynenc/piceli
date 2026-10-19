@@ -66,19 +66,20 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.4.0
+## What's new in 0.22
 
-- **`piceli deploy`**: build, deliver by digest, plan, apply and check in one
-  journaled, resumable run that skips every unchanged stage.
-- **Post-deploy checks** (`http`, `exec`, `metric`, Python) with automatic
-  rollback when one fails.
-- **Field-level diffs and true no-op plans** (`piceli release diff`).
-- **`piceli status` and `piceli access`**: is the app up, which URLs, and
-  supervised loopback port forwards declared in the model.
-- **`piceli import live|yaml`**: turn a running namespace or a folder of
-  manifests into a typed app module.
-- **One engine**: the legacy delete-and-recreate engine is gone; every change
-  goes through server-side apply, the journal and resume.
+- **Builds follow the source's toolchain**: a host build installs the Rust,
+  node, wasm-bindgen and binaryen versions the source pins, once per build
+  cache, checked against published checksums.
+- **Know where every image was built**: each deployed image records its
+  build host, builder image, commits and toolchain; `piceli gitops suspects`
+  lists what a faulty machine built and `piceli gitops rebuild` replaces it.
+- **Faulty build machines are quarantined** after repeated crashes,
+  segfaults or machine checks in their builds.
+- **Build hosts deliver without a registry**, straight into the nodes'
+  containerd over SSH.
+- **One public API**: 13 modules (`piceli/public_api.py`); everything else
+  is internal.
 
 See the [changelog](https://docs.pynenc.org/projects/piceli/en/stable/changelog.html)
 for the complete list, including breaking changes.

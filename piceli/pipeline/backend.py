@@ -289,6 +289,20 @@ class Backend:
         url = route.url(repository, free_port())
         return self._delivery(route).push_index(RegistryTarget.parse(url), manifests)
 
+    def registry_attach(
+        self, route: RegistryRoute, repository: str, digest: str, body: bytes
+    ) -> dict[str, Any]:
+        """Push a provenance document as an OCI referrer of ``repository@digest``
+        (0.22.0); ``{"state": "attached" | "skipped", ...}``."""
+        from piceli.artifacts.registry import RegistryTarget
+
+        url = route.url(repository, free_port())
+        return dict(
+            self._delivery(route).attach_referrer(
+                RegistryTarget.parse(url), digest, body
+            )
+        )
+
     def registry_has(self, route: RegistryRoute, repository: str, digest: str) -> bool:
         """Whether the registry holds ``repository@digest`` (0.21.0)."""
         from piceli.artifacts.registry import RegistryTarget
@@ -457,7 +471,13 @@ class Backend:
         )
 
     # ------------------------------------------------------------- node
-    def _node_delivery(self, url: str, *, docker: bool = True) -> tuple[Any, Any]:
+    def _node_delivery(
+        self,
+        url: str,
+        *,
+        docker: bool = True,
+        ssh_agent_socket: Path | None = None,
+    ) -> tuple[Any, Any]:
         from piceli.artifacts.delivery import NodeDelivery
         from piceli.artifacts.delivery_inputs import discover_tool
         from piceli.artifacts.node_transport import NodeTarget
@@ -466,7 +486,11 @@ class Backend:
         needs_docker = docker or target.transport == "docker"
         tool, sock = self.docker() if needs_docker else (None, None)
         ssh = discover_tool("ssh") if target.transport == "ssh" else None
-        return NodeDelivery(docker=tool, docker_socket=sock, ssh=ssh), target
+        agent = ssh_agent_socket if target.transport == "ssh" else None
+        delivery = NodeDelivery(
+            docker=tool, docker_socket=sock, ssh=ssh, ssh_agent_socket=agent
+        )
+        return delivery, target
 
     def node_present(self, url: str, reference: str, image_id: str) -> bool:
         delivery, target = self._node_delivery(url)
@@ -483,15 +507,22 @@ class Backend:
         reference: str,
         *,
         archive: Path | None = None,
+        ssh_agent_socket: Path | None = None,
     ) -> dict[str, Any]:
-        """Import one image into the node; ``archive`` as for :meth:`registry_deliver`."""
+        """Import one image into the node; ``archive`` as for :meth:`registry_deliver`.
+
+        ``ssh_agent_socket`` (0.22.0) is forwarded to ``ssh`` (an ``ssh://``
+        target), so keys held by the user's agent reach the node.
+        """
         from piceli.artifacts.delivery import (
             ArchiveSource,
             DeliveryGrant,
             DockerImageSource,
         )
 
-        delivery, target = self._node_delivery(url, docker=archive is None)
+        delivery, target = self._node_delivery(
+            url, docker=archive is None, ssh_agent_socket=ssh_agent_socket
+        )
         return dict(
             delivery.deliver(
                 ArchiveSource(archive.absolute())

@@ -520,6 +520,8 @@ class BuildCluster(PreRolloutCluster):
     """
 
     receipt_text: str | None = None
+    #: 0.22.0: the node the last build Job's pod ran on (its provenance).
+    node_name: str | None = None
     log_access: str = "not-attempted"
     _keeping: bool = False
     _job_failed: bool = False
@@ -597,6 +599,8 @@ class BuildCluster(PreRolloutCluster):
         if pod is None:
             self.log_access = "pod-not-found"
             return ""
+        node = (pod.get("spec") or {}).get("nodeName")
+        self.node_name = str(node) if node else None
         self.receipt_text = None
         texts: list[str] = []
         statuses: list[int] = []

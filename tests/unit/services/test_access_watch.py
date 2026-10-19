@@ -65,7 +65,9 @@ class _CountingStop(threading.Event):
         return super().wait(0.01)
 
 
-def _wait(condition: Callable[[], bool], seconds: float = 5.0) -> None:
+def _wait(condition: Callable[[], bool], seconds: float = 30.0) -> None:
+    """Until ``condition``; the limit only stops a hang (a starved runner can
+    take seconds for a few ticks)."""
     deadline = time.monotonic() + seconds
     while not condition():
         assert time.monotonic() < deadline, "condition not reached"
@@ -198,13 +200,13 @@ def test_close_has_one_shared_teardown_deadline(tmp_path: Path) -> None:
         gate = threading.Event()
         original = [instance.close for instance in Supervisor.instances]
         for instance, close in zip(Supervisor.instances, original, strict=True):
-            instance.close = lambda close=close: (gate.wait(5), close())  # type: ignore[method-assign]
+            instance.close = lambda close=close: (gate.wait(30), close())  # type: ignore[method-assign]
         access._close_timeout = 0.1
         started = time.monotonic()
         access.close()
-        # Each blocked close waits up to 5 s on the gate; returning well
+        # Each blocked close waits up to 30 s on the gate; returning well
         # before that proves one shared 0.1 s deadline (wide for slow runners).
-        assert time.monotonic() - started < 3
+        assert time.monotonic() - started < 10
         assert access.get("shop", first.id).state == "stopped"
         assert access.get("shop", second.id).state == "stopped"
         gate.set()

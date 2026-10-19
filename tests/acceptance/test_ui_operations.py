@@ -335,8 +335,9 @@ def child_server(
             env={**os.environ, "PICELI_UI_LAUNCH_TOKEN": token},
         )
         try:
-            with httpx.Client(base_url=origin, timeout=2) as client:
-                deadline = time.monotonic() + 15
+            # Hang guards only: a starved runner can take seconds per step.
+            with httpx.Client(base_url=origin, timeout=30) as client:
+                deadline = time.monotonic() + 60
                 while time.monotonic() < deadline:
                     assert process.poll() is None, "API process exited during startup"
                     try:
@@ -376,7 +377,8 @@ def test_api_process_death_after_write_requires_explicit_same_execution_recovery
                     "idempotency_key": "crash-write",
                 },
             )
-            deadline = time.monotonic() + 10
+            # Ends when the write lands; the limit only stops a hang.
+            deadline = time.monotonic() + 60
             while (
                 "Deployment",
                 "worker",

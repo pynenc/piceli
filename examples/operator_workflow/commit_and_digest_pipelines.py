@@ -3,10 +3,14 @@
 import json
 from pathlib import Path
 
-from piceli.k8s.automation import promote_release
-from piceli.k8s.operator_state import StandingPolicy
-from piceli.k8s.ops.session import DeploymentSessionArchive
-from piceli.k8s.release import ReleaseCatalog, ReleaseRecord, ReleaseSource
+from piceli.k8s import (
+    ReleaseCatalog,
+    ReleaseRecord,
+    ReleaseSource,
+    StandingPolicy,
+    promote_release,
+)
+from piceli.k8s.ops import DeploymentSessionArchive
 
 
 def run_pipeline(state_dir: Path) -> None:

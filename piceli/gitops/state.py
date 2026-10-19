@@ -56,6 +56,8 @@ REQUEST_KINDS = (
     "approve", "promote", "sync", "stop", "start", "cache-clear",
     # 0.21.0: build hosts (piceli builder serve)
     "build-claim", "built", "build-failed",
+    # 0.22.0: rebuild what a host built; release a quarantined host
+    "rebuild", "host-release",
 )  # fmt: skip
 #: Env states a status may carry.
 ENV_STATES = (
@@ -339,6 +341,47 @@ def build_failed_request(
         reason=str(reason)[:300],
         log_tail=str(log_tail)[-8000:],
     )
+
+
+def _host_name(value: str) -> str:
+    import re
+
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[a-z0-9](?:[-a-z0-9.]{0,61}[a-z0-9])?", value
+    ):
+        raise GitOpsError(
+            "gitops-request-invalid", "a build host or node name is a DNS name"
+        )
+    return value
+
+
+def rebuild_request(host: str, since: str | None = None) -> tuple[str, dict[str, Any]]:
+    """Rebuild every deployed image ``host`` (a build host or the builder
+    node) built, since the ISO time ``since`` (0.22.0, ``piceli gitops
+    rebuild``). The controller drops their cached build results and deploys
+    each environment that runs one, with its usual approval."""
+    from datetime import UTC, datetime
+
+    from piceli.infra.provenance import parse_since
+
+    fields: dict[str, Any] = {"host": _host_name(host)}
+    if since is not None:
+        try:
+            parse_since(since)
+        except ValueError as error:
+            raise GitOpsError("gitops-request-invalid", str(error)) from None
+        fields["since"] = since
+    fields["at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return request("rebuild", **fields)
+
+
+def host_release_request(host: str) -> tuple[str, dict[str, Any]]:
+    """Forget the health events the controller recorded for ``host`` (a build
+    host or the builder node): it is no longer quarantined (0.22.0)."""
+    from datetime import UTC, datetime
+
+    at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return request("host-release", host=_host_name(host), at=at)
 
 
 def stop_request(

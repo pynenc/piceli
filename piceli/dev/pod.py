@@ -41,9 +41,14 @@ import sys
 import tarfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
+
+try:  # in a pod: the wrapper bundles it under this name (jobs.wrapper_source)
+    import piceli_dev_toolchains as toolchains  # type: ignore[import-not-found]
+except ImportError:
+    from piceli.dev import toolchains
 
 RESULT_MARKER = "PICELI-DEV-RESULT "
 SCHEMA = "piceli.dev-pod-result.v1"
@@ -909,6 +914,46 @@ def corrupt_crates(lines: list[str]) -> tuple[list[str], str | None]:
     return [], None
 
 
+# ------------------------------------------------- machine health (0.22)
+#: Output that points at the machine rather than the code: a compiler that
+#: crashed, a process killed by a hardware fault, a link that lost symbols, a
+#: cached blob whose bytes no longer match their digest. A build host that
+#: shows these repeatedly is quarantined (:mod:`piceli.dev.health`).
+HEALTH_SIGNATURES = (
+    (
+        "internal-compiler-error",
+        re.compile(r"internal compiler error|thread 'rustc' panicked"),
+    ),
+    (
+        "link-symbol",
+        re.compile(
+            r"undefined (?:hidden )?symbol|hidden symbol `[^`']*' is(?:n't)? "
+            r"(?:referenced|defined)"
+        ),
+    ),
+    ("segfault", re.compile(r"Segmentation fault|SIGSEGV|signal: 11\b")),
+    ("illegal-instruction", re.compile(r"Illegal instruction|SIGILL|signal: 4\b")),
+    ("bus-error", re.compile(r"\bBus error\b|SIGBUS|signal: 7\b")),
+    (
+        "machine-check",
+        re.compile(r"\bmce: |[Mm]achine [Cc]heck|Hardware Error"),
+    ),
+    ("cache-corrupt", re.compile(r"\[piceli\] cache-corrupt: ")),
+    # A host build step repaired its cargo cache (piceli.artifacts.host_execution).
+    ("cache-repaired", re.compile(r"\[piceli\] .*: corrupted cache \(")),
+)
+
+
+def health_signal(lines: Iterable[str]) -> dict[str, str] | None:
+    """The first line of ``lines`` with a machine-health signature, as
+    ``{"kind", "line"}``; ``None`` when there is none."""
+    for line in lines:
+        for kind, signature in HEALTH_SIGNATURES:
+            if signature.search(line):
+                return {"kind": kind, "line": line.strip()[:300]}
+    return None
+
+
 def clear_incremental(target: Path) -> int:
     """Remove every ``incremental/`` directory of a cargo target (every
     profile and triple); how many went."""
@@ -1171,8 +1216,16 @@ def _toolchain(spec: dict[str, Any], env: dict[str, str] | None = None) -> str:
 
 
 # ------------------------------------------------- the source's toolchain (0.20)
-_CHANNEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
-_ITEM = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+# 0.22: parsing and installing live in piceli.dev.toolchains (shared with host
+# builds); the wrapper ships it next to this file (jobs.wrapper_source).
+
+
+def _toolchain_error(error: Any) -> RunError:
+    if error.kind == "checksum":
+        return RunError("dev-toolchain-checksum", str(error))
+    if error.kind == "failed":
+        return RunError("dev-toolchain-failed", str(error))
+    return RunError("dev-toolchain-invalid", str(error))
 
 
 def rust_toolchain(tree: Path, cwd: str | None) -> dict[str, Any] | None:
@@ -1195,35 +1248,12 @@ def rust_toolchain(tree: Path, cwd: str | None) -> dict[str, Any] | None:
 
 
 def _parse_toolchain(path: Path, root: Path) -> dict[str, Any]:
-    text = path.read_text(errors="replace")
-    where = str(path.relative_to(root))
-    if path.name == "rust-toolchain" and "[toolchain]" not in text:
-        table: dict[str, Any] = {"channel": text.strip()}
-    else:
-        try:
-            import tomllib
-
-            table = dict(tomllib.loads(text).get("toolchain") or {})
-        except Exception as error:
-            raise RunError(
-                "dev-toolchain-invalid", f"{where}: not valid TOML ({error})"
-            ) from None
-    channel = str(table.get("channel") or "")
-    if not _CHANNEL.fullmatch(channel):
-        raise RunError(
-            "dev-toolchain-invalid", f"{where}: [toolchain] channel {channel!r}"
+    try:
+        return toolchains.parse_rust(
+            path.read_text(errors="replace"), path.name, str(path.relative_to(root))
         )
-    found: dict[str, Any] = {"file": where, "channel": channel}
-    for key in ("targets", "components"):
-        items = [str(item) for item in table.get(key) or ()]
-        if not all(_ITEM.fullmatch(item) for item in items):
-            raise RunError("dev-toolchain-invalid", f"{where}: [toolchain] {key}")
-        found[key] = sorted(items)
-    profile = str(table.get("profile") or "minimal")
-    found["profile"] = (
-        profile if profile in {"minimal", "default", "complete"} else "minimal"
-    )
-    return found
+    except toolchains.ToolchainError as error:
+        raise _toolchain_error(error) from None
 
 
 def provision_rust(
@@ -1235,57 +1265,47 @@ def provision_rust(
     """Install the pinned toolchain once into the cache (``rustup``, under a
     lock, keyed by channel, targets and components) and return the
     environment that selects it, and what was done."""
-    home = cache / "toolchains" / "rustup"
-    home.mkdir(parents=True, exist_ok=True)
-    key = hashlib.sha256(
-        json.dumps(
-            [pin["channel"], pin["targets"], pin["components"], pin["profile"]]
-        ).encode()
-    ).hexdigest()[:16]
-    done = cache / "toolchains" / f"rust-{key}.done"
-    env = {"RUSTUP_HOME": str(home), "RUSTUP_TOOLCHAIN": pin["channel"]}
-    report: dict[str, Any] = {**pin, "installed": False, "seconds": 0.0}
-    if done.is_file():
-        return env, report
     began = clock()
-    lock = os.open(cache / "toolchains" / ".rust.lock", os.O_RDWR | os.O_CREAT, 0o600)
     try:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        if not done.is_file():
-            emit(f"[piceli-dev] installing Rust {pin['channel']} ({pin['file']})")
-            command = [
-                "rustup", "toolchain", "install", pin["channel"],
-                "--profile", pin["profile"], "--no-self-update",
-            ]  # fmt: skip
-            for item in pin["components"]:
-                command += ["--component", item]
-            for item in pin["targets"]:
-                command += ["--target", item]
-            installed = subprocess.run(
-                command,
-                env={
-                    k: v
-                    for k, v in {**os.environ, **env}.items()
-                    if k != "RUSTUP_TOOLCHAIN"
-                },
-                capture_output=True,
-                text=True,
-                timeout=1800,
-                check=False,
-            )
-            if installed.returncode != 0:
-                tail = (installed.stderr or installed.stdout).strip().splitlines()[-5:]
-                raise RunError(
-                    "dev-toolchain-failed",
-                    f"rustup could not install {pin['channel']} ({pin['file']}): "
-                    + " | ".join(tail)[:600],
-                )
-            done.write_text(json.dumps(pin))
-            report["installed"] = True
-    finally:
-        os.close(lock)
-    report["seconds"] = round(clock() - began, 3)
+        installed, env = toolchains.provision_rust(
+            cache, pin, lambda line: emit(f"[piceli-dev] {line}")
+        )
+    except toolchains.ToolchainError as error:
+        raise _toolchain_error(error) from None
+    report = {**pin, "installed": installed, "seconds": 0.0}
+    if installed:
+        report["seconds"] = round(clock() - began, 3)
     return env, report
+
+
+def provision_tools(
+    cache: Path,
+    declared: dict[str, str],
+    tree: Path,
+    env: dict[str, str],
+    emit: Callable[[str], None],
+) -> tuple[list[str], dict[str, Any]]:
+    """0.22: the profile's node, binaryen and wasm-bindgen pins (paths
+    relative to the tree's root, or versions), installed once into the
+    cache; returns the ``bin`` directories for ``PATH`` and the report."""
+    root = tree.resolve()
+
+    def read(path: str) -> bytes:
+        where = (root / path).resolve()
+        if root not in where.parents or not where.is_file():
+            raise toolchains.ToolchainError("invalid", f"{path}: no such pin file")
+        return where.read_bytes()
+
+    try:
+        wanted = toolchains.check_declared(declared, "toolchains")
+        wanted.pop("rust", None)  # the source's own rust-toolchain.toml
+        pins = toolchains.resolve(wanted, read)
+        _, paths, report = toolchains.provision(
+            cache, pins, lambda line: emit(f"[piceli-dev] {line}"), env=env
+        )
+    except toolchains.ToolchainError as error:
+        raise _toolchain_error(error) from None
+    return paths, report
 
 
 class Timeline:
@@ -1469,6 +1489,15 @@ def main(
             # --offline works); everywhere else the cache's, per toolchain.
             env["CARGO_HOME"] = str(cache / "cargo-home" / toolchain)
         env["PICELI_DEV_RUN"] = str(spec.get("run"))
+        declared = dict(spec.get("toolchains") or {})
+        if declared and spec.get("provision_toolchains", True):
+            # 0.22: the profile's node, binaryen and wasm-bindgen pins.
+            timeline.phase("toolchain")
+            paths, tools = provision_tools(
+                cache, declared, lineage.path / "tree", env, emit
+            )
+            env["PATH"] = os.pathsep.join([*paths, env.get("PATH") or os.defpath])
+            result["toolchain"] = {**(result.get("toolchain") or {}), **tools}
         if spec.get("prefetch") == "cargo" and (cwd / "Cargo.lock").is_file():
             timeline.phase("fetch")
             step = clock()
@@ -1493,7 +1522,12 @@ def main(
         errors = first = FirstError(int(spec.get("first_error_lines") or 20))
         building: collections.deque[str] = collections.deque(maxlen=2000)
 
+        health: list[dict[str, str]] = []
+
         def seen(line: str) -> None:
+            found = health_signal((line,)) if len(health) < 8 else None
+            if found is not None and all(h["kind"] != found["kind"] for h in health):
+                health.append(found)
             tail.append(line)
             cargo.feed(line)
             errors.feed(line)
@@ -1568,6 +1602,19 @@ def main(
             ),
         )
         result["exit_code"] = code
+        repaired = result["cache"].get("repaired") or {}
+        if (code and not timed_out) or repaired:
+            # 0.22: what the build host's health record counts. A link error
+            # alone is the code's own unless a cache repair blamed the cache.
+            counted = [h for h in health if repaired or h["kind"] != "link-symbol"]
+            if counted:
+                result["health"] = {**counted[0], "repaired": bool(repaired)}
+            elif repaired:
+                result["health"] = {
+                    "kind": f"cache-{repaired.get('kind')}",
+                    "line": next(iter(repaired.get("first_error") or ()), ""),
+                    "repaired": True,
+                }
         if timed_out:
             result.update(state="timed-out", reason="dev-run-timed-out")
         elif code == 0:
