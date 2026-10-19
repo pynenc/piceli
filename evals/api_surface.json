@@ -368,6 +368,7 @@
      "pull_policy",
      "ready",
      "resources",
+     "roll_on_change",
      "security",
      "selector",
      "service_account",
@@ -403,6 +404,7 @@
      "ready",
      "replicas",
      "resources",
+     "roll_on_change",
      "security",
      "selector",
      "service_account",
@@ -587,6 +589,7 @@
      "ready",
      "replicas",
      "resources",
+     "roll_on_change",
      "security",
      "selector",
      "service_account",
@@ -2249,6 +2252,7 @@
     "pod_spec",
     "references",
     "restart_policy",
+    "roll_on_change",
     "schedule",
     "security",
     "selector",
@@ -2279,6 +2283,7 @@
     "node_selector",
     "parallelism",
     "restart_policy",
+    "roll_on_change",
     "schedule",
     "security",
     "selector",
@@ -2360,6 +2365,7 @@
     "pod_labels",
     "pod_spec",
     "references",
+    "roll_on_change",
     "security",
     "selector",
     "selector_labels",
@@ -2379,6 +2385,7 @@
     "name",
     "node",
     "node_selector",
+    "roll_on_change",
     "security",
     "selector",
     "service_account",
@@ -2504,6 +2511,7 @@
     "pod_spec",
     "references",
     "replicas",
+    "roll_on_change",
     "security",
     "selector",
     "selector_labels",
@@ -2524,6 +2532,7 @@
     "node",
     "node_selector",
     "replicas",
+    "roll_on_change",
     "security",
     "selector",
     "service_account",
@@ -2602,6 +2611,7 @@
     "plan_hash",
     "protected_resources",
     "schema_version",
+    "secret_adoptions",
     "snapshot_hash",
     "summary",
     "target",
@@ -2613,6 +2623,7 @@
     "levels",
     "protected_resources",
     "schema_version",
+    "secret_adoptions",
     "snapshot_hash",
     "target"
    ],
@@ -4947,6 +4958,7 @@
     "pod_spec",
     "references",
     "restart_policy",
+    "roll_on_change",
     "security",
     "selector",
     "selector_labels",
@@ -4970,6 +4982,7 @@
     "node_selector",
     "parallelism",
     "restart_policy",
+    "roll_on_change",
     "security",
     "selector",
     "service_account",
@@ -6421,6 +6434,7 @@
     "previous",
     "prune_managed",
     "replace_resources",
+    "secret_adoptions",
     "target"
    ],
    "init": [
@@ -6431,6 +6445,7 @@
     "previous",
     "prune_managed",
     "replace_resources",
+    "secret_adoptions",
     "target"
    ],
    "methods": {}
@@ -8269,6 +8284,25 @@
     "key": "SecretKey"
    }
   },
+  "SecretAdoption": {
+   "attr_types": {
+    "resource": "ResourceRef"
+   },
+   "attrs": [
+    "generator",
+    "resource",
+    "summary",
+    "uid"
+   ],
+   "init": [
+    "generator",
+    "resource",
+    "uid"
+   ],
+   "methods": {
+    "summary": []
+   }
+  },
   "SecretBinding": {
    "attr_types": {
     "reference": "SecretVersionRef"
@@ -8316,6 +8350,7 @@
     "close",
     "contains",
     "discard",
+    "fingerprint",
     "put",
     "put_once",
     "resolve",
@@ -8335,6 +8370,10 @@
     "discard": [
      "references",
      "session_id",
+     "target"
+    ],
+    "fingerprint": [
+     "reference",
      "target"
     ],
     "put": [
@@ -8918,6 +8957,7 @@
     "pod_spec",
     "references",
     "replicas",
+    "roll_on_change",
     "security",
     "selector",
     "selector_labels",
@@ -8940,6 +8980,7 @@
     "node_selector",
     "pod_management",
     "replicas",
+    "roll_on_change",
     "security",
     "selector",
     "service_account",
@@ -9681,6 +9722,7 @@
     "pod_labels",
     "pod_spec",
     "references",
+    "roll_on_change",
     "security",
     "selector",
     "selector_labels",
@@ -9698,6 +9740,7 @@
     "name",
     "node",
     "node_selector",
+    "roll_on_change",
     "security",
     "selector",
     "service_account",
@@ -12438,6 +12481,8 @@
    "runner-memory-low",
    "runner-tool-missing",
    "scope-mismatch",
+   "secret-adoption-incomplete",
+   "secret-adoption-invalid",
    "secret-dependency-cycle",
    "secret-generator-failed",
    "secret-import-unavailable",
@@ -14374,6 +14419,7 @@
   "piceli.k8s.operator_state",
   "piceli.k8s.ops",
   "piceli.k8s.ops.bounds",
+  "piceli.k8s.ops.content_digest",
   "piceli.k8s.ops.diagnosis",
   "piceli.k8s.ops.discovery",
   "piceli.k8s.ops.dry_run",
@@ -14398,6 +14444,7 @@
   "piceli.k8s.release_secret_spec",
   "piceli.k8s.release_secrets",
   "piceli.k8s.release_spec",
+  "piceli.k8s.secret_adoption",
   "piceli.k8s.secret_sources",
   "piceli.k8s.templates",
   "piceli.k8s.templates.auxiliary",
@@ -14546,5 +14593,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.22.0"
+ "version": "0.23.0"
 }

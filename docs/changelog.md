@@ -4,6 +4,49 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.23.0
+
+- **Workloads roll when their configuration changes.** Every Deployment,
+  StatefulSet and DaemonSet that reads a ConfigMap or Secret of its release
+  (volume, projected volume, `envFrom`, `env.valueFrom`) carries
+  `piceli.io/configmaps-digest` and/or `piceli.io/secrets-digest` on its pod
+  template: a changed value rolls the pods; an unchanged or carried-over
+  value changes nothing. Secret values are reduced to an HMAC-SHA256 under a
+  random key kept in the private secret store and are never exposed. Jobs
+  and CronJobs are not annotated. `roll_on_change=False` on
+  `app.deployment`, `stateful_set` and `daemon_set` (or
+  `piceli.io/roll-on-change: "false"` on a raw workload) opts out;
+  `piceli import` sets it for imported workloads that read configuration.
+  **Upgrade note:** the first release after upgrading rolls every workload
+  that reads a ConfigMap or Secret of its release once.
+- **Generated Secrets survive an empty state.** When the state has no
+  record of a `random`, `tls-self-signed` or `tls-ca` generator but a live
+  Secret the app declares carries this release's owner annotation and field
+  manager, the plan adopts its values instead of generating new ones
+  (origin `adopted`, `secret_adoptions` in the plan JSON, bound with the
+  Secret's UID into the plan hash). Nothing is rotated, deleted or written.
+  This fixes a GitOps controller with a new state volume failing with
+  `retained-content-precondition-failed`. New codes
+  `secret-adoption-invalid` and `secret-adoption-incomplete`. Secrets
+  without the app's marks are refused as before.
+- **Steps shared by every platform run once.** `build.shared_commands` (a
+  wasm32 browser bundle, generated assets) run once in a multi-platform
+  build into `<cache>/target/shared` (`$PICELI_SHARED_TARGET_DIR`); images
+  copy their outputs with `shared_files`. Node facts are refused in them.
+  Specs without them keep their spec digest and plan hash.
+- **`host_wait` is the real wait.** A waiting step looked again only a
+  whole poll after it ended, and the run loop slept a whole poll:
+  `host_wait="20s"` with a 1-minute poll waited 121-122 s. Now the fallback
+  starts when `host_wait` ends.
+- **Cluster build Jobs keep their source checkouts** on the cache claim:
+  incremental fetches, and unchanged files keep their times, so cargo
+  rebuilds only what changed. Each Job's time is broken down per image (the
+  whole Job, the wait to start, the source fetch, commands, assembly, push)
+  in the controller's log and history.
+- **Reliable tests.** Process waits in tests are hang guards of at least
+  30 s, and a test keeps them so; an end-to-end test builds a commit while a
+  newer one arrives and checks the newer one is deployed.
+
 ## Version 0.22.0
 
 - **The toolchain follows the source, for builds too.** A host build spec

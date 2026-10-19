@@ -66,24 +66,22 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.22
+## What's new in 0.23
 
-- **Builds follow the source's toolchain**: a host build installs the Rust,
-  node, wasm-bindgen and binaryen versions the source pins, once per build
-  cache, checked against published checksums.
-- **Know where every image was built**: each deployed image records its
-  build host, builder image, commits and toolchain; `piceli gitops suspects`
-  lists what a faulty machine built and `piceli gitops rebuild` replaces it.
-- **Faulty build machines are quarantined** after repeated crashes,
-  segfaults or machine checks in their builds.
-- **Build hosts deliver without a registry**, straight into the nodes'
-  containerd over SSH.
-- **One public API**: 13 modules (`piceli/public_api.py`); everything else
-  is internal.
-
-See the [changelog](https://docs.pynenc.org/projects/piceli/en/stable/changelog.html)
-for the complete list, including breaking changes.
-
+- **Workloads roll when their configuration changes**: a Deployment,
+  StatefulSet or DaemonSet that reads a ConfigMap or Secret of its release
+  restarts when that content changes (secret values reduced to a keyed
+  digest that never leaves the secret store); `roll_on_change=False` opts
+  out.
+- **Generated Secrets survive an empty state**: a new controller volume or
+  `state_dir` adopts the live values an earlier release of the same app
+  generated, instead of failing; nothing is rotated.
+- **Build once for every platform**: `build.shared_commands` (a browser
+  bundle, generated assets) run once in a multi-platform build.
+- **Faster, measurable cluster builds**: build Jobs keep their source
+  checkouts between builds, and each Job's time is broken down (start,
+  fetch, commands, assembly, push).
+- **`host_wait` is the real wait**, not up to two polls.
 ## Web UI
 
 <p align="center">
