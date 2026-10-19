@@ -71,7 +71,15 @@ _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
 
 class BuildPending(Exception):
-    """The build was handed to the build hosts; the step waits for it."""
+    """The build was handed to the build hosts; the step waits for it.
+
+    ``retry_at`` (0.23.0): when the step should look again at the latest,
+    for example when ``host_wait`` ends and the in-cluster fallback may
+    build it; ``None``: at the next poll."""
+
+    def __init__(self, message: str, retry_at: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_at = retry_at
 
 
 def _iso(seconds: float) -> str:
@@ -224,6 +232,18 @@ class HostBuilds:
             raise _failure_error(failure)
         return entry
 
+    def _fallback_at(self, entry: Mapping[str, Any], method: str) -> float | None:
+        """When the in-cluster fallback may take ``entry`` (``None``: never,
+        or not while a host holds it)."""
+        if (
+            "cluster" not in self.order
+            or not callable(getattr(self.inner, method, None))
+            or entry.get("claimed")
+            or self.cluster_blocked() is not None
+        ):
+            return None
+        return float(entry.get("requested_epoch") or 0) + self.host_wait
+
     def _fallback_due(self, entry: Mapping[str, Any], method: str) -> bool:
         return (
             "cluster" in self.order
@@ -247,7 +267,8 @@ class HostBuilds:
             del self._wanted()[entry["id"]]
             return self.inner.build_spec(request, checkout)
         raise BuildPending(
-            f"waiting for a build host to build {', '.join(sorted(request.images))}"
+            f"waiting for a build host to build {', '.join(sorted(request.images))}",
+            retry_at=self._fallback_at(entry, "build_spec"),
         )
 
     def build(self, items: Sequence[Any], checkout: Any) -> dict[str, Any]:
@@ -270,7 +291,8 @@ class HostBuilds:
             return dict(self.inner.build(items, checkout))
         raise BuildPending(
             "waiting for a build host to build "
-            + ", ".join(sorted(item.component for item in items))
+            + ", ".join(sorted(item.component for item in items)),
+            retry_at=self._fallback_at(entry, "build"),
         )
 
 

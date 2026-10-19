@@ -30,6 +30,15 @@ from tests.unit.infra.test_controller import EXAMPLE, FakePorts
 
 @pytest.fixture
 def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    return _world(tmp_path, monkeypatch)
+
+
+def _world(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    host_wait: str = "10m",
+    poll_seconds: int = 10,
+) -> dict[str, Any]:
     shop = Repo(tmp_path / "remotes", "shop", example_files(EXAMPLE / "shop"))
     catalog = Repo(tmp_path / "remotes", "catalog", example_files(EXAMPLE / "catalog"))
     catalog.tag("v0.1.0")
@@ -41,13 +50,13 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         text.replace(
             "controller=Controller(on=REGISTRY_NODE)",
             'controller=Controller(on=REGISTRY_NODE, builds=("hosts", "cluster"), '
-            'host_wait="10m")',
+            f'host_wait="{host_wait}")',
         )
     )
     composition = load_composition(tmp_path / "infra.py")
     config = CompositionConfig(
         composition=composition.to_dict(),
-        poll_seconds=10,
+        poll_seconds=poll_seconds,
         platforms=("linux/amd64", "linux/arm64"),
     )
     state = tmp_path / "state"
@@ -347,3 +356,21 @@ def test_a_delivered_build_is_not_built_again(
     assert built is not None and builds == [built]
     assert worker.once() is None  # still listed, already answered
     assert builds == [built]
+
+
+def test_a_short_host_wait_is_the_real_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``host_wait="20s"`` with a 60 s poll: the in-cluster build starts about
+    20 s after the request, not two polls (121-122 s) later (0.23.0)."""
+    world = _world(tmp_path, monkeypatch, host_wait="20s", poll_seconds=60)
+    controller, ports, clock = world["controller"], world["ports"], world["clock"]
+    asked = clock["now"]
+    status = controller.poll_once()
+    assert status["envs"]["main"]["reason"] == "build-waiting"
+    due = controller.next_due()
+    assert due is not None and asked + 20 <= due <= asked + 22
+    clock["now"] = due  # the run loop wakes here, not at the next poll
+    controller.poll_once()
+    assert ports.builder.built, "the fallback did not build at host_wait"
+    assert controller.state["envs"]["main"]["state"] == "deployed"

@@ -59,3 +59,14 @@ def test_backoff_is_capped_at_five_minutes() -> None:
     controller = FlakyController(failures=20)
     waits = _run(controller, polls=12)
     assert max(waits) == 300.0
+
+
+def test_the_loop_wakes_for_a_step_due_before_the_next_poll() -> None:
+    """A 20 s host_wait: the loop sleeps until it ends, not a whole poll."""
+
+    class Waiting(FlakyController):
+        def next_due(self) -> float:
+            return 20.0  # seconds after the start of the run (clock at 0)
+
+    waits = _run(Waiting(failures=0), polls=2)
+    assert waits[0] == 20.0

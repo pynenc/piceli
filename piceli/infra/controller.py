@@ -825,6 +825,7 @@ class CompositionController:
         self._last_outcome: EnvOutcome | None = None
         self._step_started: str | None = None
         self._step_env: str | None = None
+        self._poll_started = 0.0
         self._history_digest: str | None = None
         self._runs: Any = None
         self._step_runs: Any = None  # the current step's run (its own cache)
@@ -2961,6 +2962,18 @@ class CompositionController:
         )
         self.log(f"{record['branch']}: no push for a while; scaled to zero")
 
+    def next_due(self) -> float | None:
+        """The earliest time an environment's step is due again (0.23.0):
+        the run loop wakes then, not only every ``poll_seconds`` (a 20 s
+        ``host_wait`` waited a whole poll)."""
+        times = [
+            float(record["next_attempt_at"])
+            for record in self._envs().values()
+            if record.get("state") in {"pending", "retrying"}
+            and record.get("next_attempt_at") is not None
+        ]
+        return min(times) if times else None
+
     def _due(self) -> list[dict[str, Any]]:
         now = self.clock()
 
@@ -3020,7 +3033,15 @@ class CompositionController:
                 record,
                 state="retrying",
                 reason=WAITING,
-                next_attempt_at=self.clock() + float(self.config.poll_seconds),
+                # 0.23.0: at the next poll counted from this poll's start
+                # (counted from the step's end it missed the next poll by a
+                # fraction of a second, so a wait took two polls), or when
+                # host_wait ends if that is sooner.
+                next_attempt_at=min(
+                    (self._poll_started or self.clock())
+                    + float(self.config.poll_seconds),
+                    *([waiting.retry_at + 0.5] if waiting.retry_at is not None else []),
+                ),
             )
             if record.get("waiting_since") is None:
                 record["waiting_since"] = _iso(self.clock())
@@ -3117,6 +3138,7 @@ class CompositionController:
     def poll_once(self) -> dict[str, Any]:
         """One poll and the work it found; returns the published status."""
         now = self.clock()
+        self._poll_started = now
         self.state["last_poll"] = _iso(now)
         if not self.recovered:
             self.recovered = True
