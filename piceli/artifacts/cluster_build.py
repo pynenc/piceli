@@ -601,6 +601,16 @@ class BuildCluster(PreRolloutCluster):
             return ""
         node = (pod.get("spec") or {}).get("nodeName")
         self.node_name = str(node) if node else None
+        # 0.23.0: when the build container started (after scheduling and the
+        # image pull), for the Job's time breakdown.
+        self.container_started = None
+        for status in (pod.get("status") or {}).get("containerStatuses") or ():
+            if status.get("name") == "build":
+                state = status.get("state") or {}
+                found = (state.get("terminated") or state.get("running") or {}).get(
+                    "startedAt"
+                )
+                self.container_started = str(found) if found else None
         self.receipt_text = None
         texts: list[str] = []
         statuses: list[int] = []

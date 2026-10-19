@@ -411,14 +411,30 @@ case "$1" in Username*) printf %s "$GIT_USERNAME" ;; *) printf %s "$GIT_PASSWORD
 ASK
 chmod 700 /work/askpass
 export GIT_ASKPASS=/work/askpass
+# 0.23.0: each source is a checkout kept on the cache claim, updated to the
+# commit: the fetch is incremental and unchanged files keep their times, so
+# cargo rebuilds only what the commit changed (a fresh checkout rebuilt every
+# crate). One build at a time holds the checkouts (the lock stays held
+# through the build: exec keeps descriptor 9).
+mkdir -p /cache/sources
+exec 9>/cache/sources/.lock
+flock 9
+fetch_started=$(date +%s)
 printf '%s\\n' "$PICELI_BUILD_SOURCES" | while read -r name url commit; do
   [ -n "$name" ] || continue
-  mkdir -p "/work/src/$name"
-  git -C "/work/src/$name" init -q .
-  git -C "/work/src/$name" remote add origin "$url"
-  git -C "/work/src/$name" fetch -q --depth 1 origin "$commit"
-  git -C "/work/src/$name" checkout -q --detach FETCH_HEAD
+  repo="/cache/sources/$name"
+  if [ ! -d "$repo/.git" ]; then
+    rm -rf "$repo"; mkdir -p "$repo"; git -C "$repo" init -q .
+  fi
+  git -C "$repo" remote remove origin 2>/dev/null || true
+  git -C "$repo" remote add origin "$url"
+  git -C "$repo" fetch -q --depth 1 origin "$commit"
+  git -C "$repo" update-index -q --refresh || true
+  git -C "$repo" checkout -q --force --detach FETCH_HEAD
+  git -C "$repo" clean -ffdxq
+  ln -sfn "$repo" "/work/src/$name"
 done
+export PICELI_BUILD_FETCH_SECONDS=$(( $(date +%s) - fetch_started ))
 unset GIT_USERNAME GIT_PASSWORD
 exec piceli build job-run --sources /work/src --cache /cache --out /work/out \\
   --registry-url "$PICELI_BUILD_REGISTRY" --node-registry "$PICELI_BUILD_NODE_REGISTRY" \\
@@ -951,6 +967,29 @@ def job_run_spec(
     return receipt
 
 
+def _job_times(
+    began: str, seconds: float, cluster: Any, fetch: Any
+) -> dict[str, float]:
+    """A build Job's time outside its commands (0.23.0): the whole Job, the
+    wait for its container to start (scheduling, image pull), the source
+    fetch."""
+    from datetime import datetime
+
+    found = {"job_seconds": round(seconds, 3)}
+    started = getattr(cluster, "container_started", None)
+    if isinstance(started, str):
+        try:
+            delta = datetime.fromisoformat(started.replace("Z", "+00:00")) - (
+                datetime.fromisoformat(began.replace("Z", "+00:00"))
+            )
+            found["start_seconds"] = max(0.0, round(delta.total_seconds(), 3))
+        except ValueError:
+            pass
+    if isinstance(fetch, int | float):
+        found["fetch_seconds"] = float(fetch)
+    return found
+
+
 class JobBuilder:
     """Build in the cluster: one Job per batch of changed components.
 
@@ -1113,6 +1152,7 @@ class JobBuilder:
         )
         # Earlier failed Jobs (and their logs) stay until a build succeeds.
         began = _utc()
+        clock = time.monotonic()
         outcome = _run(self.cluster, job, keep_earlier=True)
         if outcome.state != "passed" or self.cluster.receipt_text is None:
             raise _job_failed(outcome, "image")
@@ -1124,8 +1164,11 @@ class JobBuilder:
             ) from None
         found = receipt.get("images") or {}
         built: dict[str, BuiltImage] = {}
+        job_times = _job_times(
+            began, time.monotonic() - clock, self.cluster, receipt.get("fetch_seconds")
+        )
         self.timings = {
-            name: dict(entry["timings"])
+            name: {**dict(entry["timings"]), **job_times}
             for name, entry in found.items()
             if isinstance(entry, Mapping) and isinstance(entry.get("timings"), Mapping)
         }

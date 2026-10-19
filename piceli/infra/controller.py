@@ -2360,13 +2360,21 @@ class CompositionController:
                 key: round(float(timings.get(key) or 0), 3)
                 for key in ("commands_seconds", "assemble_seconds", "push_seconds")
             }
+            # 0.23.0: a build Job's time outside its commands, when known.
+            job = {
+                key: round(float(timings[key]), 3)
+                for key in ("job_seconds", "start_seconds", "fetch_seconds")
+                if isinstance(timings.get(key), int | float)
+            }
             others = [item for item in names if item != name]
-            self._builds[name]["timings"] = values
+            self._builds[name]["timings"] = {**values, **job}
             self._builds[name]["shared_with"] = others
-            total = round(sum(values.values()), 3)
+            total = job.get("job_seconds") or round(sum(values.values()), 3)
             self.log(
-                f"{env}: built {name} in {total}s (commands "
-                f"{values['commands_seconds']}s"
+                f"{env}: built {name} in {total}s ("
+                + (f"start {job['start_seconds']}s, " if "start_seconds" in job else "")
+                + (f"fetch {job['fetch_seconds']}s, " if "fetch_seconds" in job else "")
+                + f"commands {values['commands_seconds']}s"
                 + (f", shared with {', '.join(others)}" if others else "")
                 + f"; assembly {values['assemble_seconds']}s, push "
                 f"{values['push_seconds']}s)"
@@ -3038,9 +3046,15 @@ class CompositionController:
                 # fraction of a second, so a wait took two polls), or when
                 # host_wait ends if that is sooner.
                 next_attempt_at=min(
-                    (self._poll_started or self.clock())
-                    + float(self.config.poll_seconds),
-                    *([waiting.retry_at + 0.5] if waiting.retry_at is not None else []),
+                    [
+                        (self._poll_started or self.clock())
+                        + float(self.config.poll_seconds),
+                        *(
+                            [waiting.retry_at + 0.5]
+                            if waiting.retry_at is not None
+                            else []
+                        ),
+                    ]
                 ),
             )
             if record.get("waiting_since") is None:
