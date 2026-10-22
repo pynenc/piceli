@@ -5,8 +5,10 @@ A :class:`Provider` turns :class:`~piceli.infra.machines.model.Server`,
 :class:`~piceli.infra.machines.model.Firewall` and
 :class:`~piceli.infra.machines.model.DnsRecord` into OpenTofu resources (the
 JSON configuration syntax), names its pinned OpenTofu provider (version and
-lock-file hashes) and the environment variable its token goes into. Adding a
-provider (OVH, Infomaniak) is one subclass; nothing else changes.
+lock-file hashes) and the environment variables its credential goes into.
+Adding a provider is one subclass; nothing else changes. A provider that
+also uploads images or holds buckets says so (``supports_images``,
+``supports_buckets``) and renders them.
 
 Rendering is pure: no network, no files, no time. Only :meth:`Provider.prices`
 may contact the provider's API, and only when a command asks for prices.
@@ -22,7 +24,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from piceli.infra.machines.model import DnsRecord, Firewall, PrimaryIp, Server
+    from piceli.infra.machines.model import (
+        Bucket,
+        DnsRecord,
+        Firewall,
+        Image,
+        PrimaryIp,
+        Server,
+    )
 
 __all__ = ["Pin", "Prices", "Provider", "Resource"]
 
@@ -94,6 +103,12 @@ class Provider(ABC):
     name: str = ""
     credentials: str | None
     location: str | None
+    #: Whether a ``Server(image=Image(...))`` can be uploaded to this provider.
+    supports_images: bool = False
+    #: Whether ``Bucket(provider=...)`` can be created at this provider.
+    supports_buckets: bool = False
+    #: Whether this provider serves ``DnsRecord`` s.
+    supports_dns: bool = True
 
     # ------------------------------------------------------------ pinning
     def pin(self) -> Pin | None:
@@ -103,6 +118,16 @@ class Provider(ABC):
     def token_env(self) -> str | None:
         """The environment variable the OpenTofu provider reads its token from."""
         return None
+
+    def credential_env(self, value: str) -> dict[str, str]:
+        """The environment OpenTofu gets from the stored credential ``value``.
+
+        Default: the value in :meth:`token_env`. A provider whose credential
+        has several parts (an id and a secret) splits it here; a malformed
+        value is refused without echoing it (``infra-credential-invalid``).
+        """
+        variable = self.token_env()
+        return {variable: value} if variable is not None else {}
 
     def provider_block(self) -> dict[str, Any] | None:
         """The ``provider "<local name>"`` body (never the token)."""
@@ -150,6 +175,18 @@ class Provider(ABC):
         """A public key resource named ``name`` at the provider (``None``: none needed)."""
         return None
 
+    def render_image(self, image: Image, labels: Mapping[str, str]) -> Resource:
+        """The uploaded image (only when :attr:`supports_images`)."""
+        raise NotImplementedError(f"{self.name} does not upload images")
+
+    def render_bucket(self, bucket: Bucket, labels: Mapping[str, str]) -> Resource:
+        """The bucket (only when :attr:`supports_buckets`)."""
+        raise NotImplementedError(f"{self.name} has no buckets")
+
+    def data_sources(self) -> list[Resource]:
+        """Read-only lookups the resources refer to (``data.<type>.<name>``)."""
+        return []
+
     @abstractmethod
     def render_record(
         self, record: DnsRecord, values: list[str], labels: Mapping[str, str]
@@ -171,6 +208,12 @@ class Provider(ABC):
     @abstractmethod
     def labels_of(self, values: Mapping[str, Any]) -> Mapping[str, str]:
         """The labels of a resource as OpenTofu's state or plan shows it."""
+
+    def resource_labels(
+        self, type_: str, values: Mapping[str, Any]
+    ) -> Mapping[str, str]:
+        """The labels of a resource of OpenTofu type ``type_`` (default :meth:`labels_of`)."""
+        return self.labels_of(values)
 
     # ------------------------------------------------------------ prices
     def prices(self, token: str | None) -> Prices | None:

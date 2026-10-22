@@ -31,7 +31,13 @@ __all__ = ["InstallPreview", "preview_install", "run_install", "server_values"]
 
 INSTALLS = "installs.json"
 #: Never handed to a hook (OpenTofu's and Piceli's secret variables).
-SCRUBBED = ("TF_ENCRYPTION", "TF_HTTP_PASSWORD", "HCLOUD_TOKEN")
+SCRUBBED = (
+    "TF_ENCRYPTION",
+    "TF_HTTP_PASSWORD",
+    "HCLOUD_TOKEN",
+    "OS_APPLICATION_CREDENTIAL_ID",
+    "OS_APPLICATION_CREDENTIAL_SECRET",
+)
 
 
 def server_values(

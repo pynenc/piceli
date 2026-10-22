@@ -35,6 +35,7 @@ def _slug(text: str) -> str:
 
 
 __all__ = [
+    "Bucket",
     "BuildHost",
     "Cluster",
     "Component",
@@ -47,9 +48,12 @@ __all__ = [
     "Hetzner",
     "Hook",
     "HttpState",
+    "Image",
+    "Infomaniak",
     "Infrastructure",
     "LocalState",
     "Node",
+    "OpenStack",
     "Otlp",
     "PrimaryIp",
     "Rule",
@@ -378,13 +382,17 @@ class Component:
 # Machines provisioned with OpenTofu (``piceli infra``); after Cluster, which
 # a Server may name.
 from piceli.infra.machines import (  # noqa: E402
+    Bucket,
     DnsRecord,
     Firewall,
     Hetzner,
     Hook,
     HttpState,
+    Image,
+    Infomaniak,
     Infrastructure,
     LocalState,
+    OpenStack,
     PrimaryIp,
     Rule,
     Server,

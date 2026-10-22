@@ -1052,6 +1052,20 @@
     ]
    }
   },
+  "Bucket": {
+   "attrs": [
+    "describe",
+    "protect"
+   ],
+   "init": [
+    "name",
+    "protect",
+    "provider"
+   ],
+   "methods": {
+    "describe": []
+   }
+  },
   "Build": {
    "attrs": [
     "dockerfile",
@@ -4260,7 +4274,9 @@
    "attrs": [
     "address",
     "check_server",
+    "credential_env",
     "credentials",
+    "data_sources",
     "describe",
     "endpoint",
     "labels_of",
@@ -4270,14 +4286,20 @@
     "poll_interval",
     "prices",
     "provider_block",
+    "render_bucket",
     "render_firewall",
+    "render_image",
     "render_primary_ip",
     "render_record",
     "render_server",
     "render_ssh_key",
+    "resource_labels",
     "server_id",
     "server_status",
     "server_types",
+    "supports_buckets",
+    "supports_dns",
+    "supports_images",
     "token_env"
    ],
    "init": [
@@ -4295,6 +4317,10 @@
     "check_server": [
      "server"
     ],
+    "credential_env": [
+     "value"
+    ],
+    "data_sources": [],
     "describe": [],
     "labels_of": [
      "values"
@@ -4304,8 +4330,16 @@
      "token"
     ],
     "provider_block": [],
+    "render_bucket": [
+     "bucket",
+     "labels"
+    ],
     "render_firewall": [
      "firewall",
+     "labels"
+    ],
+    "render_image": [
+     "image",
      "labels"
     ],
     "render_primary_ip": [
@@ -4331,6 +4365,10 @@
      "name",
      "public_key"
     ],
+    "resource_labels": [
+     "type_",
+     "values"
+    ],
     "server_id": [
      "server"
     ],
@@ -4340,9 +4378,12 @@
     "token_env": []
    },
    "returns": {
+    "data_sources": "Resource",
     "pin": "Pin",
     "prices": "Prices",
+    "render_bucket": "Resource",
     "render_firewall": "Resource",
+    "render_image": "Resource",
     "render_primary_ip": "Resource",
     "render_record": "Resource",
     "render_server": "Resource",
@@ -4486,6 +4527,31 @@
     "env": [],
     "render": [],
     "secrets": []
+   }
+  },
+  "Image": {
+   "attrs": [
+    "describe",
+    "file",
+    "format",
+    "local_path",
+    "min_disk_gb",
+    "name",
+    "properties",
+    "sha256",
+    "url"
+   ],
+   "init": [
+    "file",
+    "format",
+    "min_disk_gb",
+    "name",
+    "properties",
+    "sha256",
+    "url"
+   ],
+   "methods": {
+    "describe": []
    }
   },
   "ImageHandle": {
@@ -4726,12 +4792,140 @@
    },
    "pydantic": true
   },
+  "Infomaniak": {
+   "attrs": [
+    "address",
+    "auth_url",
+    "check_server",
+    "credential_env",
+    "credentials",
+    "currency",
+    "data_sources",
+    "describe",
+    "ip_prices",
+    "labels_of",
+    "location",
+    "name",
+    "pin",
+    "preset",
+    "prices",
+    "prices_monthly",
+    "provider_block",
+    "public_network",
+    "region",
+    "render_bucket",
+    "render_firewall",
+    "render_image",
+    "render_primary_ip",
+    "render_record",
+    "render_server",
+    "render_ssh_key",
+    "resource_labels",
+    "server_id",
+    "server_status",
+    "supports_buckets",
+    "supports_dns",
+    "supports_images",
+    "token_env"
+   ],
+   "init": [
+    "auth_url",
+    "credentials",
+    "currency",
+    "ip_prices",
+    "prices",
+    "public_network",
+    "region"
+   ],
+   "methods": {
+    "address": [
+     "family",
+     "server"
+    ],
+    "check_server": [
+     "server"
+    ],
+    "credential_env": [
+     "value"
+    ],
+    "data_sources": [],
+    "describe": [],
+    "labels_of": [
+     "values"
+    ],
+    "pin": [],
+    "prices": [
+     "token"
+    ],
+    "provider_block": [],
+    "render_bucket": [
+     "bucket",
+     "labels"
+    ],
+    "render_firewall": [
+     "firewall",
+     "labels"
+    ],
+    "render_image": [
+     "image",
+     "labels"
+    ],
+    "render_primary_ip": [
+     "ip",
+     "labels",
+     "server"
+    ],
+    "render_record": [
+     "labels",
+     "record",
+     "values"
+    ],
+    "render_server": [
+     "firewall",
+     "ips",
+     "labels",
+     "server",
+     "ssh_keys"
+    ],
+    "render_ssh_key": [
+     "digest",
+     "labels",
+     "name",
+     "public_key"
+    ],
+    "resource_labels": [
+     "type_",
+     "values"
+    ],
+    "server_id": [
+     "server"
+    ],
+    "server_status": [
+     "server"
+    ],
+    "token_env": []
+   },
+   "returns": {
+    "data_sources": "Resource",
+    "pin": "Pin",
+    "prices": "Prices",
+    "render_bucket": "Resource",
+    "render_firewall": "Resource",
+    "render_image": "Resource",
+    "render_primary_ip": "Resource",
+    "render_record": "Resource",
+    "render_server": "Resource",
+    "render_ssh_key": "Resource"
+   }
+  },
   "Infrastructure": {
    "attrs": [
     "backend",
+    "buckets",
     "describe",
     "firewalls",
     "home",
+    "images",
     "providers",
     "records",
     "server",
@@ -4741,6 +4935,7 @@
    ],
    "init": [
     "backend",
+    "buckets",
     "home",
     "name",
     "records",
@@ -4751,6 +4946,7 @@
    "methods": {
     "describe": [],
     "firewalls": [],
+    "images": [],
     "providers": [],
     "server": [
      "name"
@@ -5995,6 +6191,132 @@
    ],
    "methods": {
     "summary": []
+   }
+  },
+  "OpenStack": {
+   "attrs": [
+    "address",
+    "auth_url",
+    "check_server",
+    "credential_env",
+    "credentials",
+    "currency",
+    "data_sources",
+    "describe",
+    "ip_prices",
+    "labels_of",
+    "location",
+    "name",
+    "pin",
+    "preset",
+    "prices",
+    "prices_monthly",
+    "provider_block",
+    "public_network",
+    "region",
+    "render_bucket",
+    "render_firewall",
+    "render_image",
+    "render_primary_ip",
+    "render_record",
+    "render_server",
+    "render_ssh_key",
+    "resource_labels",
+    "server_id",
+    "server_status",
+    "supports_buckets",
+    "supports_dns",
+    "supports_images",
+    "token_env"
+   ],
+   "init": [
+    "auth_url",
+    "credentials",
+    "currency",
+    "ip_prices",
+    "prices",
+    "public_network",
+    "region"
+   ],
+   "methods": {
+    "address": [
+     "family",
+     "server"
+    ],
+    "check_server": [
+     "server"
+    ],
+    "credential_env": [
+     "value"
+    ],
+    "data_sources": [],
+    "describe": [],
+    "labels_of": [
+     "values"
+    ],
+    "pin": [],
+    "prices": [
+     "token"
+    ],
+    "provider_block": [],
+    "render_bucket": [
+     "bucket",
+     "labels"
+    ],
+    "render_firewall": [
+     "firewall",
+     "labels"
+    ],
+    "render_image": [
+     "image",
+     "labels"
+    ],
+    "render_primary_ip": [
+     "ip",
+     "labels",
+     "server"
+    ],
+    "render_record": [
+     "labels",
+     "record",
+     "values"
+    ],
+    "render_server": [
+     "firewall",
+     "ips",
+     "labels",
+     "server",
+     "ssh_keys"
+    ],
+    "render_ssh_key": [
+     "digest",
+     "labels",
+     "name",
+     "public_key"
+    ],
+    "resource_labels": [
+     "type_",
+     "values"
+    ],
+    "server_id": [
+     "server"
+    ],
+    "server_status": [
+     "server"
+    ],
+    "token_env": []
+   },
+   "returns": {
+    "data_sources": "Resource",
+    "pin": "Pin",
+    "prices": "Prices",
+    "render_bucket": "Resource",
+    "render_firewall": "Resource",
+    "render_image": "Resource",
+    "render_primary_ip": "Resource",
+    "render_record": "Resource",
+    "render_server": "Resource",
+    "render_ssh_key": "Resource"
    }
   },
   "OperatorUser": {
@@ -12244,6 +12566,8 @@
    "infra-credential-refused",
    "infra-credential-unsafe",
    "infra-foreign-resource",
+   "infra-image-checksum",
+   "infra-image-unavailable",
    "infra-install-changed",
    "infra-install-failed",
    "infra-install-unavailable",
@@ -13426,6 +13750,9 @@
    }
   },
   "piceli.infra": {
+   "Bucket": {
+    "class": "Bucket"
+   },
    "BuildHost": {
     "class": "BuildHost"
    },
@@ -13462,6 +13789,12 @@
    "HttpState": {
     "class": "HttpState"
    },
+   "Image": {
+    "class": "Image"
+   },
+   "Infomaniak": {
+    "class": "Infomaniak"
+   },
    "Infrastructure": {
     "class": "Infrastructure"
    },
@@ -13470,6 +13803,9 @@
    },
    "Node": {
     "class": "Node"
+   },
+   "OpenStack": {
+    "class": "OpenStack"
    },
    "Otlp": {
     "class": "Otlp"
@@ -14352,8 +14688,10 @@
   "piceli.infra.machines",
   "piceli.infra.machines.credentials",
   "piceli.infra.machines.hetzner",
+  "piceli.infra.machines.images",
   "piceli.infra.machines.install",
   "piceli.infra.machines.model",
+  "piceli.infra.machines.openstack",
   "piceli.infra.machines.plan",
   "piceli.infra.machines.provider",
   "piceli.infra.machines.register",

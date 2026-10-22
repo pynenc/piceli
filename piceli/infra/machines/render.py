@@ -85,6 +85,13 @@ def render(infra: Infrastructure) -> Rendered:
         resources.append(resource)
         return resource
 
+    for image, provider in infra.images():
+        add(
+            provider.render_image(image, labels(infra, "image", image.name)),
+            provider.name,
+            "image",
+            image.name,
+        )
     firewalls: dict[str, Resource] = {}
     for firewall in infra.firewalls():
         users = [s for s in infra.servers if s.firewall == firewall]
@@ -175,6 +182,13 @@ def render(infra: Infrastructure) -> Rendered:
             "record",
             record.key,
         )
+    for bucket in infra.buckets:
+        add(
+            bucket.provider.render_bucket(bucket, labels(infra, "bucket", bucket.name)),
+            bucket.provider.name,
+            "bucket",
+            bucket.name,
+        )
     body: dict[str, dict[str, Any]] = {}
     for resource in resources:
         body.setdefault(resource.type, {})[resource.name] = dict(resource.body)
@@ -203,6 +217,12 @@ def render(infra: Infrastructure) -> Rendered:
     }
     if providers:
         config["provider"] = providers
+    data: dict[str, dict[str, Any]] = {}
+    for provider in infra.providers():
+        for lookup in provider.data_sources():
+            data.setdefault(lookup.type, {})[lookup.name] = dict(lookup.body)
+    if data:
+        config["data"] = data
     if body:
         config["resource"] = body
     if outputs:

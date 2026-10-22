@@ -349,6 +349,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`infra-credential-refused`](#error-infra-credential-refused) | infra | no |
 | [`infra-credential-unsafe`](#error-infra-credential-unsafe) | infra | no |
 | [`infra-foreign-resource`](#error-infra-foreign-resource) | infra | no |
+| [`infra-image-checksum`](#error-infra-image-checksum) | infra | no |
+| [`infra-image-unavailable`](#error-infra-image-unavailable) | infra | yes |
 | [`infra-install-changed`](#error-infra-install-changed) | infra | yes |
 | [`infra-install-failed`](#error-infra-install-failed) | infra | no |
 | [`infra-install-unavailable`](#error-infra-install-unavailable) | infra | no |
@@ -6087,7 +6089,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-infra-credential-invalid)=
 ### `infra-credential-invalid`
 
-**Invalid credential.** A credential name is not a valid name, its file is damaged or of another kind, or the value read is empty, has control characters, or is a state passphrase shorter than 16 characters.
+**Invalid credential.** A credential name is not a valid name, its file is damaged or of another kind, or the value read is empty, has control characters, or is a state passphrase shorter than 16 characters, or an OpenStack credential is not `APPLICATION_CREDENTIAL_ID:SECRET`.
 
 - **Fix:** Store the credential again with `piceli secrets provider|state-key NAME --prompt`.
 - **Retry-safe:** no
@@ -6103,7 +6105,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-infra-credential-refused)=
 ### `infra-credential-refused`
 
-**Secret passed the unsafe way.** A secret was given as a command-line argument or in the environment (`HCLOUD_TOKEN`, `PICELI_PROVIDER_TOKEN`, `PICELI_STATE_KEY`), where it leaks into process listings and logs. It was not stored or echoed.
+**Secret passed the unsafe way.** A secret was given as a command-line argument or in the environment (`HCLOUD_TOKEN`, `OS_APPLICATION_CREDENTIAL_SECRET`, `PICELI_PROVIDER_TOKEN`, `PICELI_STATE_KEY`), where it leaks into process listings and logs. It was not stored or echoed.
 
 - **Fix:** Unset the variable and run `piceli secrets provider|state-key NAME --prompt`, then type the value (or pipe it on stdin).
 - **Retry-safe:** no
@@ -6123,6 +6125,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Remove the resource from the state with `tofu state rm` in the state directory (it is then left alone), or delete it at the provider yourself; then plan again.
 - **Retry-safe:** no
+
+(error-infra-image-checksum)=
+### `infra-image-checksum`
+
+**Image checksum mismatch.** The file or download of an `Image` does not have the declared `sha256`; nothing was uploaded and nothing was applied.
+
+- **Fix:** Check that `file=` or `url=` is the image you meant and that `sha256=` is its checksum (`sha256sum FILE`), then plan and approve again.
+- **Retry-safe:** no
+
+(error-infra-image-unavailable)=
+### `infra-image-unavailable`
+
+**Image file unavailable.** The `file=` of an `Image` cannot be read, or its `url=` cannot be downloaded; nothing was applied.
+
+- **Fix:** Make the file readable or the URL reachable from this machine, then run the apply again.
+- **Retry-safe:** yes
 
 (error-infra-install-changed)=
 ### `infra-install-changed`

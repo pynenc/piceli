@@ -32,6 +32,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from piceli.infra.machines.images import stage_image, unstage_images
 from piceli.infra.machines.model import (
     INFRA_LABEL,
     MANAGED_BY,
@@ -101,14 +102,23 @@ def workspace(infra: Infrastructure, *, tofu: str | None = None) -> Iterator[Wor
         passphrase = load_credential(infra.state_key, "state-key")
         env = encryption_env(passphrase)
         tokens: dict[str, str] = {}
+        parts: list[str] = []
         for provider in infra.providers():
             variable = provider.token_env()
             if variable is not None and provider.credentials is not None:
-                tokens[provider.name] = env[variable] = load_credential(
+                tokens[provider.name] = load_credential(
                     provider.credentials, "provider-token"
                 )
+                provided = provider.credential_env(tokens[provider.name])
+                env.update(provided)
+                parts.extend(provided.values())
         env.update(infra.backend.env())
-        binary.secrets = [passphrase, *tokens.values(), *infra.backend.secrets()]
+        binary.secrets = [
+            passphrase,
+            *tokens.values(),
+            *parts,
+            *infra.backend.secrets(),
+        ]
         backend = infra.backend.describe()
         recorded = read_record(directory, BACKEND)
         if recorded and recorded != backend:
@@ -260,7 +270,7 @@ def owned(
     provider = _provider_of(ws, address)
     if provider is None:
         return False
-    found = provider.labels_of(before)
+    found = provider.resource_labels(address.split(".", 1)[0], before)
     return found.get(MANAGED_BY) == "piceli" and found.get(INFRA_LABEL) == ws.infra.name
 
 
@@ -421,8 +431,22 @@ def apply(
         record["created"] = sorted(ledger | creates)
         write_record(ws.directory, INVENTORY, record)
         assert fresh.file is not None
-        say(f"applying {len(fresh.changes)} change(s) with tofu {ws.tofu.version_text}")
-        result = ws.run("apply", "-input=false", "-json", str(fresh.file), timeout=3600)
+        uploads = {
+            c.name for c in fresh.changes if c.kind == "image" and "create" in c.actions
+        }
+        try:
+            for image, _ in ws.infra.images():
+                if image.name in uploads:
+                    say(f"verifying image {image.name} (sha256 {image.sha256[:12]}…)")
+                    stage_image(image, ws.directory)
+            say(
+                f"applying {len(fresh.changes)} change(s) with tofu {ws.tofu.version_text}"
+            )
+            result = ws.run(
+                "apply", "-input=false", "-json", str(fresh.file), timeout=3600
+            )
+        finally:
+            unstage_images(ws.directory)
         inventory = refresh_inventory(ws, prices=fresh.estimate)
         if result.code != 0:
             raise InfraError(
@@ -457,7 +481,11 @@ def refresh_inventory(
                 "provider": provider.name if provider else None,
                 "kind": owner[1] if owner else "unknown",
                 "name": owner[2] if owner else address,
-                "labels": dict(provider.labels_of(item.get("values") or {}))
+                "labels": dict(
+                    provider.resource_labels(
+                        str(item.get("type")), item.get("values") or {}
+                    )
+                )
                 if provider
                 else {},
             }

@@ -69,7 +69,12 @@ JsonOption = Annotated[
 #: Failures that ran (exit 1) rather than refusals (exit 2).
 FAILED = {"infra-apply-failed", "infra-install-failed", "infra-k3s-not-ready"}
 #: Variables a token is never read from.
-TOKEN_ENVS = ("HCLOUD_TOKEN", "PICELI_PROVIDER_TOKEN", "PICELI_STATE_KEY")
+TOKEN_ENVS = (
+    "HCLOUD_TOKEN",
+    "OS_APPLICATION_CREDENTIAL_SECRET",
+    "PICELI_PROVIDER_TOKEN",
+    "PICELI_STATE_KEY",
+)
 
 
 def _refuse(error: InfraError) -> NoReturn:

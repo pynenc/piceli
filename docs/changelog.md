@@ -4,6 +4,20 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.24.0
+
+- **OpenStack machines, with an Infomaniak preset.** `OpenStack(...)` and
+  `Infomaniak(...)` in `piceli.infra` render servers, a persistent public
+  port per `PrimaryIp` (a replaced server keeps its addresses without a
+  floating IP; `protect=True` is `prevent_destroy`), security groups with
+  inbound rules, key pairs, uploaded `Image`s (sha256 verified before the
+  upload: `infra-image-checksum`, `infra-image-unavailable`) and `Bucket`s
+  for the pinned `terraform-provider-openstack/openstack` 3.4.0. The
+  application credential reaches OpenTofu only in its environment;
+  ownership marks and `infra-foreign-resource` work as for Hetzner; prices
+  are a declared table. `Infrastructure(buckets=)` is new; Hetzner
+  declarations render and hash as before.
+
 ## Version 0.23.0
 
 - **Workloads roll when their configuration changes.** Every Deployment,

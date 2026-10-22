@@ -34,7 +34,7 @@ Priorities may change. Progress is tracked in
 | Local operations UI and JSON API | 🟡 Early preview |
 | Web workspace: infrastructure topology, compact Sources, resource inspection and saved deployment evidence | 🟡 Experimental: {doc}`ui`; one-command preview, exact version/configuration comparison, plans, journal transitions and captured logs |
 | Continuous delivery from Git | 🟡 Experimental: `piceli gitops enable` installs a controller that keeps one environment per branch ({doc}`gitops`, {doc}`environments`); `piceli publish` and `render --out` export manifests |
-| Machines and cloud infrastructure | 🟡 Preview: Hetzner servers, fixed IPs, firewalls and DNS through OpenTofu (`piceli infra`, {doc}`infrastructure`); GKE cluster helpers. Other providers not yet |
+| Machines and cloud infrastructure | 🟡 Preview: Hetzner servers, fixed IPs, firewalls and DNS; OpenStack (Infomaniak) servers, ports, security groups, images and buckets, through OpenTofu (`piceli infra`, {doc}`infrastructure`); GKE cluster helpers |
 
 ## Feature status
 
@@ -80,7 +80,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | Node-local registry template | {doc}`node_local_registry` | preview |
 | In-cluster registry (`Registry.in_cluster`, `piceli registry`) | {doc}`cluster_registry` | preview |
 | Cluster init (`piceli.infra.Cluster`, `piceli cluster init`, `status`, `piceli secrets git`) | {doc}`cluster_init` | preview |
-| Machines with OpenTofu (`piceli.infra.Server`, `Infrastructure`, `piceli infra`, Hetzner) | {doc}`infrastructure` | preview |
+| Machines with OpenTofu (`piceli.infra.Server`, `Infrastructure`, `piceli infra`, Hetzner, OpenStack) | {doc}`infrastructure` | preview |
 | Mirror third-party images by digest (`mirror=`) and take over a live node registry (`adopt=`/`replace=`) | {doc}`deploy` | preview |
 | Access and status from the model (`app.access.forward`, `piceli access`, `piceli status`) | {doc}`access` | preview |
 | Operations lens (`piceli observe`) | {doc}`operations_lens` | preview |
@@ -169,7 +169,8 @@ audience.
 ### 6. Beyond Kubernetes
 
 - 🟡 Machines through OpenTofu: Hetzner servers, fixed IPs, firewalls and DNS
-  records, with encrypted state (preview, see {doc}`infrastructure`).
+  records; OpenStack (Infomaniak) servers, ports, images and buckets; with
+  encrypted state (preview, see {doc}`infrastructure`).
 - Pluggable providers for more clouds and resources (networks, databases),
   interoperating with the OpenTofu/Terraform ecosystem rather than
   replacing it.

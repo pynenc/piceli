@@ -3,7 +3,7 @@
 ```{admonition} Maturity: preview
 :class: note
 
-New in 0.15.0: one provider (Hetzner Cloud) and one server type to start with. Its parameters may still change in a minor release, with a changelog entry. See the {doc}`roadmap` for every feature's status.
+New in 0.15.0: Hetzner Cloud, one server type to start with; 0.24.0 adds OpenStack clouds (with an Infomaniak preset), uploaded images and buckets. Its parameters may still change in a minor release, with a changelog entry. See the {doc}`roadmap` for every feature's status.
 ```
 
 Servers, fixed IPs, firewalls and DNS records are declared in typed Python,
@@ -87,13 +87,15 @@ declaration fails at import, never halfway through a plan.
 
 | Class | What it is |
 | --- | --- |
-| `Server(name, provider=, type=, image=, location=, ipv4=, ipv6=, firewall=, ssh_keys=, install=, ssh=, cluster=, labels=)` | One machine. `ipv4`/`ipv6`: `True` (an address that goes with the server), `False`, or a `PrimaryIp`. `location` defaults to the provider's. |
+| `Server(name, provider=, type=, image=, location=, ipv4=, ipv6=, firewall=, ssh_keys=, install=, ssh=, cluster=, labels=)` | One machine. `ipv4`/`ipv6`: `True` (an address that goes with the server), `False`, or a `PrimaryIp`. `location` defaults to the provider's. `image` is an image name, or an `Image` where the provider uploads them. Without `cluster=` it is a plain host (`register` does not apply). |
 | `PrimaryIp(name, kind="ipv4", protect=False)` | A fixed address, created in the server's location and assigned to it; it stays when the server is replaced. `protect=True` turns on delete protection (destroy then fails until it is off). |
 | `Firewall(name, rules=[...])`, `Rule.tcp(port, sources=, name=)`, `Rule.udp(...)`, `Rule.icmp(...)` | Inbound rules; a port or a range `(low, high)`; sources default to every address. Everything else is dropped. Outbound is not filtered. |
 | `DnsRecord(zone, name, type, value=… \| server=… \| servers=[…], ttl=300, provider=)` | One record set (`A`, `AAAA`, `CNAME`, `TXT`; `@` is the apex) in a zone you already have at the provider. Several servers give one record set with every address. Piceli never creates or deletes the zone. |
 | `Hook(argv, timeout=3600)` | The command that installs the OS. Placeholders `{name}`, `{id}`, `{ipv4}`, `{ipv6}`, `{address}`. |
 | `Ssh(user="root", address=None, port=22, kubeconfig_path="/etc/rancher/k3s/k3s.yaml")` | How Piceli reaches the server to read its k3s kubeconfig. |
-| `Infrastructure(name, servers=, records=, state_dir=, state_key=, backend=, home=)` | Everything one OpenTofu state holds. |
+| `Image(name, file= \| url=, sha256=, format="qcow2", min_disk_gb=, properties=)` | A disk image to upload (OpenStack). `sha256` is required and checked before the upload (`infra-image-checksum`). |
+| `Bucket(name, provider=, protect=False)` | An S3-compatible object-storage bucket (OpenStack Swift). Never emptied: destroying one that holds objects fails. |
+| `Infrastructure(name, servers=, records=, state_dir=, state_key=, backend=, home=, buckets=)` | Everything one OpenTofu state holds. |
 
 Each resource Piceli renders is labelled `piceli.io/managed-by=piceli`,
 `piceli.io/infra=<name>` and `piceli.io/resource=<kind>-<name>`.
@@ -118,11 +120,66 @@ Another server type is refused unless `server_types=` lists it.
 
 A provider is one subclass of `piceli.infra.Provider` (render a server, an
 IP, a firewall, a record; name the pinned OpenTofu provider and the
-environment variable of its token; optionally `prices()`), so another
-provider (OVH, Infomaniak) needs no change elsewhere.
+environment variables of its credential; optionally `prices()`), so another
+provider needs no change elsewhere.
 `piceli.testing.infra.FakeProvider` renders OpenTofu's built-in
 `terraform_data` instead: a real plan, apply and encrypted state, nothing
 created anywhere (see {doc}`testing`).
+
+### OpenStack and Infomaniak
+
+`OpenStack(credentials=, auth_url=, region=, public_network=, prices=,
+ip_prices=, currency="EUR")` renders for the
+`terraform-provider-openstack/openstack` OpenTofu provider (3.4.0, pinned
+with every platform's hashes). `Infomaniak(credentials=, region="dc3-a")`
+fills in Infomaniak Public Cloud's values: `auth_url`
+`https://api.pub1.infomaniak.cloud/identity/v3`, the external network
+`ext-net1` (a public IPv4 and IPv6 per port), prices in CHF; `dc4-a` is
+the other region.
+
+```python
+from piceli.infra import Bucket, Image, Infomaniak, Infrastructure, PrimaryIp, Rule, Server
+
+cloud = Infomaniak(credentials="cloud", prices={"a1-ram2-disk20-perf1": 4.70})
+base = Image("host-base", file="result/host.qcow2", sha256="9f86d0…")
+host = Server(
+    "host-1", provider=cloud, type="a1-ram2-disk20-perf1", image=base,
+    ipv4=PrimaryIp("host-1-port", protect=True),  # the port keeps the address
+    firewall=[Rule.tcp(443), Rule.udp(3478)], ssh_keys=["ssh-ed25519 AAAA… owner@example.com"],
+)  # no cluster=: a plain host
+infra = Infrastructure("web", servers=[host], buckets=[Bucket("my-cache", provider=cloud)])
+```
+
+| Declared | Rendered |
+| --- | --- |
+| `Server` | `openstack_compute_instance_v2`, flavor `type`, image by name, id or `Image` |
+| `PrimaryIp` | `openstack_networking_port_v2` on the public network; the server attaches to it, so a replaced server gets the same port and addresses, without a floating IP. `protect=True`: `prevent_destroy`, a destroy plan fails |
+| `Firewall`, `Rule` | `openstack_networking_secgroup_v2` (on the port), one ingress `openstack_networking_secgroup_rule_v2` per rule and source; the group's default egress rules stay, so outbound is not filtered |
+| `ssh_keys` | `openstack_compute_keypair_v2`; one key per server (Nova boots with one key pair) |
+| `Image` | `openstack_images_image_v2`, private, named by its checksum: at apply time Piceli copies the file (or downloads the URL) into the state directory, verifies it, uploads it, then removes the copy |
+| `Bucket` | `openstack_objectstorage_container_v1` (Swift) |
+
+The credential is an application credential (Horizon: Identity →
+Application Credentials, or `openstack application credential create`),
+stored as `ID:SECRET`: `printf '%s:%s' "$ID" "$SECRET" | piceli secrets
+provider cloud --prompt`. OpenTofu gets it only as
+`OS_APPLICATION_CREDENTIAL_ID` and `OS_APPLICATION_CREDENTIAL_SECRET`; both
+are redacted from its output. S3 access to a bucket needs EC2 credentials
+(`openstack ec2 credentials create`; at Infomaniak the endpoint is
+`https://s3.pub1.infomaniak.cloud`); Piceli never creates these long-lived
+keys. OpenStack has no price API here: `prices=` (monthly net per flavor) and
+`ip_prices=` (`{"ipv4": …}`) are your own table, shown as the plan's
+estimate. One region per declaration; `ipv4=False` and `ipv6=PrimaryIp` are
+refused (the port holds both families), and so are `DnsRecord`s (keep DNS at
+a DNS provider).
+
+Ownership marks: metadata on servers and buckets, tags on ports, security
+groups and images, the description of security group rules. Key pairs carry
+none: their name (`<infra>-<digest>`) and the ledger stand in.
+
+To move to a newer OpenStack provider, change `OPENSTACK_PIN` in
+`piceli/infra/machines/openstack.py` and take its hashes from `tofu
+providers lock` with one `-platform=` per platform the registry lists.
 
 ## Plans and approval
 
@@ -147,8 +204,8 @@ infrastructure (for example one imported into the state by hand), is
 refused whole (`infra-foreign-resource`) before anything runs.
 
 The estimate comes from the provider's prices (Hetzner's `GET /pricing`,
-net monthly) for the declared server types and primary IPs; without them
-it is left out, never an error.
+or an OpenStack provider's declared table; net monthly) for the declared
+server types and primary IPs; without them it is left out, never an error.
 
 ## State: Piceli's, encrypted, never in Git
 
@@ -185,7 +242,8 @@ it is left out, never an error.
 Provider tokens are local credentials, like cluster credentials are local
 profiles: `piceli secrets provider NAME --prompt` reads the token from stdin
 (typed without echo, or piped) into `$PICELI_CREDENTIALS_DIR/NAME.json`
-(`0600`). A token given as an argument or in `HCLOUD_TOKEN` is refused
+(`0600`). A token given as an argument or in `HCLOUD_TOKEN` (or
+`OS_APPLICATION_CREDENTIAL_SECRET`) is refused
 (`infra-credential-refused`) without echoing it, and a credential file other
 users can read is refused (`infra-credential-unsafe`). Piceli passes the token
 to OpenTofu in its environment only (`HCLOUD_TOKEN`), never as an argument,
