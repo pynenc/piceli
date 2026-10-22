@@ -480,7 +480,7 @@ class Collector:
         self.tries = 0
 
     def __call__(self, request: Any, timeout: float = 0) -> Any:
-        assert request.full_url == "https://poet.example.net:4318/v1/logs"
+        assert request.full_url == "https://otel.example.net:4318/v1/logs"
         assert timeout <= 2.0
         self.tries += 1
         if not self.up:
@@ -514,7 +514,7 @@ def test_a_collector_that_is_down_never_blocks_a_deploy(
     tmp_path: Path, cache_dir: Path, fake: FakeHost
 ) -> None:
     publish(cache_dir, commit_of(1), tag="v1.0.0")
-    declared = host(cache_dir, report=HostReport("https://poet.example.net:4318"))
+    declared = host(cache_dir, report=HostReport("https://otel.example.net:4318"))
     down = Collector(up=False)
     poll = make_agent(tmp_path, declared, fake, opener=down).run_once()
     assert poll["state"] == "deployed"
@@ -544,7 +544,7 @@ def test_a_rollback_is_reported(
     publish(cache_dir, commit_of(1), tag="v1.0.0")
     fake.unit_active = False
     up = Collector(up=True)
-    declared = host(cache_dir, report=HostReport("https://poet.example.net:4318"))
+    declared = host(cache_dir, report=HostReport("https://otel.example.net:4318"))
     make_agent(tmp_path, declared, fake, opener=up).run_once()
     assert "piceli.host.rollback" in _events(up.posts)
 
@@ -582,7 +582,7 @@ def test_declarations_are_checked(cache_dir: Path) -> None:
             bad()
         assert raised.value.code == "host-check-invalid"
     with pytest.raises(HostError):
-        HostReport("http://poet.example.net:4318")
+        HostReport("http://otel.example.net:4318")
     assert HostReport("http://127.0.0.1:4318").describe()["endpoint"] == (
         "http://127.0.0.1:4318/v1/logs"
     )
@@ -642,7 +642,7 @@ def test_a_pin_deploys_an_older_tag_and_holds_it_until_unpinned(
     publish(cache_dir, commit_of(1), tag="v1.0.0")
     publish(cache_dir, commit_of(2), tag="v1.1.0")
     up = Collector(up=True)
-    declared = host(cache_dir, report=HostReport("https://poet.example.net:4318"))
+    declared = host(cache_dir, report=HostReport("https://otel.example.net:4318"))
     agent = lambda: make_agent(tmp_path, declared, fake, opener=up)  # noqa: E731
     assert agent().run_once()["commit"] == commit_of(2)
     result = agent().control("pin", "v1.0.0")

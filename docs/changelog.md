@@ -6,6 +6,17 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.24.0
 
+A machine without a cluster: 0.24.0 creates NixOS hosts on OpenStack
+clouds, points DNS at them, publishes signed Nix builds to your own binary
+cache and lets each host follow your release tags on its own, with checks
+and rollback.
+
+- **A single NixOS host, end to end.** `docs/single_nixos_host.md` takes one
+  host from nothing to its first release with one tested declaration (an
+  Infomaniak server from an uploaded image on a persistent port, a security
+  group, a key pair, a bucket as the Nix cache, two Porkbun records, a
+  `NixHost` following `v*` tags), then compares a single host with a
+  Kubernetes environment.
 - **OpenStack machines, with an Infomaniak preset.** `OpenStack(...)` and
   `Infomaniak(...)` in `piceli.infra` render servers, a persistent public
   port per `PrimaryIp` (a replaced server keeps its addresses without a
@@ -42,7 +53,8 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   such as `infra-dns-api-disabled`, which exited 2), with
   `partially_applied`, `applied` (address, action, the provider's id) and
   `not_applied`; stderr says what was applied and that the next plan shows
-  what remains.
+  what remains. **Upgrade note:** a script that took exit 2 from `apply`
+  as "nothing changed" must now read `partially_applied`.
 - **Nix builds on build hosts, a signed binary cache and build
   manifests.** `piceli dev nix build ATTR` builds a flake output (a NixOS
   system; with `--image`, a disk image copied back with its sha256) as a
@@ -77,15 +89,11 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `piceli host status` and `piceli host wait HOST REV` read it over SSH,
   with no cluster. `dev nix build --publish` now also writes signed ref
   pointers `piceli/NAME/refs/{tags,heads}/REF.json` (`--branch`), and
-  `dev nix gc` keeps what they name. New codes `host-*`; see
-  `docs/nix_hosts.md`.
-- **`piceli host wait` judges the newest publication of a build.** A
-  commit published again is retried by the agent; `wait` no longer reports
-  the earlier failed attempt meanwhile. It judges only attempts of the
-  newest `published_at` of that rev the host has seen (its last poll, now
-  carrying the pointer's commit, tag and `published_at`; an attempt in
-  progress; its attempts), and `--published-after` (from `dev nix build
-  --publish --json`) pins it before the host has polled.
+  `dev nix gc` keeps what they name. `host wait` judges only the newest
+  publication of the rev the host has seen (a commit published again is
+  retried, and its earlier failure is not reported meanwhile);
+  `--published-after` pins one before the host has polled. New codes
+  `host-*`; see `docs/nix_hosts.md`.
 - **Pin, unpin and roll back a Nix host.** `piceli host pin HOST TAG`
   deploys a published tag's build (verified like any deploy, an older
   version too, checked and rolled back on failure) and holds it;

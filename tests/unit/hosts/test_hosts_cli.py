@@ -125,7 +125,7 @@ def _host(tmp_path: Path) -> NixHost:
         follow=Tag("v*"),
         cache=NixCache(PUBLIC, url=f"file://{tmp_path}"),
         checks=[HostCheck.http("http://127.0.0.1/healthz?x=${y}")],
-        report=HostReport("https://poet.example.net:4318", headers_file="/etc/p/h"),
+        report=HostReport("https://otel.example.net:4318", headers_file="/etc/p/h"),
     )
 
 
