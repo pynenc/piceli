@@ -95,7 +95,7 @@ def test_a_link_that_stays_down_names_the_chunk_and_the_cause(tmp_path: Path) ->
 def test_a_dropped_log_stream_resumes_without_repeating_lines(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """0.20 (IH 10.3): ``Response ended prematurely`` right after the upload
+    """0.20: ``Response ended prematurely`` right after the upload
     crashed the client and orphaned the run."""
     from urllib3.exceptions import ProtocolError
 

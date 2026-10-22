@@ -527,8 +527,8 @@ and rollback.
   shared by every image of the Job), `assemble_seconds` and `push_seconds`;
   the deployment history keeps them under `builds.<image>.timings` with
   `shared_with` (the other images of the same Job), and the controller logs
-  one line per image (`built poet in 812.4s (commands 790.1s, shared with
-  kabuki, shibuya; assembly 14.2s, push 8.1s)`). Images whose inputs did not
+  one line per image (`built api in 812.4s (commands 790.1s, shared with
+  web, worker; assembly 14.2s, push 8.1s)`). Images whose inputs did not
   change are still not built (each image's change key covers only the
   contexts it lists).
 - **A persistent cargo cache for the build Job.** `CARGO_HOME` is on the

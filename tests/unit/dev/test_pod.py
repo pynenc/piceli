@@ -120,7 +120,7 @@ def test_a_failing_command_reports_its_exit_code_and_log_tail(tmp_path: Path) ->
 def test_cargo_test_output_gives_phases_tests_and_cache_use(tmp_path: Path) -> None:
     script = "\n".join(
         [
-            "echo '   Compiling poet v0.1.0 (/x)'",
+            "echo '   Compiling app v0.1.0 (/x)'",
             "echo '   Compiling model v0.1.0 (/x)'",
             "echo '    Finished `test` profile [unoptimized] target(s) in 4.2s'",
             "echo '     Running unittests src/lib.rs'",
@@ -323,17 +323,17 @@ def test_the_command_runs_once_the_api_server_is_cut_off(
 def test_a_corrupted_cached_crate_is_cleared_and_the_command_runs_once_more(
     tmp_path: Path,
 ) -> None:
-    """0.19 (IH item 8): the first run blames a truncated artifact of ``ags``
+    """0.19: the first run blames a truncated artifact of ``canvas``
     in the lineage's target; it is removed and the second run passes."""
     script = "\n".join(
         [
-            'obj="$CARGO_TARGET_DIR/debug/incremental/ags-3k2j1/s-1/x.o"',
+            'obj="$CARGO_TARGET_DIR/debug/incremental/canvas-3k2j1/s-1/x.o"',
             'if [ -f "$obj" ]; then',
-            "  echo '   Compiling ags v0.4.0 (/x)'",
+            "  echo '   Compiling canvas v0.4.0 (/x)'",
             "  echo 'error: linking with `cc` failed: exit status: 1'",
-            "  echo '  = note: rust-lld: error: undefined hidden symbol: ags::f'",
+            "  echo '  = note: rust-lld: error: undefined hidden symbol: canvas::f'",
             '  echo "          >>> referenced by $obj"',
-            "  echo 'error: could not compile `ags` (bin \"ags\") due to 1 previous error'",
+            "  echo 'error: could not compile `canvas` (bin \"canvas\") due to 1 previous error'",
             "  exit 101",
             "fi",
             "echo '    Finished `dev` profile [unoptimized] target(s) in 1.0s'",
@@ -342,18 +342,18 @@ def test_a_corrupted_cached_crate_is_cleared_and_the_command_runs_once_more(
     data = _archive({"app/build.sh": script})
     first, _ = _run(tmp_path, data, _spec(data, ["true"]), "seed")
     poisoned = Path(first["cache"]["lineage_dir"]) / "target"
-    (poisoned / "debug/incremental/ags-3k2j1/s-1").mkdir(parents=True)
-    (poisoned / "debug/incremental/ags-3k2j1/s-1/x.o").write_bytes(b"\0" * 7)
+    (poisoned / "debug/incremental/canvas-3k2j1/s-1").mkdir(parents=True)
+    (poisoned / "debug/incremental/canvas-3k2j1/s-1/x.o").write_bytes(b"\0" * 7)
     (poisoned / "debug/deps").mkdir(parents=True)
-    (poisoned / "debug/deps/libpoet-1.rlib").write_text("kept")
+    (poisoned / "debug/deps/libapp-1.rlib").write_text("kept")
     result, lines = _run(tmp_path, data, _spec(data, ["sh", "build.sh"]), "repair")
     assert result["state"] == "passed", result
     repaired = result["cache"]["repaired"]
-    assert repaired["kind"] == "link" and repaired["crates"] == ["ags"]
+    assert repaired["kind"] == "link" and repaired["crates"] == ["canvas"]
     assert repaired["entries"] == 1
     assert repaired["first_error"][0].startswith("error: linking with")
-    assert any("corrupted cache (link): cleared ags" in line for line in lines)
-    assert (poisoned / "debug/deps/libpoet-1.rlib").exists()
+    assert any("corrupted cache (link): cleared canvas" in line for line in lines)
+    assert (poisoned / "debug/deps/libapp-1.rlib").exists()
 
 
 def test_an_ordinary_failure_is_not_retried_and_keeps_its_first_error(
@@ -380,7 +380,7 @@ def test_an_ordinary_failure_is_not_retried_and_keeps_its_first_error(
 
 
 def test_failed_tests_are_named_in_the_result(tmp_path: Path) -> None:
-    """0.20 (IH 10.8): not only counts."""
+    """0.20: not only counts."""
     script = "\n".join(
         [
             "echo '    Finished `test` profile [unoptimized] target(s) in 1s'",
@@ -401,20 +401,20 @@ def test_failed_tests_are_named_in_the_result(tmp_path: Path) -> None:
 
 
 def test_a_link_out_of_the_tree_is_named(tmp_path: Path) -> None:
-    """0.20 (IH 10.4): the message names the member and its target."""
+    """0.20: the message names the member and its target."""
     import io
 
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
-        info = tarfile.TarInfo("app/ih-muse")
+        info = tarfile.TarInfo("app/sdk")
         info.type = tarfile.SYMTYPE
-        info.linkname = "../../../ih-muse"
+        info.linkname = "../../../sdk"
         tar.addfile(info)
     data = buffer.getvalue()
     result, _ = _run(tmp_path, data, _spec(data, ["true"]))
     assert result["reason"] == "dev-upload-failed"
-    assert "app/ih-muse -> ../../../ih-muse" in result["message"]
-    assert result["path"] == "app/ih-muse"
+    assert "app/sdk -> ../../../sdk" in result["message"]
+    assert result["path"] == "app/sdk"
 
 
 def test_an_unchanged_cargo_lock_is_not_fetched_again(

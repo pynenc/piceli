@@ -93,7 +93,7 @@ def test_disabled_telemetry_ignores_runs(tmp_path: Path) -> None:
 
 
 def test_a_timeline_gives_contiguous_millisecond_spans(tmp_path: Path) -> None:
-    """0.20 (IH 10.8): every second of a run is in a span, with ms times."""
+    """0.20: every second of a run is in a span, with ms times."""
     signals = Signals()
     telemetry = signals.telemetry(tmp_path, {"now": 1_790_000_000.0})
     from datetime import UTC, datetime

@@ -5604,7 +5604,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "dev-source-invalid",
         "Source not usable",
         "A source is not `NAME=PATH[@REF]`, its path is not in a Git repository, two sources share a name, or a working tree could not be read.",
-        "Give each source a directory name and a path inside a Git repository (`--source ih-muse=../ih-muse@<sha>`).",
+        "Give each source a directory name and a path inside a Git repository (`--source app-sdk=../sdk@<sha>`).",
         False,
         "dev",
     ),

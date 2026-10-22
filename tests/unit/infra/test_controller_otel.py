@@ -848,7 +848,7 @@ def test_journal_times_of_rollback_and_prune_win(world: dict[str, Any]) -> None:
 
 
 def test_a_deploy_emits_start_stage_and_end_events(world: dict[str, Any]) -> None:
-    """IH draws these as changes on its timeline (0.17.0)."""
+    """A consumer draws these as changes on its timeline (0.17.0)."""
     world["controller"].poll_once()
     signals: Signals = world["signals"]
     root = _main_root(signals)

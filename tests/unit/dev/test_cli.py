@@ -220,7 +220,7 @@ def test_cancel_deletes_a_queued_run_only_once(queue: QueuePort) -> None:
 
 
 def test_cache_clear_empties_the_lineages_a_run_left(stand_in: dict[str, Any]) -> None:
-    """0.19 (IH item 10): ``piceli dev cache clear [--lineage] [--crate]``."""
+    """0.19: ``piceli dev cache clear [--lineage] [--crate]``."""
     import json
 
     assert invoke("--ref", "HEAD", "--", "sh", "ok.sh").exit_code == 0
@@ -229,8 +229,8 @@ def test_cache_clear_empties_the_lineages_a_run_left(stand_in: dict[str, Any]) -
     assert lineages
     target = lineages[0] / "0" / "target" / "debug" / "deps"
     target.mkdir(parents=True, exist_ok=True)
-    (target / "libags-1.rlib").write_text("x")
-    (target / "libpoet-1.rlib").write_text("x")
+    (target / "libcanvas-1.rlib").write_text("x")
+    (target / "libapp-1.rlib").write_text("x")
     clear = CliRunner().invoke(
         cli,
         [
@@ -240,15 +240,15 @@ def test_cache_clear_empties_the_lineages_a_run_left(stand_in: dict[str, Any]) -
             "--cluster",
             "infra.py:c",
             "--crate",
-            "ags",
+            "canvas",
             "--json",
         ],
     )
     assert clear.exit_code == 0, clear.stdout + clear.stderr
     body = json.loads(clear.stdout)
     assert body["cleared"] == [{"lineage": f"{lineages[0].name}/0", "entries": 1}]
-    assert (target / "libpoet-1.rlib").exists() and not (
-        target / "libags-1.rlib"
+    assert (target / "libapp-1.rlib").exists() and not (
+        target / "libcanvas-1.rlib"
     ).exists()
     job = stand_in["ports"][-1].cleared_jobs[-1]
     pod = job["spec"]["template"]["spec"]

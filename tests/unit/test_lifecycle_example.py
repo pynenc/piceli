@@ -78,4 +78,5 @@ def test_the_note_names_no_consumer(commands: Commands) -> None:
         for path in EXAMPLE.rglob("*")
         if path.is_file() and "__pycache__" not in path.parts
     )
-    assert not re.search(r"\bih[-_]|k-lab|haiku", text, re.IGNORECASE)
+    # Nothing from a private setup: no home directories, no tailnet hosts.
+    assert not re.search(r"/Users/|/home/|\.ts\.net\b", text, re.IGNORECASE)

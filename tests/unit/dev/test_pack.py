@@ -59,18 +59,18 @@ def test_a_ref_packs_that_commit_under_the_source_name(tmp_path: Path) -> None:
 
 
 def test_sibling_sources_sit_next_to_the_root(tmp_path: Path) -> None:
-    app = repo(tmp_path / "product", {"Cargo.toml": 'muse = { path = "../ih-lib" }'})
+    app = repo(tmp_path / "product", {"Cargo.toml": 'sdk = { path = "../sdk" }'})
     lib = repo(tmp_path / "lib", {"lib.rs": "v1"})
     pinned = git(lib, "rev-parse", "HEAD")
     commit(lib, {"lib.rs": "v2"})
     packed = pack(
         SourceRequest("product", app, "HEAD"),
-        [parse_source(f"ih-lib={lib}@{pinned}")],
+        [parse_source(f"sdk={lib}@{pinned}")],
         tmp_path / "out",
     )
     files = names(packed.path)
-    assert files["ih-lib/lib.rs"] == b"v1"
-    assert packed.sources["ih-lib"]["commit"] == pinned
+    assert files["sdk/lib.rs"] == b"v1"
+    assert packed.sources["sdk"]["commit"] == pinned
 
 
 def test_an_unknown_ref_is_refused(tmp_path: Path) -> None:

@@ -1,4 +1,4 @@
-"""0.20 (IH 10.5): a DaemonSet is not narrowed to the environment's nodes.
+"""0.20: a DaemonSet is not narrowed to the environment's nodes.
 
 A node agent (the kernel-faults reader) belongs on every node; the
 environment's ``on_nodes`` pins its other workloads only. The agent's own

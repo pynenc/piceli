@@ -1,8 +1,8 @@
-"""Opt-in: the operator's namespace reaches an exposed pod under an IH-style policy.
+"""Opt-in: the operator's namespace reaches an exposed pod under a pod-label policy.
 
-Reproduces k-lab's ``ih-main`` (0.19 P0) on a disposable kind cluster whose
-CNI enforces NetworkPolicies: the policy in front of the pods selects them
-through a label the Service selector does not use. Before
+The 0.19 P0 case on a disposable kind cluster whose CNI enforces
+NetworkPolicies: the policy in front of the pods selects them through a
+label the Service selector does not use. Before
 :func:`piceli.envs.access.allow_tailnet` a pod in the operator's namespace
 cannot reach the Service; after it, it can, and a pod in any other
 namespace still cannot::
@@ -98,7 +98,7 @@ def _manifests(namespace: str) -> list[dict[str, Any]]:
             "spec": {"selector": {**APP, "shop.role": "web"},
                      "ports": [{"port": 80, "targetPort": 80}]},
         },
-        # Like ih-ingress: selects the pods by a label the Service does not use.
+        # Like shop-ingress: selects the pods by a label the Service does not use.
         {
             "apiVersion": "networking.k8s.io/v1",
             "kind": "NetworkPolicy",

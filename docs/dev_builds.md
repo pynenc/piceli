@@ -173,7 +173,7 @@ Once the machine is fixed (or a memory test found nothing), clear its
 events:
 
 ```sh
-piceli dev release-host mini --cluster infra.py:k_lab
+piceli dev release-host mini --cluster infra.py:lab
 ```
 
 The events live **with the host**, so they hold with the cluster down and
@@ -357,8 +357,8 @@ blamed crates' artifacts (deps, fingerprints, build script outputs,
 incremental state), runs the command once more, and reports it:
 
 ```json
-"cache": {"lineage": "ih-rust-1a2b3c4d5e/0", "warm": true,
-          "repaired": {"kind": "link", "crates": ["ags"], "entries": 3,
+"cache": {"lineage": "shop-rust-1a2b3c4d5e/0", "warm": true,
+          "repaired": {"kind": "link", "crates": ["canvas"], "entries": 3,
                        "first_error": ["error: linking with `cc` failed: exit status: 1", "…"]}}
 ```
 
@@ -367,9 +367,9 @@ the damage is recognised but no crate is named, `cache.suspect` says so.
 To clear by hand:
 
 ```sh
-piceli dev cache clear --cluster infra.py:k_lab                    # every free lineage
-piceli dev cache clear --cluster infra.py:k_lab --lineage ih       # every lineage of a root source
-piceli dev cache clear --cluster infra.py:k_lab --lineage ih-rust-1a2b3c4d5e/0 --crate ags
+piceli dev cache clear --cluster infra.py:lab                      # every free lineage
+piceli dev cache clear --cluster infra.py:lab --lineage shop       # every lineage of a root source
+piceli dev cache clear --cluster infra.py:lab --lineage shop-rust-1a2b3c4d5e/0 --crate canvas
 ```
 
 It runs a short Job on the builder (same user and claim as a run, no

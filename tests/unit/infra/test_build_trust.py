@@ -90,7 +90,7 @@ def _world(
     config = CompositionConfig(composition=composition.to_dict(), poll_seconds=10)
     state = tmp_path / "state"
     ports = FakePorts()
-    ports.builder = NodeBuilder("amedes")  # type: ignore[assignment]
+    ports.builder = NodeBuilder("builder-1")  # type: ignore[assignment]
     channel = DirectoryChannel(state)
     clock = {"now": 1_000_000.0}
     return {
@@ -154,8 +154,8 @@ def test_own_builds_keep_their_provenance_in_status_cache_and_history(
     web = main["components"]["web"]
     assert web["provenance"] == {
         "builder": "cluster-job",
-        "host": "amedes",
-        "node": "amedes",
+        "host": "builder-1",
+        "node": "builder-1",
         "builder_image": BUILDER,
         "commits": {"shop": main["revision"]["shop"]},
         "started_at": "2026-10-18T10:00:00Z",
@@ -165,10 +165,10 @@ def test_own_builds_keep_their_provenance_in_status_cache_and_history(
     cached = json.loads(
         (state / "components" / "web" / f"{web['source_digest'][7:]}.json").read_text()
     )
-    assert cached["provenance"]["host"] == "amedes"
+    assert cached["provenance"]["host"] == "builder-1"
     (run,) = controller._history_document()["envs"]["main"]["runs"]
     by_name = {item["name"]: item for item in run["components"]}
-    assert by_name["web"]["provenance"]["host"] == "amedes"
+    assert by_name["web"]["provenance"]["host"] == "builder-1"
     assert by_name["web"]["provenance"]["builder_image"] == BUILDER
     # A sync reuses the cached image: its provenance comes back with it.
     world["channel"].add_request(*rebuild_request("nobody"))
@@ -176,7 +176,9 @@ def test_own_builds_keep_their_provenance_in_status_cache_and_history(
 
     world["channel"].add_request(*sync_request("main"))
     status = controller.poll_once()
-    assert status["envs"]["main"]["components"]["web"]["provenance"]["host"] == "amedes"
+    assert (
+        status["envs"]["main"]["components"]["web"]["provenance"]["host"] == "builder-1"
+    )
     rejected = status["rejected_requests"][-1]
     assert rejected["kind"] == "rebuild" and "no deployed image" in rejected["message"]
 
@@ -222,16 +224,16 @@ def test_suspects_list_what_a_host_built_filtered_by_time(
 ) -> None:
     controller, state = world["controller"], world["state"]
     status = controller.poll_once()
-    found = provenance.suspects(status, "amedes")
+    found = provenance.suspects(status, "builder-1")
     assert sorted(item["component"] for item in found) == ["api", "catalog", "web"]
     assert all(item["env"] == "main" for item in found)
     assert provenance.suspects(status, "mini") == []
     since = provenance.parse_since("2026-10-18T10:03:00Z")
-    assert len(provenance.suspects(status, "amedes", since)) == 3  # ended 10:04
+    assert len(provenance.suspects(status, "builder-1", since)) == 3  # ended 10:04
     later = provenance.parse_since("2026-10-18T10:05:00Z")
-    assert provenance.suspects(status, "amedes", later) == []
+    assert provenance.suspects(status, "builder-1", later) == []
     shown = _gitops(
-        "suspects", "--host", "amedes", "--since", "2026-10-18", "--state-dir",
+        "suspects", "--host", "builder-1", "--since", "2026-10-18", "--state-dir",
         str(state), "--json",
     )  # fmt: skip
     assert shown.exit_code == 0, shown.stderr
@@ -242,7 +244,7 @@ def test_suspects_list_what_a_host_built_filtered_by_time(
         "catalog",
         "web",
     ]
-    assert "rebuild them: piceli gitops rebuild --host amedes" in shown.stderr
+    assert "rebuild them: piceli gitops rebuild --host builder-1" in shown.stderr
 
 
 # ------------------------------------------------------------------ rebuild
@@ -257,7 +259,7 @@ def test_a_rebuild_request_drops_the_cached_builds_and_rebuilds_them(
     cache = state / "components" / "web" / f"{web['source_digest'][7:]}.json"
     assert ports.builder.built == [["api", "catalog", "web"]]
     ports.builder.cluster = _Node("pi01")  # a sound node builds this time
-    requested = _gitops("rebuild", "--host", "amedes", "--state-dir", str(state))
+    requested = _gitops("rebuild", "--host", "builder-1", "--state-dir", str(state))
     assert requested.exit_code == 0, requested.stderr
     assert json.loads(requested.stdout)["state"] == "requested"
     status = controller.poll_once()
@@ -269,15 +271,15 @@ def test_a_rebuild_request_drops_the_cached_builds_and_rebuilds_them(
     } == {"pi01"}
     assert json.loads(cache.read_text())["provenance"]["host"] == "pi01"
     last = status["controller"]["last_rebuild"]
-    assert last["host"] == "amedes" and last["envs"] == {
+    assert last["host"] == "builder-1" and last["envs"] == {
         "main": ["api", "catalog", "web"]
     }
     assert last["dropped"] == 3
     run = controller._history_document()["envs"]["main"]["runs"][0]
-    assert run["trigger"] == "sync rebuild amedes"
+    assert run["trigger"] == "sync rebuild builder-1"
     assert sorted(run["built"]) == ["api", "catalog", "web"]
     # Nothing left that the old node built.
-    assert provenance.suspects(status, "amedes") == []
+    assert provenance.suspects(status, "builder-1") == []
 
 
 def test_rebuild_requests_are_checked() -> None:
@@ -301,26 +303,26 @@ def test_repeated_segfaults_quarantine_the_builder_node_until_released(
     ports.builder.tail = f"Compiling ring v0.17\n{SEGFAULT}\nerror: could not compile"
     status = controller.poll_once()
     assert status["envs"]["main"]["reason"] == "component-build-failed"
-    health = status["controller"]["build_health"]["amedes"]
+    health = status["controller"]["build_health"]["builder-1"]
     assert health["kind"] == "node" and health["recent"] == 1
     assert health["quarantined"] is False
     assert health["events"][0]["kind"] == "segfault"
     status = _retry(world)
-    health = status["controller"]["build_health"]["amedes"]
+    health = status["controller"]["build_health"]["builder-1"]
     assert health["quarantined"] is True and "2 health events" in health["reason"]
     calls = len(ports.builder.built)
     status = _retry(world)
     main = status["envs"]["main"]
     assert main["reason"] == "build-host-quarantined"
-    assert "amedes is quarantined" in str(main["failure"])
+    assert "builder-1 is quarantined" in str(main["failure"])
     assert len(ports.builder.built) == calls  # nothing ran on the node
-    assert status["controller"]["build_health"]["amedes"]["recent"] == 2
+    assert status["controller"]["build_health"]["builder-1"]["recent"] == 2
     shown = _gitops("hosts", "--state-dir", str(state), "--json")
     assert shown.exit_code == 0, shown.stderr
-    assert json.loads(shown.stdout)["hosts"]["amedes"]["quarantined"] is True
+    assert json.loads(shown.stdout)["hosts"]["builder-1"]["quarantined"] is True
     assert "QUARANTINED" in shown.stderr
     ports.builder.tail = None  # the node was fixed
-    released = _gitops("release-host", "amedes", "--state-dir", str(state))
+    released = _gitops("release-host", "builder-1", "--state-dir", str(state))
     assert released.exit_code == 0, released.stderr
     status = _retry(world)
     assert status["envs"]["main"]["state"] == "deployed"
@@ -363,13 +365,13 @@ def test_a_quarantined_host_cannot_claim_and_a_quarantined_node_is_no_fallback(
     # The builder node is quarantined too: past host_wait nothing falls back.
     for _ in range(2):
         controller._record_health(
-            "amedes", "node", {"kind": "machine-check"}, "build-job"
+            "builder-1", "node", {"kind": "machine-check"}, "build-job"
         )
     clock["now"] += 11 * 60
     status = controller.poll_once()
     assert ports.builder.built == []
     assert status["envs"]["main"]["reason"] == "build-waiting"
-    channel.add_request(*host_release_request("amedes"))
+    channel.add_request(*host_release_request("builder-1"))
     clock["now"] += 11 * 60
     status = controller.poll_once()
     assert ports.builder.built == [["api", "catalog", "web"]]

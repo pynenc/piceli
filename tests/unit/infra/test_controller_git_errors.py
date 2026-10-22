@@ -1,4 +1,4 @@
-"""0.19 (IH item 11): a failing Git remote is never a silent outage.
+"""0.19: a failing Git remote is never a silent outage.
 
 On 2026-10-09 the GitOps controller deployed nothing for 30 h: an invalid
 token made every ``git ls-remote`` fail, ``gitops wait`` kept reporting the
@@ -143,7 +143,7 @@ def test_wait_fails_fast_when_the_controller_cannot_fetch() -> None:
 
 
 def test_wait_and_summary_name_the_failing_checks_with_their_detail() -> None:
-    """0.19 (IH item 12)."""
+    """0.19."""
     document = _document(None)
     document["envs"]["main"].update(
         state="failed",
@@ -179,7 +179,7 @@ def test_a_github_token_close_to_expiry_is_warned(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """0.19 (IH item 11): GitHub reports a token's expiry; warn 7 days ahead."""
+    """0.19: GitHub reports a token's expiry; warn 7 days ahead."""
     from datetime import UTC, datetime
 
     from piceli.gitops.token_expiry import github_token_expiry, is_github, parse_expiry
@@ -229,7 +229,7 @@ def test_a_github_token_close_to_expiry_is_warned(
 def test_gitops_cache_clear_runs_between_steps_and_is_recorded(
     world: dict[str, Any],  # noqa: F811
 ) -> None:
-    """0.19 (IH item 10): ``piceli gitops cache clear [--crate]``."""
+    """0.19: ``piceli gitops cache clear [--crate]``."""
     from piceli.gitops.state import cache_clear_request
 
     controller, channel = world["controller"], world["channel"]
@@ -241,11 +241,13 @@ def test_gitops_cache_clear_runs_between_steps_and_is_recorded(
         return {"state": "passed", "job": "piceli-build-cache-clear-x"}
 
     controller.ports.builder.clear_cache = clear
-    channel.add_request(*cache_clear_request(["ags", "serde_derive"]))
+    channel.add_request(*cache_clear_request(["canvas", "serde_derive"]))
     status = controller.poll_once()
-    assert cleared == [["ags", "serde_derive"]]
+    assert cleared == [["canvas", "serde_derive"]]
     record = status["controller"]["cache_clear"]
-    assert record["crates"] == ["ags", "serde_derive"] and record["state"] == "passed"
+    assert (
+        record["crates"] == ["canvas", "serde_derive"] and record["state"] == "passed"
+    )
     with pytest.raises(GitOpsError):
         cache_clear_request(["../etc"])
 
@@ -263,7 +265,7 @@ def test_the_build_cache_clear_job_empties_only_targets(tmp_path: Path) -> None:
         registry_url="oci://registry:5000/x",
         node_registry="registry:5000",
     )
-    job = cache_clear_job(settings, ["ags"], "abcd")
+    job = cache_clear_job(settings, ["canvas"], "abcd")
     pod = job["spec"]["template"]["spec"]
     assert pod["automountServiceAccountToken"] is False
     assert pod["volumes"] == [
@@ -276,8 +278,8 @@ def test_the_build_cache_clear_job_empties_only_targets(tmp_path: Path) -> None:
     assert "env" not in container  # no Git or registry Secret
     cache = tmp_path / "cache"
     for name in (
-        "amd64-4096/release/deps/libags-1.rlib",
-        "amd64-4096/release/deps/libpoet-1.rlib",
+        "amd64-4096/release/deps/libcanvas-1.rlib",
+        "amd64-4096/release/deps/libapp-1.rlib",
     ):
         (cache / "target" / name).parent.mkdir(parents=True, exist_ok=True)
         (cache / "target" / name).write_text("x")
@@ -285,11 +287,14 @@ def test_the_build_cache_clear_job_empties_only_targets(tmp_path: Path) -> None:
     script = container["command"][3]
     env = {**os.environ, "PICELI_CACHE": str(cache)}
     run = subprocess.run(
-        [sys.executable, "-c", script, "ags"], env=env, capture_output=True, text=True
+        [sys.executable, "-c", script, "canvas"],
+        env=env,
+        capture_output=True,
+        text=True,
     )
     assert run.returncode == 0, run.stderr
     assert '"amd64-4096": {"entries": 1}' in run.stdout
-    assert (cache / "target/amd64-4096/release/deps/libpoet-1.rlib").exists()
+    assert (cache / "target/amd64-4096/release/deps/libapp-1.rlib").exists()
     everything = subprocess.run(
         [sys.executable, "-c", script], env=env, capture_output=True, text=True
     )

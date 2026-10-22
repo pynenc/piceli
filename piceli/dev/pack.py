@@ -1,8 +1,8 @@
 """What a development run builds, packed on the client into one tar.gz (0.18.0).
 
 The root source and every sibling source sit side by side under their
-names (``product/``, ``ih-muse/``), so path dependencies like
-``../ih-muse`` resolve in the run as on the developer's disk. A source at a
+names (``product/``, ``sdk/``), so path dependencies like
+``../sdk`` resolve in the run as on the developer's disk. A source at a
 ref is ``git archive`` of that commit; nothing in the cluster needs Git
 credentials, a registry or a container engine.
 

@@ -4,7 +4,7 @@ A composition module declares, as module attributes:
 
 - ``environments = [...]``: :class:`piceli.envs.Environment` s whose
   ``follow`` maps each :class:`~piceli.infra.Source` to its rule
-  (``{product: "main", muse: Tag("v*")}``), and at most one branch rule
+  (``{product: "main", sdk: Tag("v*")}``), and at most one branch rule
   (:meth:`piceli.envs.Environment.per_branch`);
 - the :class:`~piceli.infra.Cluster` (optional; ``Registry.in_cluster`` is
   where built and mirrored images go);

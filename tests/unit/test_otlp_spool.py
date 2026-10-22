@@ -145,13 +145,13 @@ def test_the_controller_prints_each_line_with_its_time(
 
     try:
         cli_contract.stamp_lines()
-        cli_contract.say("main: push infinite-haiku -> abc\nsecond line")
+        cli_contract.say("main: push shop -> abc\nsecond line")
     finally:
         cli_contract.stamp_lines(False)
     cli_contract.say("plain again")
     lines = capsys.readouterr().err.splitlines()
     stamp = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ "
-    assert re.fullmatch(stamp + "main: push infinite-haiku -> abc", lines[0])
+    assert re.fullmatch(stamp + "main: push shop -> abc", lines[0])
     assert re.fullmatch(stamp + "second line", lines[1])
     assert lines[2] == "plain again"
 

@@ -98,7 +98,7 @@ def test_builder_has_the_tools_c_builds_need(builder_image: str) -> None:
 
 
 def test_builder_lints_rust_with_clippy_and_rustfmt(builder_image: str) -> None:
-    """0.19 (IH item 3): agents lint on the builder, read-only toolchain."""
+    """0.19: agents lint on the builder, read-only toolchain."""
     output = _run(
         "docker", "run", "--rm", "-e", "HOME=/tmp", builder_image, "sh", "-c",
         "cargo clippy --version && cargo fmt --version",

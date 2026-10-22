@@ -152,17 +152,15 @@ def test_a_source_that_is_the_tree_being_run_is_skipped_with_a_note(
 ) -> None:
     from piceli.dev.pack import parse_source
 
-    app = repo(tmp_path / "ih-lib", {"t.sh": "true"})
+    app = repo(tmp_path / "sdk", {"t.sh": "true"})
     result = run(
         LocalPort(tmp_path / "cluster"),
         DEV,
         RunRequest(
-            SourceRequest("ih-lib", app, None),
+            SourceRequest("sdk", app, None),
             ["sh", "t.sh"],
-            extras=[parse_source(f"ih-lib-again={app}")],
+            extras=[parse_source(f"sdk-again={app}")],
         ),
     )
     assert result["state"] == "passed"
-    assert result["notes"] == [
-        "--source ih-lib-again: it is the tree being run; skipped"
-    ]
+    assert result["notes"] == ["--source sdk-again: it is the tree being run; skipped"]

@@ -252,7 +252,7 @@ not only the last lines. To empty the cache by hand:
 
 ```sh
 piceli gitops cache clear                 # every cargo target on the build cache claim
-piceli gitops cache clear --crate ags     # only these crates' artifacts
+piceli gitops cache clear --crate canvas     # only these crates' artifacts
 ```
 
 The controller runs it between steps, as a short Job on the builder node
