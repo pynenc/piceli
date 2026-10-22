@@ -1328,6 +1328,71 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(host-deploy-failed), rolled back (host-rolled-back), or "
             "host-wait-timeout. The JSON carries the attempt's stage times.",
         ),
+        "host pin": _C(
+            "Make a Nix host deploy a tag's published build (an older one too) "
+            "and hold it: no newer build until unpin.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.NixHost) or an SSH target",
+                "--infra MODULE[:ATTR] (address, pinned host keys, host names)",
+            ),
+            writes=("the host's system and /var/lib/piceli-host (ssh, as root)",),
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.24.0. No approval digest: it only goes to a build that is "
+            "signed, published and verified like every deploy, with checks and "
+            "a rollback on failure. Runs piceli-host-agent pin TAG over SSH. "
+            "Exit 1: the build failed its switch or checks and the host is back "
+            "on its previous system; 2: refused before any change "
+            "(host-pin-not-found, host-signature-invalid, host-busy). Reported "
+            "to the OTLP collector as piceli.host.pin.",
+        ),
+        "host unpin": _C(
+            "Drop a Nix host's pin or rollback hold: it follows its declared "
+            "ref again from the next poll (started at once).",
+            reads=("MODULE:ATTR (piceli.infra.NixHost) or an SSH target",),
+            writes=("/var/lib/piceli-host/state.json on the host (ssh, as root)",),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.24.0. Changes no system itself; the poll it starts deploys "
+            "the newest build of the followed ref. Reported as piceli.host.unpin.",
+        ),
+        "host rollback": _C(
+            "Switch a Nix host back to its previous system (already in its "
+            "store) and hold it until unpin.",
+            reads=("MODULE:ATTR (piceli.infra.NixHost) or an SSH target",),
+            writes=("the host's system and /var/lib/piceli-host (ssh, as root)",),
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.24.0. No approval digest: the previous system was verified "
+            "when it was deployed. Runs the checks and switches forward again "
+            "when one fails (exit 1). The hold keeps the next poll from "
+            "deploying what was rolled away from. host-rollback-unavailable "
+            "when no previous system is recorded or in the store. Reported as "
+            "piceli.host.rollback.",
+        ),
+        "host secrets": _C(
+            "Put a Nix host's age identity (its sops-nix key) on the host: "
+            "plan, then --approve DIGEST.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.NixHost with age_identity=)",
+                "$PICELI_CREDENTIALS_DIR/NAME.json (age-identity)",
+                "the host's key file, by fingerprint only (ssh)",
+            ),
+            writes=(
+                "NixHost(age_key_file=) on the host, 0600 root (ssh stdin, "
+                "atomic rename)",
+            ),
+            approval_required=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="0.24.0. The plan lists host, path, mode, owner, public key and "
+            "whether the host has the same, a different or no key (exit 3 with "
+            "the digest; 0 when it has the same). A different key is refused "
+            "without --replace (host-secret-exists). The key travels on ssh's "
+            "stdin, never in an argument, log or state. After writing, the "
+            "host re-runs switch-to-configuration switch so sops-nix decrypts.",
+        ),
         "gitops enable": _C(
             "Plan and, with --approve HASH, install the GitOps controller that "
             "deploys branches from Git (one environment per branch).",
@@ -1965,6 +2030,19 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "key. Without --generate or --prompt it only reads. Refuses to "
             "replace a key without --replace (infra-credential-exists): hosts "
             "that trust the old key refuse what a new one signs.",
+        ),
+        "secrets age": _C(
+            "Generate or import a host's age identity (for sops-nix) as a local "
+            "credential, or print its public key.",
+            reads=("stdin (--prompt)", "$PICELI_CREDENTIALS_DIR/NAME.json"),
+            writes=(
+                "$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600; --generate, --prompt)",
+            ),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.24.0. Prints the public key (age1...) for .sops.yaml, never "
+            "the identity. Without --generate or --prompt it only reads. Refuses "
+            "to replace an identity without --replace (infra-credential-exists).",
         ),
         "secrets s3": _C(
             "Store a bucket's S3 access keys (access key id and secret) as a "

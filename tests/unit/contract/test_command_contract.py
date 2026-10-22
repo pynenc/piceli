@@ -778,6 +778,26 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["host", "wait", "no_such_module:web", "v1.0.0"],
         "host-not-found",
     ),
+    "host pin": (
+        lambda p: ["host", "pin", "no_such_module:web", "v1.0.0"],
+        "host-not-found",
+    ),
+    "host unpin": (
+        lambda p: ["host", "unpin", "ssh://bad user@host"],
+        "host-invalid",
+    ),
+    "host rollback": (
+        lambda p: ["host", "rollback", "no_such_module:web"],
+        "host-not-found",
+    ),
+    "host secrets": (
+        lambda p: ["host", "secrets", "ssh://root@host"],
+        "host-secret-undeclared",
+    ),
+    "secrets age": (
+        lambda p: ["secrets", "age", "web-1-age", "AGE-SECRET-KEY-1X"],
+        "infra-credential-refused",
+    ),
     "dev nix build": (
         lambda p: ["dev", "nix", "build", "x", "--cluster", "no_such_module:c"],
         "cluster-not-found",

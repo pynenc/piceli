@@ -73,14 +73,13 @@ web = Server(
     ssh=Ssh(user="root", address="example.org"),
 )
 
-# The Nix binary cache: a bucket, a signing key, S3 keys that write (builds,
-# gc) and separate read-only keys (the host).
+# The Nix binary cache: a bucket, a signing key and S3 keys that write
+# (builds, gc). The host reads it with separate read-only keys, in sops-nix.
 nix_bucket = Bucket("example-nix-cache", provider=cloud, protect=True)
 cache = NixCache(
     "example-cache-1:jXbGkEMPpvXtlVqGBrqfsnU8Jyn1cZB9u0QhGhvsKP0=",
     bucket=nix_bucket,
     write_credentials="nix-cache-write",
-    read_credentials="nix-cache-read",
 )
 
 infra = Infrastructure(
@@ -93,7 +92,8 @@ infra = Infrastructure(
     buckets=[nix_bucket],
 )
 
-# The host agent: the newest v* tag, checked, reported over OTLP.
+# The host agent: the newest v* tag, checked, reported over OTLP. Its
+# secrets are sops-nix's, decrypted with the age identity `web-1-age`.
 host = NixHost(
     "web-1",
     server=web,
@@ -105,7 +105,8 @@ host = NixHost(
         HostCheck.http("http://127.0.0.1/healthz", timeout=90),
     ],
     report=HostReport("https://otel.example.org:4318",
-                      headers_file="/etc/piceli-host/otlp-headers"),
+                      headers_file="/run/secrets/piceli/otlp-headers"),
+    age_identity="web-1-age",
 )
 
 # Where `piceli dev nix build` runs: a NixOS build machine over SSH. Builds
@@ -141,14 +142,15 @@ where each comes from.
    printf '%s:%s' "$KEY" "$SECRET" | piceli secrets provider porkbun --prompt
    piceli secrets nix-cache example-cache-1 --generate    # prints example-cache-1:<base64>
    piceli secrets s3 nix-cache-write --prompt              # key id, then secret: put and delete
-   piceli secrets s3 nix-cache-read --prompt               # read-only keys, for the host
+   piceli secrets age web-1-age --generate                 # prints age1...: the host's sops key
    ```
 
    The Infomaniak credential is an application credential (`ID:SECRET`),
    Porkbun's an API key pair with API access turned on for `example.org`.
-   The S3 keys are EC2 credentials (`openstack ec2 credentials create`);
-   give the host keys that can only read the bucket. Put the printed public
-   key in `NixCache(...)`.
+   The S3 keys are EC2 credentials (`openstack ec2 credentials create`).
+   Put the printed cache public key in `NixCache(...)` and the `age1...`
+   key in your `.sops.yaml`. The host's own secrets do not go into Piceli:
+   step 3 puts them in sops-nix.
 
 2. **The image, then the machines.** Build the image on the build host,
    copy the file next to `web_1.py` and put its sha256 in `Image(...)`:
@@ -170,19 +172,34 @@ where each comes from.
    `~/.ssh/known_hosts` after checking its fingerprint on the console:
    `piceli host` reads the host with strict host key checking.
 
-3. **The read-only keys on the host.** The agent reads the cache with
-   them; the module from step 4 holds no secret.
+3. **The age identity with `piceli host secrets`; cache keys and OTLP
+   headers in sops-nix.** The host's secrets live encrypted in Git, in
+   `secrets/web-1.yaml` (`sops secrets/web-1.yaml`, encrypted to the
+   `age1...` key): `piceli/cache.env` with the cache's **read-only** keys
+   (`AWS_ACCESS_KEY_ID=...` and `AWS_SECRET_ACCESS_KEY=...` lines, EC2
+   credentials that can only read the bucket) and `piceli/otlp-headers`
+   (`Authorization: Bearer ...`). The configuration declares them:
 
-   ```sh
-   ssh root@example.org 'install -d -m 700 /etc/piceli-host &&
-     install -m 600 /dev/stdin /etc/piceli-host/cache.env' <<'EOF'
-   AWS_ACCESS_KEY_ID=<read-only key id>
-   AWS_SECRET_ACCESS_KEY=<read-only secret>
-   EOF
+   ```nix
+   sops.defaultSopsFile = ./secrets/web-1.yaml;
+   sops.age.keyFile = "/var/lib/sops-nix/key.txt";
+   sops.secrets."piceli/cache.env" = { };
+   sops.secrets."piceli/otlp-headers" = { };
    ```
 
-   `/etc/piceli-host/otlp-headers` (`Authorization: Bearer ...`) goes the
-   same way. The agent refuses either file when others can read it.
+   sops-nix decrypts them to `/run/secrets/piceli/...` (`0400` root): the
+   agent's default for the cache's keys and the `headers_file=` above. The
+   only secret Piceli puts on the host is the age identity they decrypt
+   with:
+
+   ```sh
+   piceli host secrets web_1.py:host             # exit 3: host, path, 0600 root, age1..., existing key
+   piceli host secrets web_1.py:host --approve sha256:<digest>
+   ```
+
+   It goes on ssh's stdin to `/var/lib/sops-nix/key.txt`, and the host
+   re-runs its activation so sops-nix decrypts. A host that already has
+   another key is refused unless you pass `--replace`.
 
 4. **The agent's module, into the flake.**
 
@@ -231,13 +248,19 @@ where each comes from.
    system it ran before, marks the build bad and reports it; `host wait`
    exits 1 with `host-rolled-back`, and `piceli host status web_1.py:host`
    shows the failed check. The host keeps the old system and never tries
-   that build again until it is published again. To go back on purpose,
-   publish forwards: a `Tag("v*")` host never moves to a lower version, so
-   tag the last good commit as `v1.0.2` and publish it. Publishing the same
+   that build again until it is published again (publishing the same
    commit again retries it; pass the new pointer's `published_at` to `host
-   wait --published-after` so an earlier failure of that commit does not
-   count. A `nixos-rebuild switch --rollback` by hand lasts until the next
-   poll, which switches to the newest tag again.
+   wait --published-after` so an earlier failure does not count). To go
+   back on purpose:
+
+   ```sh
+   piceli host rollback web_1.py:host --json      # the previous system, held
+   piceli host pin web_1.py:host v1.0.0 --json    # or any published tag, held
+   piceli host unpin web_1.py:host --json         # follow the newest v* again
+   ```
+
+   Both switch, run the checks and hold the build until `unpin`, across
+   reboots: the next poll does not deploy the release you left.
 
 8. **Clean the cache.**
 
@@ -261,11 +284,11 @@ as a whole.
 | | Single NixOS host | Kubernetes environment |
 | --- | --- | --- |
 | Rollout | The whole system switches at once, on the next poll (300 s by default) | Rolling updates per workload, gated by readiness; the controller deploys each new commit |
-| Rollback | Automatic when a check fails: back to the previous system, the build marked bad. On purpose: publish a newer tag | `piceli release rollback` to an earlier release; restore points for retained data ({doc}`restore_points`) |
+| Rollback | Automatic when a check fails: back to the previous system, the build marked bad. On purpose: `piceli host rollback` or `pin`, held until `unpin` | `piceli release rollback` to an earlier release; restore points for retained data ({doc}`restore_points`) |
 | Health checks | `HostCheck` units, HTTP and commands after each switch | Probes on every pod, release checks before and after a rollout ({doc}`checks`) |
 | Scaling | One machine: a bigger flavor | Replicas over several nodes, an `Autoscaler` |
 | Multi-node | None: one host is one failure domain; a second host is a second declaration | Built in: pods move when a node fails |
-| Secrets | Files on the host (`0600`), written by you or agenix and sops-nix; the module holds none | Kubernetes Secrets from `piceli secrets` and the release ({doc}`secrets`) |
+| Secrets | sops-nix in Git, decrypted with one age identity that `piceli host secrets` puts on the host; the module holds none | Kubernetes Secrets from `piceli secrets` and the release ({doc}`secrets`) |
 | Observability | OTLP/HTTP logs of each deploy, stage and check; `host status` over SSH | OTLP traces, events and metrics of the controller ({doc}`opentelemetry`), the UI, `piceli status` |
 | Cost and machines | One small server and a bucket; the builds run on a machine you already have | At least one node per cluster (three for a highly available control plane) plus the home cluster |
 | When the home cluster fails | Nothing changes: the host deploys from the cache with every cluster down | The controller stops deploying until it is back; running workloads keep running |

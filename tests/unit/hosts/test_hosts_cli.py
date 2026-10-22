@@ -145,6 +145,8 @@ def test_the_module_embeds_the_agent_and_a_config_without_secrets(
     assert 'OnUnitInactiveSec = "300s";' in text
     assert "piceli_host_agent.py" in text and "nix_verify.py" in text
     assert "--config ${configFile}" in text
+    assert 'writeShellScriptBin "piceli-host-agent"' in text
+    assert "environment.systemPackages = [ command ];" in text
     assert "/etc/p/h" in text and "\\${y}" in text  # escaped, not interpolated
     settings = text.split("builtins.fromJSON ", 1)[1].split(";\n", 1)[0]
     assert "credentials" not in settings.replace("read_credentials_file", "")
@@ -367,3 +369,264 @@ def test_wait_judges_only_the_newest_publication_of_a_rev(
     publish(cache_dir, rev, tag="v1.0.0", when=T0 + dt.timedelta(hours=2))
     make_agent(tmp_path, host(cache_dir), fake, clock).run_once()
     assert remote.outcome(read(tmp_path), rev) == ("deployed", None)
+
+
+# ------------------------------------------------------------------ pin, unpin, rollback
+
+
+def test_a_pinned_host_fails_a_wait_for_another_build() -> None:
+    other = commit_of(8)
+    pinned = _status(hold={"kind": "pin", "tag": "v1.2.0", "commit": REV})
+    assert remote.outcome(pinned, "v1.2.0") == ("deployed", None)
+    assert remote.outcome(pinned, other) == ("failed", "host-pinned")
+    rolled = _status(hold={"kind": "rollback", "commit": REV})
+    assert remote.outcome(rolled, other) == ("failed", "host-pinned")
+    assert remote.outcome(_status(hold=None), other) == ("waiting", None)
+
+
+def test_control_runs_the_agent_command_over_ssh() -> None:
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+    answer = {"action": "pin", "state": "pinned", "reason": None}
+
+    def runner(argv: list[str], **kwargs: Any) -> Any:
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, json.dumps(answer).encode(), b"")
+
+    root = SshTarget.parse("root@web-1.example.net")
+    assert remote.control(root, "pin", "v1.0.0", runner=runner) == answer
+    argv = calls[0][0]
+    assert argv[-3:] == [remote.AGENT, "pin", "v1.0.0"]
+    assert "StrictHostKeyChecking=yes" in argv
+    admin = SshTarget.parse("admin@web-1.example.net")
+    remote.control(admin, "pin", "v1.0.0", runner=runner)
+    assert calls[1][0][-5:] == ["sudo", "-n", remote.AGENT, "pin", "v1.0.0"]
+    # Reading the status never needs sudo.
+    status_calls: list[list[str]] = []
+
+    def cat(argv: list[str], **_: Any) -> Any:
+        status_calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, json.dumps(_status()).encode(), b"")
+
+    remote.read_status(admin, runner=cat)
+    assert "sudo" not in status_calls[0]
+
+    def old_agent(argv: list[str], **_: Any) -> Any:
+        return subprocess.CompletedProcess(argv, 127, b"", b"not found")
+
+    from piceli.hosts.model import HostError
+
+    with pytest.raises(HostError) as raised:
+        remote.control(root, "unpin", runner=old_agent)
+    assert raised.value.code == "host-control-unsupported"
+
+
+def _control_cli(
+    monkeypatch: pytest.MonkeyPatch, result: dict[str, Any]
+) -> tuple[Any, list[tuple[str, str | None]]]:
+    import piceli.hosts.remote as remote_module
+
+    asked: list[tuple[str, str | None]] = []
+
+    def control(_target: Any, action: str, tag: str | None = None, **_: Any) -> Any:
+        asked.append((action, tag))
+        return {"action": action, **result}
+
+    monkeypatch.setattr(remote_module, "control", control)
+    from piceli.k8s.cli import app
+
+    return (lambda *args: CliRunner().invoke(app, list(args))), asked
+
+
+def test_host_pin_unpin_and_rollback_print_their_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hold = {"kind": "pin", "tag": "v1.0.0", "commit": REV, "at": "2026-10-22T10:00:00Z"}
+    current = {"commit": REV, "tag": "v1.0.0", "store_path": store_path(REV)}
+    run, asked = _control_cli(
+        monkeypatch, {"state": "pinned", "reason": None, "hold": hold,
+                      "current": current, "attempt": None},
+    )  # fmt: skip
+    done = run("host", "pin", "root@web-1.example.net", "v1.0.0", "--json")
+    assert done.exit_code == 0, done.stdout + done.stderr
+    body = json.loads(done.stdout)
+    assert body == {
+        "schema": "piceli.host-control.v1", "target": "web-1.example.net",
+        "host": None, "action": "pin", "state": "pinned", "reason": None,
+        "hold": hold, "current": current, "attempt": None,
+    }  # fmt: skip
+    assert asked == [("pin", "v1.0.0")]
+    for command in ("unpin", "rollback"):
+        done = run("host", command, "root@web-1.example.net")
+        assert done.exit_code == 0 and done.stdout == ""
+    assert [a for a, _ in asked] == ["pin", "unpin", "rollback"]
+
+
+def test_host_pin_exits_1_after_a_rollback_and_2_when_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt = {"commit": REV, "state": "rolled-back", "stages": [],
+               "checks": [{"name": "unit-1", "state": "failed"}],
+               "rollback": {"state": "done"}}  # fmt: skip
+    run, _ = _control_cli(
+        monkeypatch, {"state": "failed", "reason": "host-check-failed",
+                      "attempt": attempt, "hold": None, "current": None},
+    )  # fmt: skip
+    done = run("host", "pin", "web-1.example.net", "v0.9.0", "--json")
+    assert done.exit_code == 1
+    body = json.loads(done.stdout)
+    assert body["reason"] == "host-check-failed" and body["attempt"] == attempt
+    run, _ = _control_cli(
+        monkeypatch, {"state": "rejected", "reason": "host-pin-not-found"}
+    )
+    done = run("host", "pin", "web-1.example.net", "v9.9.9")
+    assert done.exit_code == 2
+    assert json.loads(done.stdout)["reason"] == "host-pin-not-found"
+    run, _ = _control_cli(monkeypatch, {"state": "rejected", "reason": "x-unknown"})
+    done = run("host", "rollback", "web-1.example.net")
+    assert json.loads(done.stdout)["reason"] == "host-control-unsupported"
+
+
+def test_host_status_shows_a_hold(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = _cli(monkeypatch, [_status(hold={"kind": "rollback", "commit": REV,
+                                           "tag": "v1.2.0", "at": "2026-10-22"})])  # fmt: skip
+    done = run("host", "status", "web-1.example.net")
+    assert done.exit_code == 0
+    assert "rolled back to" in done.stderr and "unpin" in done.stderr
+
+
+# ------------------------------------------------------------------ secrets
+
+
+def test_secrets_age_generates_stores_and_prints_only_the_public_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.hosts.age import recipient
+    from piceli.infra.machines.credentials import load_credential
+    from piceli.k8s.cli import app
+
+    monkeypatch.setenv("PICELI_CREDENTIALS_DIR", str(tmp_path / "creds"))
+    done = CliRunner().invoke(app, ["secrets", "age", "web-1-age", "--generate"])
+    assert done.exit_code == 0, done.stdout + done.stderr
+    body = json.loads(done.stdout)
+    identity = load_credential("web-1-age", "age-identity")
+    assert body == {"state": "stored", "name": "web-1-age", "kind": "age-identity",
+                    "public_key": recipient(identity)}  # fmt: skip
+    assert identity not in done.stdout + done.stderr
+    assert (tmp_path / "creds" / "web-1-age.json").stat().st_mode & 0o777 == 0o600
+    again = CliRunner().invoke(app, ["secrets", "age", "web-1-age", "--generate"])
+    assert again.exit_code == 2
+    assert json.loads(again.stdout)["reason"] == "infra-credential-exists"
+    shown = CliRunner().invoke(app, ["secrets", "age", "web-1-age"])
+    assert json.loads(shown.stdout)["public_key"] == body["public_key"]
+    imported = CliRunner().invoke(
+        app, ["secrets", "age", "other-age", "--prompt"], input=identity + "\n"
+    )
+    assert json.loads(imported.stdout)["public_key"] == body["public_key"]
+    bad = CliRunner().invoke(
+        app, ["secrets", "age", "bad-age", "--prompt"], input="not-a-key\n"
+    )
+    assert bad.exit_code == 2
+    assert json.loads(bad.stdout)["reason"] == "infra-credential-invalid"
+    assert "not-a-key" not in bad.stdout + bad.stderr
+
+
+class FakeSsh:
+    """The host side of ``host secrets``: a key file in ``root``."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.calls: list[list[str]] = []
+        self.inputs: list[bytes | None] = []
+        self.activate_code = 0
+
+    def __call__(self, argv: list[str], **kwargs: Any) -> Any:
+        self.calls.append(argv)
+        self.inputs.append(kwargs.get("input"))
+        words = argv[argv.index("--") + 2 :]
+        if words[0] == "/run/current-system/bin/switch-to-configuration":
+            return subprocess.CompletedProcess(argv, self.activate_code, b"", b"")
+        assert words[:2] == ["sh", "-c"]
+        script = words[2].replace("/var/lib/sops-nix", str(self.root))
+        done = subprocess.run(
+            ["sh", "-c", script.replace("chown 0:0", "true")],
+            input=kwargs.get("input") or b"", capture_output=True, timeout=30,
+        )  # fmt: skip
+        return subprocess.CompletedProcess(argv, done.returncode, done.stdout, b"")
+
+
+def test_host_secrets_plans_writes_and_reactivates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shlex
+
+    import piceli.hosts.remote as remote_module
+    import piceli.k8s.cli.host as cli_host
+    from piceli.hosts.age import generate_identity
+    from piceli.infra.machines.credentials import load_credential, save_credential
+    from piceli.k8s.cli import app
+
+    if shutil.which("sha256sum") is None:
+        pytest.skip("no sha256sum")
+    monkeypatch.setenv("PICELI_CREDENTIALS_DIR", str(tmp_path / "creds"))
+    CliRunner().invoke(app, ["secrets", "age", "web-1-age", "--generate"])
+    identity = load_credential("web-1-age", "age-identity")
+    declared = NixHost(
+        "web-1", server="ssh://root@web-1.example.net", flake=".#web-1",
+        follow=Tag("v*"), cache=NixCache(PUBLIC, url=f"file://{tmp_path}"),
+        age_identity="web-1-age",
+    )  # fmt: skip
+    monkeypatch.setattr(cli_host, "load_host", lambda _ref: declared)
+    host_root = tmp_path / "host"
+    fake = FakeSsh(host_root)
+    monkeypatch.setattr(
+        remote_module, "_ssh",
+        lambda target, words, **kw: fake(
+            ["ssh", "--", "web-1.example.net",
+             *(shlex.split(" ".join(words)) if words else [])],
+            **({"input": kw["data"]} if kw.get("data") is not None else {}),
+        ),
+    )  # fmt: skip
+    run = lambda *a: CliRunner().invoke(app, ["host", "secrets", *a])  # noqa: E731
+    planned = run("hosts.py:web", "--json")
+    assert planned.exit_code == 3, planned.stdout + planned.stderr
+    plan = json.loads(planned.stdout)
+    assert {k: plan[k] for k in ("path", "mode", "owner", "existing", "state")} == {
+        "path": "/var/lib/sops-nix/key.txt", "mode": "0600", "owner": "root",
+        "existing": "absent", "state": "approval-required",
+    }  # fmt: skip
+    assert plan["public_key"].startswith("age1") and identity not in planned.stdout
+    assert run("hosts.py:web", "--approve", "sha256:" + "0" * 64).exit_code == 2
+    done = run("hosts.py:web", "--approve", plan["digest"])
+    assert done.exit_code == 0, done.stdout + done.stderr
+    assert json.loads(done.stdout)["state"] == "written"
+    key = host_root / "key.txt"
+    assert key.stat().st_mode & 0o777 == 0o600
+    assert identity in key.read_text() and plan["public_key"] in key.read_text()
+    assert not list(host_root.glob(".piceli-age.*"))
+    # The secret went on stdin only: never in an argument.
+    assert all(identity not in " ".join(call) for call in fake.calls)
+    assert fake.calls[-1][-2:] == ["/run/current-system/bin/switch-to-configuration",
+                                   "switch"]  # fmt: skip
+    assert identity not in done.stdout + done.stderr
+    # The same key: nothing to do.
+    again = run("hosts.py:web")
+    assert again.exit_code == 0 and json.loads(again.stdout)["state"] == "current"
+    # Another key: refused unless --replace, which the plan shows.
+    save_credential("web-1-age", "age-identity", generate_identity())
+    refused = run("hosts.py:web")
+    assert refused.exit_code == 2
+    assert json.loads(refused.stdout)["reason"] == "host-secret-exists"
+    replaced = run("hosts.py:web", "--replace")
+    assert replaced.exit_code == 3
+    replan = json.loads(replaced.stdout)
+    assert replan["existing"] == "different" and replan["replace"] is True
+    fake.activate_code = 1
+    failed = run("hosts.py:web", "--replace", "--approve", replan["digest"])
+    assert failed.exit_code == 1
+    assert json.loads(failed.stdout)["reason"] == "host-secret-activation-failed"
+    no_identity = NixHost(
+        "web-2", server="ssh://root@web-2.example.net", flake=".#web-2",
+        follow=Tag("v*"), cache=NixCache(PUBLIC, url=f"file://{tmp_path}"),
+    )  # fmt: skip
+    monkeypatch.setattr(cli_host, "load_host", lambda _ref: no_identity)
+    assert json.loads(run("hosts.py:web").stdout)["reason"] == "host-secret-undeclared"

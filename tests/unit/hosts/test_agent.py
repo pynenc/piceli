@@ -434,6 +434,7 @@ def test_read_credentials_come_from_a_root_only_file(
     poll = make_agent(tmp_path, declared, fake).run_once()
     assert poll["reason"] == "host-credentials-exposed" and fake.calls == []
     secret_file.chmod(0o600)
+    secret_file.chmod(0o400)  # sops-nix's default mode
     assert make_agent(tmp_path, declared, fake).run_once()["state"] == "deployed"
     (copy_env,) = [
         env for call, env in zip(fake.calls, fake.envs, strict=True) if "copy" in call
@@ -565,6 +566,8 @@ def test_declarations_are_checked(cache_dir: Path) -> None:
     assert code(cache="file:///x") == "host-invalid"
     assert code(checks=["nginx"]) == "host-check-invalid"
     assert code(poll_seconds=5) == "host-invalid"
+    assert code(age_identity="Bad Name") == "host-invalid"
+    assert code(age_key_file="key.txt") == "host-invalid"
     https = NixCache(PUBLIC, url="https://cache.example.net")
     assert code(cache=https) == "host-invalid"  # tags need a listing
     assert host(cache_dir, cache=https, follow=Branch("main")).build == "web-1"
@@ -593,7 +596,7 @@ def test_declarations_are_checked(cache_dir: Path) -> None:
 def test_the_agent_config_holds_no_secret(cache_dir: Path) -> None:
     cache = NixCache(
         PUBLIC, url="s3://bin?endpoint=s3.example.net&region=eu-1",
-        write_credentials="cache-write", read_credentials="cache-read",
+        write_credentials="cache-write",
     )  # fmt: skip
     config = agent_config(host(cache_dir, cache=cache))
     assert config["cache"] == {
@@ -602,8 +605,13 @@ def test_the_agent_config_holds_no_secret(cache_dir: Path) -> None:
         "objects": {"kind": "s3", "endpoint": "s3.example.net", "bucket": "bin",
                     "region": "eu-1"},
     }  # fmt: skip
-    assert config["read_credentials_file"] == "/etc/piceli-host/cache.env"
+    # The read-only keys are a sops-nix secret on the host.
+    assert config["read_credentials_file"] == "/run/secrets/piceli/cache.env"
     assert "cache-write" not in json.dumps(config)
+    assert agent_config(host(cache_dir))["read_credentials_file"] is None
+    declared = host(cache_dir, age_identity="web-1-age")
+    assert declared.age_key_file == "/var/lib/sops-nix/key.txt"
+    assert "web-1-age" not in json.dumps(agent_config(declared))
 
 
 def test_the_agent_is_standard_library_only() -> None:
@@ -619,3 +627,132 @@ def test_the_agent_is_standard_library_only() -> None:
     }
     imported -= {"piceli", "nix_verify"}  # the verifier travels with it
     assert imported <= set(sys.stdlib_module_names) | {"__future__"}
+
+
+# ------------------------------------------------------------------ pin, unpin, rollback
+
+
+def _events_of(collector: Collector) -> list[str]:
+    return _events(collector.posts)
+
+
+def test_a_pin_deploys_an_older_tag_and_holds_it_until_unpinned(
+    tmp_path: Path, cache_dir: Path, fake: FakeHost
+) -> None:
+    publish(cache_dir, commit_of(1), tag="v1.0.0")
+    publish(cache_dir, commit_of(2), tag="v1.1.0")
+    up = Collector(up=True)
+    declared = host(cache_dir, report=HostReport("https://poet.example.net:4318"))
+    agent = lambda: make_agent(tmp_path, declared, fake, opener=up)  # noqa: E731
+    assert agent().run_once()["commit"] == commit_of(2)
+    result = agent().control("pin", "v1.0.0")
+    assert result["state"] == "pinned" and result["reason"] is None
+    assert result["attempt"]["trigger"] == "pin"
+    assert [s["name"] for s in result["attempt"]["stages"]] == [
+        "resolve", "verify", "realise", "switch", "checks",
+    ]  # fmt: skip
+    assert os.readlink(fake.current) == store_path(commit_of(1))
+    hold = status(tmp_path)["hold"]
+    assert hold["kind"] == "pin" and hold["tag"] == "v1.0.0"
+    assert hold["commit"] == commit_of(1) and hold["at"]
+    # A newer tag is not deployed while pinned; the hold survives each poll.
+    publish(cache_dir, commit_of(3), tag="v1.2.0")
+    calls = len(fake.calls)
+    poll = agent().run_once()
+    assert poll["state"] == "held" and poll["reason"] == "host-pinned"
+    assert len(fake.calls) == calls and status(tmp_path)["hold"]["tag"] == "v1.0.0"
+    events = _events_of(up)
+    assert events.count("piceli.host.pin") == 2  # asked, then its result
+    assert "piceli.host.deploy.result" in events and "piceli.host.check" in events
+    # Unpinned, the next poll follows the tags again (and is started now).
+    result = agent().control("unpin")
+    assert result["state"] == "unpinned" and result["hold"] is None
+    assert result["was"]["tag"] == "v1.0.0"
+    assert fake.calls[-1] == [
+        "fake-systemctl", "start", "--no-block", "piceli-host-agent.service",
+    ]  # fmt: skip
+    assert "piceli.host.unpin" in _events_of(up)
+    assert agent().run_once()["commit"] == commit_of(3)
+
+
+def test_a_pin_of_the_running_build_holds_without_a_switch(
+    tmp_path: Path, cache_dir: Path, fake: FakeHost
+) -> None:
+    publish(cache_dir, commit_of(1), tag="v1.0.0")
+    make_agent(tmp_path, host(cache_dir), fake).run_once()
+    calls = len(fake.calls)
+    result = make_agent(tmp_path, host(cache_dir), fake).control("pin", "v1.0.0")
+    assert result["state"] == "pinned" and result["attempt"] is None
+    assert len(fake.calls) == calls
+
+
+def test_a_pin_is_verified_and_rolled_back_like_any_deploy(
+    tmp_path: Path, cache_dir: Path, fake: FakeHost
+) -> None:
+    publish(cache_dir, commit_of(1), tag="v1.1.0")
+    make_agent(tmp_path, host(cache_dir), fake).run_once()
+    agent = lambda: make_agent(tmp_path, host(cache_dir), fake)  # noqa: E731
+    missing = agent().control("pin", "v0.9.0")
+    assert missing["state"] == "rejected" and missing["reason"] == "host-pin-not-found"
+    assert agent().control("pin", "../x")["reason"] == "host-pin-not-found"
+    publish(cache_dir, commit_of(2), tag="v1.0.0", secret=nix.generate_key("cache-1"))
+    forged = agent().control("pin", "v1.0.0")
+    assert forged["state"] == "rejected"
+    assert forged["reason"] == "host-signature-invalid"
+    publish(cache_dir, commit_of(3), tag="v0.9.0")
+    fake.unit_active = False
+    failed = agent().control("pin", "v0.9.0")
+    assert failed["state"] == "failed" and failed["reason"] == "host-check-failed"
+    assert failed["attempt"]["rollback"]["state"] == "done"
+    assert os.readlink(fake.current) == store_path(commit_of(1))
+    assert failed["hold"] is None and status(tmp_path)["hold"] is None
+
+
+def test_a_rollback_returns_to_the_previous_system_and_holds_it(
+    tmp_path: Path, cache_dir: Path, fake: FakeHost
+) -> None:
+    agent = lambda: make_agent(tmp_path, host(cache_dir), fake)  # noqa: E731
+    publish(cache_dir, commit_of(1), tag="v1.0.0")
+    agent().run_once()
+    assert agent().control("rollback")["state"] == "rolled-back"  # to OLD
+    assert agent().control("unpin")["state"] == "unpinned"
+    agent().run_once()
+    publish(cache_dir, commit_of(2), tag="v1.1.0")
+    agent().run_once()
+    calls = len(fake.calls)
+    result = agent().control("rollback")
+    assert result["state"] == "rolled-back"
+    attempt = result["attempt"]
+    assert attempt["trigger"] == "rollback"
+    assert [s["name"] for s in attempt["stages"]] == ["switch", "checks"]
+    assert not any(" copy " in " ".join(c) for c in fake.calls[calls:])  # in store
+    assert os.readlink(fake.current) == store_path(commit_of(1))
+    body = status(tmp_path)
+    assert body["current"]["tag"] == "v1.0.0"
+    assert body["previous"]["tag"] == "v1.1.0"
+    assert body["hold"]["kind"] == "rollback" and body["hold"]["tag"] == "v1.0.0"
+    # The next poll does not deploy again what was rolled away from.
+    assert agent().run_once()["state"] == "held"
+    assert os.readlink(fake.current) == store_path(commit_of(1))
+    state = json.loads((tmp_path / "state" / "state.json").read_text())
+    assert not state.get("bad")  # a rollback marks nothing bad
+
+
+def test_a_rollback_needs_a_previous_system_in_the_store(
+    tmp_path: Path, cache_dir: Path, fake: FakeHost
+) -> None:
+    result = make_agent(tmp_path, host(cache_dir), fake).control("rollback")
+    assert result["state"] == "rejected"
+    assert result["reason"] == "host-rollback-unavailable"
+    publish(cache_dir, commit_of(1), tag="v1.0.0")
+    make_agent(tmp_path, host(cache_dir), fake).run_once()
+
+    def gone(argv: Sequence[str], **kwargs: Any) -> Any:
+        if "path-info" in argv:
+            return subprocess.CompletedProcess(list(argv), 1, b"", b"")
+        return fake(argv, **kwargs)
+
+    agent = make_agent(tmp_path, host(cache_dir), fake)
+    agent.runner = gone
+    assert agent.control("rollback")["reason"] == "host-rollback-unavailable"
+    assert os.readlink(fake.current) == store_path(commit_of(1))

@@ -15,7 +15,8 @@ A user writes, in the same module as the cache and the servers::
             HostCheck.http("http://127.0.0.1/healthz", timeout=90),
             HostCheck.command("test", "-s", "/var/lib/app/ready"),
         ],
-        report=HostReport("https://poet.example.net:4318"),
+        report=HostReport("https://collector.example.net:4318"),
+        age_identity="web-1-age",           # sops-nix's key, by `piceli host secrets`
     )
 
 :func:`agent_config` is the JSON the host agent reads; nothing here reaches
@@ -46,6 +47,10 @@ __all__ = [
 
 CONFIG_SCHEMA = "piceli.nix-host-config.v1"
 STATE_DIR = "/var/lib/piceli-host"
+#: sops-nix's ``sops.age.keyFile`` default in its documentation.
+AGE_KEY_FILE = "/var/lib/sops-nix/key.txt"
+#: Where sops-nix decrypts ``sops.secrets."piceli/cache.env"``.
+CACHE_ENV = "/run/secrets/piceli/cache.env"
 #: Defaults (proposals): a poll every 5 minutes, 60 s per check, 20 attempts kept.
 POLL_SECONDS = 300
 CHECK_TIMEOUT = 60
@@ -196,8 +201,9 @@ class HostReport:
         or the full ``.../v1/logs`` URL. Plain ``http://`` needs
         ``insecure=True`` unless it is a loopback address.
     :param headers_file: A root-only file on the host with ``Name: value``
-        lines (``Authorization: Bearer ...``) the operator puts there; the
-        rendered module, committed to Git, never holds a header value.
+        lines (``Authorization: Bearer ...``): a sops-nix secret, such as
+        ``/run/secrets/piceli/otlp-headers``. The rendered module, committed
+        to Git, never holds a header value.
     """
 
     endpoint: str
@@ -292,11 +298,16 @@ class NixHost:
         ``.#NAME``, else the host's name).
     :param read_credentials_file: A root-only file on the host with the
         cache's **read-only** S3 keys (``AWS_ACCESS_KEY_ID=`` and
-        ``AWS_SECRET_ACCESS_KEY=`` lines); default
-        ``/etc/piceli-host/cache.env`` when the cache declares
-        ``read_credentials``, none for a public cache.
+        ``AWS_SECRET_ACCESS_KEY=`` lines), decrypted by sops-nix; default
+        ``/run/secrets/piceli/cache.env`` (``sops.secrets."piceli/cache.env"``)
+        for an ``s3://`` cache, none for a ``file://`` or ``https://`` one.
     :param poll_seconds: How often the agent looks for a new build.
     :param history: How many attempts the status keeps.
+    :param age_identity: The local credential with the host's age identity
+        (``piceli secrets age NAME --generate``) that ``piceli host secrets``
+        puts on the host for sops-nix; ``None``: the host gets its key
+        another way.
+    :param age_key_file: Where it goes: sops-nix's ``sops.age.keyFile``.
     """
 
     name: str
@@ -310,6 +321,8 @@ class NixHost:
     read_credentials_file: str | None = None
     poll_seconds: int = POLL_SECONDS
     history: int = HISTORY
+    age_identity: str | None = None
+    age_key_file: str = AGE_KEY_FILE
     attribute: str = field(init=False, default="")
 
     def __post_init__(self) -> None:
@@ -357,8 +370,8 @@ class NixHost:
             raise _invalid("NixHost(build=) is the builds' manifest name (a DNS label)")
         object.__setattr__(self, "build", build)
         path = self.read_credentials_file
-        if path is None and self.cache.read_credentials is not None:
-            path = "/etc/piceli-host/cache.env"
+        if path is None and self.cache.scheme == "s3":
+            path = CACHE_ENV
         if path is not None and not _PATH.fullmatch(path):
             raise _invalid("NixHost(read_credentials_file=) is an absolute path")
         object.__setattr__(self, "read_credentials_file", path)
@@ -368,6 +381,17 @@ class NixHost:
         ):
             if not isinstance(value, int) or not low <= value <= high:
                 raise _invalid(f"NixHost({what}=) is {low} to {high}")
+        if self.age_identity is not None:
+            from piceli.profiles import ProfileError, check_name
+
+            try:
+                check_name(self.age_identity)
+            except (ProfileError, TypeError):
+                raise _invalid("NixHost(age_identity=) is a credential name") from None
+        if not isinstance(self.age_key_file, str) or not _PATH.fullmatch(
+            self.age_key_file
+        ):
+            raise _invalid("NixHost(age_key_file=) is an absolute path")
 
     def ssh_target(self, address: str | None = None) -> SshTarget:
         """Where its status is read: the SSH target, or the server's ``Ssh``

@@ -79,6 +79,7 @@ DYNAMIC = {
     "host-rollback-failed",
     "host-rolled-back",
     "host-deploy-failed",
+    "host-pinned",
     # dev.hosts.UNAVAILABLE: a build host that cannot take a run
     "dev-host-unavailable",
     # envs.access (SKIPPED, UNCHANGED) and k8s.env_access (TAILNET_*,

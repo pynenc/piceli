@@ -56,10 +56,10 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `piceli/NAME/COMMIT.json` (`piceli.nix-build.v1`: commit, tag, flake
   attribute, store path, system, closure size, build time) signed with the
   cache key; `piceli.dev.nix_verify` checks it and the narinfo with the
-  standard library only. A cache has distinct `write_credentials` (builds,
-  gc) and read-only `read_credentials` (hosts). `piceli dev nix gc` keeps
-  the last 5 tags, the current main and their closures and deletes the
-  rest after approval. New `piceli secrets nix-cache NAME --generate`
+  standard library only. A cache's `write_credentials` (builds, gc) never
+  reach a host; hosts read with read-only keys kept in sops-nix. `piceli
+  dev nix gc` keeps the last 5 tags, the current main and their closures
+  and deletes the rest after approval. New `piceli secrets nix-cache NAME --generate`
   (prints the public key only) and `piceli secrets s3 NAME --prompt`; new
   codes `dev-nix-*`.
 - **Nix host releases.** `NixHost(name, server=, flake=, follow=Tag("v*") |
@@ -86,6 +86,35 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   carrying the pointer's commit, tag and `published_at`; an attempt in
   progress; its attempts), and `--published-after` (from `dev nix build
   --publish --json`) pins it before the host has polled.
+- **Pin, unpin and roll back a Nix host.** `piceli host pin HOST TAG`
+  deploys a published tag's build (verified like any deploy, an older
+  version too, checked and rolled back on failure) and holds it;
+  `piceli host rollback HOST` switches to the previous system, already in
+  the store, runs the checks and holds it, so the next poll does not deploy
+  what was rolled away from; `piceli host unpin HOST` drops the hold and
+  starts a poll. They run the agent once over SSH (the module now puts a
+  `piceli-host-agent` command on the host's PATH), need no approval digest,
+  print `piceli.host-control.v1` with `--json` and report
+  `piceli.host.pin`, `piceli.host.unpin` and `piceli.host.rollback` over
+  OTLP. A hold lives in `/var/lib/piceli-host/state.json` across reboots;
+  `host status` shows it and `host wait` for another build exits 1 with
+  `host-pinned`. New codes `host-pinned`, `host-pin-not-found`,
+  `host-rollback-unavailable`, `host-busy`, `host-control-unsupported`.
+- **A host's secrets live in sops-nix; Piceli provisions its age key.**
+  `piceli secrets age NAME --generate` (or `--prompt`) stores an age X25519
+  identity (`0600`, never printed) and prints its `age1...` public key for
+  `.sops.yaml`. `NixHost(age_identity=NAME, age_key_file=
+  "/var/lib/sops-nix/key.txt")` and `piceli host secrets MODULE:ATTR` put
+  it on the host after approval of a plan that shows the path, mode, owner,
+  public key and whether the host has the same, another or no key (compared
+  by fingerprint); the key travels on ssh's stdin, is renamed into place
+  atomically, another key is replaced only with `--replace`, and the host
+  re-runs its activation so sops-nix decrypts. The cache's read-only keys
+  and the OTLP headers are sops-nix secrets: `read_credentials_file=`
+  defaults to `/run/secrets/piceli/cache.env` for an `s3://` cache, and
+  the agent accepts sops-nix's `0400` root files (it refuses files that
+  root does not own). `NixCache(read_credentials=)` is removed: Piceli no
+  longer keeps keys that only hosts use. New codes `host-secret-*`.
 
 ## Version 0.23.0
 

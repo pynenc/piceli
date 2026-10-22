@@ -86,7 +86,11 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli heavy status`](#cli-heavy-status) | Show who holds the lock and the most recent receipts. | none | no |
 | [`piceli help-json`](#cli-help-json) | Print the whole CLI tree (commands, options, contracts) as JSON. | none | no |
 | [`piceli host module`](#cli-host-module) | Render the NixOS module that installs the host agent (commit it, import it). | none | no |
+| [`piceli host pin`](#cli-host-pin) | Deploy a tag's build (an older one too) and hold it: no newer build until unpin. | none | no |
+| [`piceli host rollback`](#cli-host-rollback) | Switch back to the previous system (in the store) and hold it until unpin. | none | no |
+| [`piceli host secrets`](#cli-host-secrets) | Put the host's age identity where sops-nix reads it: plan, then --approve. | none | yes |
 | [`piceli host status`](#cli-host-status) | Read the host agent's status over SSH (current build, last attempt, checks). | none | no |
+| [`piceli host unpin`](#cli-host-unpin) | Drop a pin or rollback hold: the host follows its declared ref again. | none | no |
 | [`piceli host wait`](#cli-host-wait) | Wait until the host runs REV with its checks passed (exit 1: failed or timeout). | none | no |
 | [`piceli import live`](#cli-import-live) | Generate a typed module from the objects of a live namespace (read-only). | reads | no |
 | [`piceli import yaml`](#cli-import-yaml) | Generate a typed module from a directory of manifests (no cluster). | none | no |
@@ -139,6 +143,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli restore`](#cli-restore) | Put a restore point back into its claims (plan, then --approve HASH). | writes | yes |
 | [`piceli restore-points`](#cli-restore-points) | List a pipeline's restore points, newest first (read-only, offline). | none | no |
 | [`piceli runs`](#cli-runs) | List the deploy runs of a pipeline, newest first, with their state, release, duration and summary files. Read-only (with shared state it reads the local working copy: run `piceli state pull` first). | none | no |
+| [`piceli secrets age`](#cli-secrets-age) | A host's age identity for sops-nix: generate or import it; print its public key. | none | no |
 | [`piceli secrets cluster`](#cli-secrets-cluster) | Store another cluster's credentials for the GitOps controller (never printed). | writes | no |
 | [`piceli secrets git`](#cli-secrets-git) | Store the Git token the controller and cluster builds use (read from stdin, never printed). | writes | no |
 | [`piceli secrets nix-cache`](#cli-secrets-nix-cache) | A Nix binary cache's signing key: generate or import it; print its public key. | none | no |
@@ -1892,6 +1897,75 @@ Render the NixOS module that installs the host agent (commit it, import it).
 - **Output contract:** conforms
 - **Notes:** 0.24.0. Never contacts the host or the cache. The module holds no secret (paths of root-only files only); commit it and import it from the host's configuration. With --output prints one JSON object (path, sha256).
 
+(cli-host-pin)=
+### `piceli host pin`
+
+Deploy a tag's build (an older one too) and hold it: no newer build until unpin.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `TAG` | text | required |  |
+| `--infra` | text |  | MODULE:ATTR of the Infrastructure whose applied state has the server's address (when its Ssh has no address=) |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.NixHost) or an SSH target, --infra MODULE[:ATTR] (address, pinned host keys, host names)
+- **Writes:** the host's system and /var/lib/piceli-host (ssh, as root)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. No approval digest: it only goes to a build that is signed, published and verified like every deploy, with checks and a rollback on failure. Runs piceli-host-agent pin TAG over SSH. Exit 1: the build failed its switch or checks and the host is back on its previous system; 2: refused before any change (host-pin-not-found, host-signature-invalid, host-busy). Reported to the OTLP collector as piceli.host.pin.
+
+(cli-host-rollback)=
+### `piceli host rollback`
+
+Switch back to the previous system (in the store) and hold it until unpin.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--infra` | text |  | MODULE:ATTR of the Infrastructure whose applied state has the server's address (when its Ssh has no address=) |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.NixHost) or an SSH target
+- **Writes:** the host's system and /var/lib/piceli-host (ssh, as root)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. No approval digest: the previous system was verified when it was deployed. Runs the checks and switches forward again when one fails (exit 1). The hold keeps the next poll from deploying what was rolled away from. host-rollback-unavailable when no previous system is recorded or in the store. Reported as piceli.host.rollback.
+
+(cli-host-secrets)=
+### `piceli host secrets`
+
+Put the host's age identity where sops-nix reads it: plan, then --approve.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--infra` | text |  | MODULE:ATTR of the Infrastructure whose applied state has the server's address (when its Ssh has no address=) |
+| `--replace` | boolean | `False` | Replace a different key the host has (what it decrypts with it changes) |
+| `--approve` | text |  | The plan's digest |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.NixHost with age_identity=), $PICELI_CREDENTIALS_DIR/NAME.json (age-identity), the host's key file, by fingerprint only (ssh)
+- **Writes:** NixHost(age_key_file=) on the host, 0600 root (ssh stdin, atomic rename)
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** 0.24.0. The plan lists host, path, mode, owner, public key and whether the host has the same, a different or no key (exit 3 with the digest; 0 when it has the same). A different key is refused without --replace (host-secret-exists). The key travels on ssh's stdin, never in an argument, log or state. After writing, the host re-runs switch-to-configuration switch so sops-nix decrypts.
+
 (cli-host-status)=
 ### `piceli host status`
 
@@ -1913,6 +1987,28 @@ Read the host agent's status over SSH (current build, last attempt, checks).
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** 0.24.0. Read-only; no cluster (works with every cluster down). ssh runs with BatchMode and strict host key checking (host-unreachable, host-status-missing).
+
+(cli-host-unpin)=
+### `piceli host unpin`
+
+Drop a pin or rollback hold: the host follows its declared ref again.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--infra` | text |  | MODULE:ATTR of the Infrastructure whose applied state has the server's address (when its Ssh has no address=) |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.NixHost) or an SSH target
+- **Writes:** /var/lib/piceli-host/state.json on the host (ssh, as root)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Changes no system itself; the poll it starts deploys the newest build of the followed ref. Reported as piceli.host.unpin.
 
 (cli-host-wait)=
 ### `piceli host wait`
@@ -3224,6 +3320,29 @@ List the deploy runs of a pipeline, newest first, with their state, release, dur
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Read-only; newest first. With shared state it reads the local working copy (piceli state pull first). summary.json follows docs/schemas/piceli-run-summary-v1.schema.json.
+
+(cli-secrets-age)=
+### `piceli secrets age`
+
+A host's age identity for sops-nix: generate or import it; print its public key.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--generate` | boolean | `False` | Generate a new identity |
+| `--prompt` | boolean | `False` | Read an existing identity (AGE-SECRET-KEY-1...) from stdin |
+| `--replace` | boolean | `False` | Replace an existing identity (what was encrypted to the old one needs re-encrypting) |
+
+**Contract**
+
+- **Reads:** stdin (--prompt), $PICELI_CREDENTIALS_DIR/NAME.json
+- **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600; --generate, --prompt)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Prints the public key (age1...) for .sops.yaml, never the identity. Without --generate or --prompt it only reads. Refuses to replace an identity without --replace (infra-credential-exists).
 
 (cli-secrets-cluster)=
 ### `piceli secrets cluster`

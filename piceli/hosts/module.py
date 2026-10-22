@@ -3,7 +3,9 @@
 ``piceli host module MODULE:ATTR`` writes one self-contained ``.nix`` file:
 the agent (:mod:`piceli.hosts.agent`) and its verifier
 (:mod:`piceli.dev.nix_verify`) as strings, the host's configuration as JSON
-(no secret), a systemd oneshot service and its timer. The user commits it
+(no secret), a systemd oneshot service and its timer, and the
+``piceli-host-agent`` command (``pin``, ``unpin``, ``rollback``) on the
+system's PATH for ``piceli host`` over SSH. The user commits it
 next to the host's configuration and imports it; Piceli never edits the
 flake. Because the agent is part of the system it switches to, every
 release carries the agent of the Piceli that rendered the module.
@@ -70,8 +72,13 @@ let
     cp ${{pkgs.writeText "piceli_host_agent.py" agentSource}} $out/piceli_host_agent.py
     cp ${{pkgs.writeText "nix_verify.py" verifySource}} $out/nix_verify.py
   '';
+  # `piceli host pin|unpin|rollback` run it over SSH; the timer runs a poll.
+  command = pkgs.writeShellScriptBin "piceli-host-agent" ''
+    exec ${{pkgs.python3}}/bin/python3 -E -s ${{agent}}/piceli_host_agent.py --config ${{configFile}} "$@"
+  '';
 in
 {{
+  environment.systemPackages = [ command ];
   systemd.services.piceli-host-agent = {{
     description = "Piceli host agent: follow {following} of {host.build}";
     wants = [ "network-online.target" ];
@@ -81,7 +88,7 @@ in
     stopIfChanged = false;
     serviceConfig = {{
       Type = "oneshot";
-      ExecStart = "${{pkgs.python3}}/bin/python3 -E -s ${{agent}}/piceli_host_agent.py --config ${{configFile}}";
+      ExecStart = "${{command}}/bin/piceli-host-agent";
       StateDirectory = "piceli-host";
       StateDirectoryMode = "0755";
       TimeoutStartSec = "3h";

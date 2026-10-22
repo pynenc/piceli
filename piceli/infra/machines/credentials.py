@@ -35,13 +35,15 @@ _SCHEMA = "piceli.credential.v1"
 #: ``provider-token``: an API token; ``state-key``: a state passphrase;
 #: 0.24: ``nix-signing-key``: a Nix binary cache's secret key
 #: (``piceli secrets nix-cache``); ``s3-keys``: ``ACCESS_KEY_ID:SECRET``
-#: of a bucket's S3 API (``piceli secrets s3``).
-KINDS = ("provider-token", "state-key", "nix-signing-key", "s3-keys")
+#: of a bucket's S3 API (``piceli secrets s3``); ``age-identity``: a host's
+#: age X25519 identity for sops-nix (``piceli secrets age``).
+KINDS = ("provider-token", "state-key", "nix-signing-key", "s3-keys", "age-identity")
 _SET_UP = {
     "provider-token": "piceli secrets provider {} --prompt",
     "state-key": "piceli secrets state-key {} --generate",
     "nix-signing-key": "piceli secrets nix-cache {} --generate",
     "s3-keys": "piceli secrets s3 {} --prompt",
+    "age-identity": "piceli secrets age {} --generate",
 }
 #: OpenTofu's pbkdf2 key provider needs at least 16 characters.
 MIN_PASSPHRASE = 16

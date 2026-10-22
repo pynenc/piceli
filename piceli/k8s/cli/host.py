@@ -3,7 +3,9 @@
 ``piceli host module MODULE:ATTR`` renders the NixOS module of a
 :class:`~piceli.hosts.NixHost` (the agent, its configuration, a service and
 a timer); ``piceli host status`` and ``piceli host wait`` read the agent's
-status over SSH, with no cluster involved.
+status over SSH, with no cluster involved. ``piceli host pin|unpin|rollback``
+run the agent once over SSH; ``piceli host secrets`` puts the host's age
+identity (``piceli secrets age``) where sops-nix reads it, after approval.
 """
 
 from __future__ import annotations
@@ -19,7 +21,8 @@ from piceli.k8s.cli.cluster import JsonOption
 
 host_app = typer.Typer(
     rich_markup_mode=None,
-    help="Nix host releases: the host agent's module, status and wait (0.24.0).",
+    help="Nix host releases: the agent's module, status, wait, pins, rollback "
+    "and bootstrap secret (0.24.0).",
     no_args_is_help=True,
 )
 
@@ -150,6 +153,11 @@ def _describe(entry: Any) -> str:
 
 def _say_status(status: dict[str, Any]) -> None:
     say(f"{status.get('host')}: current {_describe(status.get('current'))}")
+    hold = status.get("hold")
+    if isinstance(hold, dict):
+        what = "pinned to" if hold.get("kind") == "pin" else "rolled back to"
+        say(f"  {what} {_describe(hold)} at {hold.get('at')}: no newer build "
+            "until `piceli host unpin`")  # fmt: skip
     poll = status.get("poll") or {}
     say(f"  last poll {poll.get('at')}: {poll.get('state')} {poll.get('reason') or ''}")
     attempt = status.get("last_attempt")
@@ -255,5 +263,257 @@ def wait(
         time.sleep(interval)
 
 
+# ------------------------------------------------------------- pin, rollback
+
+_DONE = {"pinned": "pinned", "unpinned": "unpinned", "rolled-back": "rolled back"}
+
+
+def _control(
+    target: str, infra: str | None, action: str, tag: str | None, as_json: bool
+) -> None:
+    from piceli.hosts.model import HostError
+    from piceli.hosts.remote import control
+
+    host, ssh, known = _target(target, infra)
+    try:
+        result = control(ssh, action, tag, known_hosts=known)
+    except HostError as error:
+        reject(error.code, str(error))
+    body = {
+        "schema": "piceli.host-control.v1",
+        "target": ssh.address,
+        "host": host.name if host is not None else None,
+        **{k: result.get(k) for k in ("action", "state", "reason", "hold",
+                                      "current", "attempt")},
+    }  # fmt: skip
+    state, reason = str(result.get("state")), str(result.get("reason") or "")
+    if state not in _DONE:
+        if result.get("attempt"):
+            _say_status({"host": body["host"] or ssh.address,
+                         "current": result.get("current"),
+                         "last_attempt": result.get("attempt")})  # fmt: skip
+        from piceli.errors import ERRORS
+
+        code = reason if reason in ERRORS else "host-control-unsupported"
+        message = f"{action} on {ssh.address}: {state}"
+        fields = {k: v for k, v in body.items() if k not in ("state", "reason")}
+        if state == "failed":
+            fail(code, message + " (the host runs what it ran before)", **fields)
+        reject(code, message, **fields)
+    say(f"{ssh.address}: {_DONE[state]}; current {_describe(result.get('current'))}")
+    if as_json:
+        emit_json(body)
+
+
+@host_app.command("pin")
+def pin(
+    target: TargetArgument,
+    tag: Annotated[
+        str,
+        typer.Argument(
+            help="The tag whose published build the host holds", show_default=False
+        ),
+    ],
+    infra: InfraOption = None,
+    as_json: JsonOption = False,
+) -> None:
+    """Deploy a tag's build (an older one too) and hold it: no newer build until unpin."""
+    _control(target, infra, "pin", tag, as_json)
+
+
+@host_app.command("unpin")
+def unpin(
+    target: TargetArgument, infra: InfraOption = None, as_json: JsonOption = False
+) -> None:
+    """Drop a pin or rollback hold: the host follows its declared ref again."""
+    _control(target, infra, "unpin", None, as_json)
+
+
+@host_app.command("rollback")
+def rollback(
+    target: TargetArgument, infra: InfraOption = None, as_json: JsonOption = False
+) -> None:
+    """Switch back to the previous system (in the store) and hold it until unpin."""
+    _control(target, infra, "rollback", None, as_json)
+
+
+# ------------------------------------------------------------- secrets
+
+
+@host_app.command("secrets")
+def host_secrets(
+    target: Annotated[
+        str,
+        typer.Argument(
+            help="MODULE:ATTR of a piceli.infra.NixHost with age_identity=",
+            show_default=False,
+        ),
+    ],
+    infra: InfraOption = None,
+    replace: Annotated[
+        bool,
+        typer.Option(
+            "--replace",
+            help="Replace a different key the host has "
+            "(what it decrypts with it changes)",
+        ),
+    ] = False,
+    approve: Annotated[
+        str | None, typer.Option("--approve", help="The plan's digest")
+    ] = None,
+    as_json: JsonOption = False,
+) -> None:
+    """Put the host's age identity where sops-nix reads it: plan, then --approve."""
+    import hashlib
+    import json
+
+    from piceli.cli_contract import EXIT_APPROVAL
+    from piceli.hosts import remote
+    from piceli.hosts.age import AgeError, check_identity, recipient
+    from piceli.hosts.model import HostError
+    from piceli.infra.machines.credentials import load_credential
+    from piceli.infra.machines.model import InfraError
+
+    host, ssh, known = _target(target, infra)
+    if host is None or host.age_identity is None:
+        reject(
+            "host-secret-undeclared",
+            "give a NixHost with age_identity= (piceli secrets age NAME --generate)",
+        )
+    try:
+        identity = check_identity(load_credential(host.age_identity, "age-identity"))
+        public = recipient(identity)
+        existing = remote.age_key_state(
+            ssh, host.age_key_file, identity, known_hosts=known
+        )
+    except (InfraError, AgeError, HostError) as error:
+        reject(error.code, str(error))
+    plan = {
+        "host": host.name, "target": ssh.address, "port": ssh.port,
+        "user": ssh.user, "path": host.age_key_file, "mode": "0600",
+        "owner": "root", "credential": host.age_identity, "public_key": public,
+        "existing": existing, "replace": replace,
+    }  # fmt: skip
+    digest = (
+        "sha256:"
+        + hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
+    )
+    body = {"schema": "piceli.host-secrets.v1", **plan, "digest": digest}
+    say(f"{host.name}: age identity {host.age_identity} -> {ssh.address}:"
+        f"{host.age_key_file} (0600 root), public key {public}")  # fmt: skip
+    say(f"  the host has: {existing} key")
+    if existing == "same":
+        emit_json({**body, "state": "current"})
+        return
+    if existing == "different" and not replace:
+        reject(
+            "host-secret-exists",
+            f"{host.age_key_file} on {ssh.address} holds another key; what sops-nix "
+            "decrypts with it changes (--replace if you mean it)",
+            **body,
+        )
+    if approve is None:
+        command = f"piceli host secrets {target}"
+        command += f" --infra {infra}" if infra else ""
+        command += " --replace" if replace else ""
+        say("approve with:")
+        say(f"  {command} --approve {digest}")
+        emit_json({**body, "state": "approval-required",
+                   "approve_command": f"{command} --approve {digest}"})  # fmt: skip
+        raise typer.Exit(EXIT_APPROVAL)
+    if approve != digest:
+        reject(
+            "host-secret-plan-changed",
+            "what host secrets would do changed since it was approved; review it again",
+        )
+    content = f"# public key: {public}\n{identity}\n".encode()
+    del identity
+    try:
+        remote.write_age_key(ssh, host.age_key_file, content, known_hosts=known)
+        del content
+        activated = remote.activate(ssh, known_hosts=known)
+    except HostError as error:
+        fail(error.code, str(error), **body)
+    if not activated:
+        fail(
+            "host-secret-activation-failed",
+            "the key was written; re-running the activation failed",
+            **body,
+        )
+    say(f"written; {ssh.address} re-ran its activation (sops-nix decrypts with it)")
+    emit_json({**body, "state": "written", "activated": True})
+
+
+def age_secret(
+    context: typer.Context,
+    name: Annotated[str, typer.Argument(help="Credential name, e.g. web-1-age")],
+    generate: Annotated[
+        bool, typer.Option("--generate", help="Generate a new identity")
+    ] = False,
+    prompt: Annotated[
+        bool,
+        typer.Option(
+            "--prompt",
+            help="Read an existing identity (AGE-SECRET-KEY-1...) from stdin",
+        ),
+    ] = False,
+    replace: Annotated[
+        bool,
+        typer.Option(
+            "--replace",
+            help="Replace an existing identity (what was "
+            "encrypted to the old one needs re-encrypting)",
+        ),
+    ] = False,
+) -> None:
+    """A host's age identity for sops-nix: generate or import it; print its public key."""
+    from piceli.hosts.age import AgeError, check_identity, generate_identity, recipient
+    from piceli.infra.machines.credentials import (
+        credential_present,
+        load_credential,
+        save_credential,
+    )
+    from piceli.infra.machines.model import InfraError
+    from piceli.k8s.cli.infra import _guard, _no_secret_arguments, _read_secret
+
+    _no_secret_arguments(context)
+    if generate and prompt:
+        reject("infra-prompt-required", "pass one of --prompt or --generate")
+    with _guard():
+        try:
+            if not generate and not prompt:
+                public = recipient(load_credential(name, "age-identity"))
+                state = "present"
+            else:
+                if credential_present(name) and not replace:
+                    reject(
+                        "infra-credential-exists",
+                        f"credential {name!r} exists; .sops.yaml lists its public "
+                        "key (--replace if you mean it)",
+                    )
+                value = check_identity(
+                    generate_identity()
+                    if generate
+                    else _read_secret("age identity (not echoed): ")
+                )
+                public = recipient(value)
+                save_credential(name, "age-identity", value)
+                del value
+                state = "stored"
+        except (AgeError, InfraError) as error:
+            reject(error.code, str(error))
+    say(f"credential {name} (age-identity); the identity was not printed")
+    say(f"public key: {public}")
+    emit_json({"state": state, "name": name, "kind": "age-identity",
+               "public_key": public})  # fmt: skip
+
+
 def register(root: typer.Typer) -> None:
+    from piceli.k8s.cli.cluster import secrets_app
+
     root.add_typer(host_app, name="host")
+    settings: dict[str, Any] = {
+        "allow_extra_args": True,
+        "ignore_unknown_options": True,
+    }
+    secrets_app.command("age", context_settings=settings)(age_secret)

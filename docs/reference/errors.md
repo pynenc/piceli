@@ -330,9 +330,11 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`host-address-unknown`](#error-host-address-unknown) | hosts | no |
 | [`host-build-bad`](#error-host-build-bad) | hosts | no |
 | [`host-build-invalid`](#error-host-build-invalid) | host-build | no |
+| [`host-busy`](#error-host-busy) | hosts | yes |
 | [`host-cache-unreachable`](#error-host-cache-unreachable) | hosts | yes |
 | [`host-check-failed`](#error-host-check-failed) | hosts | no |
 | [`host-check-invalid`](#error-host-check-invalid) | hosts | no |
+| [`host-control-unsupported`](#error-host-control-unsupported) | hosts | no |
 | [`host-credentials-exposed`](#error-host-credentials-exposed) | hosts | yes |
 | [`host-credentials-missing`](#error-host-credentials-missing) | hosts | yes |
 | [`host-deploy-failed`](#error-host-deploy-failed) | hosts | no |
@@ -341,11 +343,19 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`host-narinfo-mismatch`](#error-host-narinfo-mismatch) | hosts | no |
 | [`host-not-found`](#error-host-not-found) | hosts | no |
 | [`host-output-missing`](#error-host-output-missing) | host-build | no |
+| [`host-pin-not-found`](#error-host-pin-not-found) | hosts | no |
+| [`host-pinned`](#error-host-pinned) | hosts | no |
 | [`host-pointer-replayed`](#error-host-pointer-replayed) | hosts | no |
 | [`host-realise-failed`](#error-host-realise-failed) | hosts | yes |
 | [`host-report-failed`](#error-host-report-failed) | hosts | yes |
 | [`host-rollback-failed`](#error-host-rollback-failed) | hosts | no |
+| [`host-rollback-unavailable`](#error-host-rollback-unavailable) | hosts | no |
 | [`host-rolled-back`](#error-host-rolled-back) | hosts | no |
+| [`host-secret-activation-failed`](#error-host-secret-activation-failed) | hosts | yes |
+| [`host-secret-exists`](#error-host-secret-exists) | hosts | no |
+| [`host-secret-plan-changed`](#error-host-secret-plan-changed) | hosts | no |
+| [`host-secret-undeclared`](#error-host-secret-undeclared) | hosts | no |
+| [`host-secret-write-failed`](#error-host-secret-write-failed) | hosts | yes |
 | [`host-signature-invalid`](#error-host-signature-invalid) | hosts | no |
 | [`host-status-missing`](#error-host-status-missing) | hosts | yes |
 | [`host-switch-failed`](#error-host-switch-failed) | hosts | no |
@@ -6477,6 +6487,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Publish a fixed build, or publish the same commit again to retry it.
 - **Retry-safe:** no
 
+(error-host-busy)=
+### `host-busy`
+
+**Host agent busy.** A poll held the agent's lock (a deploy in progress) for the whole wait of `piceli host pin`, `unpin` or `rollback`.
+
+- **Fix:** Wait for the deploy (`piceli host status`), then run the command again.
+- **Retry-safe:** yes
+
 (error-host-cache-unreachable)=
 ### `host-cache-unreachable`
 
@@ -6499,6 +6517,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Host check refused.** A `HostCheck` is `HostCheck.unit(NAME)`, `HostCheck.http(URL)` (http(s), no credentials) or `HostCheck.command(ARG, ...)`, with a timeout of 1 to 3600 s and a unique DNS-label name.
 
 - **Fix:** Fix the check.
+- **Retry-safe:** no
+
+(error-host-control-unsupported)=
+### `host-control-unsupported`
+
+**Host agent cannot run the command.** The host has no `piceli-host-agent` command, or it did not answer with a result: its module was rendered by an older Piceli, or `sudo -n` is not allowed for the SSH user.
+
+- **Fix:** Render the module again with `piceli host module`, switch the host once, and log in as root (or allow `sudo -n`).
 - **Retry-safe:** no
 
 (error-host-credentials-exposed)=
@@ -6557,6 +6583,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Point at the `NixHost` (`hosts.py:web`), or give an SSH target (`ssh://root@host`).
 - **Retry-safe:** no
 
+(error-host-pin-not-found)=
+### `host-pin-not-found`
+
+**No build of that tag.** `piceli host pin` names a tag with no published build for the host's build name in the cache (or not a tag name).
+
+- **Fix:** Publish the tag's build (`piceli dev nix build --ref TAG --publish ...`) or pin a published tag.
+- **Retry-safe:** no
+
+(error-host-pinned)=
+### `host-pinned`
+
+**Host is pinned.** The host holds a build (`piceli host pin`, or `piceli host rollback`) and deploys no other until `piceli host unpin`; `piceli host wait` stops instead of timing out.
+
+- **Fix:** Run `piceli host unpin HOST` to follow the declared ref again, or wait for the held build.
+- **Retry-safe:** no
+
 (error-host-pointer-replayed)=
 ### `host-pointer-replayed`
 
@@ -6589,6 +6631,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Log in, run `/nix/var/nix/profiles/system/bin/switch-to-configuration switch` or boot the previous generation.
 - **Retry-safe:** no
 
+(error-host-rollback-unavailable)=
+### `host-rollback-unavailable`
+
+**No previous system to roll back to.** The agent has recorded no previous system, it is the one running, or it is no longer in the host's store (collected).
+
+- **Fix:** Pin a published tag instead (`piceli host pin HOST TAG`).
+- **Retry-safe:** no
+
 (error-host-rolled-back)=
 ### `host-rolled-back`
 
@@ -6596,6 +6646,46 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Read the failed check in `piceli host status --json`, fix it, publish a new build (or publish the same commit again to retry it).
 - **Retry-safe:** no
+
+(error-host-secret-activation-failed)=
+### `host-secret-activation-failed`
+
+**Host activation failed after the key.** The key was written, but re-running the system's activation (`switch-to-configuration switch`) failed, so sops-nix may not have decrypted.
+
+- **Fix:** Read the host's journal, then run `/run/current-system/bin/switch-to-configuration switch` on it.
+- **Retry-safe:** yes
+
+(error-host-secret-exists)=
+### `host-secret-exists`
+
+**Host holds another age key.** The host's key file holds a different age identity; replacing it changes what sops-nix can decrypt.
+
+- **Fix:** Check which key `.sops.yaml` lists; pass `--replace` to the plan if the new one is meant, after re-encrypting the secrets to it.
+- **Retry-safe:** no
+
+(error-host-secret-plan-changed)=
+### `host-secret-plan-changed`
+
+**Host secrets plan changed.** What `piceli host secrets` would write (the key, the host's file, `--replace`) changed since the digest was approved.
+
+- **Fix:** Plan again and approve the new digest.
+- **Retry-safe:** no
+
+(error-host-secret-undeclared)=
+### `host-secret-undeclared`
+
+**Host declares no age identity.** `piceli host secrets` needs a `NixHost` with `age_identity=` (a credential from `piceli secrets age NAME --generate`).
+
+- **Fix:** Declare `NixHost(age_identity=NAME)` and give the `NixHost` (`MODULE:ATTR`).
+- **Retry-safe:** no
+
+(error-host-secret-write-failed)=
+### `host-secret-write-failed`
+
+**Writing the host's key failed.** Over SSH, checking or writing the key file failed: a read-only path, no root (or `sudo -n`), or missing `sh`, `sha256sum` or `mktemp`.
+
+- **Fix:** Check that `ssh USER@HOST` runs commands as root, then plan again.
+- **Retry-safe:** yes
 
 (error-host-signature-invalid)=
 ### `host-signature-invalid`

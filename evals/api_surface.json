@@ -5905,7 +5905,6 @@
     "key_name",
     "manifest_url",
     "public_key",
-    "read_credentials",
     "region",
     "scheme",
     "signing_credential",
@@ -5918,7 +5917,6 @@
     "bucket",
     "endpoint",
     "public_key",
-    "read_credentials",
     "region",
     "signing_key",
     "url",
@@ -5939,6 +5937,8 @@
     "report": "HostReport"
    },
    "attrs": [
+    "age_identity",
+    "age_key_file",
     "attribute",
     "build",
     "cache",
@@ -5954,6 +5954,8 @@
     "ssh_target"
    ],
    "init": [
+    "age_identity",
+    "age_key_file",
     "build",
     "cache",
     "checks",
@@ -11642,7 +11644,11 @@
     "flags": [],
     "subcommands": [
      "module",
+     "pin",
+     "rollback",
+     "secrets",
      "status",
+     "unpin",
      "wait"
     ]
    },
@@ -11655,7 +11661,50 @@
     ],
     "subcommands": []
    },
+   "host pin": {
+    "arguments": [
+     "target",
+     "tag"
+    ],
+    "flags": [
+     "--infra",
+     "--json"
+    ],
+    "subcommands": []
+   },
+   "host rollback": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--infra",
+     "--json"
+    ],
+    "subcommands": []
+   },
+   "host secrets": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--approve",
+     "--infra",
+     "--json",
+     "--replace"
+    ],
+    "subcommands": []
+   },
    "host status": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--infra",
+     "--json"
+    ],
+    "subcommands": []
+   },
+   "host unpin": {
     "arguments": [
      "target"
     ],
@@ -12440,6 +12489,7 @@
     "arguments": [],
     "flags": [],
     "subcommands": [
+     "age",
      "cluster",
      "git",
      "nix-cache",
@@ -12447,6 +12497,17 @@
      "s3",
      "state-key"
     ]
+   },
+   "secrets age": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--generate",
+     "--prompt",
+     "--replace"
+    ],
+    "subcommands": []
    },
    "secrets cluster": {
     "arguments": [],
@@ -13078,9 +13139,11 @@
    "host-address-unknown",
    "host-build-bad",
    "host-build-invalid",
+   "host-busy",
    "host-cache-unreachable",
    "host-check-failed",
    "host-check-invalid",
+   "host-control-unsupported",
    "host-credentials-exposed",
    "host-credentials-missing",
    "host-deploy-failed",
@@ -13089,11 +13152,19 @@
    "host-narinfo-mismatch",
    "host-not-found",
    "host-output-missing",
+   "host-pin-not-found",
+   "host-pinned",
    "host-pointer-replayed",
    "host-realise-failed",
    "host-report-failed",
    "host-rollback-failed",
+   "host-rollback-unavailable",
    "host-rolled-back",
+   "host-secret-activation-failed",
+   "host-secret-exists",
+   "host-secret-plan-changed",
+   "host-secret-undeclared",
+   "host-secret-write-failed",
    "host-signature-invalid",
    "host-status-missing",
    "host-switch-failed",
@@ -15265,6 +15336,7 @@
   "piceli.gitops.token_expiry",
   "piceli.gitops.wait",
   "piceli.hosts",
+  "piceli.hosts.age",
   "piceli.hosts.agent",
   "piceli.hosts.model",
   "piceli.hosts.module",

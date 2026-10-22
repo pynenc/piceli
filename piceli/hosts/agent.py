@@ -20,6 +20,14 @@ JSON, and runs it as a systemd oneshot on a timer. Each run:
 6. on a failed switch or check, **rollback** to the previous system, and
    mark the build bad: it is not tried again until a newer pointer.
 
+``piceli host pin``, ``unpin`` and ``rollback`` run it once over SSH as
+``piceli-host-agent pin TAG`` (and so on), under the same lock as a poll: a
+pin deploys a tag's build (verified like any other, even an older version)
+and holds it; a rollback switches back to the previous system, already in
+the store, and holds it too, so the next poll does not deploy again what was
+rolled away from; ``unpin`` drops the hold. A hold lives in ``state.json``
+and survives reboots and switches; while it holds, polls do not deploy.
+
 The status (``status.json`` in the state directory, readable by anyone,
 no secret) carries the current and previous builds, the last attempt with
 its stages, timings and check results, and a bounded history. Events go to
@@ -67,6 +75,10 @@ PROFILE = "/nix/var/nix/profiles/system"
 CURRENT = "/run/current-system"
 CHECK_PATH = "/run/wrappers/bin:/run/current-system/sw/bin"
 REALISE_SECONDS = 2 * 3600
+#: How long a pin, unpin or rollback waits for a poll in progress.
+LOCK_WAIT = 600
+ACTIONS = ("poll", "pin", "unpin", "rollback")
+_TAG = re.compile(r"[A-Za-z0-9_+-][A-Za-z0-9._+-]{0,199}")
 SWITCH_SECONDS = 1800
 QUEUE_MAX = 500
 OTLP_TIMEOUT = 2.0
@@ -122,7 +134,8 @@ def read_env_file(path: str) -> dict[str, str]:
         raise Failure(
             "host-credentials-missing", "a credentials file is missing"
         ) from None
-    if info.st_mode & 0o077:
+    if info.st_mode & 0o077 or info.st_uid not in (0, os.geteuid()):
+        # 0600 or 0400 (sops-nix's default), owned by root (the agent's user).
         raise Failure("host-credentials-exposed", "a credentials file is not 0600")
     values = {}
     for line in text.splitlines():
@@ -305,7 +318,7 @@ class Reporter:
                     lines = handle.read().splitlines()
             except OSError:
                 raise Failure("host-credentials-missing") from None
-            if info.st_mode & 0o077:
+            if info.st_mode & 0o077 or info.st_uid not in (0, os.geteuid()):
                 raise Failure("host-credentials-exposed")
             for line in lines:
                 key, sep, value = line.partition(":")
@@ -524,9 +537,26 @@ class Agent:
                 return None, "no-build"
             version, tag = max(ranked)
             key = f"{prefix}{tag}.json"
+        body = self.pointer(cache, key)
+        if body is None:
+            return None, "no-build"
+        current = self.state.get("current") or {}
+        if version is not None and isinstance(current.get("tag"), str):
+            running = semver(str(current["tag"]))
+            if running is not None and version < running:
+                return None, "older"
+        if current.get("ref") == body["ref"] and str(
+            current.get("published_at") or ""
+        ) > str(body["published_at"]):
+            return None, "older"
+        return body, None
+
+    def pointer(self, cache: Cache, key: str) -> dict[str, Any] | None:
+        """The ref pointer at ``key``, signature checked and not a replay
+        (``None`` when there is none)."""
         raw = cache.get(key)
         if raw is None:
-            return None, "no-build"
+            return None
         try:
             body = json.loads(raw)
         except ValueError:
@@ -547,16 +577,7 @@ class Agent:
         if isinstance(last, str) and str(body["published_at"]) < last:
             raise Failure("host-pointer-replayed", "an older pointer than one seen")
         seen[body["ref"]] = max(str(body["published_at"]), last or "")
-        current = self.state.get("current") or {}
-        if version is not None and isinstance(current.get("tag"), str):
-            running = semver(str(current["tag"]))
-            if running is not None and version < running:
-                return None, "older"
-        if current.get("ref") == body["ref"] and str(
-            current.get("published_at") or ""
-        ) > str(body["published_at"]):
-            return None, "older"
-        return body, None
+        return body
 
     # ---------------------------------------------------------- verify
 
@@ -737,8 +758,8 @@ class Agent:
             mark.get("published_at") or ""
         )
 
-    def run_once(self) -> dict[str, Any]:
-        """One poll; the poll's summary (also in the status file)."""
+    def _load(self) -> tuple[str | None, dict[str, Any]]:
+        """Read the state and status; ``(running system, current entry)``."""
         os.makedirs(self.dir, mode=0o755, exist_ok=True)
         self.state = _read_json(os.path.join(self.dir, STATE_FILE))
         self.status = _read_json(os.path.join(self.dir, STATUS_FILE))
@@ -755,7 +776,26 @@ class Agent:
             current = {"store_path": running, "commit": None, "since": now_text()}
             self.state["current"] = current
         self.status.setdefault("current", current)
+        return running, current
+
+    def _finish(self) -> None:
+        for key in ("current", "previous", "hold"):
+            self.status[key] = self.state.get(key)
+        self.status.pop("in_progress", None)
+        self._save()
+        self.reporter.save()
+
+    def run_once(self) -> dict[str, Any]:
+        """One poll; the poll's summary (also in the status file)."""
+        running, current = self._load()
         poll: dict[str, Any] = {"at": now_text(self.clock()), "state": "idle"}
+        hold = self.state.get("hold")
+        if isinstance(hold, dict):
+            # Pinned or rolled back: no newer build until ``piceli host unpin``.
+            poll.update(state="held", reason="host-pinned", hold=hold.get("kind"))
+            self.status["poll"] = poll
+            self._finish()
+            return poll
         try:
             cache = self._cache()
             started = self.monotonic()
@@ -787,32 +827,136 @@ class Agent:
                     "piceli.host.rejected", failed.detail or failed.code,
                     secrets.token_hex(16), error=True, **{"piceli.reason": failed.code},
                 )  # fmt: skip
-        self.status["current"] = self.state.get("current")
         self.status["poll"] = poll
-        self.status.pop("in_progress", None)
-        self._save()
-        self.reporter.save()
+        self._finish()
         return poll
+
+    # ---------------------------------------------------------- pin, unpin, rollback
+
+    def control(self, action: str, tag: str | None = None) -> dict[str, Any]:
+        """``pin TAG``, ``unpin`` or ``rollback``: what ``piceli host`` runs
+        over SSH. ``state`` is ``pinned``, ``unpinned`` or ``rolled-back``;
+        ``failed`` (the host is back on the system it ran) or ``rejected``
+        (nothing changed), with a ``reason``."""
+        running, current = self._load()
+        trace = secrets.token_hex(16)
+        asked: dict[str, Any] = {"piceli.action": action, "piceli.tag": tag}
+        self.reporter.event(
+            f"piceli.host.{action}", f"{action} {tag or ''}".strip(), trace, **asked
+        )
+        result: dict[str, Any] = {"action": action, "state": "rejected",
+                                  "reason": None, "attempt": None}  # fmt: skip
+        try:
+            if action == "unpin":
+                result.update(state="unpinned", was=self.state.pop("hold", None))
+                # The next poll follows the declared ref now, not in poll_seconds.
+                self._run([self.tools["systemctl"], "start", "--no-block",
+                           "piceli-host-agent.service"], 30)  # fmt: skip
+            elif action == "pin":
+                result.update(self._pin(str(tag or ""), current, running, trace))
+            elif action == "rollback":
+                result.update(self._back(current, running, trace))
+            else:
+                raise Failure("host-control-unsupported", f"unknown action {action}")
+        except Failure as failed:
+            result.update(state="rejected", reason=failed.code)
+        self.reporter.event(
+            f"piceli.host.{action}", f"{action}: {result['state']}", trace,
+            error=result["state"] in ("failed", "rejected"),
+            **{"piceli.action": action, "piceli.state": result["state"],
+               "piceli.reason": result["reason"], "piceli.tag": tag},
+        )  # fmt: skip
+        self._finish()
+        return {**result, **{k: self.state.get(k) for k in ("hold", "current")}}
+
+    def _hold(self, kind: str, entry: Mapping[str, Any]) -> None:
+        self.state["hold"] = {
+            "kind": kind, "at": now_text(self.clock()),
+            **{k: entry.get(k) for k in ("tag", "commit", "ref", "store_path",
+                                         "published_at")},
+        }  # fmt: skip
+
+    def _outcome(self, attempt: Mapping[str, Any], done: str) -> dict[str, Any]:
+        if attempt["state"] == "deployed":
+            return {"state": done, "attempt": attempt}
+        state = "rejected" if attempt["state"] == "rejected" else "failed"
+        return {"state": state, "reason": attempt.get("reason"), "attempt": attempt}
+
+    def _pin(
+        self, tag: str, current: dict[str, Any], running: str | None, trace: str
+    ) -> dict[str, Any]:
+        """Deploy the build of ``tag`` (an older one too) and hold it."""
+        if not _TAG.fullmatch(tag) or ".." in tag:
+            raise Failure("host-pin-not-found", "a pin names a tag")
+        cache = self._cache()
+        started = self.monotonic()
+        pointer = self.pointer(cache, f"piceli/{self.build}/refs/tags/{tag}.json")
+        if pointer is None:
+            raise Failure("host-pin-not-found", f"no published build of {tag}")
+        if pointer["store_path"] == running:
+            current.update(
+                {k: pointer.get(k) for k in ("commit", "ref", "published_at")},
+                tag=tag, store_path=running,
+            )  # fmt: skip
+            self._hold("pin", current)
+            return {"state": "pinned"}
+        attempt = self.deploy(
+            cache, pointer, current, round(self.monotonic() - started, 3),
+            trigger="pin", trace=trace,
+        )  # fmt: skip
+        if attempt["state"] == "deployed":
+            self._hold("pin", self.state["current"])
+        return self._outcome(attempt, "pinned")
+
+    def _back(
+        self, current: dict[str, Any], running: str | None, trace: str
+    ) -> dict[str, Any]:
+        """Switch to the previous system (in the store) and hold it."""
+        previous = self.state.get("previous") or {}
+        path = str(previous.get("store_path") or "")
+        if not _STORE_PATH.fullmatch(path) or path == running:
+            raise Failure("host-rollback-unavailable", "no previous system recorded")
+        code, _ = self._output(
+            [self.tools["nix"], *FEATURES, "path-info", "--json", path], 600
+        )
+        if code != 0:
+            raise Failure("host-rollback-unavailable", "the previous system is gone")
+        attempt = self.deploy(None, previous, current, trigger="rollback", trace=trace)
+        if attempt["state"] == "deployed":
+            self._hold("rollback", self.state["current"])
+        return self._outcome(attempt, "rolled-back")
 
     def deploy(
         self,
-        cache: Cache,
+        cache: Cache | None,
         pointer: Mapping[str, Any],
         current: Mapping[str, Any],
         resolved: float = 0.0,
+        *,
+        trigger: str = "poll",
+        trace: str | None = None,
     ) -> dict[str, Any]:
+        """Verify, realise, switch, check; switch back on a failure.
+
+        ``trigger`` is ``poll``, ``pin`` or ``rollback``; a rollback goes to
+        a system already in the store, verified when it was deployed: it
+        only switches and checks, and never marks a build bad."""
+        local = trigger == "rollback"
         attempt: dict[str, Any] = {
             "id": secrets.token_hex(8),
-            "trace_id": secrets.token_hex(16),
-            "commit": pointer["commit"],
+            "trace_id": trace or secrets.token_hex(16),
+            "trigger": trigger,
+            "commit": pointer.get("commit"),
             "tag": _tag(pointer),
-            "ref": pointer["ref"],
+            "ref": pointer.get("ref"),
             "store_path": pointer["store_path"],
-            "published_at": pointer["published_at"],
+            "published_at": pointer.get("published_at"),
             "from": current.get("store_path"),
             "started_at": now_text(self.clock()),
             "state": "running",
-            "stages": [
+            "stages": []
+            if local
+            else [
                 {
                     "name": "resolve",
                     "state": "passed",
@@ -826,16 +970,19 @@ class Agent:
         started = self.monotonic()
         trace = attempt["trace_id"]
         self.reporter.event(
-            "piceli.host.deploy.start", f"deploy {str(pointer['commit'])[:12]}", trace,
-            **{"piceli.commit": pointer["commit"], "piceli.ref": pointer["ref"],
-               "piceli.store_path": pointer["store_path"]},
+            "piceli.host.deploy.start", f"deploy {str(pointer.get('commit'))[:12]}",
+            trace, **{"piceli.commit": pointer.get("commit"),
+                      "piceli.ref": pointer.get("ref"), "piceli.trigger": trigger,
+                      "piceli.store_path": pointer["store_path"]},
         )  # fmt: skip
         switched = False
         try:
-            manifest = self._stage(
-                attempt, "verify", lambda: self.verify(cache, pointer)
-            )
-            self._stage(attempt, "realise", lambda: self.realise(manifest))
+            if not local:
+                assert cache is not None
+                manifest = self._stage(
+                    attempt, "verify", lambda: self.verify(cache, pointer)
+                )
+                self._stage(attempt, "realise", lambda: self.realise(manifest))
             switched = True
             self._stage(
                 attempt, "switch", lambda: self.switch(str(pointer["store_path"]))
@@ -865,9 +1012,9 @@ class Agent:
                     attempt, str(current["store_path"])
                 )
                 attempt["state"] = "rolled-back"
-            if _refusal(failed.code) or failed.code in (
-                "host-switch-failed",
-                "host-check-failed",
+            if not local and (
+                _refusal(failed.code)
+                or failed.code in ("host-switch-failed", "host-check-failed")
             ):
                 self.state.setdefault("bad", {})[str(pointer["commit"])] = {
                     "published_at": pointer["published_at"], "reason": failed.code,
@@ -876,16 +1023,18 @@ class Agent:
             attempt["state"] = "deployed"
             self.state["previous"] = dict(current)
             self.state["current"] = {
-                "store_path": pointer["store_path"], "commit": pointer["commit"],
-                "tag": attempt["tag"], "ref": pointer["ref"],
-                "published_at": pointer["published_at"], "since": now_text(self.clock()),
+                "store_path": pointer["store_path"], "commit": pointer.get("commit"),
+                "tag": attempt["tag"], "ref": pointer.get("ref"),
+                "published_at": pointer.get("published_at"),
+                "since": now_text(self.clock()),
             }  # fmt: skip
         attempt["ended_at"] = now_text(self.clock())
         attempt["seconds"] = round(self.monotonic() - started, 3)
         self.reporter.event(
             "piceli.host.deploy.result", f"{attempt['state']}", trace,
             error=attempt["state"] != "deployed", **{
-                "piceli.commit": pointer["commit"], "piceli.state": attempt["state"],
+                "piceli.commit": pointer.get("commit"), "piceli.state": attempt["state"],
+                "piceli.trigger": trigger,
                 "piceli.reason": attempt.get("reason"),
                 "piceli.seconds": attempt["seconds"],
             },
@@ -936,19 +1085,35 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - on the hos
 
     parser = argparse.ArgumentParser(prog="piceli-host-agent")
     parser.add_argument("--config", required=True)
+    parser.add_argument("action", nargs="?", default="poll", choices=ACTIONS)
+    parser.add_argument("tag", nargs="?")
     args = parser.parse_args(argv)
     with open(args.config, encoding="utf-8") as handle:
         config = json.load(handle)
     os.makedirs(config.get("state_dir") or "/var/lib/piceli-host", exist_ok=True)
     lock = os.path.join(config.get("state_dir") or "/var/lib/piceli-host", "lock")
     with open(lock, "w") as held:
-        try:
-            fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            print(json.dumps({"state": "busy"}))
-            return 0
-        poll = Agent(config).run_once()
-    print(json.dumps(poll, sort_keys=True))
+        # A poll skips a busy run; a command waits for the poll in progress.
+        deadline = time.monotonic() + (0 if args.action == "poll" else LOCK_WAIT)
+        while True:
+            try:
+                fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    busy = {"state": "busy"} if args.action == "poll" else {
+                        "action": args.action, "state": "rejected",
+                        "reason": "host-busy",
+                    }  # fmt: skip
+                    print(json.dumps(busy))
+                    return 0
+                time.sleep(2)
+        agent = Agent(config)
+        if args.action == "poll":
+            result = agent.run_once()
+        else:
+            result = agent.control(args.action, args.tag)
+    print(json.dumps(result, sort_keys=True))
     return 0
 
 

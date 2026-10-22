@@ -440,8 +440,6 @@ def _publish(
         "signatures": outcome.get("signatures") or [],
         "system": outcome.get("system"),
         "closure_size": signed.get("closure_size"),
-        # What hosts substitute with: read-only keys, never the write ones.
-        "read_credentials": cache.read_credentials,
         "manifest": plan["manifest"],
         "manifest_url": url,
         "manifest_body": signed,

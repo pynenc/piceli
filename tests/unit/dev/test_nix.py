@@ -68,7 +68,6 @@ def test_a_cache_on_an_infomaniak_bucket_knows_its_s3_endpoint() -> None:
         PUBLIC,
         bucket=bucket,
         write_credentials="cache-s3-write",
-        read_credentials="cache-s3-read",
     )
     assert cache.store_url == (
         "s3://nix-cache?endpoint=s3.pub1.infomaniak.cloud&region=us-east-1"
@@ -82,20 +81,7 @@ def test_a_cache_on_an_infomaniak_bucket_knows_its_s3_endpoint() -> None:
         "public_key": PUBLIC,
         "signing_key": "cache-1",
         "write_credentials": "cache-s3-write",
-        "read_credentials": "cache-s3-read",
     }
-    # Hosts never get keys that write.
-    assert (
-        _codes(
-            lambda: NixCache(
-                PUBLIC,
-                bucket=bucket,
-                write_credentials="k",
-                read_credentials="k",
-            )
-        )
-        == "dev-nix-cache-invalid"
-    )
 
 
 def test_cache_urls_and_refusals(tmp_path: Path) -> None:

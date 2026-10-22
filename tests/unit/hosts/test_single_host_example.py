@@ -64,8 +64,13 @@ def test_the_example_declares_the_host_and_its_builds(tmp_path: Path) -> None:
     assert config["cache"]["objects"]["bucket"] == example.nix_bucket.name
     assert [check["kind"] for check in config["checks"]] == ["unit", "http"]
     assert config["report"]["endpoint"] == "https://otel.example.org:4318/v1/logs"
-    assert example.cache.read_credentials != example.cache.write_credentials
-    assert "nix-cache-read" not in json.dumps(config)  # names stay off the host
+    # The host's secrets are sops-nix's: the cache's read keys, the headers.
+    assert config["read_credentials_file"] == "/run/secrets/piceli/cache.env"
+    assert config["report"]["headers_file"] == "/run/secrets/piceli/otlp-headers"
+    assert host.age_identity == "web-1-age"
+    assert host.age_key_file == "/var/lib/sops-nix/key.txt"
+    assert "web-1-age" not in json.dumps(config)  # names stay off the host
+    assert "nix-cache-write" not in json.dumps(config)
     assert host.ssh_target(None).address == "example.org"
     assert render_module(host, "web_1.py:host").startswith(
         "# The Piceli host agent of web-1"
@@ -86,6 +91,16 @@ def _commands() -> list[list[str]]:
                 if "piceli" in words:
                     lines.append(words[words.index("piceli") + 1 :])
     return lines
+
+
+def test_the_page_puts_no_secret_on_the_host_by_hand() -> None:
+    text = PAGE.read_text(encoding="utf-8")
+    assert "/etc/piceli-host" not in text and "install -m 600" not in text
+    assert 'sops.secrets."piceli/cache.env"' in text
+    words = [" ".join(command[:2]) for command in _commands()]
+    for command in ("secrets age", "host secrets", "host rollback", "host pin",
+                    "host unpin"):  # fmt: skip
+        assert command in words, command
 
 
 def test_the_page_uses_real_commands_and_options() -> None:

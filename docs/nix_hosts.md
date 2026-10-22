@@ -23,7 +23,6 @@ cache = NixCache(
     "my-cache-1:<base64 public key>",
     url="s3://nix-cache?endpoint=s3.example.net&region=us-east-1",
     write_credentials="cache-s3-write",  # the builder only
-    read_credentials="cache-s3-read",  # what hosts read with
 )
 
 web = NixHost(
@@ -38,7 +37,8 @@ web = NixHost(
         HostCheck.command("test", "-s", "/var/lib/app/ready"),
     ],
     report=HostReport("https://collector.example.net:4318",
-                      headers_file="/etc/piceli-host/otlp-headers"),
+                      headers_file="/run/secrets/piceli/otlp-headers"),
+    age_identity="web-1-age",  # its sops-nix key: piceli host secrets
 )
 ```
 
@@ -51,8 +51,9 @@ web = NixHost(
 | `checks=` | `HostCheck.unit(UNIT)`, `HostCheck.http(URL)` (2xx), `HostCheck.command(ARG, ...)` (exit 0); each tried every 2 s until its `timeout=` (60 s) |
 | `report=` | `HostReport(endpoint, headers_file=None, insecure=False)`: OTLP/HTTP logs |
 | `build=` | The manifests' name, `--name` of the publish (`NAME` of `.#NAME`, else the host's name) |
-| `read_credentials_file=` | The host's file with the read-only S3 keys (`/etc/piceli-host/cache.env` when the cache has `read_credentials`) |
+| `read_credentials_file=` | The host's file with the cache's read-only S3 keys, a sops-nix secret (`/run/secrets/piceli/cache.env` for an `s3://` cache, none otherwise) |
 | `poll_seconds=`, `history=` | How often the agent polls (300) and how many attempts the status keeps (20) |
+| `age_identity=`, `age_key_file=` | The local credential with the host's age identity, and where `piceli host secrets` puts it (`/var/lib/sops-nix/key.txt`, sops-nix's `sops.age.keyFile`) |
 
 `Tag("v*")` follows the highest semantic version among the matching tags (an
 optional `v`, `MAJOR.MINOR.PATCH`, `-prerelease`, `+build`). A matching tag
@@ -77,21 +78,48 @@ From then on the agent maintains itself, because it is part of every system
 it switches to. Render the module again after you change the declaration or
 upgrade Piceli.
 
-The module holds no secret. On the host, as root, put the cache's
-**read-only** keys (never the write ones) in a `0600` file. The agent
-refuses a file others can read (`host-credentials-exposed`).
+## Secrets: one age key, the rest in sops-nix
+
+The module holds no secret. The host's secrets live in Git, encrypted with
+[sops-nix](https://github.com/Mic92/sops-nix): the cache's **read-only** S3
+keys (never the write ones), the report's headers and your services'
+secrets. The only secret Piceli puts on the host is the key sops-nix
+decrypts them with, an age identity:
 
 ```sh
-install -d -m 700 /etc/piceli-host
-install -m 600 /dev/stdin /etc/piceli-host/cache.env <<'EOF'
-AWS_ACCESS_KEY_ID=<read-only key id>
-AWS_SECRET_ACCESS_KEY=<read-only secret>
-EOF
+piceli secrets age web-1-age --generate      # prints age1...: put it in .sops.yaml
+piceli host secrets hosts.py:web              # exit 3: the plan and its digest
+piceli host secrets hosts.py:web --approve sha256:<digest>
 ```
 
-A public-read cache needs no file. The report's headers file has
-`Name: value` lines (`Authorization: Bearer ...`), with the same mode. Your
-secret tooling (agenix, sops-nix) can write both files.
+`piceli secrets age NAME` stores the identity `0600` in Piceli's
+credentials and prints only its public key (`--prompt` imports one,
+`AGE-SECRET-KEY-1...`, from stdin). `piceli host secrets` plans first: the
+host, the path (`age_key_file=`), mode `0600`, owner root, the public key,
+and whether the host has the same key, another one or none. It compares
+fingerprints: the host never sends its key back. Approved, the key goes on
+ssh's stdin into a temporary file that is renamed over the path, and the
+host re-runs its activation (`switch-to-configuration switch`) so sops-nix
+decrypts with it. Another key is replaced only with `--replace`
+(`host-secret-exists`); the same key is a no-op.
+
+Declare the secrets in the host's configuration, encrypted to that public
+key:
+
+```nix
+sops.defaultSopsFile = ./secrets/web-1.yaml;
+sops.age.keyFile = "/var/lib/sops-nix/key.txt";
+sops.secrets."piceli/cache.env" = { };      # AWS_ACCESS_KEY_ID=... and AWS_SECRET_ACCESS_KEY=... lines
+sops.secrets."piceli/otlp-headers" = { };   # Authorization: Bearer ...
+```
+
+sops-nix decrypts them to `/run/secrets/piceli/cache.env` and
+`/run/secrets/piceli/otlp-headers` (`0400` root), the agent's default for
+an `s3://` cache and the path to give `HostReport(headers_file=)`. Any
+other path works: `read_credentials_file=` and `headers_file=` take the
+`path` of your sops secret. The agent refuses a file that its group or
+others can read, or that root does not own (`host-credentials-exposed`). A
+`file://` or `https://` cache needs no keys.
 
 ## What the agent does
 
@@ -127,6 +155,46 @@ A system the agent did not switch to (the first install, a manual
 `nixos-rebuild`) becomes its current one. When it is a published build, the
 agent records its commit and tag.
 
+## Pin, unpin and roll back
+
+```sh
+piceli host pin hosts.py:web v1.3.0 --json     # deploy v1.3.0 (older too) and hold it
+piceli host unpin hosts.py:web --json          # follow Tag("v*") again
+piceli host rollback hosts.py:web --json       # back to the previous system, held
+```
+
+Each runs the agent once over SSH (`piceli-host-agent pin TAG`, a command
+the module puts on the host's PATH; as root, else `sudo -n`), after a poll
+in progress (`host-busy` after 10 minutes). None needs an approval: they go
+only to a build that was signed, published and verified, or to the system
+the host ran before.
+
+- **pin** resolves the tag's signed pointer and verifies the manifest and
+  narinfo as a poll does, then fetches, switches and runs the checks. It may
+  go to an older version: that is the point. When a check fails it switches
+  back, exits 1 and holds nothing (`host-pin-not-found` when the tag has no
+  published build).
+- **rollback** switches to the previous system, already in the store
+  (`host-rollback-unavailable` when there is none), and runs the checks. It
+  also holds that system: otherwise the next poll would deploy the build
+  you rolled away from. A second rollback returns to it. A failed check
+  switches forward again (exit 1). It marks no build bad.
+- **unpin** drops the hold and starts a poll at once: the host deploys the
+  newest build of its `follow=` ref again.
+
+A hold lives in `/var/lib/piceli-host/state.json`: it survives reboots and
+switches. While it holds, polls deploy nothing (`poll.state` is `held`).
+`host status` shows it (`hold`: `pin` or `rollback`, the tag, commit and
+`at`), and `host wait` for another build exits 1 at once with
+`host-pinned`. Each command reports `piceli.host.pin`, `piceli.host.unpin`
+or `piceli.host.rollback` (the request and its outcome) with the deploy's
+usual events.
+
+The JSON of the three commands (`piceli.host-control.v1`): `action`,
+`state` (`pinned`, `unpinned`, `rolled-back`; `failed` or `rejected` with a
+`reason`), `hold`, `current`, `attempt` (its `trigger`, stages, checks and
+rollback; `null` when nothing switched), `host` and `target`.
+
 ## Status and wait
 
 The agent writes `/var/lib/piceli-host/status.json` (`0644`, no secret,
@@ -134,7 +202,7 @@ The agent writes `/var/lib/piceli-host/status.json` (`0644`, no secret,
 (store path, commit, tag, ref, `published_at`, `since`), `poll` (the last
 poll's state and reason), `last_attempt` (its stages with `seconds`, the
 check results, the `rollback`), `history` (the newest attempts), the
-ignored tags and the report's state.
+ignored tags, the `hold` (or `null`) and the report's state.
 
 ```sh
 piceli host status hosts.py:web --infra infra.py:edge --json
@@ -169,9 +237,11 @@ piceli host wait hosts.py:web 3f2c1ab --published-after 2026-10-22T10:00:00.0000
 With `report=`, the agent sends OTLP/HTTP JSON logs to `ENDPOINT/v1/logs`
 (`service.name` `piceli-host-agent`, `host.name` the host's name): the
 events `piceli.host.deploy.start`, `piceli.host.stage`,
-`piceli.host.check`, `piceli.host.deploy.result`, `piceli.host.rollback`
-and `piceli.host.rejected`. They carry the commit, the state, the reason and
-the seconds; one deploy shares one trace id. A collector that is down never
+`piceli.host.check`, `piceli.host.deploy.result`, `piceli.host.rollback`,
+`piceli.host.rejected`, `piceli.host.pin` and `piceli.host.unpin`. They
+carry the commit, the state, the reason, the seconds and the deploy's
+`piceli.trigger` (`poll`, `pin` or `rollback`); one deploy or command
+shares one trace id. A collector that is down never
 blocks or fails a deploy. The agent makes one 2-second try per run, keeps up
 to 500 records in `otlp-queue.json` and sends them at the next run.
 
@@ -185,5 +255,7 @@ to 500 records in `otlp-queue.json` and sends them at the next run.
 | `host-signature-invalid`, `host-pointer-replayed`, `host-manifest-mismatch`, `host-narinfo-mismatch`, `host-system-mismatch` | The agent refused a build; nothing was realised |
 | `host-cache-unreachable`, `host-realise-failed`, `host-credentials-missing`, `host-credentials-exposed` | The agent could not read or fetch; it tries again at the next poll |
 | `host-switch-failed`, `host-check-failed`, `host-rollback-failed`, `host-build-bad`, `host-report-failed` | A switch or check failed (rolled back), or the report was not delivered |
+| `host-pinned`, `host-pin-not-found`, `host-rollback-unavailable`, `host-busy`, `host-control-unsupported` | `pin`, `unpin`, `rollback`, and `wait` on a held host |
+| `host-secret-undeclared`, `host-secret-exists`, `host-secret-plan-changed`, `host-secret-write-failed`, `host-secret-activation-failed` | `piceli host secrets` |
 
 `piceli explain CODE` prints the cause and the fix of each.

@@ -195,11 +195,9 @@ class NixCache:
     :param write_credentials: The local credential with S3 access keys
         that may **put and delete** objects (``piceli secrets s3 NAME
         --prompt``): only the publishing side (``dev nix build --publish``,
-        ``dev nix gc``) uses them; required for ``s3://``.
-    :param read_credentials: The credential with **read-only** S3 keys
-        hosts substitute with (``None``: a public-read bucket). Never the
-        write one: the build side never reads it, hosts never get the
-        write keys.
+        ``dev nix gc``) uses them; required for ``s3://``. Hosts read with
+        separate read-only keys that live in sops-nix on the host
+        (``NixHost(read_credentials_file=)``), never in Piceli.
     :param endpoint: The S3 endpoint host (``s3.example.net``).
     :param region: The S3 region signatures name.
     """
@@ -211,7 +209,6 @@ class NixCache:
     region: str = "us-east-1"
     signing_key: str | None = None
     write_credentials: str | None = None
-    read_credentials: str | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -237,7 +234,7 @@ class NixCache:
             raise _invalid("NixCache(endpoint=) is a host name (and port)")
         if not _REGION.fullmatch(self.region):
             raise _invalid("NixCache(region=) is a region name")
-        for value in (self.signing_key, self.write_credentials, self.read_credentials):
+        for value in (self.signing_key, self.write_credentials):
             if value is not None:
                 from piceli.profiles import ProfileError, check_name
 
@@ -250,14 +247,6 @@ class NixCache:
         if self.scheme == "s3" and self.write_credentials is None:
             raise _invalid(
                 "NixCache: an s3 cache needs write_credentials= (S3 keys that put)"
-            )
-        if (
-            self.read_credentials is not None
-            and self.read_credentials == self.write_credentials
-        ):
-            raise _invalid(
-                "NixCache: read_credentials= and write_credentials= are distinct "
-                "credentials (hosts never get keys that write)"
             )
 
     def _check_url(self, url: str) -> None:
@@ -327,7 +316,6 @@ class NixCache:
             "public_key": self.public_key,
             "signing_key": self.signing_credential,
             "write_credentials": self.write_credentials,
-            "read_credentials": self.read_credentials,
         }
 
 

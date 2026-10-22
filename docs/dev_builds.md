@@ -595,7 +595,6 @@ cache = NixCache(
     "my-cache-1:<base64 public key>",
     bucket=Bucket("nix-cache", Infomaniak(credentials="infomaniak")),
     write_credentials="cache-s3-write",  # put and delete: builds, gc
-    read_credentials="cache-s3-read",  # read-only: what hosts get
 )
 ```
 
@@ -614,9 +613,9 @@ cache = NixCache(
   `trusted-public-keys` (`--prompt` imports a key from `nix key
   generate-secret`). `piceli secrets s3 cache-s3-write --prompt` stores
   S3 keys that may put and delete objects (two lines on stdin): only
-  `--publish` and `gc` use them. Hosts substitute with the separate
-  read-only keys of `read_credentials` (a distinct credential, refused when
-  it is the write one); the build side never reads them.
+  `--publish` and `gc` use them. Hosts substitute with separate read-only
+  keys that live in sops-nix on the host ({doc}`nix_hosts`), never in
+  Piceli; the build side never reads them.
 
 ```sh
 # A build: the store path, and with --image the image file and its sha256
