@@ -1,12 +1,15 @@
 """Local credentials of ``piceli infra``: provider API tokens and state passphrases.
 
 ``piceli secrets provider NAME --prompt`` and ``piceli secrets state-key
-NAME --prompt|--generate`` store one value per name in
+NAME --prompt|--generate`` (and the other ``piceli secrets`` commands) store
+one value per name in
 ``$PICELI_CREDENTIALS_DIR`` (default ``~/.config/piceli/credentials``), a
 ``0700`` directory, as ``NAME.json`` (``0600``). Values are read only when a
 command needs them and go to OpenTofu through its environment, never as an
 argument; they are never printed, logged or put in a plan. A file another
-user can read is refused (``infra-credential-unsafe``).
+user can read is refused (``infra-credential-unsafe``). ``piceli secrets
+delete NAME`` removes one (:func:`delete_credential`), without reading its
+value out.
 
 Importing this module is side-effect free.
 """
@@ -25,6 +28,7 @@ from piceli.infra.machines.model import InfraError
 __all__ = [
     "KINDS",
     "credentials_dir",
+    "delete_credential",
     "generate_passphrase",
     "load_credential",
     "save_credential",
@@ -53,6 +57,16 @@ _SET_UP = {
     "s3-keys": "piceli secrets s3 {} --prompt",
     "age-identity": "piceli secrets age {} --generate",
     "user-data": "piceli secrets user-data {} --file PATH",
+}
+#: ``piceli secrets delete --kind``: the ``piceli secrets`` command's name of
+#: each kind (a stored kind's own name is accepted too).
+KIND_OPTIONS = {
+    "provider": "provider-token",
+    "state-key": "state-key",
+    "nix-cache": "nix-signing-key",
+    "s3": "s3-keys",
+    "age": "age-identity",
+    "user-data": "user-data",
 }
 #: Nova takes at most 65535 bytes of base64: 49149 bytes of user data.
 MAX_USER_DATA = 49149
@@ -172,3 +186,50 @@ def load_credential(name: str, kind: str) -> str:
             "infra-credential-invalid", f"credential {name!r} is not a {kind}"
         )
     return str(body["value"])
+
+
+def kind_of(option: str) -> str:
+    """The stored kind that ``--kind OPTION`` names (``infra-credential-invalid``)."""
+    kind = KIND_OPTIONS.get(option, option)
+    if kind not in KINDS:
+        raise InfraError(
+            "infra-credential-invalid",
+            "--kind is one of " + ", ".join(KIND_OPTIONS),
+        )
+    return kind
+
+
+def stored_kind(name: str) -> tuple[Path, str | None]:
+    """The file of ``name`` and the kind it holds (``None``: damaged); the
+    value is not returned. ``infra-credential-missing`` when there is none."""
+    path = _path(name)
+    if not path.is_file():
+        raise InfraError(
+            "infra-credential-missing", f"no credential named {name!r} to delete"
+        )
+    try:
+        body = json.loads(path.read_text())
+    except (OSError, ValueError, UnicodeDecodeError):
+        body = None
+    kind = body.get("kind") if isinstance(body, dict) else None
+    return path, kind if kind in KINDS else None
+
+
+def delete_credential(name: str, kind: str | None = None) -> tuple[Path, str | None]:
+    """Remove the credential ``name`` (only if it holds ``kind``, when given):
+    its path and the kind it held. The value is never read out."""
+    path, found = stored_kind(name)
+    require_kind(name, found, kind)
+    path.unlink()
+    return path, found
+
+
+def require_kind(name: str, found: str | None, kind: str | None) -> None:
+    """Refuse (``infra-credential-invalid``) when ``kind`` is given and the
+    credential holds another one."""
+    if kind is not None and found != kind:
+        raise InfraError(
+            "infra-credential-invalid",
+            f"credential {name!r} is {'a ' + found if found else 'damaged'}, "
+            f"not a {kind}; nothing was deleted",
+        )

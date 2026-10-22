@@ -12550,6 +12550,7 @@
     "subcommands": [
      "age",
      "cluster",
+     "delete",
      "git",
      "nix-cache",
      "provider",
@@ -12581,6 +12582,16 @@
      "--prompt",
      "--server",
      "--transport"
+    ],
+    "subcommands": []
+   },
+   "secrets delete": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--kind",
+     "--yes"
     ],
     "subcommands": []
    },

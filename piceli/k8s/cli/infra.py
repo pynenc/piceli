@@ -594,6 +594,71 @@ def user_data_secret(
     )  # fmt: skip
 
 
+def _interactive() -> bool:
+    return bool(sys.stdin is not None and sys.stdin.isatty() and sys.stderr.isatty())
+
+
+def delete_secret(
+    name: NameArgument,
+    kind: Annotated[
+        str | None,
+        typer.Option(
+            "--kind",
+            help="Delete it only if it is this kind: provider, state-key, "
+            "nix-cache, s3, age or user-data",
+            show_default=False,
+        ),
+    ] = None,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Delete without asking (owner only)")
+    ] = False,
+) -> None:
+    """Delete a stored credential (a spent bootstrap key, an old token); never printed."""
+    from piceli.infra.machines.credentials import (
+        delete_credential,
+        kind_of,
+        require_kind,
+        stored_kind,
+    )
+
+    with _guard():
+        wanted = kind_of(kind) if kind is not None else None
+        path, found = stored_kind(name)
+        require_kind(name, found, wanted)
+        what = f"{name} ({found or 'damaged'})"
+        if not yes:
+            if _interactive():
+                answer = typer.prompt(
+                    f"Type the credential name ({name}) to delete {path}",
+                    default="",
+                    err=True,
+                )
+            else:
+                answer = None
+            if answer != name:
+                command = " ".join(
+                    ["piceli secrets delete", name,
+                     *(["--kind", kind] if kind is not None else
+                       ["--kind", _option_of(found)] if found else []),
+                     "--yes"]
+                )  # fmt: skip
+                say(f"not deleted: {what}; to delete it: {command}")
+                emit_json(
+                    {"state": "approval-required", "name": name, "kind": found,
+                     "path": str(path), "approve_command": command}
+                )  # fmt: skip
+                raise typer.Exit(EXIT_APPROVAL)
+        path, found = delete_credential(name, wanted)
+    say(f"deleted credential {what}; the value was not printed")
+    emit_json({"state": "deleted", "name": name, "kind": found, "path": str(path)})
+
+
+def _option_of(kind: str) -> str:
+    from piceli.infra.machines.credentials import KIND_OPTIONS
+
+    return next((o for o, k in KIND_OPTIONS.items() if k == kind), kind)
+
+
 def register(root: typer.Typer) -> None:
     from piceli.k8s.cli.cluster import secrets_app
 
@@ -605,3 +670,4 @@ def register(root: typer.Typer) -> None:
     secrets_app.command("provider", context_settings=settings)(provider_secret)
     secrets_app.command("state-key", context_settings=settings)(state_key_secret)
     secrets_app.command("user-data", context_settings=settings)(user_data_secret)
+    secrets_app.command("delete")(delete_secret)

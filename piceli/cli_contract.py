@@ -2070,6 +2070,19 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(infra-credential-refused) without echoing it. Used only by a plan "
             "that creates the server (Server(user_data=UserData(NAME))).",
         ),
+        "secrets delete": _C(
+            "Delete a stored local credential (a spent bootstrap key, an old token).",
+            reads=("$PICELI_CREDENTIALS_DIR/NAME.json (its kind, never the value)",),
+            writes=("$PICELI_CREDENTIALS_DIR/NAME.json (removed)",),
+            approval_required=True,
+            contract="conforms",
+            exit_codes=(0, 2, 3),
+            notes="0.24.0. Never prints the value. Without --yes it asks for the "
+            "name on a terminal; otherwise it exits 3 (approval-required, with "
+            "the command to run) and deletes nothing. --kind (provider, "
+            "state-key, nix-cache, s3, age, user-data) refuses another kind "
+            "(infra-credential-invalid); a missing one is infra-credential-missing.",
+        ),
         "secrets state-key": _C(
             "Store the passphrase that encrypts an Infrastructure's OpenTofu state "
             "(--generate, or --prompt).",

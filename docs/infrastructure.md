@@ -387,6 +387,7 @@ the command line with their approvals.
 | `piceli infra register REF SERVER [--kubeconfig F] [--approve DIGEST]` | Register the server's k3s | 0, 1 `infra-k3s-not-ready`, 2, 3 |
 | `piceli secrets provider NAME --prompt` | Store a provider token | 0, 2 |
 | `piceli secrets state-key NAME --generate\|--prompt` | Store the state passphrase | 0, 2 |
+| `piceli secrets delete NAME [--kind KIND] [--yes]` | Delete a stored credential (asks first; never printed) | 0, 2, 3 |
 
 `--tofu PATH` (or `$PICELI_TOFU`) chooses the OpenTofu binary; otherwise
 `tofu` on `PATH`. Error codes: area `infra` in {doc}`reference/errors`.

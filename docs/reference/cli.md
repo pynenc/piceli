@@ -145,6 +145,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli runs`](#cli-runs) | List the deploy runs of a pipeline, newest first, with their state, release, duration and summary files. Read-only (with shared state it reads the local working copy: run `piceli state pull` first). | none | no |
 | [`piceli secrets age`](#cli-secrets-age) | A host's age identity for sops-nix: generate or import it; print its public key. | none | no |
 | [`piceli secrets cluster`](#cli-secrets-cluster) | Store another cluster's credentials for the GitOps controller (never printed). | writes | no |
+| [`piceli secrets delete`](#cli-secrets-delete) | Delete a stored credential (a spent bootstrap key, an old token); never printed. | none | yes |
 | [`piceli secrets git`](#cli-secrets-git) | Store the Git token the controller and cluster builds use (read from stdin, never printed). | writes | no |
 | [`piceli secrets nix-cache`](#cli-secrets-nix-cache) | A Nix binary cache's signing key: generate or import it; print its public key. | none | no |
 | [`piceli secrets provider`](#cli-secrets-provider) | Store a provider API token (read from stdin, never printed). | none | no |
@@ -3372,6 +3373,28 @@ Store another cluster's credentials for the GitOps controller (never printed).
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** One context, certificates and token inlined, no exec plugin (cluster-credentials-unsupported); the kubeconfig's server must be Cluster(api=) (cluster-api-mismatch); --server sets the address the controller uses. Writes the Secret on the cluster with Controller(...) (or --home) without a plan; prints names only, never a value. A token argument is refused (secrets-token-refused).
+
+(cli-secrets-delete)=
+### `piceli secrets delete`
+
+Delete a stored credential (a spent bootstrap key, an old token); never printed.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--kind` | text |  | Delete it only if it is this kind: provider, state-key, nix-cache, s3, age or user-data |
+| `--yes` | boolean | `False` | Delete without asking (owner only) |
+
+**Contract**
+
+- **Reads:** $PICELI_CREDENTIALS_DIR/NAME.json (its kind, never the value)
+- **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (removed)
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Never prints the value. Without --yes it asks for the name on a terminal; otherwise it exits 3 (approval-required, with the command to run) and deletes nothing. --kind (provider, state-key, nix-cache, s3, age, user-data) refuses another kind (infra-credential-invalid); a missing one is infra-credential-missing.
 
 (cli-secrets-git)=
 ### `piceli secrets git`

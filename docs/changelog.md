@@ -42,6 +42,14 @@ and rollback.
   only its SHA-1 in the state. The single-host guide now bootstraps the
   host onto a tailnet with a one-hour, single-use key and opens no public
   port 22.
+- **`piceli secrets delete NAME [--kind KIND] [--yes]`** removes a stored
+  credential, such as the spent bootstrap key of a server's user data.
+  `--kind` (`provider`, `state-key`, `nix-cache`, `s3`, `age`,
+  `user-data`) refuses a credential of another kind
+  (`infra-credential-invalid`). Without `--yes` it asks for the name on a
+  terminal, otherwise it exits 3 with the command to run and deletes
+  nothing. It prints the name, kind and path (`{"state": "deleted", ...}`),
+  never the value. The single-host guide uses it to discard the spent key.
 - **OpenStack flavors are an allow-list.** `OpenStack(flavors=[...])` is
   required and `Infomaniak(flavors=)` defaults to its smallest,
   `a1-ram2-disk20-perf1`, like `Hetzner(server_types=)`: a server with

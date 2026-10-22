@@ -205,10 +205,10 @@ after installing Tailscale.
 
    The first boot joins the tailnet as `web-1`. From then on the user
    data is ignored: later plans never read it and never replace the server
-   for it. Delete the stored key (`rm
-   ~/.config/piceli/credentials/web-1-boot.json`): a plan that has to
-   replace the server then stops with `infra-user-data-missing` until you
-   store a fresh one.
+   for it. Delete the spent key: `piceli secrets delete web-1-boot --kind
+   user-data` asks you to type its name (`--yes` skips that; it never
+   prints the value). A plan that has to replace the server then stops with
+   `infra-user-data-missing` until you store a fresh one.
 
    Everything else goes over the tailnet, to `Ssh(address=)`. `infra
    register` reads the server's SSH host keys and shows their
