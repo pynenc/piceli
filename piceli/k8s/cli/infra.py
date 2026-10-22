@@ -14,8 +14,9 @@
   waits for its k3s and makes it a cluster Piceli deploys to, or, for a
   server without ``cluster=``, pins its SSH host keys only.
 - ``secrets provider NAME --prompt`` stores a provider API token,
-  ``secrets state-key NAME --generate|--prompt`` a state passphrase: read
-  from stdin only, never printed.
+  ``secrets state-key NAME --generate|--prompt`` a state passphrase,
+  ``secrets user-data NAME --prompt|--file PATH`` a server's user data: read
+  from stdin or a file only, never printed.
 
 Machine output is one JSON object on stdout; human text on stderr.
 
@@ -149,6 +150,11 @@ def _say_plan(result: InfraPlan) -> None:
         say(
             "  refused: these resources were not created by Piceli: "
             + ", ".join(result.foreign)
+        )
+    for item in result.user_data:
+        say(
+            f"  user data of {item['server']}: secret {item['secret']} "
+            f"({item['digest']}), passed at creation only"
         )
     for check in result.checks:
         if check.get("ran"):
@@ -544,6 +550,50 @@ def state_key_secret(
     emit_json({"state": "stored", "name": name, "kind": "state-key", "path": str(path)})
 
 
+def user_data_secret(
+    context: typer.Context,
+    name: NameArgument,
+    prompt: Annotated[
+        bool,
+        typer.Option(
+            "--prompt",
+            help="Read it from stdin (typed: one line without echo; piped: until EOF)",
+        ),
+    ] = False,
+    file: Annotated[
+        Path | None,
+        typer.Option(
+            "--file", help="Read it from this file (a cloud-config, a script)"
+        ),
+    ] = None,
+) -> None:
+    """Store a server's user data (a cloud-config, a script or a bootstrap key)."""
+    from piceli.infra.machines.credentials import save_credential
+    from piceli.infra.machines.plan import user_data_digest
+
+    _no_secret_arguments(context)
+    if prompt == (file is not None):
+        reject("infra-prompt-required", "pass exactly one of --prompt or --file PATH")
+    with _guard():
+        if file is not None:
+            try:
+                value = file.read_text()
+            except (OSError, UnicodeDecodeError):
+                reject("infra-credential-invalid", "the --file is not readable text")
+        elif sys.stdin is not None and not sys.stdin.isatty():
+            value = sys.stdin.read()
+        else:
+            value = _read_secret("User data (not echoed): ")
+        path = save_credential(name, "user-data", value)
+        digest, size = user_data_digest(value), len(value.encode())
+        del value
+    say(f"stored credential {name} (user-data, {size} bytes, {digest}); not printed")
+    emit_json(
+        {"state": "stored", "name": name, "kind": "user-data", "digest": digest,
+         "bytes": size, "path": str(path)}
+    )  # fmt: skip
+
+
 def register(root: typer.Typer) -> None:
     from piceli.k8s.cli.cluster import secrets_app
 
@@ -554,3 +604,4 @@ def register(root: typer.Typer) -> None:
     }
     secrets_app.command("provider", context_settings=settings)(provider_secret)
     secrets_app.command("state-key", context_settings=settings)(state_key_secret)
+    secrets_app.command("user-data", context_settings=settings)(user_data_secret)

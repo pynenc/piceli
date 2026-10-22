@@ -21,6 +21,7 @@ from piceli.infra import (
     PrimaryIp,
     Rule,
     Server,
+    UserData,
 )
 from piceli.infra.machines import credentials
 from piceli.infra.machines.images import stage_image
@@ -43,6 +44,7 @@ OS = OpenStack(
     prices={"small": 4.7},
     ip_prices={"ipv4": 2.0},
     currency="CHF",
+    flavors=["small"],
 )
 IMAGE_BYTES = b"not really a disk image\n"
 IMAGE_SHA = hashlib.sha256(IMAGE_BYTES).hexdigest()
@@ -140,6 +142,7 @@ def test_a_network_id_needs_no_lookup() -> None:
         auth_url="https://identity.example.net/v3",
         region="region-1",
         public_network="2c0f1f6e-8a7b-4c35-9d0e-5f1f3a6b7c8d",
+        flavors=["small"],
     )
     config = render(Infrastructure("web", servers=[_server(provider=provider)])).config
     assert "data" not in config
@@ -411,6 +414,7 @@ def test_prices_are_a_declared_estimate(tmp_path: Path) -> None:
         auth_url="https://identity.example.net/v3",
         region="region-1",
         public_network="public",
+        flavors=["small"],
     )
     infra = Infrastructure("web", servers=[_server(provider=bare)], state_dir=tmp_path)
     ws = Workspace(infra, tmp_path, None, render(infra), {})  # type: ignore[arg-type]
@@ -445,7 +449,12 @@ def test_rendering_is_deterministic(tmp_path: Path) -> None:
 def test_the_pinned_provider_validates_the_configuration(
     homes: Path, tmp_path: Path
 ) -> None:
-    """``tofu init`` verifies the pinned hashes; ``tofu validate`` accepts every resource."""
+    """``tofu init`` verifies the pinned hashes; ``tofu validate`` accepts every resource.
+
+    Also the user data: a sensitive variable and ``ignore_changes``. The
+    provider (3.4.0) keeps only the SHA-1 of ``user_data`` in the state
+    (its ``StateFunc``); the live test checks it on a real server.
+    """
     from piceli.infra.machines.plan import workspace
 
     credentials.save_credential("web-state", "state-key", PASSPHRASE)
@@ -457,7 +466,8 @@ def test_the_pinned_provider_validates_the_configuration(
         "web",
         servers=[
             _server(image=image, firewall=firewall, ssh_keys=[KEY],
-                    ipv4=PrimaryIp("host-1-ip", protect=True)),
+                    ipv4=PrimaryIp("host-1-ip", protect=True),
+                    user_data=UserData("host-1-boot")),
             _server(name="host-2", ipv4=True, firewall=firewall),
         ],
         buckets=[Bucket("nix-cache", provider=OS, protect=True)],

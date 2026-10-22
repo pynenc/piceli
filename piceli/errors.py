@@ -5433,6 +5433,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "infra",
     ),
     _E(
+        "infra-user-data-missing",
+        "User data not stored",
+        "The plan creates (or replaces) a server declared with `UserData(secret=NAME)`, and no credential NAME holds its user data. Plans that do not create the server never need it.",
+        "Store it, then plan again: `piceli secrets user-data NAME --file PATH` (or `--prompt`). For a bootstrap key, mint a single-use key that expires within the hour just before.",
+        True,
+        "infra",
+    ),
+    _E(
         "infra-credential-unsafe",
         "Credential readable by others",
         "A credential file is readable or writable by other users.",

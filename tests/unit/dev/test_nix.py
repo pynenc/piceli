@@ -111,7 +111,7 @@ def test_a_bucket_without_a_known_endpoint_needs_one() -> None:
 
     provider = OpenStack(
         credentials="os", auth_url="https://keystone.example.net/v3", region="r1",
-        public_network="ext",
+        public_network="ext", flavors=["small"],
     )  # fmt: skip
     bucket = Bucket("nix-cache", provider)
     assert (

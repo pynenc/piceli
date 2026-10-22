@@ -70,6 +70,7 @@ __all__ = [
     "Ssh",
     "Tag",
     "Ui",
+    "UserData",
     "register_cluster",
 ]
 
@@ -407,6 +408,7 @@ from piceli.infra.machines import (  # noqa: E402
     Rule,
     Server,
     Ssh,
+    UserData,
 )
 
 # Loaded on first use (piceli/_lazy.py): importing the facade stays cheap and

@@ -36,6 +36,7 @@ __all__ = [
     "Rule",
     "Server",
     "Ssh",
+    "UserData",
 ]
 
 #: A name Piceli gives a resource: a DNS label (also an OpenTofu identifier
@@ -354,6 +355,30 @@ class Ssh:
 
 
 @dataclass(frozen=True)
+class UserData:
+    """The user data a server gets at creation: a stored secret, never in a file.
+
+    ``secret`` names a local credential (``piceli secrets user-data NAME
+    --file PATH``) holding the whole user data: a cloud-config, a script or
+    a single value the image reads (a pre-authorized VPN key). It reaches
+    OpenTofu as a sensitive variable in its environment and is loaded only
+    by a plan that creates (or replaces) the server; later plans ignore it,
+    so a missing, changed or expired value never replaces the server. The
+    plan shows the secret's name and a short digest, never the value.
+    """
+
+    secret: str
+
+    def __post_init__(self) -> None:
+        from piceli.profiles import ProfileError, check_name
+
+        try:
+            check_name(self.secret)
+        except (ProfileError, TypeError):
+            raise _invalid("UserData(secret=) is a credential name") from None
+
+
+@dataclass(frozen=True)
 class Image:
     """A disk image Piceli uploads for ``Server(image=Image(...))``.
 
@@ -536,6 +561,8 @@ class Server:
     :param cluster: The :class:`~piceli.infra.Cluster` its k3s becomes
         (``piceli infra register``); ``None`` for a plain host.
     :param labels: Extra provider labels (``piceli.io/`` keys are Piceli's).
+    :param user_data: :class:`UserData` given to the server at creation only
+        (providers with ``supports_user_data``).
     """
 
     name: str
@@ -551,6 +578,7 @@ class Server:
     ssh: Ssh = field(default_factory=Ssh)
     cluster: Cluster | None = None
     labels: Mapping[str, str] = field(default_factory=dict)
+    user_data: UserData | None = None
 
     def __post_init__(self) -> None:
         from piceli.infra import Cluster
@@ -624,6 +652,13 @@ class Server:
         object.__setattr__(
             self, "labels", _labels(self.labels, f"Server {self.name}: labels")
         )
+        if self.user_data is not None:
+            if not isinstance(self.user_data, UserData):
+                raise _invalid(f"Server {self.name}: user_data is a UserData(secret=)")
+            if not self.provider.supports_user_data:
+                raise _invalid(
+                    f"Server {self.name}: {self.provider.name} takes no user data here"
+                )
         self.provider.check_server(self)
 
     def __hash__(self) -> int:
@@ -646,6 +681,7 @@ class Server:
             else None,
             "install": list(self.install.argv) if self.install is not None else None,
             "cluster": self.cluster.name if self.cluster is not None else None,
+            "user_data": self.user_data.secret if self.user_data else None,
         }
 
 

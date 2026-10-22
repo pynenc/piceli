@@ -130,14 +130,17 @@ created anywhere (see {doc}`testing`).
 
 ### OpenStack and Infomaniak
 
-`OpenStack(credentials=, auth_url=, region=, public_network=, prices=,
-ip_prices=, currency="EUR")` renders for the
+`OpenStack(credentials=, auth_url=, region=, public_network=, flavors=,
+prices=, ip_prices=, currency="EUR")` renders for the
 `terraform-provider-openstack/openstack` OpenTofu provider (3.4.0, pinned
-with every platform's hashes). `Infomaniak(credentials=, region="dc3-a")`
-fills in Infomaniak Public Cloud's values: `auth_url`
+with every platform's hashes). `flavors=` is an allow-list, like
+`Hetzner(server_types=)`: a server with another flavor is refused when it
+is declared. `Infomaniak(credentials=, region="dc3-a")` fills in
+Infomaniak Public Cloud's values: `auth_url`
 `https://api.pub1.infomaniak.cloud/identity/v3`, the external network
-`ext-net1` (a public IPv4 and IPv6 per port), prices in CHF; `dc4-a` is
-the other region.
+`ext-net1` (a public IPv4 and IPv6 per port), prices in CHF, and
+`flavors=["a1-ram2-disk20-perf1"]`, its smallest (1 vCPU, 2 GB); `dc4-a`
+is the other region.
 
 ```python
 from piceli.infra import Bucket, Image, Infomaniak, Infrastructure, PrimaryIp, Rule, Server
@@ -160,6 +163,7 @@ infra = Infrastructure("web", servers=[host], buckets=[Bucket("my-cache", provid
 | `ssh_keys` | `openstack_compute_keypair_v2`; one key per server (Nova boots with one key pair) |
 | `Image` | `openstack_images_image_v2`, private, named by its checksum: at apply time Piceli copies the file (or downloads the URL) into the state directory, verifies it, uploads it, then removes the copy |
 | `Bucket` | `openstack_objectstorage_container_v1` (Swift) |
+| `user_data=UserData(NAME)` | `user_data` from the sensitive variable `user_data_<server>`, with `ignore_changes`: read at creation only |
 
 The credential is an application credential (Horizon: Identity →
 Application Credentials, or `openstack application credential create`),
@@ -174,6 +178,21 @@ keys. OpenStack has no price API here: `prices=` (monthly net per flavor) and
 estimate. One region per declaration; `ipv4=False` and `ipv6=PrimaryIp` are
 refused (the port holds both families). OpenStack serves no DNS: give a
 `DnsRecord` `provider=Porkbun(...)` (below).
+
+**User data.** `Server(user_data=UserData("web-1-boot"))` gives the server
+a stored secret at creation: a cloud-config, a script, or one value the
+image reads (a pre-authorized VPN key). Store it with `piceli secrets
+user-data web-1-boot --file PATH` (or `--prompt`). Only a plan that creates
+or replaces the server reads it: the plan runs once without it, and when it
+creates the server, again with the value in OpenTofu's environment
+(`TF_VAR_user_data_web_1`, redacted from every output). The plan lists
+`user_data` (server, secret name, a short sha256 digest), which the plan
+hash covers. Later plans never read it, and a changed, expired or deleted
+value never replaces the server. A creating plan without it fails with
+`infra-user-data-missing`. The provider keeps only the value's SHA-1 in
+the (encrypted) state. The instance's metadata service serves the user data
+to any process on it, so a key in it should be single-use and short-lived.
+{doc}`single_nixos_host` uses one to join a tailnet on first boot.
 
 Ownership marks: metadata on servers and buckets, tags on ports, security
 groups and images, the description of security group rules. Key pairs carry

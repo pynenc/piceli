@@ -25,6 +25,13 @@ OpenTofu cannot see (:meth:`Provider.plan_check`: Porkbun's API access for
 each domain the plan changes). A check that fails fails the plan; whether
 each one ran is in the plan's ``checks``, outside the hash.
 
+User data: a server's :class:`~piceli.infra.machines.model.UserData` is
+loaded only when the plan creates (or replaces) that server. The plan runs
+once without it; if it creates such a server, the secret goes into
+``TF_VAR_user_data_<server>`` and the plan runs again (a missing secret is
+``infra-user-data-missing``). The plan shows the secret's name and a short
+digest, which the plan hash covers; the value is redacted from every output.
+
 Partial applies: ``tofu apply -json`` prints an ``apply_complete`` line per
 finished change. When the apply fails after one of them, the error carries
 ``partially_applied``, what was applied (address, action, the provider's id)
@@ -38,7 +45,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -52,7 +59,7 @@ from piceli.infra.machines.model import (
     Infrastructure,
 )
 from piceli.infra.machines.provider import Prices, Provider
-from piceli.infra.machines.render import Rendered, render
+from piceli.infra.machines.render import Rendered, render, user_data_variable
 from piceli.infra.machines.state import (
     encryption_env,
     locked,
@@ -86,6 +93,8 @@ class Workspace:
     rendered: Rendered
     env: dict[str, str]
     tokens: dict[str, str] = field(default_factory=dict)
+    #: Server address -> its user data, once a plan that creates it loaded it.
+    user_data: dict[str, str] = field(default_factory=dict, repr=False)
 
     def run(self, *args: str, timeout: float = 1800) -> TofuResult:
         return self.tofu.run(
@@ -235,6 +244,8 @@ class InfraPlan:
     tofu: str
     file: Path | None = None
     checks: tuple[dict[str, Any], ...] = ()
+    #: The user data the plan passes: server, secret name, short digest.
+    user_data: tuple[dict[str, str], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -249,6 +260,7 @@ class InfraPlan:
             "estimate": self.estimate,
             "tofu": self.tofu,
             "checks": [dict(check) for check in self.checks],
+            "user_data": [dict(item) for item in self.user_data],
         }
 
 
@@ -259,8 +271,14 @@ def _summary(changes: tuple[Change, ...]) -> dict[str, int]:
     return counts
 
 
-def plan_hash(operation: str, rendered: Rendered, document: Mapping[str, Any]) -> str:
-    """The approval hash: configuration, operation and plan JSON (no timestamp)."""
+def plan_hash(
+    operation: str,
+    rendered: Rendered,
+    document: Mapping[str, Any],
+    user_data: Sequence[Mapping[str, str]] = (),
+) -> str:
+    """The approval hash: configuration, operation, plan JSON (no timestamp)
+    and the digests of the user data it passes."""
     stable = {k: v for k, v in document.items() if k not in VOLATILE}
     # OpenTofu lists these in map order, which changes from run to run.
     for key in UNORDERED:
@@ -268,8 +286,15 @@ def plan_hash(operation: str, rendered: Rendered, document: Mapping[str, Any]) -
             stable[key] = sorted(
                 stable[key], key=lambda item: json.dumps(item, sort_keys=True)
             )
+    hashed: dict[str, Any] = {
+        "operation": operation,
+        "config": rendered.digest,
+        "plan": stable,
+    }
+    if user_data:
+        hashed["user_data"] = [dict(item) for item in user_data]
     body = json.dumps(
-        {"operation": operation, "config": rendered.digest, "plan": stable},
+        hashed,
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -387,6 +412,60 @@ def estimate(ws: Workspace) -> dict[str, Any] | None:
     }
 
 
+def _creates_with_user_data(ws: Workspace, document: Mapping[str, Any]) -> list[str]:
+    """Server addresses with user data that the plan creates (or replaces)."""
+    found: list[str] = []
+    for item in document.get("resource_changes") or ():
+        if not isinstance(item, dict):
+            continue
+        actions = (item.get("change") or {}).get("actions") or ()
+        address = item.get("address")
+        if address in ws.rendered.user_data and "create" in actions:
+            found.append(str(address))
+    return sorted(found)
+
+
+def _load_user_data(ws: Workspace, addresses: list[str]) -> bool:
+    """Put each server's user data into OpenTofu's environment (``True``: new ones)."""
+    from piceli.infra.machines.credentials import credential_present, load_credential
+
+    loaded = False
+    for address in addresses:
+        if address in ws.user_data:
+            continue
+        server, secret = ws.rendered.user_data[address]
+        if not credential_present(secret):
+            raise InfraError(
+                "infra-user-data-missing",
+                f"this plan creates server {server}, which needs its user data; "
+                f"store it first: piceli secrets user-data {secret} --file PATH",
+            )
+        value = load_credential(secret, "user-data")
+        ws.user_data[address] = value
+        ws.env["TF_VAR_" + user_data_variable(server)] = value
+        loaded = True
+    return loaded
+
+
+def user_data_digest(value: str) -> str:
+    """A short digest of user data: names it in a plan, never reveals it."""
+    return "sha256:" + hashlib.sha256(value.encode()).hexdigest()[:16]
+
+
+def _plan_document(ws: Workspace, args: list[str], file: Path) -> dict[str, Any]:
+    _check(ws.run(*args), "infra-tofu-failed", "plan", ws)
+    shown = _check(ws.run("show", "-json", str(file)), "infra-tofu-failed", "show")
+    try:
+        document = json.loads(shown.stdout)
+    except ValueError:
+        raise InfraError(
+            "infra-tofu-failed", "tofu show -json did not print a plan"
+        ) from None
+    if not isinstance(document, dict):
+        raise InfraError("infra-tofu-failed", "tofu show -json did not print a plan")
+    return document
+
+
 def plan(
     ws: Workspace,
     *,
@@ -405,14 +484,24 @@ def plan(
         args = ["plan", "-input=false", "-json", "-out=" + str(file)]
         if destroy:
             args.append("-destroy")
-        _check(ws.run(*args), "infra-tofu-failed", "plan", ws)
-        shown = _check(ws.run("show", "-json", str(file)), "infra-tofu-failed", "show")
-        try:
-            document = json.loads(shown.stdout)
-        except ValueError:
-            raise InfraError(
-                "infra-tofu-failed", "tofu show -json did not print a plan"
-            ) from None
+        document = _plan_document(ws, args, file)
+        creates: list[str] = []
+        if not destroy and ws.rendered.user_data:
+            # Without the user data first: only a plan that creates the
+            # server loads it, then plans again with it.
+            creates = _creates_with_user_data(ws, document)
+            if _load_user_data(ws, creates):
+                document = _plan_document(ws, args, file)
+                creates = _creates_with_user_data(ws, document)
+                _load_user_data(ws, creates)
+        user_data = tuple(
+            {
+                "server": ws.rendered.user_data[address][0],
+                "secret": ws.rendered.user_data[address][1],
+                "digest": user_data_digest(ws.user_data[address]),
+            }
+            for address in creates
+        )
         changes, foreign = changes_of(ws, document)
         checks = tuple(
             check
@@ -423,13 +512,14 @@ def plan(
         result = InfraPlan(
             ws.infra.name,
             operation,
-            plan_hash(operation, ws.rendered, document),
+            plan_hash(operation, ws.rendered, document, user_data),
             ws.rendered.digest,
             changes,
             foreign,
             estimate(ws) if prices and not destroy else None,
             ws.tofu.version_text,
             checks=checks,
+            user_data=user_data,
         )
         if keep is not None:
             target = keep / "plan.tfplan"

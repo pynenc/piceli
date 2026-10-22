@@ -28,6 +28,24 @@ and rollback.
   ownership marks and `infra-foreign-resource` work as for Hetzner; prices
   are a declared table. `Infrastructure(buckets=)` is new; Hetzner
   declarations render and hash as before.
+- **Secret user data, at creation only.** `Server(user_data=UserData(NAME))`
+  (new in `piceli.infra`; OpenStack servers) gives a server a stored secret
+  as its user data: a cloud-config, a script or a bootstrap key, stored
+  with `piceli secrets user-data NAME --file PATH` (or `--prompt`; `0600`,
+  never printed). It renders as a sensitive OpenTofu variable passed only
+  through `TF_VAR_*`, redacted from every output (also JSON-escaped), with
+  `lifecycle.ignore_changes = ["user_data"]`. Only a plan that creates or
+  replaces the server loads it; the plan shows the secret's name and a
+  short digest (`user_data`), which the plan hash covers. Later plans never
+  need it and never replace the server for it. A creating plan without it
+  fails with the new code `infra-user-data-missing`. The provider keeps
+  only its SHA-1 in the state. The single-host guide now bootstraps the
+  host onto a tailnet with a one-hour, single-use key and opens no public
+  port 22.
+- **OpenStack flavors are an allow-list.** `OpenStack(flavors=[...])` is
+  required and `Infomaniak(flavors=)` defaults to its smallest,
+  `a1-ram2-disk20-perf1`, like `Hetzner(server_types=)`: a server with
+  another flavor is refused when it is declared (`infra-invalid`).
 - **DNS records at Porkbun, for servers anywhere.** `Porkbun(credentials=)`
   in `piceli.infra` renders `DnsRecord(..., provider=Porkbun(...))` for the
   pinned `marcfrederick/porkbun` 1.3.3 OpenTofu provider (API v3; one

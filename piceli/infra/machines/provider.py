@@ -114,6 +114,8 @@ class Provider(ABC):
     #: Whether ``Server(provider=...)`` can be created here (a DNS-only
     #: provider holds none).
     supports_servers: bool = True
+    #: Whether ``Server(user_data=UserData(...))`` is passed at creation.
+    supports_user_data: bool = False
     #: The TTL of a ``DnsRecord`` that gives none, and the shortest accepted.
     default_ttl: int = 300
     min_ttl: int = 60
@@ -190,6 +192,15 @@ class Provider(ABC):
     def render_bucket(self, bucket: Bucket, labels: Mapping[str, str]) -> Resource:
         """The bucket (only when :attr:`supports_buckets`)."""
         raise NotImplementedError(f"{self.name} has no buckets")
+
+    def render_user_data(self, server: Resource, reference: str) -> Resource:
+        """``server`` with its user data set to ``reference`` (a sensitive variable).
+
+        Only when :attr:`supports_user_data`. The user data is used at
+        creation only: the resource ignores later changes to it, so a plan
+        that does not create the server needs no value.
+        """
+        raise NotImplementedError(f"{self.name} takes no user data")
 
     def data_sources(self) -> list[Resource]:
         """Read-only lookups the resources refer to (``data.<type>.<name>``)."""

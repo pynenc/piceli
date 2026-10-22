@@ -2058,6 +2058,18 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "argument is refused (infra-credential-refused) without echoing it. "
             "Prints the name, never a value.",
         ),
+        "secrets user-data": _C(
+            "Store a server's user data (a cloud-config, a script or a bootstrap "
+            "key) as a local credential.",
+            reads=("stdin (--prompt)", "PATH (--file)"),
+            writes=("$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)",),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.24.0. Prints the name, size and a short digest (the one the "
+            "plan shows), never the value; an argument is refused "
+            "(infra-credential-refused) without echoing it. Used only by a plan "
+            "that creates the server (Server(user_data=UserData(NAME))).",
+        ),
         "secrets state-key": _C(
             "Store the passphrase that encrypts an Infrastructure's OpenTofu state "
             "(--generate, or --prompt).",

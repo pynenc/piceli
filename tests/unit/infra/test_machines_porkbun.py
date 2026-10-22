@@ -48,6 +48,7 @@ OS = OpenStack(
     region="region-1",
     public_network="public",
     prices={"small": 4.7},
+    flavors=["small"],
 )
 PORT = "openstack_networking_port_v2.ip-host-1-ip"
 V4 = "${[for ip in " + PORT + '.all_fixed_ips : ip if !strcontains(ip, ":")][0]}'

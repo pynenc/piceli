@@ -9,7 +9,11 @@ its environment, never from the configuration, a plan or the state.
 
 What each declared object becomes:
 
-- ``Server`` → ``openstack_compute_instance_v2`` (flavor ``Server.type``).
+- ``Server`` → ``openstack_compute_instance_v2`` (flavor ``Server.type``,
+  one of ``flavors=``). ``Server(user_data=UserData(...))`` sets
+  ``user_data`` from a sensitive variable, ignored after creation
+  (``lifecycle.ignore_changes``); the provider keeps only its SHA-1 in the
+  state.
 - ``Server(ipv4=PrimaryIp(...))`` → ``openstack_networking_port_v2`` on the
   public network, holding the public IPv4 (and the IPv6 the network gives).
   The server attaches to that port, so a replaced server re-attaches it and
@@ -38,7 +42,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -56,7 +60,13 @@ from piceli.infra.machines.model import (
 )
 from piceli.infra.machines.provider import Pin, Prices, Provider, Resource
 
-__all__ = ["INFOMANIAK_AUTH_URL", "OPENSTACK_PIN", "Infomaniak", "OpenStack"]
+__all__ = [
+    "INFOMANIAK_AUTH_URL",
+    "INFOMANIAK_FLAVORS",
+    "OPENSTACK_PIN",
+    "Infomaniak",
+    "OpenStack",
+]
 
 #: terraform-provider-openstack/openstack, as ``tofu providers lock`` locked
 #: it for every platform the registry publishes (refresh: see the docs).
@@ -98,6 +108,9 @@ OPENSTACK_PIN = Pin(
 )
 #: Infomaniak Public Cloud's Keystone (its application-credential guide).
 INFOMANIAK_AUTH_URL = "https://api.pub1.infomaniak.cloud/identity/v3"
+#: Infomaniak's smallest flavor; another is refused unless
+#: ``Infomaniak(flavors=...)`` lists it.
+INFOMANIAK_FLAVORS = ("a1-ram2-disk20-perf1",)
 ID_ENV = "OS_APPLICATION_CREDENTIAL_ID"
 SECRET_ENV = "OS_APPLICATION_CREDENTIAL_SECRET"
 NETWORK_LOOKUP = "public-network"
@@ -145,6 +158,8 @@ class OpenStack(Provider):
     :param ip_prices: Monthly net price of a persistent port's address
         (``{"ipv4": ...}``).
     :param currency: The currency of those prices.
+    :param flavors: The flavors a server may use; any other is refused
+        (required: clouds name their flavors differently).
     """
 
     credentials: str | None = None
@@ -154,6 +169,7 @@ class OpenStack(Provider):
     prices_monthly: Mapping[str, float] = field(default_factory=dict)
     ip_prices: Mapping[str, float] = field(default_factory=dict)
     currency: str = "EUR"
+    flavors: tuple[str, ...] = ()
     #: The servers' default location: the region.
     location: str | None = field(default=None, repr=False)
 
@@ -163,6 +179,7 @@ class OpenStack(Provider):
     supports_images = True
     supports_buckets = True
     supports_dns = False
+    supports_user_data = True
 
     def __init__(
         self,
@@ -173,6 +190,7 @@ class OpenStack(Provider):
         prices: Mapping[str, float] | None = None,
         ip_prices: Mapping[str, float] | None = None,
         currency: str = "EUR",
+        flavors: Sequence[str] | None = None,
     ) -> None:
         set_ = object.__setattr__
         set_(self, "credentials", credentials)
@@ -184,6 +202,16 @@ class OpenStack(Provider):
         set_(self, "ip_prices", dict(ip_prices or {}))
         set_(self, "currency", currency)
         self._check()
+        what = type(self).__name__
+        if flavors is None or isinstance(flavors, str) or not flavors:
+            raise InfraError(
+                "infra-invalid", f"{what}(flavors=) lists the flavors servers may use"
+            )
+        if not all(isinstance(f, str) and _TOKEN.fullmatch(f) for f in flavors):
+            raise InfraError(
+                "infra-invalid", f"{what}(flavors=) are names like a1-ram2-disk20-perf1"
+            )
+        set_(self, "flavors", tuple(sorted(set(flavors))))
 
     def _check(self) -> None:
         from piceli.profiles import ProfileError, check_name
@@ -260,6 +288,12 @@ class OpenStack(Provider):
         return body
 
     def check_server(self, server: Server) -> None:
+        if server.type not in self.flavors:
+            raise InfraError(
+                "infra-invalid",
+                f"Server {server.name}: flavor {server.type!r} is not one of "
+                f"{', '.join(self.flavors)} ({type(self).__name__}(flavors=...) adds one)",
+            )
         if server.location != self.region:
             raise InfraError(
                 "infra-invalid",
@@ -441,6 +475,14 @@ class OpenStack(Provider):
             body["key_pair"] = ssh_keys[0].ref("name")
         return Resource("openstack_compute_instance_v2", f"server-{server.name}", body)
 
+    def render_user_data(self, server: Resource, reference: str) -> Resource:
+        body = dict(server.body)
+        body["user_data"] = reference
+        lifecycle = dict(body.get("lifecycle") or {})
+        lifecycle["ignore_changes"] = ["user_data"]
+        body["lifecycle"] = lifecycle
+        return Resource(server.type, server.name, body)
+
     def render_record(
         self, record: DnsRecord, values: list[str], labels: Mapping[str, str]
     ) -> Resource:
@@ -514,7 +556,9 @@ class Infomaniak(OpenStack):
 
     ``auth_url`` is Infomaniak's Keystone, ``public_network`` its external
     network ``ext-net1`` (a public IPv4 and IPv6 per port), ``region``
-    ``dc3-a`` by default (``dc4-a`` is the other), prices in CHF.
+    ``dc3-a`` by default (``dc4-a`` is the other), prices in CHF, and
+    ``flavors`` its smallest, ``a1-ram2-disk20-perf1`` (1 vCPU, 2 GB, 20 GB):
+    a bigger one must be listed.
     """
 
     preset = "infomaniak"
@@ -528,6 +572,7 @@ class Infomaniak(OpenStack):
         ip_prices: Mapping[str, float] | None = None,
         currency: str = "CHF",
         auth_url: str = INFOMANIAK_AUTH_URL,
+        flavors: Sequence[str] = INFOMANIAK_FLAVORS,
     ) -> None:
         super().__init__(
             credentials=credentials,
@@ -537,4 +582,5 @@ class Infomaniak(OpenStack):
             prices=prices,
             ip_prices=ip_prices,
             currency=currency,
+            flavors=flavors,
         )

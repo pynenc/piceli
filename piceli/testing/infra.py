@@ -45,6 +45,7 @@ class FakeProvider(Provider):
     monthly: Mapping[str, float] = field(default_factory=dict)
 
     name = "fake"
+    supports_user_data = True
 
     def __hash__(self) -> int:
         return hash(("FakeProvider", self.location))
@@ -106,6 +107,15 @@ class FakeProvider(Provider):
         if firewall is not None:
             body["firewall"] = firewall.ref("id")
         return Resource("terraform_data", f"server-{server.name}", {"input": body})
+
+    def render_user_data(self, server: Resource, reference: str) -> Resource:
+        # Kept out of ``input``: ignoring it after creation leaves the rest live.
+        body = {
+            **server.body,
+            "triggers_replace": reference,
+            "lifecycle": {"ignore_changes": ["triggers_replace"]},
+        }
+        return Resource(server.type, server.name, body)  # fmt: skip
 
     def render_record(
         self, record: DnsRecord, values: list[str], labels: Mapping[str, str]

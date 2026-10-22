@@ -150,6 +150,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli secrets provider`](#cli-secrets-provider) | Store a provider API token (read from stdin, never printed). | none | no |
 | [`piceli secrets s3`](#cli-secrets-s3) | Store a bucket's S3 access keys (an access key id and its secret). | none | no |
 | [`piceli secrets state-key`](#cli-secrets-state-key) | Store the passphrase that encrypts an infrastructure's OpenTofu state. | none | no |
+| [`piceli secrets user-data`](#cli-secrets-user-data) | Store a server's user data (a cloud-config, a script or a bootstrap key). | none | no |
 | [`piceli state export`](#cli-state-export) | Write the release's state to one file (secret material excluded unless asked). | reads | no |
 | [`piceli state import`](#cli-state-import) | Replace the release's state with an export (needs --approve DIGEST). | writes | yes |
 | [`piceli state pull`](#cli-state-pull) | Refresh the local working copy from the shared state (reads the cluster). | reads | no |
@@ -3485,6 +3486,28 @@ Store the passphrase that encrypts an infrastructure's OpenTofu state.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Never printed; back the file up, the state cannot be read without it. Refuses to replace an existing key without --replace (infra-credential-exists).
+
+(cli-secrets-user-data)=
+### `piceli secrets user-data`
+
+Store a server's user data (a cloud-config, a script or a bootstrap key).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--prompt` | boolean | `False` | Read it from stdin (typed: one line without echo; piped: until EOF) |
+| `--file` | path |  | Read it from this file (a cloud-config, a script) |
+
+**Contract**
+
+- **Reads:** stdin (--prompt), PATH (--file)
+- **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Prints the name, size and a short digest (the one the plan shows), never the value; an argument is refused (infra-credential-refused) without echoing it. Used only by a plan that creates the server (Server(user_data=UserData(NAME))).
 
 (cli-state-export)=
 ### `piceli state export`

@@ -4307,6 +4307,7 @@
     "render_records",
     "render_server",
     "render_ssh_key",
+    "render_user_data",
     "resource_labels",
     "server_id",
     "server_status",
@@ -4315,6 +4316,7 @@
     "supports_dns",
     "supports_images",
     "supports_servers",
+    "supports_user_data",
     "token_env"
    ],
    "init": [
@@ -4401,6 +4403,10 @@
      "name",
      "public_key"
     ],
+    "render_user_data": [
+     "reference",
+     "server"
+    ],
     "resource_labels": [
      "type_",
      "values"
@@ -4425,7 +4431,8 @@
     "render_record": "Resource",
     "render_records": "Resource",
     "render_server": "Resource",
-    "render_ssh_key": "Resource"
+    "render_ssh_key": "Resource",
+    "render_user_data": "Resource"
    }
   },
   "Hook": {
@@ -4909,6 +4916,7 @@
     "data_sources",
     "default_ttl",
     "describe",
+    "flavors",
     "ip_prices",
     "known_error",
     "labels_of",
@@ -4933,6 +4941,7 @@
     "render_records",
     "render_server",
     "render_ssh_key",
+    "render_user_data",
     "resource_labels",
     "server_id",
     "server_status",
@@ -4940,12 +4949,14 @@
     "supports_dns",
     "supports_images",
     "supports_servers",
+    "supports_user_data",
     "token_env"
    ],
    "init": [
     "auth_url",
     "credentials",
     "currency",
+    "flavors",
     "ip_prices",
     "prices",
     "public_network",
@@ -5028,6 +5039,10 @@
      "name",
      "public_key"
     ],
+    "render_user_data": [
+     "reference",
+     "server"
+    ],
     "resource_labels": [
      "type_",
      "values"
@@ -5052,7 +5067,8 @@
     "render_record": "Resource",
     "render_records": "Resource",
     "render_server": "Resource",
-    "render_ssh_key": "Resource"
+    "render_ssh_key": "Resource",
+    "render_user_data": "Resource"
    }
   },
   "InfraError": {
@@ -6439,6 +6455,7 @@
     "data_sources",
     "default_ttl",
     "describe",
+    "flavors",
     "ip_prices",
     "known_error",
     "labels_of",
@@ -6463,6 +6480,7 @@
     "render_records",
     "render_server",
     "render_ssh_key",
+    "render_user_data",
     "resource_labels",
     "server_id",
     "server_status",
@@ -6470,12 +6488,14 @@
     "supports_dns",
     "supports_images",
     "supports_servers",
+    "supports_user_data",
     "token_env"
    ],
    "init": [
     "auth_url",
     "credentials",
     "currency",
+    "flavors",
     "ip_prices",
     "prices",
     "public_network",
@@ -6558,6 +6578,10 @@
      "name",
      "public_key"
     ],
+    "render_user_data": [
+     "reference",
+     "server"
+    ],
     "resource_labels": [
      "type_",
      "values"
@@ -6582,7 +6606,8 @@
     "render_record": "Resource",
     "render_records": "Resource",
     "render_server": "Resource",
-    "render_ssh_key": "Resource"
+    "render_ssh_key": "Resource",
+    "render_user_data": "Resource"
    }
   },
   "OperatorUser": {
@@ -7310,6 +7335,7 @@
     "render_records",
     "render_server",
     "render_ssh_key",
+    "render_user_data",
     "resource_labels",
     "server_id",
     "server_status",
@@ -7317,6 +7343,7 @@
     "supports_dns",
     "supports_images",
     "supports_servers",
+    "supports_user_data",
     "token_env"
    ],
    "init": [
@@ -7400,6 +7427,10 @@
      "name",
      "public_key"
     ],
+    "render_user_data": [
+     "reference",
+     "server"
+    ],
     "resource_labels": [
      "type_",
      "values"
@@ -7424,7 +7455,8 @@
     "render_record": "Resource",
     "render_records": "Resource",
     "render_server": "Resource",
-    "render_ssh_key": "Resource"
+    "render_ssh_key": "Resource",
+    "render_user_data": "Resource"
    }
   },
   "Port": {
@@ -9243,7 +9275,8 @@
     "ipv6",
     "location",
     "primary_ips",
-    "ssh_keys"
+    "ssh_keys",
+    "user_data"
    ],
    "init": [
     "cluster",
@@ -9258,7 +9291,8 @@
     "provider",
     "ssh",
     "ssh_keys",
-    "type"
+    "type",
+    "user_data"
    ],
    "methods": {
     "describe": [],
@@ -10217,6 +10251,15 @@
    ],
    "methods": {},
    "pydantic": true
+  },
+  "UserData": {
+   "attrs": [
+    "secret"
+   ],
+   "init": [
+    "secret"
+   ],
+   "methods": {}
   },
   "UserStore": {
    "attrs": [
@@ -12506,7 +12549,8 @@
      "nix-cache",
      "provider",
      "s3",
-     "state-key"
+     "state-key",
+     "user-data"
     ]
    },
    "secrets age": {
@@ -12585,6 +12629,16 @@
      "--generate",
      "--prompt",
      "--replace"
+    ],
+    "subcommands": []
+   },
+   "secrets user-data": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--file",
+     "--prompt"
     ],
     "subcommands": []
    },
@@ -13240,6 +13294,7 @@
    "infra-tofu-failed",
    "infra-tofu-missing",
    "infra-tofu-unsupported",
+   "infra-user-data-missing",
    "inputs-io-error",
    "inputs-lock-invalid",
    "invalid-access-profile",
@@ -14499,6 +14554,9 @@
    },
    "Ui": {
     "class": "Ui"
+   },
+   "UserData": {
+    "class": "UserData"
    },
    "register_cluster": {
     "params": [

@@ -762,6 +762,10 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["secrets", "s3", "cache-s3"],
         "infra-prompt-required",
     ),
+    "secrets user-data": (
+        lambda p: ["secrets", "user-data", "web-1-boot", "a-key-value"],
+        "infra-credential-refused",
+    ),
     "dev nix gc": (
         lambda p: ["dev", "nix", "gc", "--cache", "no_such_module:cache"],
         "dev-nix-cache-invalid",

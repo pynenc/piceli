@@ -54,8 +54,13 @@ _VERSION = re.compile(r"OpenTofu v(\d+)\.(\d+)\.(\d+)")
 
 
 def redact(text: str, secrets: Sequence[str]) -> str:
-    """``text`` with every secret value replaced (longest first)."""
-    for value in sorted({s for s in secrets if s}, key=len, reverse=True):
+    """``text`` with every secret value replaced (longest first).
+
+    Also as a JSON string spells it (``-json`` output escapes new lines and
+    quotes), so a multi-line secret is replaced there too.
+    """
+    forms = {s for s in secrets if s} | {json.dumps(s)[1:-1] for s in secrets if s}
+    for value in sorted(forms, key=len, reverse=True):
         text = text.replace(value, REDACTED)
     return text
 
@@ -157,8 +162,11 @@ class Tofu:
 
 
 def _secret_name(key: str) -> bool:
-    return key == "TF_ENCRYPTION" or key.endswith(
-        ("_TOKEN", "_PASSWORD", "_SECRET", "_API_KEY")
+    # Piceli passes only sensitive variables (user data) as TF_VAR_*.
+    return (
+        key == "TF_ENCRYPTION"
+        or key.startswith("TF_VAR_")
+        or key.endswith(("_TOKEN", "_PASSWORD", "_SECRET", "_API_KEY"))
     )
 
 

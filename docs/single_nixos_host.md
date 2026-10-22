@@ -10,7 +10,9 @@ with a changelog entry.
 
 This guide takes one NixOS machine from nothing to a host that follows your
 release tags on its own. One typed-Python file declares everything: the
-machine, its address, firewall and key, the disk image it boots, the bucket
+machine, its address, firewall and key, the disk image it boots, the
+bootstrap key it joins your tailnet with (port 22 is never open to the
+internet), the bucket
 that holds the Nix binary cache, two DNS records, and the host agent that
 deploys every new `v*` tag, checks it and rolls back when a check fails. No
 Kubernetes cluster is involved, and none has to be up.
@@ -44,10 +46,12 @@ from piceli.infra import (
     Server,
     Ssh,
     Tag,
+    UserData,
 )
 
-# An OpenStack cloud (Infomaniak's preset) and the registrar's DNS.
-cloud = Infomaniak(credentials="infomaniak", prices={"a2-ram4-disk50-perf1": 9.40})
+# An OpenStack cloud (Infomaniak's preset: its smallest flavor only, unless
+# flavors=[...] lists more) and the registrar's DNS.
+cloud = Infomaniak(credentials="infomaniak", prices={"a1-ram2-disk20-perf1": 4.70})
 dns = Porkbun(credentials="porkbun")
 
 # The first system: `piceli dev nix build ... --image` (step 2) writes the
@@ -57,16 +61,17 @@ nixos = Image.from_build("web-1-nixos", "images/web-1-image.image.json")
 web = Server(
     "web-1",
     provider=cloud,
-    type="a2-ram4-disk50-perf1",
+    type="a1-ram2-disk20-perf1",
     image=nixos,
     ipv4=PrimaryIp("web-1-port", protect=True),  # a port that outlives the server
-    firewall=Firewall(  # a security group: inbound SSH, HTTP and HTTPS only
+    firewall=Firewall(  # a security group: inbound HTTP and HTTPS only, no SSH
         "web",
-        rules=[Rule.tcp(22, name="ssh"), Rule.tcp(80, name="http"),
-               Rule.tcp(443, name="https")],
+        rules=[Rule.tcp(80, name="http"), Rule.tcp(443, name="https")],
     ),
     ssh_keys=["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyOnly owner@example.org"],
-    ssh=Ssh(user="root", address="example.org"),
+    # Read once, at creation: a pre-authorized tailnet key (step 2).
+    user_data=UserData("web-1-boot"),
+    ssh=Ssh(user="root", address="web-1.tail-example.ts.net"),  # over the tailnet
 )
 
 # The Nix binary cache: a bucket, a signing key and S3 keys that write
@@ -118,9 +123,29 @@ builds = DevBuilds(
 The flake has a `nixosConfigurations.web-1` (nginx, your service, a
 `/healthz`) and two outputs of it: `config.system.build.toplevel`, the
 system the host switches to, and `config.system.build.openstackImage`, the
-disk image it first boots. Replace the public key, the SSH key and the
-builder image's digest with yours; the commands below say where each comes
-from.
+disk image it first boots. Replace the public key, the SSH key, the tailnet
+name and the builder image's digest with yours; the commands below say
+where each comes from.
+
+The system joins the tailnet on its first boot with the key in its user
+data. NixOS's OpenStack image fetches the user data to
+`/etc/ec2-metadata/user-data` (`0600` root); Tailscale reads it from there:
+
+```nix
+services.tailscale.enable = true;
+services.tailscale.authKeyFile = "/etc/ec2-metadata/user-data";
+systemd.services.tailscaled-autoconnect = {
+  after = [ "openstack-init.service" ];  # the service that fetches it
+  requires = [ "openstack-init.service" ];
+};
+# Otherwise amazon-init reads the user data as a NixOS configuration.
+virtualisation.amazon-init.enable = false;
+networking.firewall.trustedInterfaces = [ "tailscale0" ];  # SSH on the tailnet only
+```
+
+On an image with cloud-init (Debian, Ubuntu), store a cloud-config
+instead: `#cloud-config`, then `runcmd: [[tailscale, up, --auth-key=...]]`
+after installing Tailscale.
 
 ## Steps
 
@@ -134,6 +159,7 @@ from.
    piceli secrets nix-cache example-cache-1 --generate    # prints example-cache-1:<base64>
    piceli secrets s3 nix-cache-write --prompt              # key id, then secret: put and delete
    piceli secrets age web-1-age --generate                 # prints age1...: the host's sops key
+   piceli secrets user-data web-1-boot --prompt           # the tailnet key, just before step 2
    ```
 
    The Infomaniak credential is an application credential (`ID:SECRET`),
@@ -142,6 +168,13 @@ from.
    Put the printed cache public key in `NixCache(...)` and the `age1...`
    key in your `.sops.yaml`. The host's own secrets do not go into Piceli:
    step 3 puts them in sops-nix.
+
+   The user data is a Tailscale auth key you mint just before the first
+   apply (admin console, Settings, Keys): **single-use, pre-authorized,
+   tagged `tag:example`, expiring in one hour**. Any process on the
+   instance can read its user data from the metadata service, so the key
+   must be useless once the host has joined. Your tailnet policy lets you
+   reach `tag:example` on port 22.
 
 2. **The image, then the machines.** Build the image on the build host;
    it lands in `images/` with `images/web-1-image.image.json`, the sidecar
@@ -161,11 +194,25 @@ from.
    `infra plan` exits 3 with the changes (image, port, security group and
    its rules, key pair, server, bucket, two Porkbun records), the monthly
    estimate and the plan hash; it also checks Porkbun's API access for
-   `example.org`. `infra apply` uploads the image (its sha256 checked
+   `example.org`. It shows `user data of web-1: secret web-1-boot
+   (sha256:...)`: only a plan that creates the server reads the key, passes
+   it to OpenTofu as a sensitive variable in its environment, and the plan
+   hash covers its digest. The key is never in the configuration, the plan
+   output or Piceli's records; the provider keeps only its SHA-1 in the
+   encrypted state. `infra apply` uploads the image (its sha256 checked
    first), creates the rest and points both records at the port. Nothing
-   runs without the hash you approved. `infra register` reads the server's
-   SSH host keys and shows their fingerprints: compare them with the
-   console, then approve, and they are pinned in the infrastructure's
+   runs without the hash you approved.
+
+   The first boot joins the tailnet as `web-1`. From then on the user
+   data is ignored: later plans never read it and never replace the server
+   for it. Delete the stored key (`rm
+   ~/.config/piceli/credentials/web-1-boot.json`): a plan that has to
+   replace the server then stops with `infra-user-data-missing` until you
+   store a fresh one.
+
+   Everything else goes over the tailnet, to `Ssh(address=)`. `infra
+   register` reads the server's SSH host keys and shows their
+   fingerprints: compare them with the console, then approve, and they are pinned in the infrastructure's
    state. Every `piceli host ... --infra web_1.py` reads the host with
    strict host key checking against them, and finds `web-1` by its name.
 
@@ -194,9 +241,10 @@ from.
    piceli host secrets web-1 --infra web_1.py --approve sha256:<digest>
    ```
 
-   It goes on ssh's stdin to `/var/lib/sops-nix/key.txt`, and the host
-   re-runs its activation so sops-nix decrypts. A host that already has
-   another key is refused unless you pass `--replace`.
+   It goes over the tailnet, on ssh's stdin, to
+   `/var/lib/sops-nix/key.txt`, and the host re-runs its activation so
+   sops-nix decrypts. A host that already has another key is refused
+   unless you pass `--replace`.
 
 4. **The agent's module, into the flake.**
 
@@ -209,7 +257,7 @@ from.
    from then on carries the agent. Render it before you build the image of
    step 2 and the first boot already runs the agent; otherwise switch once
    by hand (`nixos-rebuild switch --flake .#web-1 --target-host
-   root@example.org`).
+   root@web-1.tail-example.ts.net`).
 
 5. **A release.** Tag the commit and publish its build:
 
@@ -235,7 +283,7 @@ from.
    ```
 
    It reads `/var/lib/piceli-host/status.json` over SSH (or give a target:
-   `root@example.org`). It exits 0 once `v1.0.0` runs with its checks
+   `root@web-1.tail-example.ts.net`). It exits 0 once `v1.0.0` runs with its checks
    passed, and 1 on a refused or failed attempt (`host-deploy-failed`), a
    rollback (`host-rolled-back`) or after `--timeout` (`host-wait-timeout`).
    The JSON carries the attempt's stages with their seconds. The same

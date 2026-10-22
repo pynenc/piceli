@@ -420,6 +420,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`infra-tofu-failed`](#error-infra-tofu-failed) | infra | yes |
 | [`infra-tofu-missing`](#error-infra-tofu-missing) | infra | no |
 | [`infra-tofu-unsupported`](#error-infra-tofu-unsupported) | infra | no |
+| [`infra-user-data-missing`](#error-infra-user-data-missing) | infra | yes |
 | [`inputs-io-error`](#error-inputs-io-error) | inputs | yes |
 | [`inputs-lock-invalid`](#error-inputs-lock-invalid) | inputs | no |
 | [`invalid-access-profile`](#error-invalid-access-profile) | observe | no |
@@ -6476,6 +6477,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Install OpenTofu 1.8 or later and pass it with `--tofu PATH`.
 - **Retry-safe:** no
+
+(error-infra-user-data-missing)=
+### `infra-user-data-missing`
+
+**User data not stored.** The plan creates (or replaces) a server declared with `UserData(secret=NAME)`, and no credential NAME holds its user data. Plans that do not create the server never need it.
+
+- **Fix:** Store it, then plan again: `piceli secrets user-data NAME --file PATH` (or `--prompt`). For a bootstrap key, mint a single-use key that expires within the hour just before.
+- **Retry-safe:** yes
 
 
 ## Nix host releases (`piceli.infra.NixHost`, the host agent, `piceli host …`)

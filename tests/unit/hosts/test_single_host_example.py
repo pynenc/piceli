@@ -2,7 +2,8 @@
 
 The test imports the page's declaration as written and builds, offline, the
 OpenTofu configuration ``piceli infra plan`` plans and the ``NixHost``'s
-agent configuration and module: no network, no ``tofu``.
+agent configuration and module: no network, no ``tofu``. The host is
+bootstrapped onto a tailnet through secret user data: no public port 22.
 """
 
 from __future__ import annotations
@@ -64,11 +65,20 @@ def test_the_example_renders_the_infrastructure(tmp_path: Path) -> None:
         "openstack_objectstorage_container_v1", "porkbun_dns_record",
     }  # fmt: skip
     rules = resources["openstack_networking_secgroup_rule_v2"].values()
-    assert sorted({rule["port_range_min"] for rule in rules}) == [22, 80, 443]
+    assert sorted({rule["port_range_min"] for rule in rules}) == [80, 443]
     assert all(rule["direction"] == "ingress" for rule in rules)
     records = resources["porkbun_dns_record"].values()
     assert sorted(record["type"] for record in records) == ["A", "AAAA"]
     assert all(record["domain"] == "example.org" for record in records)
+    # The tailnet key: a sensitive variable, read at creation only.
+    server = resources["openstack_compute_instance_v2"]["server-web-1"]
+    assert server["flavor_name"] == "a1-ram2-disk20-perf1"
+    assert server["user_data"] == "${var.user_data_web_1}"
+    assert server["lifecycle"] == {"ignore_changes": ["user_data"]}
+    assert rendered.config["variable"]["user_data_web_1"]["sensitive"] is True
+    assert rendered.user_data == {
+        "openstack_compute_instance_v2.server-web-1": ("web-1", "web-1-boot")
+    }
     assert rendered.digest.startswith("sha256:")
     assert render(_example(tmp_path).infra).digest == rendered.digest  # stable
 
@@ -89,7 +99,7 @@ def test_the_example_declares_the_host_and_its_builds(tmp_path: Path) -> None:
     assert host.age_key_file == "/var/lib/sops-nix/key.txt"
     assert "web-1-age" not in json.dumps(config)  # names stay off the host
     assert "nix-cache-write" not in json.dumps(config)
-    assert host.ssh_target(None).address == "example.org"
+    assert host.ssh_target(None).address == "web-1.tail-example.ts.net"
     assert render_module(host, "web_1.py:host").startswith(
         "# The Piceli host agent of web-1"
     )
@@ -112,7 +122,7 @@ def test_host_commands_find_the_host_by_name_with_the_pinned_key(
     )
     known = tmp_path / "state" / "piceli" / "infra" / "web-1" / "known_hosts"
     known.parent.mkdir(parents=True)
-    known.write_text("example.org ssh-ed25519 AAAA\n")
+    known.write_text("web-1.tail-example.ts.net ssh-ed25519 AAAA\n")
     seen: list[dict[str, Any]] = []
 
     def read_status(target: Any, **kwargs: Any) -> dict[str, Any]:
@@ -124,7 +134,7 @@ def test_host_commands_find_the_host_by_name_with_the_pinned_key(
         app, ["host", "wait", "web-1", "v1.0.0", "--infra", "web_1.py", "--json"]
     )
     assert done.exit_code == 0, done.stdout + done.stderr
-    assert seen == [{"address": "example.org", "known_hosts": known}]
+    assert seen == [{"address": "web-1.tail-example.ts.net", "known_hosts": known}]
     with_attr = CliRunner().invoke(
         app, ["host", "status", "web-1", "--infra", "web_1.py:infra", "--json"]
     )
@@ -155,6 +165,20 @@ def test_the_page_puts_no_secret_on_the_host_by_hand() -> None:
     for command in ("secrets age", "host secrets", "host rollback", "host pin",
                     "host unpin"):  # fmt: skip
         assert command in words, command
+
+
+def test_the_page_bootstraps_over_the_tailnet() -> None:
+    text = PAGE.read_text(encoding="utf-8")
+    assert "Rule.tcp(22" not in text  # port 22 is never open to the internet
+    assert "@example.org" not in text.replace("owner@example.org", "")
+    assert "single-use, pre-authorized" in text and "one hour" in text
+    assert "metadata service" in text
+    assert 'authKeyFile = "/etc/ec2-metadata/user-data"' in text
+    assert "virtualisation.amazon-init.enable = false" in text
+    words = [" ".join(command[:2]) for command in _commands()]
+    assert words.index("secrets user-data") < words.index("infra plan")
+    assert words.index("infra apply") < words.index("infra register")
+    assert words.index("infra register") < words.index("host secrets")
 
 
 def test_the_page_uses_real_commands_and_options() -> None:

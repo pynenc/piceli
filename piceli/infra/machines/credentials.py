@@ -36,15 +36,26 @@ _SCHEMA = "piceli.credential.v1"
 #: 0.24: ``nix-signing-key``: a Nix binary cache's secret key
 #: (``piceli secrets nix-cache``); ``s3-keys``: ``ACCESS_KEY_ID:SECRET``
 #: of a bucket's S3 API (``piceli secrets s3``); ``age-identity``: a host's
-#: age X25519 identity for sops-nix (``piceli secrets age``).
-KINDS = ("provider-token", "state-key", "nix-signing-key", "s3-keys", "age-identity")
+#: age X25519 identity for sops-nix (``piceli secrets age``); ``user-data``:
+#: a server's user data at creation (``piceli secrets user-data``).
+KINDS = (
+    "provider-token",
+    "state-key",
+    "nix-signing-key",
+    "s3-keys",
+    "age-identity",
+    "user-data",
+)
 _SET_UP = {
     "provider-token": "piceli secrets provider {} --prompt",
     "state-key": "piceli secrets state-key {} --generate",
     "nix-signing-key": "piceli secrets nix-cache {} --generate",
     "s3-keys": "piceli secrets s3 {} --prompt",
     "age-identity": "piceli secrets age {} --generate",
+    "user-data": "piceli secrets user-data {} --file PATH",
 }
+#: Nova takes at most 65535 bytes of base64: 49149 bytes of user data.
+MAX_USER_DATA = 49149
 #: OpenTofu's pbkdf2 key provider needs at least 16 characters.
 MIN_PASSPHRASE = 16
 
@@ -75,6 +86,18 @@ def check_value(kind: str, value: str) -> None:
         raise InfraError(
             "infra-credential-invalid", f"unknown credential kind {kind!r}"
         )
+    if kind == "user-data":
+        # A whole cloud-config or script: lines and tabs are fine.
+        if (
+            not value.strip()
+            or len(value.encode()) > MAX_USER_DATA
+            or any((ord(c) < 32 and c not in "\n\t\r") or ord(c) == 127 for c in value)
+        ):
+            raise InfraError(
+                "infra-credential-invalid",
+                f"user data is text of 1..{MAX_USER_DATA} bytes without control characters",
+            )
+        return
     if (
         not value
         or len(value) > 4096

@@ -40,6 +40,7 @@ from piceli.infra.machines.model import (
     Rule,
     Server,
     Ssh,
+    UserData,
 )
 from piceli.infra.machines.openstack import Infomaniak, OpenStack
 from piceli.infra.machines.porkbun import Porkbun
@@ -69,4 +70,5 @@ __all__ = [
     "Server",
     "Ssh",
     "StateBackend",
+    "UserData",
 ]
