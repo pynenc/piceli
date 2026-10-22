@@ -4352,7 +4352,8 @@
     "pin": [],
     "plan_check": [
      "credential",
-     "document"
+     "document",
+     "ledger"
     ],
     "prices": [
      "token"
@@ -4988,7 +4989,8 @@
     "pin": [],
     "plan_check": [
      "credential",
-     "document"
+     "document",
+     "ledger"
     ],
     "prices": [
      "token"
@@ -6531,7 +6533,8 @@
     "pin": [],
     "plan_check": [
      "credential",
-     "document"
+     "document",
+     "ledger"
     ],
     "prices": [
      "token"
@@ -7380,7 +7383,9 @@
     "pin": [],
     "plan_check": [
      "credential",
-     "document"
+     "document",
+     "ledger",
+     "post"
     ],
     "prices": [
      "token"
@@ -13285,6 +13290,7 @@
    "infra-credential-unsafe",
    "infra-dns-api-disabled",
    "infra-dns-check-failed",
+   "infra-dns-record-conflict",
    "infra-foreign-resource",
    "infra-image-build-invalid",
    "infra-image-checksum",

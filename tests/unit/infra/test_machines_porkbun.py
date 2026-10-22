@@ -520,9 +520,17 @@ def test_a_plan_checks_api_access_of_the_domains_it_changes(
     monkeypatch.setattr(porkbun, "_post", post)
     result = plan(ws, destroy=destroy)
     body = result.to_dict()
+    conflicts = (
+        {"check": "porkbun-record-conflicts", "ran": False,
+         "why": "the plan creates no records at Porkbun"}
+        if destroy
+        else {"check": "porkbun-record-conflicts", "ran": True, "creates": 2,
+              "foreign": 0, "conflicts": [], "warnings": []}
+    )  # fmt: skip
     assert body["checks"] == [
         {"check": "porkbun-api-access", "ran": True,
          "domains": {"example.com": "enabled"}},
+        conflicts,
     ]  # fmt: skip
     assert len(post.seen) == 1  # one call per domain, not per record
     assert SECRET_KEY not in json.dumps(body) and API_KEY not in json.dumps(body)
@@ -566,4 +574,6 @@ def test_a_plan_without_record_changes_says_the_check_did_not_run(
     assert plan(ws).to_dict()["checks"] == [
         {"check": "porkbun-api-access", "ran": False,
          "why": "no record changes at Porkbun", "domains": {}},
+        {"check": "porkbun-record-conflicts", "ran": False,
+         "why": "no record changes at Porkbun"},
     ]  # fmt: skip

@@ -5380,6 +5380,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "infra",
     ),
     _E(
+        "infra-dns-record-conflict",
+        "DNS records Piceli did not create are in the way",
+        "The zone holds records Piceli did not create (not in its ledger) where the plan creates one: a CNAME or ALIAS at the same name (a registrar's parking record at the apex), any record at a name where Piceli creates a CNAME, or a record of the same name and type (for TXT, the same content). The apply would fail or answer beside them, and Piceli never touches records it did not create. The output's `conflicts` lists each (type, name, content). Nothing was applied.",
+        "Remove or change those records at the registrar (Porkbun: Domain Management → DNS), or declare another name, then plan again and approve the new hash.",
+        False,
+        "infra",
+    ),
+    _E(
         "infra-plan-changed",
         "Infrastructure plan changed",
         "The fresh plan's hash is not the approved one: the declaration, the pinned providers, the state or the resources at the provider changed since the plan (or the hash is wrong).",

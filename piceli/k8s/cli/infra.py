@@ -85,6 +85,10 @@ TOKEN_ENVS = (
 def _refuse(error: InfraError) -> NoReturn:
     for line in error.details:
         say(f"  tofu: {line}")
+    for item in error.fields.get("conflicts") or ():
+        record = item["record"]
+        say(f"  conflict: {record['type']} {record['name']} {record['content']}: "
+            f"{item['why']}")  # fmt: skip
     if error.code in FAILED or error.fields.get("partially_applied"):
         # Something changed: a failure that ran, whatever refused it.
         fail(error.code, str(error), **error.fields)
@@ -157,10 +161,18 @@ def _say_plan(result: InfraPlan) -> None:
             f"({item['digest']}), passed at creation only"
         )
     for check in result.checks:
-        if check.get("ran"):
+        if not check.get("ran"):
+            say(f"  not checked {check['check']}: {check.get('why')}")
+        elif "domains" in check:
             say(f"  checked {check['check']}: " + ", ".join(sorted(check["domains"])))
         else:
-            say(f"  not checked {check['check']}: {check.get('why')}")
+            say(f"  checked {check['check']}")
+        for warning in check.get("warnings") or ():
+            record = warning.get("record") or {}
+            say(
+                f"    warning: {record.get('type')} {record.get('name')} "
+                f"{record.get('content')}: {warning.get('why')}"
+            )
     if result.estimate is not None:
         estimate = result.estimate
         note = "" if estimate["complete"] else " (some prices unknown)"

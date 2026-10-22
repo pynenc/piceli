@@ -20,7 +20,7 @@ Importing this module is side-effect free.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -263,14 +263,20 @@ class Provider(ABC):
         return None
 
     def plan_check(
-        self, document: Mapping[str, Any], credential: str | None
-    ) -> dict[str, Any] | None:
+        self,
+        document: Mapping[str, Any],
+        credential: str | None,
+        *,
+        ledger: Collection[str] | None = None,
+    ) -> dict[str, Any] | list[dict[str, Any]] | None:
         """Check what the plan needs that OpenTofu cannot see, before approval.
 
         ``document`` is ``tofu show -json`` of the plan; ``credential`` the
-        provider's stored value. Raise :class:`InfraError` to fail the plan;
-        return ``{"check": NAME, "ran": bool, ...}`` for the plan's
-        ``checks`` (never a secret), or ``None`` when there is nothing to check.
+        provider's stored value; ``ledger`` the addresses Piceli created
+        (``None``: every resource in the state). Raise :class:`InfraError`
+        to fail the plan; return ``{"check": NAME, "ran": bool, ...}`` (or
+        a list of them) for the plan's ``checks`` (never a secret), or
+        ``None`` when there is nothing to check.
         """
         return None
 

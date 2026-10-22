@@ -395,6 +395,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`infra-credential-unsafe`](#error-infra-credential-unsafe) | infra | no |
 | [`infra-dns-api-disabled`](#error-infra-dns-api-disabled) | infra | no |
 | [`infra-dns-check-failed`](#error-infra-dns-check-failed) | infra | yes |
+| [`infra-dns-record-conflict`](#error-infra-dns-record-conflict) | infra | no |
 | [`infra-foreign-resource`](#error-infra-foreign-resource) | infra | no |
 | [`infra-image-build-invalid`](#error-infra-image-build-invalid) | infra | no |
 | [`infra-image-checksum`](#error-infra-image-checksum) | infra | no |
@@ -6270,6 +6271,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Check the network and the key pair (`piceli secrets provider NAME --prompt`; a domain in that account), then plan again.
 - **Retry-safe:** yes
+
+(error-infra-dns-record-conflict)=
+### `infra-dns-record-conflict`
+
+**DNS records Piceli did not create are in the way.** The zone holds records Piceli did not create (not in its ledger) where the plan creates one: a CNAME or ALIAS at the same name (a registrar's parking record at the apex), any record at a name where Piceli creates a CNAME, or a record of the same name and type (for TXT, the same content). The apply would fail or answer beside them, and Piceli never touches records it did not create. The output's `conflicts` lists each (type, name, content). Nothing was applied.
+
+- **Fix:** Remove or change those records at the registrar (Porkbun: Domain Management → DNS), or declare another name, then plan again and approve the new hash.
+- **Retry-safe:** no
 
 (error-infra-foreign-resource)=
 ### `infra-foreign-resource`

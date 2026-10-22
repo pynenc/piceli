@@ -29,6 +29,19 @@ too (``infra-dns-check-failed``): the plan never passes a check it did not
 run. The key pair goes only into the request body, never into a message,
 the plan or the state. The plan's ``checks`` record whether it ran.
 
+Conflicts: the same answer lists the zone's records. The zone may hold
+records Piceli did not create (not in the ledger) and never touches: a
+parking ALIAS or CNAME at the apex, a wildcard, an A record added by hand.
+For each record the plan creates, one of them conflicts when it is a CNAME
+or ALIAS at the same name, any record at a name where Piceli creates a
+CNAME, or a record of the same name and type (for TXT, which may hold
+several values, the same content: Porkbun refuses that). The plan fails
+with ``infra-dns-record-conflict`` and lists them (type, name, content):
+the owner removes or changes them at the registrar. A wildcard does not
+answer a name that has records of its own, so it is a warning in the
+plan's ``checks`` (``porkbun-record-conflicts``), as is a TXT record with
+other content beside one Piceli creates.
+
 Importing this module is side-effect free.
 """
 
@@ -40,7 +53,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, NoReturn
 
@@ -53,7 +66,7 @@ from piceli.infra.machines.model import (
 )
 from piceli.infra.machines.provider import Pin, Provider, Resource
 
-__all__ = ["PORKBUN_PIN", "Porkbun", "api_access"]
+__all__ = ["PORKBUN_PIN", "Porkbun", "api_access", "record_conflicts", "retrieve"]
 
 #: marcfrederick/porkbun, as ``tofu providers lock`` locked it for every
 #: platform the registry publishes (refresh: see the docs).
@@ -99,6 +112,9 @@ API = "https://api.porkbun.com/api/json/v3"
 #: Seconds to wait for each domain's answer.
 CHECK_TIMEOUT = 15.0
 CHECK = "porkbun-api-access"
+CONFLICTS = "porkbun-record-conflicts"
+#: Record types that allow no other record at their name.
+_EXCLUSIVE = ("CNAME", "ALIAS")
 #: Porkbun's answer for a domain without API access (its code, or its message).
 _API_DISABLED = re.compile(
     r"API_ACCESS_DISABLED|opted in to API access|API access (?:is )?(?:disabled|not enabled)",
@@ -146,10 +162,23 @@ def api_access(
     ``infra-dns-check-failed`` when the check cannot confirm it. Neither
     error carries the key pair or Porkbun's own message.
     """
+    found = retrieve(domains, credential, post=post, timeout=timeout)
+    return dict.fromkeys(found, "enabled")
+
+
+def retrieve(
+    domains: Iterable[str],
+    credential: str | None,
+    *,
+    post: Any = None,
+    timeout: float = CHECK_TIMEOUT,
+) -> dict[str, list[dict[str, str]]]:
+    """Each domain's records (``type``, ``name``, ``content``, ``id``), from
+    ``dns/retrieve``; refuses as :func:`api_access` does."""
     key, secret = _key_pair(credential)
     send = post or _post
     body = json.dumps({"apikey": key, "secretapikey": secret}).encode()
-    found: dict[str, str] = {}
+    found: dict[str, list[dict[str, str]]] = {}
     for domain in sorted(set(domains)):
         url = f"{API}/dns/retrieve/{urllib.parse.quote(domain, safe='')}"
         try:
@@ -163,7 +192,16 @@ def api_access(
         if not isinstance(answer, dict):
             raise _unconfirmed(domain, f"Porkbun's API answered HTTP {status}")
         if answer.get("status") == "SUCCESS" and status == 200:
-            found[domain] = "enabled"
+            found[domain] = [
+                {
+                    "id": str(item.get("id") or ""),
+                    "type": str(item.get("type") or "").upper(),
+                    "name": _fqdn(str(item.get("name") or ""), ""),
+                    "content": str(item.get("content") or ""),
+                }
+                for item in answer.get("records") or ()
+                if isinstance(item, dict)
+            ]
             continue
         if _API_DISABLED.search(str(answer.get("message") or "")):
             raise InfraError(
@@ -177,6 +215,86 @@ def api_access(
             "and that the domain is in its account",
         )
     return found
+
+
+def _fqdn(name: str, domain: str) -> str:
+    """``name`` (relative to ``domain``; empty for the apex) as a lower-case
+    absolute name without the final dot."""
+    name, domain = name.strip().rstrip(".").lower(), domain.strip().rstrip(".").lower()
+    if not domain:
+        return name
+    return f"{name}.{domain}" if name else domain
+
+
+def _shown(record: Mapping[str, str]) -> dict[str, str]:
+    return {k: record[k] for k in ("type", "name", "content")}
+
+
+def record_conflicts(
+    planned: Sequence[Mapping[str, Any]],
+    records: Sequence[Mapping[str, str]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """``(conflicts, warnings)`` of the records the plan creates
+    (``type``, ``name``, ``content`` or ``None``: known after apply) against
+    the zone's records Piceli does not own."""
+    conflicts: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    covered: dict[tuple[str, str, str], set[str]] = {}
+    for create in planned:
+        name, type_ = str(create["name"]), str(create["type"])
+        wanted = {"type": type_, "name": name}
+        for record in records:
+            other = record["type"]
+            if record["name"] == name:
+                why = None
+                if other in _EXCLUSIVE:
+                    why = f"a {'CNAME or ALIAS' if other != type_ else other} allows no other record at its name"
+                elif type_ in _EXCLUSIVE:
+                    why = f"a {type_} allows no other record at its name"
+                elif other == type_ == "TXT":
+                    if record["content"] == create.get("content"):
+                        why = (
+                            "Porkbun refuses a second record with the same name, "
+                            "type and content"
+                        )
+                    else:
+                        warnings.append(
+                            {"kind": "txt-beside", "record": _shown(record),
+                             "planned": wanted,
+                             "why": "TXT records with other content answer "
+                             "beside Piceli's; no conflict"}
+                        )  # fmt: skip
+                elif other == type_:
+                    why = (
+                        f"an {type_} record at the same name would answer beside "
+                        "Piceli's"
+                    )
+                if why:
+                    conflicts.append(
+                        {"record": _shown(record), "planned": wanted, "why": why}
+                    )
+            elif record["name"].startswith("*.") and name.endswith(record["name"][1:]):
+                key = (record["type"], record["name"], record["content"])
+                covered.setdefault(key, set()).add(name)
+    for (type_, name, content), names in sorted(covered.items()):
+        warnings.append(
+            {"kind": "wildcard",
+             "record": {"type": type_, "name": name, "content": content},
+             "covers": sorted(names),
+             "why": "a wildcard answers only names without records of their "
+             "own; Piceli's explicit records take precedence, so it is no "
+             "conflict (names Piceli does not create still get its answer)"}
+        )  # fmt: skip
+    return conflicts, warnings
+
+
+def _key(values: Mapping[str, Any]) -> tuple[str, str, str]:
+    """``(name, type, content)`` of a ``porkbun_dns_record``'s values."""
+    return (
+        _fqdn(str(values.get("subdomain") or ""), str(values.get("domain") or "")),
+        str(values.get("type") or "").upper(),
+        str(values.get("content") or ""),
+    )
 
 
 def _unconfirmed(domain: str, why: str) -> InfraError:
@@ -246,29 +364,93 @@ class Porkbun(Provider):
         return None
 
     def plan_check(
-        self, document: Mapping[str, Any], credential: str | None
-    ) -> dict[str, Any] | None:
-        """API access of each domain whose records the plan changes."""
+        self,
+        document: Mapping[str, Any],
+        credential: str | None,
+        *,
+        ledger: Collection[str] | None = None,
+        post: Any = None,
+    ) -> list[dict[str, Any]]:
+        """API access of each domain whose records the plan changes, and
+        the zone's records that conflict with those it creates."""
         domains: set[str] = set()
+        creates: list[dict[str, Any]] = []
+        owned_ids: set[str] = set()
+        owned: set[tuple[str, str, str]] = set()
         for item in document.get("resource_changes") or ():
             if not isinstance(item, dict) or item.get("type") != RECORD_TYPE:
                 continue
             change = item.get("change") or {}
             actions = tuple(change.get("actions") or ())
+            before = change.get("before")
+            if isinstance(before, dict) and (
+                ledger is None or item.get("address") in ledger
+            ):
+                # In the state and the ledger: Piceli's record.
+                owned_ids.add(str(before.get("id") or ""))
+                owned.add(_key(before))
             if not actions or actions in (("no-op",), ("read",)):
                 continue
             for side in ("after", "before"):
                 domain = (change.get(side) or {}).get("domain")
                 if isinstance(domain, str) and domain:
                     domains.add(domain)
+            after = change.get("after")
+            if "create" in actions and isinstance(after, dict):
+                content = after.get("content")
+                creates.append(
+                    {"domain": str(after.get("domain") or ""),
+                     "name": _key(after)[0], "type": _key(after)[1],
+                     "content": content if isinstance(content, str) else None}
+                )  # fmt: skip
         if not domains:
-            return {
-                "check": CHECK,
-                "ran": False,
-                "why": "no record changes at Porkbun",
-                "domains": {},
-            }
-        return {"check": CHECK, "ran": True, "domains": api_access(domains, credential)}
+            why = "no record changes at Porkbun"
+            return [
+                {"check": CHECK, "ran": False, "why": why, "domains": {}},
+                {"check": CONFLICTS, "ran": False, "why": why},
+            ]
+        zones = retrieve(domains, credential, post=post)
+        access = {
+            "check": CHECK, "ran": True,
+            "domains": dict.fromkeys(zones, "enabled"),
+        }  # fmt: skip
+        if not creates:
+            return [access, {"check": CONFLICTS, "ran": False,
+                             "why": "the plan creates no records at Porkbun"}]  # fmt: skip
+        conflicts: list[dict[str, Any]] = []
+        warnings: list[dict[str, Any]] = []
+        foreign = 0
+        for domain, records in sorted(zones.items()):
+            others = [
+                r for r in records
+                if r["id"] not in owned_ids
+                and (r["name"], r["type"], r["content"]) not in owned
+            ]  # fmt: skip
+            foreign += len(others)
+            found, warned = record_conflicts(
+                [c for c in creates if c["domain"] == domain], others
+            )
+            conflicts += found
+            warnings += warned
+        if conflicts:
+            listed = "; ".join(
+                "{type} {name} {content}".format(**c["record"])
+                + " (where the plan creates {type} {name})".format(**c["planned"])
+                for c in conflicts
+            )
+            raise InfraError(
+                "infra-dns-record-conflict",
+                "records Piceli did not create sit where this plan creates "
+                f"records: {listed}. Piceli never touches them: remove or change "
+                "them at the registrar (Porkbun: Domain Management → DNS), then "
+                "plan again",
+                fields={"conflicts": conflicts, "warnings": warnings},
+            )
+        return [
+            access,
+            {"check": CONFLICTS, "ran": True, "creates": len(creates),
+             "foreign": foreign, "conflicts": [], "warnings": warnings},
+        ]  # fmt: skip
 
     # ------------------------------------------------------------ rendering
     def _no_servers(self) -> NoReturn:

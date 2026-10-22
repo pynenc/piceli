@@ -244,6 +244,43 @@ infra = Infrastructure("web", servers=[host], records=[
   plan JSON's `checks` says whether it ran and for which domains
   (`{"check": "porkbun-api-access", "ran": true, "domains": {"example.com":
   "enabled"}}`); the check is not part of the plan hash.
+- **Records in the way.** The same answer lists the zone's records. A
+  registered domain usually holds records Piceli did not create and never
+  touches: a parking `ALIAS` at the apex and a wildcard `CNAME` (Porkbun's
+  defaults), `NS`, records added by hand. For each record the plan
+  creates, one of them is a conflict when it is a `CNAME` or `ALIAS` at the
+  same name, any record at a name where Piceli creates a `CNAME`, or a
+  record of the same name and type (for `TXT`, which holds several values,
+  the same content: Porkbun refuses that). A record in the ledger is
+  Piceli's, so replacing its own record is no conflict. A conflict fails
+  the plan with `infra-dns-record-conflict`; its `conflicts` lists each one
+  and stderr says the fix: remove or change those records at the registrar
+  (Domain Management → DNS), then plan again.
+
+  ```json
+  {"state": "rejected", "reason": "infra-dns-record-conflict",
+   "message": "records Piceli did not create sit where this plan creates records: ...",
+   "conflicts": [{"record": {"type": "ALIAS", "name": "example.com",
+                             "content": "pixie.porkbun.com"},
+                  "planned": {"type": "A", "name": "example.com"},
+                  "why": "a CNAME or ALIAS allows no other record at its name"}],
+   "warnings": []}
+  ```
+
+  A wildcard (`*.example.com`) answers only names that have no records of
+  their own, so it does not conflict with Piceli's explicit names. It is a
+  warning in the plan's `checks`, with the names it covers and why, as is
+  a `TXT` record with other content beside one Piceli creates:
+
+  ```json
+  {"check": "porkbun-record-conflicts", "ran": true, "creates": 2,
+   "foreign": 3, "conflicts": [],
+   "warnings": [{"kind": "wildcard",
+                 "record": {"type": "CNAME", "name": "*.example.com",
+                            "content": "pixie.porkbun.com"},
+                 "covers": ["www.example.com"],
+                 "why": "a wildcard answers only names without records of their own; ..."}]}
+  ```
 - **Ownership.** Porkbun records carry no labels (the OpenTofu provider
   cannot set their notes), so the ledger alone marks what Piceli created; a
   destroy or update of any other record is `infra-foreign-resource`. Porkbun

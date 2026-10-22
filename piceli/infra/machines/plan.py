@@ -503,12 +503,13 @@ def plan(
             for address in creates
         )
         changes, foreign = changes_of(ws, document)
-        checks = tuple(
-            check
-            for provider in ws.infra.providers()
-            if (check := provider.plan_check(document, ws.tokens.get(provider.name)))
-            is not None
-        )
+        ledger = frozenset(ws.ledger())
+        checks: list[dict[str, Any]] = []
+        for provider in ws.infra.providers():
+            found = provider.plan_check(
+                document, ws.tokens.get(provider.name), ledger=ledger
+            )
+            checks += [found] if isinstance(found, dict) else list(found or ())
         result = InfraPlan(
             ws.infra.name,
             operation,
@@ -518,7 +519,7 @@ def plan(
             foreign,
             estimate(ws) if prices and not destroy else None,
             ws.tofu.version_text,
-            checks=checks,
+            checks=tuple(checks),
             user_data=user_data,
         )
         if keep is not None:

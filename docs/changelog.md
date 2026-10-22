@@ -74,6 +74,18 @@ and rollback.
   apply, and a check that cannot run fails it too (new code
   `infra-dns-check-failed`). The plan JSON's new `checks` says whether it
   ran; it is not part of the plan hash.
+- **DNS records in the way fail the plan, not the apply.** The plan-time
+  Porkbun check now also reads each zone's records. A record Piceli did not
+  create (not in its ledger) where the plan creates one fails the plan with
+  the new code `infra-dns-record-conflict`: a CNAME or ALIAS at the same
+  name (a parking ALIAS at the apex), any record at a name where Piceli
+  creates a CNAME, or a record of the same name and type (for TXT, the
+  same content). Its `conflicts` lists each record (type, name, content)
+  and the fix: remove or change it at the registrar; Piceli never touches
+  it. A wildcard does not answer explicit names, so it is a warning in the
+  plan's new `porkbun-record-conflicts` check, as is a TXT record with
+  other content beside Piceli's. `Provider.plan_check` now receives the
+  ledger and may return several checks.
 - **A partially applied change exits 1.** `piceli infra apply` and
   `destroy` that fail after changing something exit 1 (also for a refusal
   such as `infra-dns-api-disabled`, which exited 2), with

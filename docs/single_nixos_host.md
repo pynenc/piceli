@@ -194,7 +194,9 @@ after installing Tailscale.
    `infra plan` exits 3 with the changes (image, port, security group and
    its rules, key pair, server, bucket, two Porkbun records), the monthly
    estimate and the plan hash; it also checks Porkbun's API access for
-   `example.org`. It shows `user data of web-1: secret web-1-boot
+   `example.org`, and that no record Piceli did not create (Porkbun's
+   parking `ALIAS` at the apex, for example) sits where it creates one:
+   delete those at Porkbun first (`infra-dns-record-conflict` lists them). It shows `user data of web-1: secret web-1-boot
    (sha256:...)`: only a plan that creates the server reads the key, passes
    it to OpenTofu as a sensitive variable in its environment, and the plan
    hash covers its digest. The key is never in the configuration, the plan
