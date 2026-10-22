@@ -13,6 +13,8 @@ a plan only with the approval of its hash, as it does for deploys. Piceli
 does not own the operating system: an install hook you declare installs it,
 then Piceli waits for the machine's k3s and registers it as a cluster it
 deploys to.
+A machine without a cluster can run NixOS and follow your release tags:
+{doc}`single_nixos_host` declares one, with its image, bucket and DNS.
 
 ```python
 # machines.py

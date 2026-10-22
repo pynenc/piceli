@@ -228,6 +228,7 @@ maintenance
 heavy_work
 dev_builds
 nix_hosts
+single_nixos_host
 restore_points
 typed_apps
 crds

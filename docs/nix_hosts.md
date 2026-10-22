@@ -11,6 +11,9 @@ The builds come from `piceli dev nix build --publish` ({doc}`dev_builds`),
 which signs the closure, its manifest and the ref pointers with the cache's
 key.
 
+{doc}`single_nixos_host` takes one host from nothing to its first release
+with one complete example, and compares it with a Kubernetes environment.
+
 ## Declare the host
 
 ```python
