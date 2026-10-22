@@ -1507,6 +1507,58 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "until interrupted. Pushes through it go by digest; nodes pull "
             "by the stable name. " + _EXPLICIT_CONTEXT,
         ),
+        "dev nix build": _C(
+            "Build a flake output (a NixOS system, a disk image) as a development "
+            "run on a docker or native build host with Nix; with --publish, sign "
+            "and push its closure to a NixCache and upload a signed build manifest.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Cluster with dev=)",
+                "MODULE:ATTR (piceli.infra.NixCache, --publish)",
+                "the local Git repository",
+                "credentials (signing key, S3 keys; --publish after approval)",
+            ),
+            writes=(
+                "--artifacts-dir RUN/ (with --image)",
+                "the build host's Nix store",
+                "the binary cache and piceli/NAME/REV.json (--publish)",
+            ),
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="0.24.0. Without --publish it is a development run (no approval; "
+            "covered like dev run). With --publish it prints the plan (commit, "
+            "output, host, cache, key) and exits 3; --approve DIGEST builds, then "
+            "a separate step on the same host receives the signing key and S3 "
+            "keys on stdin only (never the build), pushes with nix copy and the "
+            "client uploads the manifest. Prints the store path, the image's "
+            "sha256 and the public key, never a secret. Exit 1: the build "
+            "failed, no output (dev-nix-no-output), dev-nix-publish-failed, "
+            "dev-nix-manifest-failed.",
+        ),
+        "dev nix gc": _C(
+            "Remove the builds of old commits from a Nix cache: keep the manifests "
+            "of the newest --keep-tags tags (5) and the current --main, and every "
+            "path their closures reach; delete the rest after approval.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.NixCache)",
+                "the local Git repository (tags, main)",
+                "the cache's objects (write credentials)",
+            ),
+            writes=("the binary cache (deleted manifests, narinfos, NAR files)",),
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="0.24.0. Without --approve prints the keys it would delete and "
+            "the plan digest (exit 3; 0 and state clean when nothing goes). A "
+            "path a kept manifest's closure reaches is never deleted; objects "
+            "younger than --grace stay. --approve with another digest is "
+            "refused (dev-nix-plan-changed); a failed delete exits 1 "
+            "(dev-nix-gc-failed).",
+        ),
         "dev run": _C(
             "Run a build or test command on the cluster's builder node for a "
             "working tree or a commit, with the shared warm cache; stream its log, print the "
@@ -1853,6 +1905,31 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             notes="The token is read from stdin only (typed without echo, or piped); "
             "an argument or HCLOUD_TOKEN in the environment is refused "
             "(infra-credential-refused) without echoing it. Prints the name, never the value.",
+        ),
+        "secrets nix-cache": _C(
+            "Generate or import a Nix binary cache's signing key as a local "
+            "credential, or print its public key.",
+            reads=("stdin (--prompt)", "$PICELI_CREDENTIALS_DIR/NAME.json"),
+            writes=(
+                "$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600; --generate, --prompt)",
+            ),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.24.0. Prints the public key (NAME:base64), never the secret "
+            "key. Without --generate or --prompt it only reads. Refuses to "
+            "replace a key without --replace (infra-credential-exists): hosts "
+            "that trust the old key refuse what a new one signs.",
+        ),
+        "secrets s3": _C(
+            "Store a bucket's S3 access keys (access key id and secret) as a "
+            "local credential.",
+            reads=("stdin (--prompt)",),
+            writes=("$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)",),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.24.0. Two lines on stdin (typed without echo, or piped); an "
+            "argument is refused (infra-credential-refused) without echoing it. "
+            "Prints the name, never a value.",
         ),
         "secrets state-key": _C(
             "Store the passphrase that encrypts an Infrastructure's OpenTofu state "

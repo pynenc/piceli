@@ -753,6 +753,22 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["secrets", "state-key", "edge-state"],
         "infra-prompt-required",
     ),
+    "secrets nix-cache": (
+        lambda p: ["secrets", "nix-cache", "cache-1", "a-key-value"],
+        "infra-credential-refused",
+    ),
+    "secrets s3": (
+        lambda p: ["secrets", "s3", "cache-s3"],
+        "infra-prompt-required",
+    ),
+    "dev nix gc": (
+        lambda p: ["dev", "nix", "gc", "--cache", "no_such_module:cache"],
+        "dev-nix-cache-invalid",
+    ),
+    "dev nix build": (
+        lambda p: ["dev", "nix", "build", "x", "--cluster", "no_such_module:c"],
+        "cluster-not-found",
+    ),
 }
 
 

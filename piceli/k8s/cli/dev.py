@@ -440,6 +440,9 @@ def _cluster_up(
 
 
 def register(root: typer.Typer) -> None:
+    from piceli.k8s.cli.dev_nix import register as register_nix
+
+    register_nix(app)
     root.add_typer(app, name="dev")
 
 

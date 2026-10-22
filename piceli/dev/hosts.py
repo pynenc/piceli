@@ -65,6 +65,10 @@ STALE_SECONDS = 60.0
 _ARCH = {"aarch64": "linux/arm64", "arm64": "linux/arm64",
          "x86_64": "linux/amd64", "amd64": "linux/amd64"}  # fmt: skip
 UNAVAILABLE = "dev-host-unavailable"
+#: 0.24: how a ``DevProfile(nix=True)`` run (and ``dev nix build
+#: --publish``) reaches a docker host's own Nix.
+NIX_MOUNT = ("-v", "/nix:/nix:ro", "-e", "NIX_REMOTE=daemon")
+NIX_PATH = "/nix/var/nix/profiles/default/bin:/nix/var/nix/profiles/system/sw/bin"
 
 
 def _iso_ms(seconds: float) -> str:
@@ -612,13 +616,19 @@ class DockerPort:
             argv += ["--memory", str(bytes_of(str(memory)))]
         if self.host.cpu:
             argv += ["--cpus", str(self.host.cpu).rstrip("m")]
+        nix = ""
+        if spec.get("nix"):
+            # 0.24: the host's Nix, read-only: its store and its daemon's
+            # socket; builds run in the daemon's own sandbox on the host.
+            argv += [*NIX_MOUNT]
+            nix = f'export PATH="$PATH:{NIX_PATH}"; '
         fetch = (
             'PICELI_DEV_ROLE=fetch python3 -I -c "$PICELI_DEV_WRAPPER"; '
             if spec.get("sources")
             else ""
         )
         script = (
-            f"mkdir -p {WORK}/home {WORK}/tmp; {fetch}"
+            f"{nix}mkdir -p {WORK}/home {WORK}/tmp; {fetch}"
             'exec python3 -I -c "$PICELI_DEV_WRAPPER"'
         )
         return [*argv, "--entrypoint", "sh", image, "-c", script]

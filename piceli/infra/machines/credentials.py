@@ -32,8 +32,17 @@ __all__ = [
 
 CREDENTIALS_ENV = "PICELI_CREDENTIALS_DIR"
 _SCHEMA = "piceli.credential.v1"
-#: ``provider-token``: an API token; ``state-key``: a state passphrase.
-KINDS = ("provider-token", "state-key")
+#: ``provider-token``: an API token; ``state-key``: a state passphrase;
+#: 0.24: ``nix-signing-key``: a Nix binary cache's secret key
+#: (``piceli secrets nix-cache``); ``s3-keys``: ``ACCESS_KEY_ID:SECRET``
+#: of a bucket's S3 API (``piceli secrets s3``).
+KINDS = ("provider-token", "state-key", "nix-signing-key", "s3-keys")
+_SET_UP = {
+    "provider-token": "piceli secrets provider {} --prompt",
+    "state-key": "piceli secrets state-key {} --generate",
+    "nix-signing-key": "piceli secrets nix-cache {} --generate",
+    "s3-keys": "piceli secrets s3 {} --prompt",
+}
 #: OpenTofu's pbkdf2 key provider needs at least 16 characters.
 MIN_PASSPHRASE = 16
 
@@ -114,11 +123,7 @@ def load_credential(name: str, kind: str) -> str:
     try:
         info = path.stat()
     except FileNotFoundError:
-        command = (
-            f"piceli secrets provider {name} --prompt"
-            if kind == "provider-token"
-            else f"piceli secrets state-key {name} --generate"
-        )
+        command = _SET_UP.get(kind, _SET_UP["provider-token"]).format(name)
         raise InfraError(
             "infra-credential-missing", f"no credential named {name!r}; run `{command}`"
         ) from None

@@ -31,6 +31,25 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `infra-dns-api-disabled` for a domain without API access. `DnsRecord(ttl=)`
   now defaults to the provider's (300 s; Porkbun's minimum and default
   600 s).
+- **Nix builds on build hosts, a signed binary cache and build
+  manifests.** `piceli dev nix build ATTR` builds a flake output (a NixOS
+  system; with `--image`, a disk image copied back with its sha256) as a
+  development run with `DevProfile.for_nix()`: a docker host mounts its own
+  `/nix` read-only and builds through its daemon, a native host uses its
+  `nix`. `--publish MODULE:ATTR` names a `NixCache(bucket=|url=,
+  public_key=)` (new in `piceli.infra`); it plans (exit 3) and runs only
+  with `--approve DIGEST`; the build stays isolated, and a separate step on
+  the same host receives the signing key and S3 keys on stdin only, signs
+  each path as `nix copy` uploads it, and Piceli uploads a manifest
+  `piceli/NAME/COMMIT.json` (`piceli.nix-build.v1`: commit, tag, flake
+  attribute, store path, system, closure size, build time) signed with the
+  cache key; `piceli.dev.nix_verify` checks it and the narinfo with the
+  standard library only. A cache has distinct `write_credentials` (builds,
+  gc) and read-only `read_credentials` (hosts). `piceli dev nix gc` keeps
+  the last 5 tags, the current main and their closures and deletes the
+  rest after approval. New `piceli secrets nix-cache NAME --generate`
+  (prints the public key only) and `piceli secrets s3 NAME --prompt`; new
+  codes `dev-nix-*`.
 
 ## Version 0.23.0
 

@@ -44,6 +44,8 @@ class RunRequest:
     artifacts_dir: Path = Path("piceli-dev-artifacts")
     queue_timeout: float = 3600.0
     keep: bool = False
+    #: 0.24: the artifacts' size limit (default the wrapper's, 512 MiB).
+    artifact_max_bytes: int | None = None
 
 
 def new_run_id(now: datetime | None = None) -> str:
@@ -156,6 +158,11 @@ def run(
             "lineage_key": f"{request.root.name}-{profile.name}",
             "lineage_hint": hint,
             "artifacts": list(request.artifacts),
+            **(
+                {"artifact_max_bytes": request.artifact_max_bytes}
+                if request.artifact_max_bytes
+                else {}
+            ),
             # 0.19: the fetch init container reports which of these commits
             # the builder's mirrors have; the upload is only the rest.
             "sources": [plan.describe() for plan in plans],

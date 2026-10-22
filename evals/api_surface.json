@@ -2866,9 +2866,11 @@
     "cpu",
     "describe",
     "env",
+    "for_nix",
     "image",
     "memory",
     "name",
+    "nix",
     "prefetch",
     "timeout",
     "toolchain",
@@ -2881,6 +2883,7 @@
     "image",
     "memory",
     "name",
+    "nix",
     "prefetch",
     "timeout",
     "toolchain",
@@ -2888,7 +2891,11 @@
     "tools"
    ],
    "methods": {
-    "describe": []
+    "describe": [],
+    "for_nix": null
+   },
+   "returns": {
+    "for_nix": "DevProfile"
    }
   },
   "DiscoveredResource": {
@@ -5818,6 +5825,42 @@
    "pydantic": true,
    "returns": {
     "dns": "NetworkRule"
+   }
+  },
+  "NixCache": {
+   "attrs": [
+    "bucket",
+    "bucket_name",
+    "describe",
+    "endpoint",
+    "key_name",
+    "manifest_url",
+    "public_key",
+    "read_credentials",
+    "region",
+    "scheme",
+    "signing_credential",
+    "signing_key",
+    "store_url",
+    "url",
+    "write_credentials"
+   ],
+   "init": [
+    "bucket",
+    "endpoint",
+    "public_key",
+    "read_credentials",
+    "region",
+    "signing_key",
+    "url",
+    "write_credentials"
+   ],
+   "methods": {
+    "describe": [],
+    "manifest_url": [
+     "commit",
+     "name"
+    ]
    }
   },
   "Node": {
@@ -10913,6 +10956,7 @@
      "cancel",
      "hosts",
      "logs",
+     "nix",
      "release-host",
      "run",
      "schedule",
@@ -10975,6 +11019,49 @@
      "--follow",
      "--tail",
      "--transport"
+    ],
+    "subcommands": []
+   },
+   "dev nix": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "build",
+     "gc"
+    ]
+   },
+   "dev nix build": {
+    "arguments": [
+     "attr"
+    ],
+    "flags": [
+     "--approve",
+     "--artifacts-dir",
+     "--cluster",
+     "--host",
+     "--image",
+     "--json",
+     "--name",
+     "--profile",
+     "--publish",
+     "--queue-timeout",
+     "--quiet",
+     "--ref",
+     "--repo",
+     "--worktree"
+    ],
+    "subcommands": []
+   },
+   "dev nix gc": {
+    "arguments": [],
+    "flags": [
+     "--approve",
+     "--cache",
+     "--grace",
+     "--json",
+     "--keep-tags",
+     "--main",
+     "--repo"
     ],
     "subcommands": []
    },
@@ -12168,7 +12255,9 @@
     "subcommands": [
      "cluster",
      "git",
+     "nix-cache",
      "provider",
+     "s3",
      "state-key"
     ]
    },
@@ -12199,7 +12288,28 @@
     ],
     "subcommands": []
    },
+   "secrets nix-cache": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--generate",
+     "--key-name",
+     "--prompt",
+     "--replace"
+    ],
+    "subcommands": []
+   },
    "secrets provider": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--prompt"
+    ],
+    "subcommands": []
+   },
+   "secrets s3": {
     "arguments": [
      "name"
     ],
@@ -12644,6 +12754,17 @@
    "dev-host-unavailable",
    "dev-host-unknown",
    "dev-isolation-not-enforced",
+   "dev-nix-cache-invalid",
+   "dev-nix-crypto-unavailable",
+   "dev-nix-gc-failed",
+   "dev-nix-host-unsupported",
+   "dev-nix-invalid",
+   "dev-nix-key-invalid",
+   "dev-nix-key-mismatch",
+   "dev-nix-manifest-failed",
+   "dev-nix-no-output",
+   "dev-nix-plan-changed",
+   "dev-nix-publish-failed",
    "dev-not-enabled",
    "dev-profile-unknown",
    "dev-queue-timeout",
@@ -14036,6 +14157,9 @@
    "LocalState": {
     "class": "LocalState"
    },
+   "NixCache": {
+    "class": "NixCache"
+   },
    "Node": {
     "class": "Node"
    },
@@ -14879,6 +15003,9 @@
   "piceli.dev.hosts",
   "piceli.dev.jobs",
   "piceli.dev.model",
+  "piceli.dev.nix",
+  "piceli.dev.nix_publish",
+  "piceli.dev.nix_verify",
   "piceli.dev.pack",
   "piceli.dev.pod",
   "piceli.dev.scheduler",
@@ -14961,6 +15088,7 @@
   "piceli.k8s.cli.contract",
   "piceli.k8s.cli.deploy_pipeline",
   "piceli.k8s.cli.dev",
+  "piceli.k8s.cli.dev_nix",
   "piceli.k8s.cli.env",
   "piceli.k8s.cli.env_push",
   "piceli.k8s.cli.env_stop",

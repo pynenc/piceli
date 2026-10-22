@@ -55,6 +55,8 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli dev cancel`](#cli-dev-cancel) | Cancel a queued or running run (its Job and pod are deleted). | writes | no |
 | [`piceli dev hosts`](#cli-dev-hosts) | Each declared build host: up or down (why), platforms, slots, runs and queue. | reads | no |
 | [`piceli dev logs`](#cli-dev-logs) | A run's output (stdout): live, or the recorded tail of a finished run. | reads | no |
+| [`piceli dev nix build`](#cli-dev-nix-build) | Build a flake output on a Nix build host; with --publish, sign and push it. | none | yes |
+| [`piceli dev nix gc`](#cli-dev-nix-gc) | Remove builds of old commits from a Nix cache: plan, then --approve. | none | yes |
 | [`piceli dev release-host`](#cli-dev-release-host) | Clear a build host's health events: it is no longer quarantined (0.22.0). | none | no |
 | [`piceli dev run`](#cli-dev-run) | Run COMMAND on the builder for a commit (--ref) or a working tree (default: here). | writes | no |
 | [`piceli dev schedule`](#cli-dev-schedule) | Run the queue yourself (a cluster without the GitOps controller, which runs it). | writes | no |
@@ -136,7 +138,9 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli runs`](#cli-runs) | List the deploy runs of a pipeline, newest first, with their state, release, duration and summary files. Read-only (with shared state it reads the local working copy: run `piceli state pull` first). | none | no |
 | [`piceli secrets cluster`](#cli-secrets-cluster) | Store another cluster's credentials for the GitOps controller (never printed). | writes | no |
 | [`piceli secrets git`](#cli-secrets-git) | Store the Git token the controller and cluster builds use (read from stdin, never printed). | writes | no |
+| [`piceli secrets nix-cache`](#cli-secrets-nix-cache) | A Nix binary cache's signing key: generate or import it; print its public key. | none | no |
 | [`piceli secrets provider`](#cli-secrets-provider) | Store a provider API token (read from stdin, never printed). | none | no |
+| [`piceli secrets s3`](#cli-secrets-s3) | Store a bucket's S3 access keys (an access key id and its secret). | none | no |
 | [`piceli secrets state-key`](#cli-secrets-state-key) | Store the passphrase that encrypts an infrastructure's OpenTofu state. | none | no |
 | [`piceli state export`](#cli-state-export) | Write the release's state to one file (secret material excluded unless asked). | reads | no |
 | [`piceli state import`](#cli-state-import) | Replace the release's state with an export (needs --approve DIGEST). | writes | yes |
@@ -1073,6 +1077,66 @@ A run's output (stdout): live, or the recorded tail of a finished run.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Read-only. The log on stdout; dev-run-unknown for a run that is neither live nor among the last 50 recorded.
+
+(cli-dev-nix-build)=
+### `piceli dev nix build`
+
+Build a flake output on a Nix build host; with --publish, sign and push it.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `ATTR` | text | required |  |
+| `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster with dev=DevBuilds(...) (or PICELI_DEV_CLUSTER) |
+| `--ref` | text |  | Build this commit (required with --publish) |
+| `--worktree` | path |  | Build this working tree (default: here) |
+| `--repo` | path | `.` | The repository with --ref (default: here) |
+| `--name` | text |  | The manifest's name (default: HOST of nixosConfigurations.HOST, HOST-image with --image) |
+| `--profile` | text |  | A Nix profile (default: the first nix=True) |
+| `--host` | text |  | A docker or native build host (default: the first) |
+| `--image` | boolean | `False` | The output is a disk image: copy its file back with its sha256 |
+| `--publish` | text |  | MODULE:ATTR of a piceli.infra.NixCache: sign and push the closure, upload the manifest (needs --approve) |
+| `--approve` | text |  | The publish plan's digest |
+| `--artifacts-dir` | path | `piceli-dev-artifacts` | Where an image lands (RUN/) |
+| `--queue-timeout` | integer | `3600` | Seconds to wait for a slot |
+| `--quiet` | boolean | `False` | Do not stream the build's log |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=), MODULE:ATTR (piceli.infra.NixCache, --publish), the local Git repository, credentials (signing key, S3 keys; --publish after approval)
+- **Writes:** --artifacts-dir RUN/ (with --image), the build host's Nix store, the binary cache and piceli/NAME/REV.json (--publish)
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Without --publish it is a development run (no approval; covered like dev run). With --publish it prints the plan (commit, output, host, cache, key) and exits 3; --approve DIGEST builds, then a separate step on the same host receives the signing key and S3 keys on stdin only (never the build), pushes with nix copy and the client uploads the manifest. Prints the store path, the image's sha256 and the public key, never a secret. Exit 1: the build failed, no output (dev-nix-no-output), dev-nix-publish-failed, dev-nix-manifest-failed.
+
+(cli-dev-nix-gc)=
+### `piceli dev nix gc`
+
+Remove builds of old commits from a Nix cache: plan, then --approve.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--cache` | text | required | MODULE:ATTR of the piceli.infra.NixCache |
+| `--repo` | path | `.` | The repository whose tags and main count |
+| `--keep-tags` | integer | `5` | Keep the builds of the newest N tags |
+| `--main` | text | `main` | The branch whose current commit stays |
+| `--grace` | integer | `3600` | Seconds: younger objects stay (a publish in progress) |
+| `--approve` | text |  | The gc plan's digest |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.NixCache), the local Git repository (tags, main), the cache's objects (write credentials)
+- **Writes:** the binary cache (deleted manifests, narinfos, NAR files)
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Without --approve prints the keys it would delete and the plan digest (exit 3; 0 and state clean when nothing goes). A path a kept manifest's closure reaches is never deleted; objects younger than --grace stay. --approve with another digest is refused (dev-nix-plan-changed); a failed delete exits 1 (dev-nix-gc-failed).
 
 (cli-dev-release-host)=
 ### `piceli dev release-host`
@@ -3141,6 +3205,30 @@ Store the Git token the controller and cluster builds use (read from stdin, neve
 - **Output contract:** conforms
 - **Notes:** The token is read from stdin only (typed without echo, or piped); a token argument or PICELI_GIT_TOKEN is refused (secrets-token-refused) without echoing it. Creates or updates the Secret without a plan; prints its name and key names, never a value. Needs piceli cluster init first (cluster-not-initialized).
 
+(cli-secrets-nix-cache)=
+### `piceli secrets nix-cache`
+
+A Nix binary cache's signing key: generate or import it; print its public key.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--generate` | boolean | `False` | Generate a new key pair |
+| `--prompt` | boolean | `False` | Read an existing secret key (NAME:base64) from stdin |
+| `--key-name` | text |  | The key's name in signatures (default: NAME) |
+| `--replace` | boolean | `False` | Replace an existing key (hosts that trust the old one refuse new builds) |
+
+**Contract**
+
+- **Reads:** stdin (--prompt), $PICELI_CREDENTIALS_DIR/NAME.json
+- **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600; --generate, --prompt)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Prints the public key (NAME:base64), never the secret key. Without --generate or --prompt it only reads. Refuses to replace a key without --replace (infra-credential-exists): hosts that trust the old key refuse what a new one signs.
+
 (cli-secrets-provider)=
 ### `piceli secrets provider`
 
@@ -3161,6 +3249,27 @@ Store a provider API token (read from stdin, never printed).
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** The token is read from stdin only (typed without echo, or piped); an argument or HCLOUD_TOKEN in the environment is refused (infra-credential-refused) without echoing it. Prints the name, never the value.
+
+(cli-secrets-s3)=
+### `piceli secrets s3`
+
+Store a bucket's S3 access keys (an access key id and its secret).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--prompt` | boolean | `False` | Read the access key id, then the secret, from stdin |
+
+**Contract**
+
+- **Reads:** stdin (--prompt)
+- **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Two lines on stdin (typed without echo, or piped); an argument is refused (infra-credential-refused) without echoing it. Prints the name, never a value.
 
 (cli-secrets-state-key)=
 ### `piceli secrets state-key`

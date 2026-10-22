@@ -193,6 +193,17 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`dev-host-unavailable`](#error-dev-host-unavailable) | dev | no |
 | [`dev-host-unknown`](#error-dev-host-unknown) | dev | no |
 | [`dev-isolation-not-enforced`](#error-dev-isolation-not-enforced) | dev | no |
+| [`dev-nix-cache-invalid`](#error-dev-nix-cache-invalid) | dev | no |
+| [`dev-nix-crypto-unavailable`](#error-dev-nix-crypto-unavailable) | dev | no |
+| [`dev-nix-gc-failed`](#error-dev-nix-gc-failed) | dev | yes |
+| [`dev-nix-host-unsupported`](#error-dev-nix-host-unsupported) | dev | no |
+| [`dev-nix-invalid`](#error-dev-nix-invalid) | dev | no |
+| [`dev-nix-key-invalid`](#error-dev-nix-key-invalid) | dev | no |
+| [`dev-nix-key-mismatch`](#error-dev-nix-key-mismatch) | dev | no |
+| [`dev-nix-manifest-failed`](#error-dev-nix-manifest-failed) | dev | yes |
+| [`dev-nix-no-output`](#error-dev-nix-no-output) | dev | no |
+| [`dev-nix-plan-changed`](#error-dev-nix-plan-changed) | dev | no |
+| [`dev-nix-publish-failed`](#error-dev-nix-publish-failed) | dev | yes |
 | [`dev-not-enabled`](#error-dev-not-enabled) | dev | no |
 | [`dev-profile-unknown`](#error-dev-profile-unknown) | dev | no |
 | [`dev-queue-timeout`](#error-dev-queue-timeout) | dev | yes |
@@ -4960,6 +4971,94 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Use a CNI that enforces NetworkPolicy (k3s's default does; on kind, kindnet does), then run again.
 - **Retry-safe:** no
+
+(error-dev-nix-cache-invalid)=
+### `dev-nix-cache-invalid`
+
+**Nix cache declaration refused.** `NixCache` needs a public key `NAME:base64`, one of `bucket=` or `url=` (`s3://`, `file://`, or a read-only `https://`), an S3 endpoint and `credentials=` for an S3 cache; or `--publish` did not name a `NixCache`, or names a read-only cache.
+
+- **Fix:** Fix the declaration; publish to the cache's `s3://` or `file://` URL.
+- **Retry-safe:** no
+
+(error-dev-nix-crypto-unavailable)=
+### `dev-nix-crypto-unavailable`
+
+**Signing library missing.** Generating Nix cache keys and signing build manifests need the `cryptography` package, which is not installed.
+
+- **Fix:** Install it (`pip install 'piceli[crypto]'`).
+- **Retry-safe:** no
+
+(error-dev-nix-gc-failed)=
+### `dev-nix-gc-failed`
+
+**Nix cache cleanup failed.** Listing, reading or deleting objects of the cache failed (credentials, endpoint, network); manifests go first, so no kept build lost a path.
+
+- **Fix:** Check the write credential and the endpoint, then plan `piceli dev nix gc` again and approve the new digest.
+- **Retry-safe:** yes
+
+(error-dev-nix-host-unsupported)=
+### `dev-nix-host-unsupported`
+
+**Build host cannot run Nix builds.** Nix builds run on docker or native build hosts (the host's own Nix); the chosen host is the cluster's builder node, or none is declared.
+
+- **Fix:** Declare `BuildHost.docker(...)` (a host with Nix, over `ssh://`) or `BuildHost.native(...)` and pass `--host`.
+- **Retry-safe:** no
+
+(error-dev-nix-invalid)=
+### `dev-nix-invalid`
+
+**Nix build request refused.** `piceli dev nix build` got an output that is not a flake attribute of the source (`.#ATTR`), a bad `--name`, `--publish` without `--ref` or `--name`, `--approve` without `--publish`, or a profile without `nix=True`.
+
+- **Fix:** Give `ATTR` or `.#ATTR`, a DNS-label `--name`, a commit with `--ref` when publishing, and declare `DevProfile.for_nix()`.
+- **Retry-safe:** no
+
+(error-dev-nix-key-invalid)=
+### `dev-nix-key-invalid`
+
+**Nix key refused.** A Nix key is `NAME:base64` (a secret key of 64 bytes, a public key of 32); the value given or stored is not one.
+
+- **Fix:** Generate one with `piceli secrets nix-cache NAME --generate`, or paste a key from `nix key generate-secret` with `--prompt`.
+- **Retry-safe:** no
+
+(error-dev-nix-key-mismatch)=
+### `dev-nix-key-mismatch`
+
+**Signing key does not match the cache.** The stored signing key's public key is not `NixCache(public_key=)`: hosts that trust the declared key would refuse what it signs.
+
+- **Fix:** Print the stored key's public key with `piceli secrets nix-cache NAME` and fix the declaration or `NixCache(signing_key=)`.
+- **Retry-safe:** no
+
+(error-dev-nix-manifest-failed)=
+### `dev-nix-manifest-failed`
+
+**Build manifest not stored.** The closure is in the cache but uploading `piceli/NAME/REV.json` failed.
+
+- **Fix:** Check the S3 credential's write access and run the approved command again.
+- **Retry-safe:** yes
+
+(error-dev-nix-no-output)=
+### `dev-nix-no-output`
+
+**Nix build gave no output.** The build passed but printed no store path, or `--image` found no disk image file in the output.
+
+- **Fix:** Check that the attribute builds a derivation (`nix build .#ATTR --print-out-paths`) and, with `--image`, that it is an image output.
+- **Retry-safe:** no
+
+(error-dev-nix-plan-changed)=
+### `dev-nix-plan-changed`
+
+**Publish plan changed.** The `--approve` digest is not the digest of the publish plan computed now (the commit, the output, the host, the cache or the key changed).
+
+- **Fix:** Run the command without `--approve`, review the new plan and approve its digest.
+- **Retry-safe:** no
+
+(error-dev-nix-publish-failed)=
+### `dev-nix-publish-failed`
+
+**Pushing to the Nix cache failed.** `nix copy` to the cache, or reading back the store path's signed narinfo, failed on the build host (credentials, endpoint, network, or no `nix` on the host).
+
+- **Fix:** Read the masked lines on stderr, check the bucket, the S3 credential and the endpoint, then run the approved command again (paths already in the cache are skipped).
+- **Retry-safe:** yes
 
 (error-dev-not-enabled)=
 ### `dev-not-enabled`
