@@ -309,3 +309,61 @@ def test_the_infra_exports_the_host_types() -> None:
     import piceli.infra as infra
 
     assert infra.NixHost is NixHost and infra.Tag is Tag and infra.Branch is Branch
+
+
+def _pointer(cache_dir: Path, tag: str) -> dict[str, Any]:
+    path = cache_dir / "piceli" / "web-1" / "refs" / "tags" / f"{tag}.json"
+    return dict(json.loads(path.read_text()))
+
+
+def test_wait_judges_only_the_newest_publication_of_a_rev(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import datetime as dt
+
+    from tests.unit.hosts.test_agent import OLD, T0, Clock, FakeHost, host, make_agent
+    from tests.unit.hosts.test_agent import status as read
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    link = tmp_path / "current-system"
+    link.symlink_to(OLD)
+    fake, clock = FakeHost(link, unit_active=False), Clock()
+    rev = commit_of(1)
+    publish(cache_dir, rev, tag="v1.0.0")
+    make_agent(tmp_path, host(cache_dir), fake, clock).run_once()
+    failed = read(tmp_path)
+    assert remote.outcome(failed, rev) == ("failed", "host-rolled-back")
+    make_agent(tmp_path, host(cache_dir), fake, clock).run_once()  # skipped: bad
+    assert remote.outcome(read(tmp_path), rev) == ("failed", "host-rolled-back")
+
+    # The same commit is published again: the old failure no longer counts.
+    publish(cache_dir, rev, tag="v1.0.0", when=T0 + dt.timedelta(hours=1))
+    again = _pointer(cache_dir, "v1.0.0")["published_at"]
+    assert remote.outcome(read(tmp_path), rev, published_after=again) == (
+        "waiting", None,
+    )  # fmt: skip
+    # A host that has seen the newer pointer (an attempt in progress) waits too.
+    seen = {**failed, "in_progress": {"commit": rev, "published_at": again,
+                                      "state": "running"}}  # fmt: skip
+    assert remote.outcome(seen, rev) == ("waiting", None)
+    seen = {**failed, "poll": {"state": "idle", "commit": rev, "published_at": again}}
+    assert remote.outcome(seen, rev) == ("waiting", None)
+    run = _cli(monkeypatch, [read(tmp_path)] * 3)
+    clock_values = iter([0.0, 0.0, 5.0, 5.0, 11.0, 11.0, 11.0, 11.0])
+    monkeypatch.setattr(time, "monotonic", lambda: next(clock_values))
+    done = run("host", "wait", "web-1.example.net", rev, "--timeout", "10",
+               "--published-after", again)  # fmt: skip
+    assert json.loads(done.stdout)["reason"] == "host-wait-timeout"
+
+    # The agent records an attempt of the new publication: it is judged.
+    make_agent(tmp_path, host(cache_dir), fake, clock).run_once()
+    retried = read(tmp_path)
+    assert retried["last_attempt"]["published_at"] == again
+    assert remote.outcome(retried, rev, published_after=again) == (
+        "failed", "host-rolled-back",
+    )  # fmt: skip
+    fake.unit_active = True
+    publish(cache_dir, rev, tag="v1.0.0", when=T0 + dt.timedelta(hours=2))
+    make_agent(tmp_path, host(cache_dir), fake, clock).run_once()
+    assert remote.outcome(read(tmp_path), rev) == ("deployed", None)

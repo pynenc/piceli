@@ -761,6 +761,9 @@ class Agent:
             started = self.monotonic()
             pointer, why = self.resolve(cache)
             resolved = round(self.monotonic() - started, 3)
+            if pointer is not None:  # ``piceli host wait`` judges the newest seen
+                poll.update(commit=pointer["commit"], tag=_tag(pointer),
+                            published_at=pointer["published_at"])  # fmt: skip
             if pointer is None:
                 poll["reason"] = why
             elif pointer["store_path"] == running:

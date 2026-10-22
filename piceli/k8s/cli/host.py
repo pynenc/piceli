@@ -200,6 +200,15 @@ def wait(
     interval: Annotated[
         int, typer.Option("--interval", help="Seconds between reads", min=1)
     ] = 10,
+    published_after: Annotated[
+        str | None,
+        typer.Option(
+            "--published-after",
+            help="Judge only attempts of a publication at or after this "
+            "published_at (from dev nix build --publish --json): an earlier "
+            "failure of the same commit is not reported",
+        ),
+    ] = None,
     as_json: JsonOption = False,
 ) -> None:
     """Wait until the host runs REV with its checks passed (exit 1: failed or timeout)."""
@@ -209,7 +218,8 @@ def wait(
     _, ssh, known = _target(target, infra)
     started = time.monotonic()
     body: dict[str, Any] = {"schema": "piceli.host-wait.v1", "rev": rev,
-                            "target": ssh.address}  # fmt: skip
+                            "target": ssh.address,
+                            "published_after": published_after}  # fmt: skip
     last_error: str | None = None
     while True:
         try:
@@ -217,7 +227,9 @@ def wait(
             last_error = None
         except HostError as error:
             current, last_error = {}, error.code
-        state, reason = outcome(current, rev) if current else ("waiting", None)
+        state, reason = (
+            outcome(current, rev, published_after) if current else ("waiting", None)
+        )
         attempt = current.get("last_attempt")
         body.update(
             host=current.get("host"),

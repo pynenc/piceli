@@ -79,6 +79,13 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   pointers `piceli/NAME/refs/{tags,heads}/REF.json` (`--branch`), and
   `dev nix gc` keeps what they name. New codes `host-*`; see
   `docs/nix_hosts.md`.
+- **`piceli host wait` judges the newest publication of a build.** A
+  commit published again is retried by the agent; `wait` no longer reports
+  the earlier failed attempt meanwhile. It judges only attempts of the
+  newest `published_at` of that rev the host has seen (its last poll, now
+  carrying the pointer's commit, tag and `published_at`; an attempt in
+  progress; its attempts), and `--published-after` (from `dev nix build
+  --publish --json`) pins it before the host has polled.
 
 ## Version 0.23.0
 

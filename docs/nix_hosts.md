@@ -149,6 +149,18 @@ attempt was refused or failed (`host-deploy-failed`), rolled back
 (`host-rolled-back`), or after `--timeout` (`host-wait-timeout`). Its JSON
 carries the attempt with its stage times.
 
+Only the newest publication of the rev counts. Publishing the same commit
+again retries it, so an earlier failure stays pending once the host has
+seen a newer pointer (in its last poll or an attempt in progress), until
+the agent records an attempt of that publication. Pass the pointer's
+`published_at` from `dev nix build --publish --json` as
+`--published-after` to wait for that publication before the host has even
+polled:
+
+```sh
+piceli host wait hosts.py:web 3f2c1ab --published-after 2026-10-22T10:00:00.000000Z
+```
+
 ## Reports
 
 With `report=`, the agent sends OTLP/HTTP JSON logs to `ENDPOINT/v1/logs`

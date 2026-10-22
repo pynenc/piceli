@@ -1926,6 +1926,7 @@ Wait until the host runs REV with its checks passed (exit 1: failed or timeout).
 | `--infra` | text |  | MODULE:ATTR of the Infrastructure whose applied state has the server's address (when its Ssh has no address=) |
 | `--timeout` | integer | `1800` | Seconds to wait |
 | `--interval` | integer | `10` | Seconds between reads |
+| `--published-after` | text |  | Judge only attempts of a publication at or after this published_at (from dev nix build --publish --json): an earlier failure of the same commit is not reported |
 | `--json` | boolean | `False` | Print one JSON object on stdout |
 
 **Contract**

@@ -90,22 +90,46 @@ def matches(entry: Mapping[str, Any] | None, rev: str) -> bool:
     return entry.get("tag") == rev
 
 
-def outcome(status: Mapping[str, Any], rev: str) -> tuple[str, str | None]:
-    """``("deployed"|"failed"|"waiting", reason)`` of ``rev`` on the host."""
+def _published(entry: Any) -> str:
+    return str(entry.get("published_at") or "") if isinstance(entry, Mapping) else ""
+
+
+def outcome(
+    status: Mapping[str, Any], rev: str, published_after: str | None = None
+) -> tuple[str, str | None]:
+    """``("deployed"|"failed"|"waiting", reason)`` of ``rev`` on the host.
+
+    Only the newest publication of ``rev`` counts: the newest ``published_at``
+    the host has seen for it (its last poll, an attempt in progress, its
+    attempts) or ``published_after``, when it is newer. A failure of an older
+    publication is pending until the agent records an attempt of that one.
+    """
     if matches(status.get("current"), rev):
         return "deployed", None
-    attempt = status.get("last_attempt")
-    if matches(attempt, rev) and isinstance(attempt, Mapping):
+    attempt, poll = status.get("last_attempt"), status.get("poll")
+    history = status.get("history")
+    seen = [
+        _published(entry)
+        for entry in (poll, status.get("in_progress"), attempt,
+                      *(history if isinstance(history, list) else ()))
+        if matches(entry, rev)
+    ]  # fmt: skip
+    newest = max([published_after or "", *seen])
+    if (
+        matches(attempt, rev)
+        and isinstance(attempt, Mapping)
+        and _published(attempt) >= newest
+    ):
         state = attempt.get("state")
         if state == "rolled-back":
             return "failed", "host-rolled-back"
         if state in ("failed", "rejected"):
             return "failed", "host-deploy-failed"
-    poll = status.get("poll")
     if (
         isinstance(poll, Mapping)
         and poll.get("state") == "skipped"
         and matches(poll, rev)
+        and _published(poll) >= newest
     ):
         return "failed", "host-deploy-failed"
     return "waiting", None
