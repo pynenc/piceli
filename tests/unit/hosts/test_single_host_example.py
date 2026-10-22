@@ -12,14 +12,32 @@ import json
 import re
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
+import pytest
+
+from piceli.dev.model import DevBuilds
 from piceli.hosts.model import agent_config
 from piceli.hosts.module import render_module
-from piceli.infra import Cluster, Infrastructure, NixHost
+from piceli.infra import Infrastructure, NixHost
 from piceli.infra.machines.render import render
 
 PAGE = Path(__file__).parents[3] / "docs" / "single_nixos_host.md"
 _BLOCK = re.compile(r"```python\n(# web_1\.py\n.*?)```", re.S)
+IMAGE_SHA256 = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+
+
+@pytest.fixture(autouse=True)
+def _built_image(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """What step 2's `dev nix build --image --artifacts-dir images` leaves."""
+    images = tmp_path / "images"
+    images.mkdir()
+    (images / "web-1-image.image.json").write_text(
+        json.dumps({"schema": "piceli.nix-image.v1", "sha256": IMAGE_SHA256,
+                    "file": "r-1/piceli-nix-out/nixos.qcow2", "format": "qcow2"})
+    )  # fmt: skip
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
 
 
 def _example(tmp_path: Path) -> ModuleType:
@@ -75,7 +93,43 @@ def test_the_example_declares_the_host_and_its_builds(tmp_path: Path) -> None:
     assert render_module(host, "web_1.py:host").startswith(
         "# The Piceli host agent of web-1"
     )
-    assert isinstance(example.builds, Cluster) and example.builds.dev is not None
+    assert isinstance(example.builds, DevBuilds)  # no cluster for builds
+    image = example.nixos
+    assert image.sha256 == IMAGE_SHA256
+    assert Path(str(image.file)) == Path("images/r-1/piceli-nix-out/nixos.qcow2")
+
+
+def test_host_commands_find_the_host_by_name_with_the_pinned_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    import piceli.hosts.remote as remote
+    from piceli.k8s.cli import app
+
+    (tmp_path / "web_1.py").write_text(
+        _BLOCK.findall(PAGE.read_text(encoding="utf-8"))[0], encoding="utf-8"
+    )
+    known = tmp_path / "state" / "piceli" / "infra" / "web-1" / "known_hosts"
+    known.parent.mkdir(parents=True)
+    known.write_text("example.org ssh-ed25519 AAAA\n")
+    seen: list[dict[str, Any]] = []
+
+    def read_status(target: Any, **kwargs: Any) -> dict[str, Any]:
+        seen.append({"address": target.address, **kwargs})
+        return {"host": "web-1", "current": {"tag": "v1.0.0"}}
+
+    monkeypatch.setattr(remote, "read_status", read_status)
+    done = CliRunner().invoke(
+        app, ["host", "wait", "web-1", "v1.0.0", "--infra", "web_1.py", "--json"]
+    )
+    assert done.exit_code == 0, done.stdout + done.stderr
+    assert seen == [{"address": "example.org", "known_hosts": known}]
+    with_attr = CliRunner().invoke(
+        app, ["host", "status", "web-1", "--infra", "web_1.py:infra", "--json"]
+    )
+    assert with_attr.exit_code == 0, with_attr.stdout + with_attr.stderr
+    assert seen[-1]["known_hosts"] == known
 
 
 def _commands() -> list[list[str]]:

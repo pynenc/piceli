@@ -37,6 +37,16 @@ def load_target(entry: str, base: Path) -> Any:
     target, sep, attribute = entry.rpartition(":")
     if not sep or not target or not attribute:
         raise RenderError(f"target must be module:attr or file.py:attr, got {entry!r}")
+    value: Any = load_module(target, base)
+    for part in attribute.split("."):
+        if not hasattr(value, part):
+            raise RenderError(f"{entry!r}: no attribute {part!r}")
+        value = getattr(value, part)
+    return value
+
+
+def load_module(target: str, base: Path) -> Any:
+    """Import ``module`` or ``path/to/file.py``, as :func:`load_target` does."""
     if target.endswith(".py") or "/" in target:
         path = (base / target).resolve()
         if not path.is_file():
@@ -63,12 +73,7 @@ def load_target(entry: str, base: Path) -> Any:
             module = importlib.import_module(target)
         except ImportError as error:
             raise RenderError(f"cannot import module {target!r}: {error}") from None
-    value: Any = module
-    for part in attribute.split("."):
-        if not hasattr(value, part):
-            raise RenderError(f"{entry!r}: no attribute {part!r}")
-        value = getattr(value, part)
-    return value
+    return module
 
 
 def placeholder_inputs(names: list[str]) -> dict[str, SecretVersionRef]:

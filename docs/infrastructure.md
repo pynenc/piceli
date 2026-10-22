@@ -333,7 +333,10 @@ passphrase from OpenTofu's output before it is shown.
    Git, never printed) and makes it the profile `Cluster(credentials=)`.
    With `Infrastructure(home=HOME_CLUSTER)` and the multi-cluster
    registration, the home cluster's GitOps controller also gets the new
-   cluster's credentials.
+   cluster's credentials. A server without `cluster=` (a Nix host,
+   {doc}`nix_hosts`) is registered for its host keys only: the same preview
+   and approval pin them, and `piceli host ... --infra MODULE` reads the
+   host against them (0.24.0).
 3. **Deploy.** The server's cluster is then a declared cluster like any
    other: `piceli cluster init`, environments, GitOps.
 

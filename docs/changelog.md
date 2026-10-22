@@ -115,6 +115,23 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   the agent accepts sops-nix's `0400` root files (it refuses files that
   root does not own). `NixCache(read_credentials=)` is removed: Piceli no
   longer keeps keys that only hosts use. New codes `host-secret-*`.
+- **Nix builds need no cluster.** `piceli dev nix build --cluster` (now
+  also `--dev`) takes a bare `DevBuilds`, as well as a `Cluster` with
+  `dev=`.
+- **No hand-copied image checksum.** `dev nix build --image` writes
+  `ARTIFACTS_DIR/NAME.image.json` (`piceli.nix-image.v1`: the image's path,
+  sha256, format, size, store path and commit), and
+  `Image.from_build(NAME, PATH)` reads it (new code
+  `infra-image-build-invalid`).
+- **Host keys without a cluster.** `piceli infra register INFRA SERVER` for
+  a server without `cluster=` pins its SSH host keys only, after the same
+  preview and approval of their fingerprints (`mode: host-keys`, state
+  `pinned`). The state's `known_hosts` now keeps the other servers' keys
+  when one is registered.
+- **Hosts by name.** `piceli host status|wait|pin|unpin|rollback|secrets
+  NAME --infra MODULE` finds the `NixHost` the module declares by its name,
+  and reads it with the host keys pinned in the infrastructure's state;
+  `--infra` takes a module or `MODULE:ATTR`.
 
 ## Version 0.23.0
 

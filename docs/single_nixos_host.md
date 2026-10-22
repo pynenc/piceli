@@ -27,7 +27,6 @@ host with a Kubernetes environment.
 from piceli.infra import (
     Bucket,
     BuildHost,
-    Cluster,
     DevBuilds,
     DevProfile,
     DnsRecord,
@@ -51,12 +50,9 @@ from piceli.infra import (
 cloud = Infomaniak(credentials="infomaniak", prices={"a2-ram4-disk50-perf1": 9.40})
 dns = Porkbun(credentials="porkbun")
 
-# The first system, built with `piceli dev nix build ... --image` (step 2).
-nixos = Image(
-    "web-1-nixos",
-    file="images/web-1.qcow2",
-    sha256="9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-)
+# The first system: `piceli dev nix build ... --image` (step 2) writes the
+# image and this sidecar with its file and sha256.
+nixos = Image.from_build("web-1-nixos", "images/web-1-image.image.json")
 
 web = Server(
     "web-1",
@@ -109,27 +105,22 @@ host = NixHost(
     age_identity="web-1-age",
 )
 
-# Where `piceli dev nix build` runs: a NixOS build machine over SSH. Builds
-# are declared on a Cluster; with node=None no cluster is ever contacted.
-builds = Cluster(
-    "builds",
-    api="https://127.0.0.1:6443",
-    credentials="builds",
-    dev=DevBuilds(
-        node=None,
-        image="ghcr.io/pynenc/piceli-builder@sha256:" + "0" * 64,
-        hosts=[BuildHost.docker("nix-1", context="ssh://builder@nix-1.example.org")],
-        profiles=[DevProfile.for_nix(timeout="2h")],
-    ),
+# Where `piceli dev nix build` runs: a NixOS build machine over SSH. No
+# cluster: node=None, and no cluster is ever contacted.
+builds = DevBuilds(
+    node=None,
+    image="ghcr.io/pynenc/piceli-builder@sha256:" + "0" * 64,
+    hosts=[BuildHost.docker("nix-1", context="ssh://builder@nix-1.example.org")],
+    profiles=[DevProfile.for_nix(timeout="2h")],
 )
 ```
 
 The flake has a `nixosConfigurations.web-1` (nginx, your service, a
 `/healthz`) and two outputs of it: `config.system.build.toplevel`, the
 system the host switches to, and `config.system.build.openstackImage`, the
-disk image it first boots. Replace the public key, the image's sha256, the
-SSH key and the builder image's digest with yours; the commands below say
-where each comes from.
+disk image it first boots. Replace the public key, the SSH key and the
+builder image's digest with yours; the commands below say where each comes
+from.
 
 ## Steps
 
@@ -152,15 +143,19 @@ where each comes from.
    key in your `.sops.yaml`. The host's own secrets do not go into Piceli:
    step 3 puts them in sops-nix.
 
-2. **The image, then the machines.** Build the image on the build host,
-   copy the file next to `web_1.py` and put its sha256 in `Image(...)`:
+2. **The image, then the machines.** Build the image on the build host;
+   it lands in `images/` with `images/web-1-image.image.json`, the sidecar
+   `Image.from_build` reads (the file, its sha256, the store path, the
+   commit):
 
    ```sh
-   export PICELI_DEV_CLUSTER=web_1.py:builds
+   export PICELI_DEV_CLUSTER=web_1.py:builds          # the DevBuilds
    piceli dev nix build nixosConfigurations.web-1.config.system.build.openstackImage \
-     --image --json          # image.file and image.sha256
+     --image --artifacts-dir images --json
    piceli infra plan web_1.py:infra
    piceli infra apply web_1.py:infra --approve sha256:<plan hash>
+   piceli infra register web_1.py:infra web-1         # exit 3: its SSH host keys
+   piceli infra register web_1.py:infra web-1 --approve sha256:<digest>
    ```
 
    `infra plan` exits 3 with the changes (image, port, security group and
@@ -168,9 +163,11 @@ where each comes from.
    estimate and the plan hash; it also checks Porkbun's API access for
    `example.org`. `infra apply` uploads the image (its sha256 checked
    first), creates the rest and points both records at the port. Nothing
-   runs without the hash you approved. Add the host's SSH key to
-   `~/.ssh/known_hosts` after checking its fingerprint on the console:
-   `piceli host` reads the host with strict host key checking.
+   runs without the hash you approved. `infra register` reads the server's
+   SSH host keys and shows their fingerprints: compare them with the
+   console, then approve, and they are pinned in the infrastructure's
+   state. Every `piceli host ... --infra web_1.py` reads the host with
+   strict host key checking against them, and finds `web-1` by its name.
 
 3. **The age identity with `piceli host secrets`; cache keys and OTLP
    headers in sops-nix.** The host's secrets live encrypted in Git, in
@@ -193,8 +190,8 @@ where each comes from.
    with:
 
    ```sh
-   piceli host secrets web_1.py:host             # exit 3: host, path, 0600 root, age1..., existing key
-   piceli host secrets web_1.py:host --approve sha256:<digest>
+   piceli host secrets web-1 --infra web_1.py    # exit 3: host, path, 0600 root, age1..., existing key
+   piceli host secrets web-1 --infra web_1.py --approve sha256:<digest>
    ```
 
    It goes on ssh's stdin to `/var/lib/sops-nix/key.txt`, and the host
@@ -234,7 +231,7 @@ where each comes from.
    cache key, fetches the system, switches and runs the checks.
 
    ```sh
-   piceli host wait web_1.py:host v1.0.0 --json
+   piceli host wait web-1 v1.0.0 --infra web_1.py --json
    ```
 
    It reads `/var/lib/piceli-host/status.json` over SSH (or give a target:
@@ -246,7 +243,7 @@ where each comes from.
 
 7. **A rollback.** When a check fails, the agent switches back to the
    system it ran before, marks the build bad and reports it; `host wait`
-   exits 1 with `host-rolled-back`, and `piceli host status web_1.py:host`
+   exits 1 with `host-rolled-back`, and `piceli host status web-1 --infra web_1.py`
    shows the failed check. The host keeps the old system and never tries
    that build again until it is published again (publishing the same
    commit again retries it; pass the new pointer's `published_at` to `host
@@ -254,9 +251,9 @@ where each comes from.
    back on purpose:
 
    ```sh
-   piceli host rollback web_1.py:host --json      # the previous system, held
-   piceli host pin web_1.py:host v1.0.0 --json    # or any published tag, held
-   piceli host unpin web_1.py:host --json         # follow the newest v* again
+   piceli host rollback web-1 --infra web_1.py --json      # the previous system, held
+   piceli host pin web-1 v1.0.0 --infra web_1.py --json    # or any published tag, held
+   piceli host unpin web-1 --infra web_1.py --json         # follow the newest v* again
    ```
 
    Both switch, run the checks and hold the build until `unpin`, across

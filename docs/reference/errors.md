@@ -395,6 +395,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`infra-dns-api-disabled`](#error-infra-dns-api-disabled) | infra | no |
 | [`infra-dns-check-failed`](#error-infra-dns-check-failed) | infra | yes |
 | [`infra-foreign-resource`](#error-infra-foreign-resource) | infra | no |
+| [`infra-image-build-invalid`](#error-infra-image-build-invalid) | infra | no |
 | [`infra-image-checksum`](#error-infra-image-checksum) | infra | no |
 | [`infra-image-unavailable`](#error-infra-image-unavailable) | infra | yes |
 | [`infra-install-changed`](#error-infra-install-changed) | infra | yes |
@@ -6276,6 +6277,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Remove the resource from the state with `tofu state rm` in the state directory (it is then left alone), or delete it at the provider yourself; then plan again.
 - **Retry-safe:** no
 
+(error-infra-image-build-invalid)=
+### `infra-image-build-invalid`
+
+**Image build sidecar unreadable.** `Image.from_build(NAME, PATH)` got a file that is missing, not JSON, or not a `piceli.nix-image.v1` sidecar (a relative `file`, a 64-hex `sha256`, a known `format`).
+
+- **Fix:** Build the image with `piceli dev nix build ... --image` (it writes `NAME.image.json` in `--artifacts-dir`) and point `from_build` at that file.
+- **Retry-safe:** no
+
 (error-infra-image-checksum)=
 ### `infra-image-checksum`
 
@@ -6351,9 +6360,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-infra-no-cluster)=
 ### `infra-no-cluster`
 
-**Server declares no cluster.** `piceli infra register` needs `Server(cluster=Cluster(...))`: the cluster the server's k3s becomes.
+**Server declares no cluster.** `piceli infra register --kubeconfig` needs `Server(cluster=Cluster(...))`: the cluster the server's k3s becomes. Without a cluster, `register` only pins the server's SSH host keys.
 
-- **Fix:** Add `cluster=Cluster(name, api=..., credentials=...)` to the server and run the command again.
+- **Fix:** Add `cluster=Cluster(name, api=..., credentials=...)` to the server, or drop `--kubeconfig` to pin its host keys only.
 - **Retry-safe:** no
 
 (error-infra-not-applied)=

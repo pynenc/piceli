@@ -98,8 +98,9 @@ noted.
   running and queued runs with their position, recent results, cache use)
   and a run's output; change nothing. See {doc}`dev_builds`.
 - `piceli host status TARGET [--json]` and `piceli host wait TARGET REV
-  [--timeout S] --json` (0.24.0): read a Nix host agent's status file over
-  SSH (no cluster); `wait` exits 1 on a refused, failed or rolled-back
+  [--timeout S] --json` (0.24.0; `TARGET` is `MODULE:ATTR`, a host name
+  with `--infra MODULE`, or an SSH target): read a Nix host agent's status
+  file over SSH (no cluster); `wait` exits 1 on a refused, failed or rolled-back
   attempt, on a pinned host (`host-pinned`) and on timeout. See
   {doc}`nix_hosts`.
 - `piceli profiles [--json]`: lists the stored credential profiles (names,

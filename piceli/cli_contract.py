@@ -1304,8 +1304,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "Read a Nix host agent's status over SSH: the current and previous "
             "builds, the last attempt with its stages, checks and rollback.",
             reads=(
-                "MODULE:ATTR (piceli.infra.NixHost) or an SSH target",
-                "--infra MODULE:ATTR (the server's applied address)",
+                "MODULE:ATTR (piceli.infra.NixHost), its name with --infra, or "
+                "an SSH target",
+                "--infra MODULE[:ATTR] (declared hosts, applied address, pinned "
+                "host keys)",
                 "the host's /var/lib/piceli-host/status.json (ssh)",
             ),
             contract="conforms",
@@ -1617,13 +1619,13 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "run on a docker or native build host with Nix; with --publish, sign "
             "and push its closure to a NixCache and upload a signed build manifest.",
             reads=(
-                "MODULE:ATTR (piceli.infra.Cluster with dev=)",
+                "MODULE:ATTR (piceli.infra.DevBuilds, or a Cluster with dev=)",
                 "MODULE:ATTR (piceli.infra.NixCache, --publish)",
                 "the local Git repository",
                 "credentials (signing key, S3 keys; --publish after approval)",
             ),
             writes=(
-                "--artifacts-dir RUN/ (with --image)",
+                "--artifacts-dir RUN/ and NAME.image.json (with --image)",
                 "the build host's Nix store",
                 "the binary cache and piceli/NAME/REV.json (--publish)",
             ),
@@ -1985,7 +1987,8 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         ),
         "infra register": _C(
             "Wait for a server's k3s and make it the server's declared Cluster "
-            "(kubeconfig over SSH or --kubeconfig; a credential profile).",
+            "(kubeconfig over SSH or --kubeconfig; a credential profile); for a "
+            "server without cluster=, pin its SSH host keys only.",
             reads=(
                 "MODULE:ATTR (piceli.infra.Infrastructure)",
                 "the server over SSH (host keys, k3s kubeconfig) or --kubeconfig",

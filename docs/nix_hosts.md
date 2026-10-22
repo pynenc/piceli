@@ -206,15 +206,18 @@ ignored tags, the `hold` (or `null`) and the report's state.
 
 ```sh
 piceli host status hosts.py:web --infra infra.py:edge --json
-piceli host wait hosts.py:web v1.4.0 --timeout 1800 --json
+piceli host wait web-1 v1.4.0 --infra hosts.py --timeout 1800 --json
 piceli host status root@web-1.example.net
 ```
 
 Both commands read the file over SSH (`BatchMode`, strict host key
 checking: the key must be in `~/.ssh/known_hosts`, or pinned by `piceli
-infra register` in the infrastructure's state). Give a `NixHost` or an
-SSH target. A `Server` without `Ssh(address=)` needs `--infra` for its
-applied address. `wait` takes a commit (7+ hex digits) or a tag. It exits
+infra register` in the infrastructure's state; a server without
+`cluster=` is registered for its host keys only). Give a `NixHost`
+(`MODULE:ATTR`), the name of one that the `--infra MODULE` declares, or an
+SSH target. `--infra` (a module, or `MODULE:ATTR` of its `Infrastructure`)
+also gives the server's applied address when its `Ssh` has none, and the
+pinned host keys. Every `piceli host` command takes the same arguments. `wait` takes a commit (7+ hex digits) or a tag. It exits
 0 once the host runs that build with its checks passed. It exits 1 when the
 attempt was refused or failed (`host-deploy-failed`), rolled back
 (`host-rolled-back`), or after `--timeout` (`host-wait-timeout`). Its JSON

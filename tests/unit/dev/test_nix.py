@@ -581,7 +581,12 @@ def cli_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     )  # fmt: skip
     cache_dir = tmp_path / "cache"
     cache = NixCache(PUBLIC, url=f"file://{cache_dir}")
-    monkeypatch.setattr(dev_nix, "load_cluster", lambda _ref: cluster)
+    real_load_dev = dev_nix.load_dev  # another ref than the fixture's loads for real
+    monkeypatch.setattr(
+        dev_nix,
+        "load_dev",
+        lambda ref: cluster.dev if ref == "infra.py:c" else real_load_dev(ref),
+    )
     monkeypatch.setattr(dev_nix, "load_cache", lambda _ref: cache)
     monkeypatch.setattr(hosts, "probe", lambda h, **_: hosts.HostState(h, True))
     app = repo(tmp_path / "app", {"flake.nix": "{ outputs = _: {}; }"})
@@ -677,6 +682,50 @@ def test_publish_plans_first_then_runs_only_the_approved_digest(
     secret_body = SECRET.partition(":")[2]
     for text in (planned.stdout, planned.stderr, done.stdout, done.stderr):
         assert secret_body not in text
+
+
+def test_builds_need_no_cluster_and_an_image_leaves_its_sidecar(
+    cli_env: dict[str, Any], tmp_path: Path
+) -> None:
+    import hashlib
+
+    from piceli.infra import Image
+    from piceli.infra.machines.model import InfraError
+
+    module = tmp_path / "builds.py"
+    module.write_text(
+        "from piceli.infra import BuildHost, DevBuilds, DevProfile\n"
+        f"builds = DevBuilds(node=None, image={IMAGE!r},\n"
+        f"    hosts=[BuildHost.native('laptop', state_dir={str(tmp_path / 'state')!r})],\n"
+        "    profiles=[DevProfile.for_nix()])\n"
+        "nothing = 1\n"
+    )
+    attr = "nixosConfigurations.web-1.config.system.build.openstackImage"
+    out = tmp_path / "images"
+    result = _invoke("dev", "nix", "build", attr, "--cluster", f"{module}:builds",
+                     "--image", "--artifacts-dir", str(out), "--json")  # fmt: skip
+    assert result.exit_code == 0, result.stdout + result.stderr
+    body = json.loads(result.stdout)
+    sidecar = out / "web-1-image.image.json"
+    assert body["image"]["build"] == str(sidecar)
+    written = json.loads(sidecar.read_text())
+    digest = hashlib.sha256(b"qcow2 bytes").hexdigest()
+    assert written["schema"] == "piceli.nix-image.v1" and written["sha256"] == digest
+    assert written["store_path"] == STORE and written["format"] == "qcow2"
+    image = Image.from_build("web-1-nixos", sidecar)
+    assert image.sha256 == digest and Path(str(image.file)).read_bytes() == (
+        b"qcow2 bytes"
+    )
+    refused = _invoke("dev", "nix", "build", attr, "--dev", f"{module}:nothing")
+    assert json.loads(refused.stdout)["reason"] == "cluster-not-found"
+    for bad in ("{", json.dumps({**written, "sha256": "x"}),
+                json.dumps({**written, "file": "/etc/passwd"})):  # fmt: skip
+        sidecar.write_text(bad)
+        with pytest.raises(InfraError) as raised:
+            Image.from_build("web-1-nixos", sidecar)
+        assert raised.value.code == "infra-image-build-invalid"
+    with pytest.raises(InfraError):
+        Image.from_build("web-1-nixos", tmp_path / "missing.json")
 
 
 def test_publish_refusals(cli_env: dict[str, Any]) -> None:

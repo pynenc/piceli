@@ -617,10 +617,14 @@ cache = NixCache(
   keys that live in sops-nix on the host ({doc}`nix_hosts`), never in
   Piceli; the build side never reads them.
 
+`--cluster` (or `--dev`, or `PICELI_DEV_CLUSTER`) names that `DevBuilds`
+itself, or a `Cluster` that declares it as `dev=`: Nix builds need no
+cluster.
+
 ```sh
 # A build: the store path, and with --image the image file and its sha256
 piceli dev nix build nixosConfigurations.web-1.config.system.build.openstackImage \
-  --image --name web-1-image --json
+  --cluster infra.py:dev --image --name web-1-image --json
 # Publish a commit: the plan and its digest first (exit 3), then approve it
 piceli dev nix build nixosConfigurations.web-1.config.system.build.toplevel \
   --ref v1.4.0 --publish infra.py:cache
@@ -640,9 +644,14 @@ user. Last, Piceli signs and uploads the **build manifest**
 `closure_size` from `nix path-info -S`, `built_at`, `host`, `image`,
 `signed_by`, and `signature`: the cache key's Ed25519 signature over the
 canonical JSON of the rest). The result
-(`piceli.dev-nix-build.v1`) carries the store path, `image.file` and
-`image.sha256` (for `Image(file=..., sha256=...)`), the cache URL, the
-public key and the manifest; never a secret.
+(`piceli.dev-nix-build.v1`) carries the store path, `image.file`,
+`image.sha256` and `image.build`, the cache URL, the public key and the
+manifest; never a secret. With `--image`, the build also writes
+`ARTIFACTS_DIR/NAME.image.json` (`piceli.nix-image.v1`: the image's path
+relative to it, `sha256`, `format`, `bytes`, `store_path`, `commit`), which
+`Image.from_build("my-image", "piceli-dev-artifacts/web-1-image.image.json")`
+reads: nobody copies a checksum by hand (`infra-image-build-invalid` when
+it is missing or malformed).
 
 **Ref pointers.** After the manifest, publishing writes a signed pointer for
 the tag at the commit and for the branch `--ref` names (or `--branch NAME`):

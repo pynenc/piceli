@@ -4630,6 +4630,7 @@
     "describe",
     "file",
     "format",
+    "from_build",
     "local_path",
     "min_disk_gb",
     "name",
@@ -4647,7 +4648,16 @@
     "url"
    ],
    "methods": {
-    "describe": []
+    "describe": [],
+    "from_build": [
+     "build",
+     "min_disk_gb",
+     "name",
+     "properties"
+    ]
+   },
+   "returns": {
+    "from_build": "Image"
    }
   },
   "ImageHandle": {
@@ -11185,6 +11195,7 @@
      "--artifacts-dir",
      "--branch",
      "--cluster",
+     "--dev",
      "--host",
      "--image",
      "--json",
@@ -13204,6 +13215,7 @@
    "infra-dns-api-disabled",
    "infra-dns-check-failed",
    "infra-foreign-resource",
+   "infra-image-build-invalid",
    "infra-image-checksum",
    "infra-image-unavailable",
    "infra-install-changed",

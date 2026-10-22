@@ -11,7 +11,8 @@
   registrations and cost from the state directory's records (read-only).
 - ``infra install MODULE:ATTR SERVER`` runs the server's install hook after
   approval of its rendered command; ``infra register MODULE:ATTR SERVER``
-  waits for its k3s and makes it a cluster Piceli deploys to.
+  waits for its k3s and makes it a cluster Piceli deploys to, or, for a
+  server without ``cluster=``, pins its SSH host keys only.
 - ``secrets provider NAME --prompt`` stores a provider API token,
   ``secrets state-key NAME --generate|--prompt`` a state passphrase: read
   from stdin only, never printed.
@@ -372,7 +373,7 @@ def register_command(
         ),
     ] = "https",
 ) -> None:
-    """Wait for the server's k3s and register it as its Cluster (approved by digest)."""
+    """Wait for the server's k3s and register it as its Cluster, or pin its SSH host keys (approved by digest)."""
     from piceli.infra.machines.register import preview_register, run_register
     from piceli.infra.machines.state import locked, state_dir
 
@@ -386,9 +387,12 @@ def register_command(
                 infra, directory, server, kubeconfig=kubeconfig, context=context
             )
             body = preview.to_dict()
-            say(
-                f"register {server} as cluster {preview.cluster} ({preview.api}), profile {preview.profile}"
-            )
+            if preview.cluster is None:
+                say(f"pin the SSH host keys of {server} ({preview.address})")
+            else:
+                say(
+                    f"register {server} as cluster {preview.cluster} ({preview.api}), profile {preview.profile}"
+                )
             if preview.source == "ssh":
                 for key in body["host_keys"]:
                     say(f"  host key {key['type']} {key['fingerprint']}")
@@ -426,6 +430,10 @@ def register_command(
                 infra, directory, preview, kubeconfig=kubeconfig, context=context,
                 wait=max(0, wait), transport=transport, say=say,
             )  # fmt: skip
+    if preview.cluster is None:
+        say(f"pinned: piceli host reads {server} with these keys (--infra {ref})")
+        emit_json({**body, "state": "pinned", "outcome": outcome})
+        return
     say(
         f"registered: cluster {outcome['cluster']} through profile {outcome['profile']}"
     )

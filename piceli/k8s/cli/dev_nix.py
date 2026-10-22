@@ -24,8 +24,8 @@ from typing import Annotated, Any
 import typer
 
 from piceli.cli_contract import EXIT_APPROVAL, emit_json, fail, reject, say
-from piceli.k8s.cli.cluster import JsonOption, load_cluster
-from piceli.k8s.cli.dev import ClusterOption, requester_label, run_summary
+from piceli.k8s.cli.cluster import JsonOption
+from piceli.k8s.cli.dev import requester_label, run_summary
 
 nix_app = typer.Typer(
     rich_markup_mode=None,
@@ -35,6 +35,54 @@ nix_app = typer.Typer(
 
 #: An image is often a few GiB; the run's artifacts may be this large.
 IMAGE_MAX_BYTES = 32 << 30
+#: ``--image`` writes ``NAME.image.json`` next to the run's directory.
+IMAGE_SCHEMA = "piceli.nix-image.v1"
+
+DevOption = Annotated[
+    str,
+    typer.Option(
+        "--cluster",
+        "--dev",
+        envvar="PICELI_DEV_CLUSTER",
+        help="MODULE:ATTR of a piceli.infra.DevBuilds (no cluster needed), or "
+        "of a Cluster with dev=DevBuilds(...) (or PICELI_DEV_CLUSTER)",
+        show_default=False,
+    ),
+]
+
+
+def load_dev(ref: str) -> Any:
+    """The ``DevBuilds`` that ``ref`` names: a bare one, or a ``Cluster``'s."""
+    from piceli.app.render import RenderError, load_target
+    from piceli.cli_contract import describe_user_error
+    from piceli.dev.model import DevBuilds
+    from piceli.errors import ERRORS
+    from piceli.infra import Cluster
+
+    try:
+        value = load_target(ref, Path.cwd())
+    except RenderError as error:
+        reject("cluster-not-found", str(error))
+    except Exception as error:  # the module raised while importing
+        code = getattr(error, "code", None)
+        if isinstance(code, str) and code in ERRORS:
+            reject(code, str(error))
+        reject(
+            "cluster-load-failed",
+            f"importing {ref} failed: {describe_user_error(error)}",
+        )
+    if isinstance(value, DevBuilds):
+        return value
+    if not isinstance(value, Cluster):
+        reject("cluster-not-found", f"{ref} is not a piceli.infra.DevBuilds or Cluster")
+    if value.dev is None:
+        reject(
+            "dev-not-enabled",
+            f"{value.name} declares no development builds: add "
+            "Cluster(dev=DevBuilds(hosts=[...], profiles=[DevProfile.for_nix()])), "
+            "or give a DevBuilds",
+        )
+    return value.dev
 
 
 def load_cache(ref: str) -> Any:
@@ -138,7 +186,7 @@ def build(
             show_default=False,
         ),
     ],
-    cluster: ClusterOption,
+    cluster: DevOption,
     ref: Annotated[
         str | None,
         typer.Option("--ref", help="Build this commit (required with --publish)"),
@@ -227,14 +275,7 @@ def build(
     )
     from piceli.dev.pack import SourceRequest, repository_name, resolve, toplevel
 
-    declared = load_cluster(cluster)
-    dev = declared.dev
-    if dev is None:
-        reject(
-            "dev-not-enabled",
-            f"{declared.name} declares no development builds: add "
-            "Cluster(dev=DevBuilds(hosts=[...], profiles=[DevProfile.for_nix()]))",
-        )
+    dev = load_dev(cluster)
     try:
         target = installable(attr)
         if ref is not None and worktree is not None:
@@ -367,7 +408,12 @@ def build(
     body.update({"store_path": store_path, "image": found_image, "publish": None})
     say(f"built {store_path}")
     if found_image is not None:
+        found_image["build"] = str(
+            _image_sidecar(artifacts_dir, label or "image", found_image, store_path,
+                           rev, target)
+        )  # fmt: skip
         say(f"image {found_image['file']} (sha256 {found_image['sha256']})")
+        say(f"  Image.from_build(NAME, {found_image['build']!r}) reads it")
     if cache is not None and plan is not None:
         body["publish"] = _publish(
             cache, plan, store_path, chosen, chosen_profile, found_image,
@@ -377,6 +423,37 @@ def build(
     body["state"] = "published" if body["publish"] else "built"
     if as_json:
         emit_json(body)
+
+
+def _image_sidecar(
+    directory: Path,
+    name: str,
+    image: dict[str, Any],
+    store_path: str,
+    rev: str | None,
+    target: str,
+) -> Path:
+    """``DIR/NAME.image.json``: what ``Image.from_build`` reads (the image's
+    path relative to it, its sha256 and format, the store path, the rev)."""
+    import json
+    import os
+
+    path = directory / f"{name}.image.json"
+    body = {
+        "schema": IMAGE_SCHEMA,
+        "file": os.path.relpath(image["file"], directory),
+        "sha256": image["sha256"],
+        "format": image["format"],
+        "bytes": image["bytes"],
+        "store_path": store_path,
+        "commit": rev,
+        "installable": target,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staged = path.with_name(f".{path.name}.partial")
+    staged.write_text(json.dumps(body, sort_keys=True, indent=2) + "\n")
+    os.replace(staged, path)
+    return path
 
 
 def _publish(

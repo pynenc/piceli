@@ -415,6 +415,54 @@ class Image:
     def __hash__(self) -> int:
         return hash(("Image", self.name, self.sha256))
 
+    @classmethod
+    def from_build(
+        cls,
+        name: str,
+        build: Path | str,
+        *,
+        min_disk_gb: int | None = None,
+        properties: Mapping[str, str] | None = None,
+    ) -> Image:
+        """The image ``piceli dev nix build --image`` wrote, from its sidecar
+        ``NAME.image.json``: the file (relative to the sidecar), its sha256
+        and format, so nobody copies a checksum by hand
+        (``infra-image-build-invalid`` when it is missing or malformed)."""
+        import json
+
+        path = Path(build).expanduser()
+        try:
+            body = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raise InfraError(
+                "infra-image-build-invalid",
+                f"Image {name}: {path} is not readable JSON; run piceli dev nix "
+                "build ... --image",
+            ) from None
+        file = body.get("file") if isinstance(body, dict) else None
+        if (
+            not isinstance(body, dict)
+            or body.get("schema") != "piceli.nix-image.v1"
+            or not isinstance(file, str)
+            or not file
+            or Path(file).is_absolute()
+            or not isinstance(body.get("sha256"), str)
+            or not _SHA256.fullmatch(body["sha256"])
+            or body.get("format") not in IMAGE_FORMATS
+        ):
+            raise InfraError(
+                "infra-image-build-invalid",
+                f"Image {name}: {path} is not a piceli.nix-image.v1 sidecar",
+            )
+        return cls(
+            name,
+            file=path.parent / file,
+            sha256=body["sha256"],
+            format=body["format"],
+            min_disk_gb=min_disk_gb,
+            properties=dict(properties or {}),
+        )
+
     @property
     def local_path(self) -> str:
         """Where the verified file is staged, relative to the state directory."""

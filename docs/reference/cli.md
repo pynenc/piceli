@@ -98,7 +98,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli infra destroy`](#cli-infra-destroy) | Destroy what Piceli created for it, with approval of the destroy plan's hash. | none | yes |
 | [`piceli infra install`](#cli-infra-install) | Run the server's install hook (its rendered command, approved by digest). | none | yes |
 | [`piceli infra plan`](#cli-infra-plan) | Plan the declared machines with OpenTofu; print the changes, estimate and plan hash. | none | no |
-| [`piceli infra register`](#cli-infra-register) | Wait for the server's k3s and register it as its Cluster (approved by digest). | reads | yes |
+| [`piceli infra register`](#cli-infra-register) | Wait for the server's k3s and register it as its Cluster, or pin its SSH host keys (approved by digest). | reads | yes |
 | [`piceli infra status`](#cli-infra-status) | Servers, addresses, installs, cluster registrations and cost (read-only). | none | no |
 | [`piceli inputs record`](#cli-inputs-record) | Capture each declared source (or the ``--only`` ones) and write a lock. | none | no |
 | [`piceli inputs verify`](#cli-inputs-verify) | Recapture the sources and compare them with the lock (exit 1 on drift). | none | no |
@@ -1094,7 +1094,7 @@ Build a flake output on a Nix build host; with --publish, sign and push it.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `ATTR` | text | required |  |
-| `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster with dev=DevBuilds(...) (or PICELI_DEV_CLUSTER) |
+| `--cluster`, `--dev` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of a piceli.infra.DevBuilds (no cluster needed), or of a Cluster with dev=DevBuilds(...) (or PICELI_DEV_CLUSTER) |
 | `--ref` | text |  | Build this commit (required with --publish) |
 | `--worktree` | path |  | Build this working tree (default: here) |
 | `--repo` | path | `.` | The repository with --ref (default: here) |
@@ -1112,8 +1112,8 @@ Build a flake output on a Nix build host; with --publish, sign and push it.
 
 **Contract**
 
-- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=), MODULE:ATTR (piceli.infra.NixCache, --publish), the local Git repository, credentials (signing key, S3 keys; --publish after approval)
-- **Writes:** --artifacts-dir RUN/ (with --image), the build host's Nix store, the binary cache and piceli/NAME/REV.json (--publish)
+- **Reads:** MODULE:ATTR (piceli.infra.DevBuilds, or a Cluster with dev=), MODULE:ATTR (piceli.infra.NixCache, --publish), the local Git repository, credentials (signing key, S3 keys; --publish after approval)
+- **Writes:** --artifacts-dir RUN/ and NAME.image.json (with --image), the build host's Nix store, the binary cache and piceli/NAME/REV.json (--publish)
 - **Cluster:** none
 - **Approval required:** yes
 - **Safe to retry:** yes
@@ -1906,7 +1906,7 @@ Deploy a tag's build (an older one too) and hold it: no newer build until unpin.
 | --- | --- | --- | --- |
 | `TARGET` | text | required |  |
 | `TAG` | text | required |  |
-| `--infra` | text |  | MODULE:ATTR of the Infrastructure whose applied state has the server's address (when its Ssh has no address=) |
+| `--infra` | text |  | MODULE (or MODULE:ATTR of its Infrastructure): the NixHosts it declares by name, its servers' applied addresses and pinned host keys |
 | `--json` | boolean | `False` | Print one JSON object on stdout |
 
 **Contract**
@@ -1928,7 +1928,7 @@ Switch back to the previous system (in the store) and hold it until unpin.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `TARGET` | text | required |  |
-| `--infra` | text |  | MODULE:ATTR of the Infrastructure whose applied state has the server's address (when its Ssh has no address=) |
+| `--infra` | text |  | MODULE (or MODULE:ATTR of its Infrastructure): the NixHosts it declares by name, its servers' applied addresses and pinned host keys |
 | `--json` | boolean | `False` | Print one JSON object on stdout |
 
 **Contract**
@@ -1950,7 +1950,7 @@ Put the host's age identity where sops-nix reads it: plan, then --approve.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `TARGET` | text | required |  |
-| `--infra` | text |  | MODULE:ATTR of the Infrastructure whose applied state has the server's address (when its Ssh has no address=) |
+| `--infra` | text |  | MODULE (or MODULE:ATTR of its Infrastructure): the NixHosts it declares by name, its servers' applied addresses and pinned host keys |
 | `--replace` | boolean | `False` | Replace a different key the host has (what it decrypts with it changes) |
 | `--approve` | text |  | The plan's digest |
 | `--json` | boolean | `False` | Print one JSON object on stdout |
@@ -1974,12 +1974,12 @@ Read the host agent's status over SSH (current build, last attempt, checks).
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `TARGET` | text | required |  |
-| `--infra` | text |  | MODULE:ATTR of the Infrastructure whose applied state has the server's address (when its Ssh has no address=) |
+| `--infra` | text |  | MODULE (or MODULE:ATTR of its Infrastructure): the NixHosts it declares by name, its servers' applied addresses and pinned host keys |
 | `--json` | boolean | `False` | Print one JSON object on stdout |
 
 **Contract**
 
-- **Reads:** MODULE:ATTR (piceli.infra.NixHost) or an SSH target, --infra MODULE:ATTR (the server's applied address), the host's /var/lib/piceli-host/status.json (ssh)
+- **Reads:** MODULE:ATTR (piceli.infra.NixHost), its name with --infra, or an SSH target, --infra MODULE[:ATTR] (declared hosts, applied address, pinned host keys), the host's /var/lib/piceli-host/status.json (ssh)
 - **Writes:** nothing (read-only)
 - **Cluster:** none
 - **Approval required:** no
@@ -1996,7 +1996,7 @@ Drop a pin or rollback hold: the host follows its declared ref again.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `TARGET` | text | required |  |
-| `--infra` | text |  | MODULE:ATTR of the Infrastructure whose applied state has the server's address (when its Ssh has no address=) |
+| `--infra` | text |  | MODULE (or MODULE:ATTR of its Infrastructure): the NixHosts it declares by name, its servers' applied addresses and pinned host keys |
 | `--json` | boolean | `False` | Print one JSON object on stdout |
 
 **Contract**
@@ -2019,7 +2019,7 @@ Wait until the host runs REV with its checks passed (exit 1: failed or timeout).
 | --- | --- | --- | --- |
 | `TARGET` | text | required |  |
 | `REV` | text | required |  |
-| `--infra` | text |  | MODULE:ATTR of the Infrastructure whose applied state has the server's address (when its Ssh has no address=) |
+| `--infra` | text |  | MODULE (or MODULE:ATTR of its Infrastructure): the NixHosts it declares by name, its servers' applied addresses and pinned host keys |
 | `--timeout` | integer | `1800` | Seconds to wait |
 | `--interval` | integer | `10` | Seconds between reads |
 | `--published-after` | text |  | Judge only attempts of a publication at or after this published_at (from dev nix build --publish --json): an earlier failure of the same commit is not reported |
@@ -2180,7 +2180,7 @@ Plan the declared machines with OpenTofu; print the changes, estimate and plan h
 (cli-infra-register)=
 ### `piceli infra register`
 
-Wait for the server's k3s and register it as its Cluster (approved by digest).
+Wait for the server's k3s and register it as its Cluster, or pin its SSH host keys (approved by digest).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |

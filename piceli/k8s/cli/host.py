@@ -29,8 +29,8 @@ host_app = typer.Typer(
 TargetArgument = Annotated[
     str,
     typer.Argument(
-        help="MODULE:ATTR of a piceli.infra.NixHost, or an SSH target "
-        "(ssh://user@host:port, user@host, host)",
+        help="MODULE:ATTR of a piceli.infra.NixHost, its name with --infra, or "
+        "an SSH target (ssh://user@host:port, user@host, host)",
         show_default=False,
     ),
 ]
@@ -38,8 +38,8 @@ InfraOption = Annotated[
     str | None,
     typer.Option(
         "--infra",
-        help="MODULE:ATTR of the Infrastructure whose applied state has the "
-        "server's address (when its Ssh has no address=)",
+        help="MODULE (or MODULE:ATTR of its Infrastructure): the NixHosts it "
+        "declares by name, its servers' applied addresses and pinned host keys",
     ),
 ]
 
@@ -70,28 +70,82 @@ def _is_ref(text: str) -> bool:
     )
 
 
+def _module_values(ref: str) -> list[Any]:
+    """The values of the module that ``ref`` (``MODULE`` or ``MODULE:ATTR``) names."""
+    from piceli.app.render import load_module
+    from piceli.cli_contract import describe_user_error
+
+    module = ref.rpartition(":")[0] if _is_ref(ref) else ref
+    try:
+        loaded = load_module(module, Path.cwd())
+    except Exception as error:
+        reject(
+            "infra-not-found", f"loading {module} failed: {describe_user_error(error)}"
+        )
+    return list(vars(loaded).values())
+
+
+def _declared(name: str, infra_ref: str) -> Any:
+    """The ``NixHost`` named ``name`` that the ``--infra`` module declares."""
+    from piceli.hosts.model import NixHost
+
+    found = [v for v in _module_values(infra_ref) if isinstance(v, NixHost)]
+    named = {id(v): v for v in found if v.name == name}
+    if len(named) > 1:
+        reject("host-not-found", f"{infra_ref} declares several NixHosts named {name}")
+    return next(iter(named.values()), None)
+
+
+def _infrastructure(infra_ref: str, server: Any) -> Any:
+    """The ``Infrastructure`` of ``--infra``: its ``ATTR``, else the module's
+    one that declares ``server``."""
+    from piceli.infra import Infrastructure
+    from piceli.k8s.cli.infra import load_infra
+
+    if _is_ref(infra_ref):
+        return load_infra(infra_ref)
+    found = {
+        id(v): v
+        for v in _module_values(infra_ref)
+        if isinstance(v, Infrastructure) and server in v.servers
+    }
+    if len(found) != 1:
+        reject(
+            "infra-not-found",
+            f"{infra_ref} declares {len(found)} Infrastructure(s) with server "
+            f"{server.name}: give MODULE:ATTR",
+        )
+    return next(iter(found.values()))
+
+
 def _target(text: str, infra_ref: str | None) -> tuple[Any, Any, Path | None]:
-    """``(NixHost or None, SshTarget, known_hosts)`` of the argument."""
+    """``(NixHost or None, SshTarget, known_hosts)`` of the argument: a
+    ``MODULE:ATTR``, a host name the ``--infra`` module declares, or an SSH
+    target."""
     from piceli.hosts.model import HostError, SshTarget
 
-    if not _is_ref(text):
+    host = None
+    if _is_ref(text):
+        host = load_host(text)
+    elif infra_ref is not None:
+        host = _declared(text, infra_ref)
+    if host is None:
         try:
             return None, SshTarget.parse(text), None
         except HostError as error:
             reject(error.code, str(error))
-    host = load_host(text)
     address, known = None, None
     if infra_ref is not None and not isinstance(host.server, str):
         from piceli.infra.machines.install import server_values
         from piceli.infra.machines.model import InfraError
         from piceli.infra.machines.register import KNOWN_HOSTS
         from piceli.infra.machines.state import state_dir
-        from piceli.k8s.cli.infra import load_infra
 
-        infra = load_infra(infra_ref)
+        infra = _infrastructure(infra_ref, host.server)
         try:
             directory = state_dir(infra.name, infra.state_dir, create=False)
-            address = server_values(infra, directory, host.server).get("address")
+            if host.server.ssh.address is None:
+                address = server_values(infra, directory, host.server).get("address")
         except InfraError as error:
             reject(error.code, str(error))
         if (directory / KNOWN_HOSTS).is_file():
