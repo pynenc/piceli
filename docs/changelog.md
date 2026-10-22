@@ -17,6 +17,20 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   ownership marks and `infra-foreign-resource` work as for Hetzner; prices
   are a declared table. `Infrastructure(buckets=)` is new; Hetzner
   declarations render and hash as before.
+- **DNS records at Porkbun, for servers anywhere.** `Porkbun(credentials=)`
+  in `piceli.infra` renders `DnsRecord(..., provider=Porkbun(...))` for the
+  pinned `marcfrederick/porkbun` 1.3.3 OpenTofu provider (API v3; one
+  record per answer). A record's servers may now be at another provider
+  than the record: each answer is a reference through the server's own
+  provider (an OpenStack server on a port answers with the port's address),
+  so records follow a replaced server and no address is written down. The
+  key pair is stored as `APIKEY:SECRETKEY` and reaches OpenTofu only as
+  `PORKBUN_API_KEY`/`PORKBUN_SECRET_API_KEY` (redacted, refused in the
+  environment of `piceli secrets provider`). Records carry no labels, so the
+  ledger alone owns them (`infra-foreign-resource` otherwise). New code
+  `infra-dns-api-disabled` for a domain without API access. `DnsRecord(ttl=)`
+  now defaults to the provider's (300 s; Porkbun's minimum and default
+  600 s).
 
 ## Version 0.23.0
 

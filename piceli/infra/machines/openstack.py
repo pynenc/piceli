@@ -14,7 +14,9 @@ What each declared object becomes:
   public network, holding the public IPv4 (and the IPv6 the network gives).
   The server attaches to that port, so a replaced server re-attaches it and
   keeps its addresses without a floating IP. ``protect=True`` renders
-  ``lifecycle { prevent_destroy = true }``: a destroy plan fails.
+  ``lifecycle { prevent_destroy = true }``: a destroy plan fails. A
+  ``DnsRecord`` (at a DNS provider such as Porkbun) answers with the port's
+  address, so it does not change when the server is replaced.
 - ``Firewall`` → ``openstack_networking_secgroup_v2`` (default egress rules
   kept) and one ingress ``openstack_networking_secgroup_rule_v2`` per rule
   and source.
@@ -446,6 +448,23 @@ class OpenStack(Provider):
 
     def address(self, server: Resource, family: str) -> str:
         return server.ref(f"access_ip_{family[-2:]}")
+
+    def record_address(
+        self,
+        server: Server,
+        resource: Resource,
+        family: str,
+        ips: Mapping[str, Resource],
+    ) -> str:
+        # A server on a persistent port answers with the port's address: a
+        # replaced server re-attaches the port, and the record stays as it is.
+        if not isinstance(server.ipv4, PrimaryIp):
+            return self.address(resource, family)
+        port = ips[server.ipv4.name]
+        test = '!strcontains(ip, ":")' if family == "ipv4" else 'strcontains(ip, ":")'
+        return (
+            f"${{[for ip in {port.type}.{port.name}.all_fixed_ips : ip if {test}][0]}}"
+        )
 
     def server_id(self, server: Resource) -> str:
         return server.ref("id")

@@ -16,7 +16,9 @@ apply, the addresses the plan creates are added to the ledger
 (``inventory.json`` ``created``); a plan that would update, replace or
 delete a resource that is not in the ledger, or whose labels are not
 ``piceli.io/managed-by=piceli`` and ``piceli.io/infra=<name>``, is refused
-(``infra-foreign-resource``) before anything runs.
+(``infra-foreign-resource``) before anything runs. A resource type that
+carries no labels (``Provider.ledger_owned``: Porkbun records) is owned by
+the ledger alone.
 
 Importing this module is side-effect free.
 """
@@ -84,10 +86,24 @@ class Workspace:
         return set(read_record(self.directory, INVENTORY).get("created") or ())
 
 
-def _check(result: TofuResult, code: str, what: str) -> TofuResult:
+def _check(
+    result: TofuResult, code: str, what: str, ws: Workspace | None = None
+) -> TofuResult:
     if result.code != 0:
-        raise InfraError(code, f"tofu {what} failed", result.diagnostics())
+        diagnostics = result.diagnostics()
+        raise _known(ws, diagnostics) or InfraError(
+            code, f"tofu {what} failed", diagnostics
+        )
     return result
+
+
+def _known(ws: Workspace | None, diagnostics: list[str]) -> InfraError | None:
+    """The registered code a provider gives a refusal it knows (Porkbun's API access)."""
+    for provider in ws.infra.providers() if ws is not None else ():
+        known = provider.known_error(diagnostics)
+        if known is not None:
+            return known
+    return None
 
 
 @contextmanager
@@ -270,7 +286,11 @@ def owned(
     provider = _provider_of(ws, address)
     if provider is None:
         return False
-    found = provider.resource_labels(address.split(".", 1)[0], before)
+    type_ = address.split(".", 1)[0]
+    if provider.ledger_owned(type_):
+        # No labels to read (Porkbun records): the ledger alone owns it.
+        return True
+    found = provider.resource_labels(type_, before)
     return found.get(MANAGED_BY) == "piceli" and found.get(INFRA_LABEL) == ws.infra.name
 
 
@@ -373,7 +393,7 @@ def plan(
         args = ["plan", "-input=false", "-json", "-out=" + str(file)]
         if destroy:
             args.append("-destroy")
-        _check(ws.run(*args), "infra-tofu-failed", "plan")
+        _check(ws.run(*args), "infra-tofu-failed", "plan", ws)
         shown = _check(ws.run("show", "-json", str(file)), "infra-tofu-failed", "show")
         try:
             document = json.loads(shown.stdout)
@@ -449,8 +469,9 @@ def apply(
             unstage_images(ws.directory)
         inventory = refresh_inventory(ws, prices=fresh.estimate)
         if result.code != 0:
-            raise InfraError(
-                "infra-apply-failed", "tofu apply failed", result.diagnostics()
+            diagnostics = result.diagnostics()
+            raise _known(ws, diagnostics) or InfraError(
+                "infra-apply-failed", "tofu apply failed", diagnostics
             )
         return fresh, inventory
 

@@ -72,6 +72,8 @@ FAILED = {"infra-apply-failed", "infra-install-failed", "infra-k3s-not-ready"}
 TOKEN_ENVS = (
     "HCLOUD_TOKEN",
     "OS_APPLICATION_CREDENTIAL_SECRET",
+    "PORKBUN_API_KEY",
+    "PORKBUN_SECRET_API_KEY",
     "PICELI_PROVIDER_TOKEN",
     "PICELI_STATE_KEY",
 )

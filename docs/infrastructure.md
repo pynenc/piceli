@@ -3,7 +3,7 @@
 ```{admonition} Maturity: preview
 :class: note
 
-New in 0.15.0: Hetzner Cloud, one server type to start with; 0.24.0 adds OpenStack clouds (with an Infomaniak preset), uploaded images and buckets. Its parameters may still change in a minor release, with a changelog entry. See the {doc}`roadmap` for every feature's status.
+New in 0.15.0: Hetzner Cloud, one server type to start with; 0.24.0 adds OpenStack clouds (with an Infomaniak preset), uploaded images, buckets and DNS records at Porkbun. Its parameters may still change in a minor release, with a changelog entry. See the {doc}`roadmap` for every feature's status.
 ```
 
 Servers, fixed IPs, firewalls and DNS records are declared in typed Python,
@@ -90,7 +90,7 @@ declaration fails at import, never halfway through a plan.
 | `Server(name, provider=, type=, image=, location=, ipv4=, ipv6=, firewall=, ssh_keys=, install=, ssh=, cluster=, labels=)` | One machine. `ipv4`/`ipv6`: `True` (an address that goes with the server), `False`, or a `PrimaryIp`. `location` defaults to the provider's. `image` is an image name, or an `Image` where the provider uploads them. Without `cluster=` it is a plain host (`register` does not apply). |
 | `PrimaryIp(name, kind="ipv4", protect=False)` | A fixed address, created in the server's location and assigned to it; it stays when the server is replaced. `protect=True` turns on delete protection (destroy then fails until it is off). |
 | `Firewall(name, rules=[...])`, `Rule.tcp(port, sources=, name=)`, `Rule.udp(...)`, `Rule.icmp(...)` | Inbound rules; a port or a range `(low, high)`; sources default to every address. Everything else is dropped. Outbound is not filtered. |
-| `DnsRecord(zone, name, type, value=… \| server=… \| servers=[…], ttl=300, provider=)` | One record set (`A`, `AAAA`, `CNAME`, `TXT`; `@` is the apex) in a zone you already have at the provider. Several servers give one record set with every address. Piceli never creates or deletes the zone. |
+| `DnsRecord(zone, name, type, value=… \| server=… \| servers=[…], ttl=, provider=)` | One record set (`A`, `AAAA`, `CNAME`, `TXT`; `@` is the apex) in a zone you already have at the provider (default: the first server's). Several servers give one record set with every address; the servers may be at another provider than the record. `ttl` defaults to the provider's (300 s; Porkbun 600 s). Piceli never creates or deletes the zone. |
 | `Hook(argv, timeout=3600)` | The command that installs the OS. Placeholders `{name}`, `{id}`, `{ipv4}`, `{ipv6}`, `{address}`. |
 | `Ssh(user="root", address=None, port=22, kubeconfig_path="/etc/rancher/k3s/k3s.yaml")` | How Piceli reaches the server to read its k3s kubeconfig. |
 | `Image(name, file= \| url=, sha256=, format="qcow2", min_disk_gb=, properties=)` | A disk image to upload (OpenStack). `sha256` is required and checked before the upload (`infra-image-checksum`). |
@@ -170,8 +170,8 @@ are redacted from its output. S3 access to a bucket needs EC2 credentials
 keys. OpenStack has no price API here: `prices=` (monthly net per flavor) and
 `ip_prices=` (`{"ipv4": …}`) are your own table, shown as the plan's
 estimate. One region per declaration; `ipv4=False` and `ipv6=PrimaryIp` are
-refused (the port holds both families), and so are `DnsRecord`s (keep DNS at
-a DNS provider).
+refused (the port holds both families). OpenStack serves no DNS: give a
+`DnsRecord` `provider=Porkbun(...)` (below).
 
 Ownership marks: metadata on servers and buckets, tags on ports, security
 groups and images, the description of security group rules. Key pairs carry
@@ -180,6 +180,49 @@ none: their name (`<infra>-<digest>`) and the ledger stand in.
 To move to a newer OpenStack provider, change `OPENSTACK_PIN` in
 `piceli/infra/machines/openstack.py` and take its hashes from `tofu
 providers lock` with one `-platform=` per platform the registry lists.
+
+### Porkbun DNS
+
+`Porkbun(credentials=)` keeps `DnsRecord`s at Porkbun, for domains
+registered there, whatever provider the servers are at. It renders one
+`porkbun_dns_record` per answer for the `marcfrederick/porkbun` OpenTofu
+provider (1.3.3, Porkbun API v3, pinned with every platform's hashes);
+Porkbun holds no servers.
+
+```python
+from piceli.infra import DnsRecord, Infomaniak, Infrastructure, Porkbun, PrimaryIp, Server
+
+cloud, dns = Infomaniak(credentials="cloud"), Porkbun(credentials="porkbun")
+host = Server("host-1", provider=cloud, type="a1-ram2-disk20-perf1",
+              image="debian-12", ipv4=PrimaryIp("host-1-port"))
+infra = Infrastructure("web", servers=[host], records=[
+    DnsRecord("example.com", "www", "A", server=host, provider=dns),
+    DnsRecord("example.com", "www", "AAAA", server=host, provider=dns),
+    DnsRecord("example.com", "@", "TXT", value="v=spf1 -all", provider=dns),
+])
+```
+
+- **Addresses are references.** A record's answer for a server comes from
+  the server's own provider, in the same configuration: a server on a port
+  (`PrimaryIp`) answers with the port's address, so a replaced server
+  changes nothing; any other server answers with its current address, and
+  the record follows it in the same apply. No address is written in the
+  configuration.
+- **Credentials.** An API key pair (Porkbun: Account → API Access), stored
+  as `APIKEY:SECRETKEY`: `printf '%s:%s' "$KEY" "$SECRET" | piceli secrets
+  provider porkbun --prompt`. OpenTofu gets it only as `PORKBUN_API_KEY`
+  and `PORKBUN_SECRET_API_KEY`; both are redacted from its output.
+- **API access per domain.** Turn it on for each domain (Domain Management
+  → Details → API Access). A record of a domain without it is refused with
+  `infra-dns-api-disabled`.
+- **Ownership.** Porkbun records carry no labels (the OpenTofu provider
+  cannot set their notes), so the ledger alone marks what Piceli created; a
+  destroy or update of any other record is `infra-foreign-resource`. Porkbun
+  refuses a second record with the same name, type and content, so Piceli
+  never takes over one it did not create.
+- **TTL and values.** At least 600 s (Porkbun's minimum and default). `TXT`
+  values are given without quotes. DNS at the registrar is free: no estimate
+  lines.
 
 ## Plans and approval
 
@@ -243,7 +286,8 @@ Provider tokens are local credentials, like cluster credentials are local
 profiles: `piceli secrets provider NAME --prompt` reads the token from stdin
 (typed without echo, or piped) into `$PICELI_CREDENTIALS_DIR/NAME.json`
 (`0600`). A token given as an argument or in `HCLOUD_TOKEN` (or
-`OS_APPLICATION_CREDENTIAL_SECRET`) is refused
+`OS_APPLICATION_CREDENTIAL_SECRET`, `PORKBUN_API_KEY`,
+`PORKBUN_SECRET_API_KEY`) is refused
 (`infra-credential-refused`) without echoing it, and a credential file other
 users can read is refused (`infra-credential-unsafe`). Piceli passes the token
 to OpenTofu in its environment only (`HCLOUD_TOKEN`), never as an argument,

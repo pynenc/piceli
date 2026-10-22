@@ -348,6 +348,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`infra-credential-missing`](#error-infra-credential-missing) | infra | no |
 | [`infra-credential-refused`](#error-infra-credential-refused) | infra | no |
 | [`infra-credential-unsafe`](#error-infra-credential-unsafe) | infra | no |
+| [`infra-dns-api-disabled`](#error-infra-dns-api-disabled) | infra | no |
 | [`infra-foreign-resource`](#error-infra-foreign-resource) | infra | no |
 | [`infra-image-checksum`](#error-infra-image-checksum) | infra | no |
 | [`infra-image-unavailable`](#error-infra-image-unavailable) | infra | yes |
@@ -6089,7 +6090,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-infra-credential-invalid)=
 ### `infra-credential-invalid`
 
-**Invalid credential.** A credential name is not a valid name, its file is damaged or of another kind, or the value read is empty, has control characters, or is a state passphrase shorter than 16 characters, or an OpenStack credential is not `APPLICATION_CREDENTIAL_ID:SECRET`.
+**Invalid credential.** A credential name is not a valid name, its file is damaged or of another kind, or the value read is empty, has control characters, or is a state passphrase shorter than 16 characters, or an OpenStack credential is not `APPLICATION_CREDENTIAL_ID:SECRET` (a Porkbun one not `APIKEY:SECRETKEY`).
 
 - **Fix:** Store the credential again with `piceli secrets provider|state-key NAME --prompt`.
 - **Retry-safe:** no
@@ -6105,7 +6106,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-infra-credential-refused)=
 ### `infra-credential-refused`
 
-**Secret passed the unsafe way.** A secret was given as a command-line argument or in the environment (`HCLOUD_TOKEN`, `OS_APPLICATION_CREDENTIAL_SECRET`, `PICELI_PROVIDER_TOKEN`, `PICELI_STATE_KEY`), where it leaks into process listings and logs. It was not stored or echoed.
+**Secret passed the unsafe way.** A secret was given as a command-line argument or in the environment (`HCLOUD_TOKEN`, `OS_APPLICATION_CREDENTIAL_SECRET`, `PORKBUN_API_KEY`, `PORKBUN_SECRET_API_KEY`, `PICELI_PROVIDER_TOKEN`, `PICELI_STATE_KEY`), where it leaks into process listings and logs. It was not stored or echoed.
 
 - **Fix:** Unset the variable and run `piceli secrets provider|state-key NAME --prompt`, then type the value (or pipe it on stdin).
 - **Retry-safe:** no
@@ -6116,6 +6117,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Credential readable by others.** A credential file is readable or writable by other users.
 
 - **Fix:** Run `chmod 600` on the file named in the message (and `chmod 700` on its directory), then run the command again.
+- **Retry-safe:** no
+
+(error-infra-dns-api-disabled)=
+### `infra-dns-api-disabled`
+
+**DNS provider API access is off for the domain.** The DNS provider refused a record because API access is not turned on for its domain (Porkbun turns it on per domain). Records of other domains in the same apply may have been changed; the state shows what exists.
+
+- **Fix:** Turn API access on for the domain in the provider's console (Porkbun: Domain Management → Details → API Access), then plan again and approve the new hash.
 - **Retry-safe:** no
 
 (error-infra-foreign-resource)=

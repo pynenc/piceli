@@ -5359,6 +5359,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "infra",
     ),
     _E(
+        "infra-dns-api-disabled",
+        "DNS provider API access is off for the domain",
+        "The DNS provider refused a record because API access is not turned on for its domain (Porkbun turns it on per domain). Records of other domains in the same apply may have been changed; the state shows what exists.",
+        "Turn API access on for the domain in the provider's console (Porkbun: Domain Management → Details → API Access), then plan again and approve the new hash.",
+        False,
+        "infra",
+    ),
+    _E(
         "infra-plan-changed",
         "Infrastructure plan changed",
         "The fresh plan's hash is not the approved one: the declaration, the pinned providers, the state or the resources at the provider changed since the plan (or the hash is wrong).",
@@ -5425,7 +5433,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "infra-credential-invalid",
         "Invalid credential",
-        "A credential name is not a valid name, its file is damaged or of another kind, or the value read is empty, has control characters, or is a state passphrase shorter than 16 characters, or an OpenStack credential is not `APPLICATION_CREDENTIAL_ID:SECRET`.",
+        "A credential name is not a valid name, its file is damaged or of another kind, or the value read is empty, has control characters, or is a state passphrase shorter than 16 characters, or an OpenStack credential is not `APPLICATION_CREDENTIAL_ID:SECRET` (a Porkbun one not `APIKEY:SECRETKEY`).",
         "Store the credential again with `piceli secrets provider|state-key NAME --prompt`.",
         False,
         "infra",
@@ -5433,7 +5441,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "infra-credential-refused",
         "Secret passed the unsafe way",
-        "A secret was given as a command-line argument or in the environment (`HCLOUD_TOKEN`, `OS_APPLICATION_CREDENTIAL_SECRET`, `PICELI_PROVIDER_TOKEN`, `PICELI_STATE_KEY`), where it leaks into process listings and logs. It was not stored or echoed.",
+        "A secret was given as a command-line argument or in the environment (`HCLOUD_TOKEN`, `OS_APPLICATION_CREDENTIAL_SECRET`, `PORKBUN_API_KEY`, `PORKBUN_SECRET_API_KEY`, `PICELI_PROVIDER_TOKEN`, `PICELI_STATE_KEY`), where it leaks into process listings and logs. It was not stored or echoed.",
         "Unset the variable and run `piceli secrets provider|state-key NAME --prompt`, then type the value (or pipe it on stdin).",
         False,
         "infra",

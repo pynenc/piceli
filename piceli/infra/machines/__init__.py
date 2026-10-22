@@ -1,7 +1,8 @@
 """Machines as typed Python, provisioned with OpenTofu (``piceli infra``).
 
 Declare servers, fixed IPs, firewalls, DNS records, images and buckets like
-an ``App`` (Hetzner Cloud, or any OpenStack cloud such as Infomaniak);
+an ``App`` (Hetzner Cloud, or any OpenStack cloud such as Infomaniak; DNS
+also at Porkbun);
 Piceli renders the OpenTofu configuration, owns its encrypted state and
 applies a plan only with the approval of its hash::
 
@@ -41,6 +42,7 @@ from piceli.infra.machines.model import (
     Ssh,
 )
 from piceli.infra.machines.openstack import Infomaniak, OpenStack
+from piceli.infra.machines.porkbun import Porkbun
 from piceli.infra.machines.provider import Pin, Prices, Provider, Resource
 from piceli.infra.machines.state import HttpState, LocalState, StateBackend
 
@@ -58,6 +60,7 @@ __all__ = [
     "LocalState",
     "OpenStack",
     "Pin",
+    "Porkbun",
     "Prices",
     "PrimaryIp",
     "Provider",

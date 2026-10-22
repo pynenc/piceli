@@ -103,6 +103,8 @@ def render(infra: Infrastructure) -> Rendered:
             firewalls.setdefault(firewall.name, item)
     keys: dict[tuple[str, str], Resource] = {}
     outputs: dict[str, Any] = {}
+    #: Server name -> (its resource, its rendered PrimaryIps).
+    hosts: dict[str, tuple[Resource, dict[str, Resource]]] = {}
     for server in infra.servers:
         provider = server.provider
         ips: dict[str, Resource] = {}
@@ -144,6 +146,7 @@ def render(infra: Infrastructure) -> Rendered:
             "server",
             server.name,
         )
+        hosts[server.name] = (resource, ips)
         value: dict[str, Any] = {"id": provider.server_id(resource)}
         for family in ("ipv4", "ipv6"):
             if getattr(server, family) is not False:
@@ -152,36 +155,27 @@ def render(infra: Infrastructure) -> Rendered:
         if status is not None:
             value["status"] = status
         outputs[f"server-{server.name}"] = {"value": value}
-    servers = {
-        address: resource
-        for resource in resources
-        for address in [resource.address]
-        if owners[address][1] == "server"
-    }
     for record in infra.records:
         assert record.provider is not None
         if record.servers:
+            # Through each server's own provider: a reference into this
+            # configuration, also when the record is at another provider.
             family = "ipv4" if record.type == "A" else "ipv6"
             values = sorted(
-                record.provider.address(
-                    next(r for a, r in servers.items() if owners[a][2] == item.name),
-                    family,
+                item.provider.record_address(
+                    item, hosts[item.name][0], family, hosts[item.name][1]
                 )
                 for item in record.servers
             )
         else:
             assert isinstance(record.value, tuple)
             values = list(record.value)
-        add(
-            record.provider.render_record(
-                record,
-                values,
-                labels(infra, "record", record.resource_name.removeprefix("record-")),
-            ),
-            record.provider.name,
-            "record",
-            record.key,
-        )
+        for made in record.provider.render_records(
+            record,
+            values,
+            labels(infra, "record", record.resource_name.removeprefix("record-")),
+        ):
+            add(made, record.provider.name, "record", record.key)
     for bucket in infra.buckets:
         add(
             bucket.provider.render_bucket(bucket, labels(infra, "bucket", bucket.name)),

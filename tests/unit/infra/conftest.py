@@ -23,6 +23,8 @@ def homes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     for name in (
         "HCLOUD_TOKEN",
         "OS_APPLICATION_CREDENTIAL_SECRET",
+        "PORKBUN_API_KEY",
+        "PORKBUN_SECRET_API_KEY",
         "PICELI_PROVIDER_TOKEN",
         "PICELI_STATE_KEY",
     ):

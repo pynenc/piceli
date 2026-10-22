@@ -4277,20 +4277,26 @@
     "credential_env",
     "credentials",
     "data_sources",
+    "default_ttl",
     "describe",
     "endpoint",
+    "known_error",
     "labels_of",
+    "ledger_owned",
     "location",
+    "min_ttl",
     "name",
     "pin",
     "poll_interval",
     "prices",
     "provider_block",
+    "record_address",
     "render_bucket",
     "render_firewall",
     "render_image",
     "render_primary_ip",
     "render_record",
+    "render_records",
     "render_server",
     "render_ssh_key",
     "resource_labels",
@@ -4300,6 +4306,7 @@
     "supports_buckets",
     "supports_dns",
     "supports_images",
+    "supports_servers",
     "token_env"
    ],
    "init": [
@@ -4322,14 +4329,26 @@
     ],
     "data_sources": [],
     "describe": [],
+    "known_error": [
+     "diagnostics"
+    ],
     "labels_of": [
      "values"
+    ],
+    "ledger_owned": [
+     "type_"
     ],
     "pin": [],
     "prices": [
      "token"
     ],
     "provider_block": [],
+    "record_address": [
+     "family",
+     "ips",
+     "resource",
+     "server"
+    ],
     "render_bucket": [
      "bucket",
      "labels"
@@ -4348,6 +4367,11 @@
      "server"
     ],
     "render_record": [
+     "labels",
+     "record",
+     "values"
+    ],
+    "render_records": [
      "labels",
      "record",
      "values"
@@ -4379,6 +4403,7 @@
    },
    "returns": {
     "data_sources": "Resource",
+    "known_error": "InfraError",
     "pin": "Pin",
     "prices": "Prices",
     "render_bucket": "Resource",
@@ -4386,6 +4411,7 @@
     "render_image": "Resource",
     "render_primary_ip": "Resource",
     "render_record": "Resource",
+    "render_records": "Resource",
     "render_server": "Resource",
     "render_ssh_key": "Resource"
    }
@@ -4801,10 +4827,14 @@
     "credentials",
     "currency",
     "data_sources",
+    "default_ttl",
     "describe",
     "ip_prices",
+    "known_error",
     "labels_of",
+    "ledger_owned",
     "location",
+    "min_ttl",
     "name",
     "pin",
     "preset",
@@ -4812,12 +4842,14 @@
     "prices_monthly",
     "provider_block",
     "public_network",
+    "record_address",
     "region",
     "render_bucket",
     "render_firewall",
     "render_image",
     "render_primary_ip",
     "render_record",
+    "render_records",
     "render_server",
     "render_ssh_key",
     "resource_labels",
@@ -4826,6 +4858,7 @@
     "supports_buckets",
     "supports_dns",
     "supports_images",
+    "supports_servers",
     "token_env"
    ],
    "init": [
@@ -4850,14 +4883,26 @@
     ],
     "data_sources": [],
     "describe": [],
+    "known_error": [
+     "diagnostics"
+    ],
     "labels_of": [
      "values"
+    ],
+    "ledger_owned": [
+     "type_"
     ],
     "pin": [],
     "prices": [
      "token"
     ],
     "provider_block": [],
+    "record_address": [
+     "family",
+     "ips",
+     "resource",
+     "server"
+    ],
     "render_bucket": [
      "bucket",
      "labels"
@@ -4876,6 +4921,11 @@
      "server"
     ],
     "render_record": [
+     "labels",
+     "record",
+     "values"
+    ],
+    "render_records": [
      "labels",
      "record",
      "values"
@@ -4907,6 +4957,7 @@
    },
    "returns": {
     "data_sources": "Resource",
+    "known_error": "InfraError",
     "pin": "Pin",
     "prices": "Prices",
     "render_bucket": "Resource",
@@ -4914,8 +4965,25 @@
     "render_image": "Resource",
     "render_primary_ip": "Resource",
     "render_record": "Resource",
+    "render_records": "Resource",
     "render_server": "Resource",
     "render_ssh_key": "Resource"
+   }
+  },
+  "InfraError": {
+   "attrs": [
+    "add_note",
+    "args",
+    "with_traceback"
+   ],
+   "init": [
+    "code",
+    "details",
+    "message"
+   ],
+   "methods": {
+    "add_note": null,
+    "with_traceback": null
    }
   },
   "Infrastructure": {
@@ -6202,10 +6270,14 @@
     "credentials",
     "currency",
     "data_sources",
+    "default_ttl",
     "describe",
     "ip_prices",
+    "known_error",
     "labels_of",
+    "ledger_owned",
     "location",
+    "min_ttl",
     "name",
     "pin",
     "preset",
@@ -6213,12 +6285,14 @@
     "prices_monthly",
     "provider_block",
     "public_network",
+    "record_address",
     "region",
     "render_bucket",
     "render_firewall",
     "render_image",
     "render_primary_ip",
     "render_record",
+    "render_records",
     "render_server",
     "render_ssh_key",
     "resource_labels",
@@ -6227,6 +6301,7 @@
     "supports_buckets",
     "supports_dns",
     "supports_images",
+    "supports_servers",
     "token_env"
    ],
    "init": [
@@ -6251,14 +6326,26 @@
     ],
     "data_sources": [],
     "describe": [],
+    "known_error": [
+     "diagnostics"
+    ],
     "labels_of": [
      "values"
+    ],
+    "ledger_owned": [
+     "type_"
     ],
     "pin": [],
     "prices": [
      "token"
     ],
     "provider_block": [],
+    "record_address": [
+     "family",
+     "ips",
+     "resource",
+     "server"
+    ],
     "render_bucket": [
      "bucket",
      "labels"
@@ -6277,6 +6364,11 @@
      "server"
     ],
     "render_record": [
+     "labels",
+     "record",
+     "values"
+    ],
+    "render_records": [
      "labels",
      "record",
      "values"
@@ -6308,6 +6400,7 @@
    },
    "returns": {
     "data_sources": "Resource",
+    "known_error": "InfraError",
     "pin": "Pin",
     "prices": "Prices",
     "render_bucket": "Resource",
@@ -6315,6 +6408,7 @@
     "render_image": "Resource",
     "render_primary_ip": "Resource",
     "render_record": "Resource",
+    "render_records": "Resource",
     "render_server": "Resource",
     "render_ssh_key": "Resource"
    }
@@ -7014,6 +7108,146 @@
    ],
    "methods": {
     "to_dict": []
+   }
+  },
+  "Porkbun": {
+   "attrs": [
+    "address",
+    "check_server",
+    "credential_env",
+    "credentials",
+    "data_sources",
+    "default_ttl",
+    "describe",
+    "known_error",
+    "labels_of",
+    "ledger_owned",
+    "location",
+    "min_ttl",
+    "name",
+    "pin",
+    "prices",
+    "provider_block",
+    "record_address",
+    "render_bucket",
+    "render_firewall",
+    "render_image",
+    "render_primary_ip",
+    "render_record",
+    "render_records",
+    "render_server",
+    "render_ssh_key",
+    "resource_labels",
+    "server_id",
+    "server_status",
+    "supports_buckets",
+    "supports_dns",
+    "supports_images",
+    "supports_servers",
+    "token_env"
+   ],
+   "init": [
+    "credentials",
+    "location"
+   ],
+   "methods": {
+    "address": [
+     "family",
+     "server"
+    ],
+    "check_server": [
+     "server"
+    ],
+    "credential_env": [
+     "value"
+    ],
+    "data_sources": [],
+    "describe": [],
+    "known_error": [
+     "diagnostics"
+    ],
+    "labels_of": [
+     "values"
+    ],
+    "ledger_owned": [
+     "type_"
+    ],
+    "pin": [],
+    "prices": [
+     "token"
+    ],
+    "provider_block": [],
+    "record_address": [
+     "family",
+     "ips",
+     "resource",
+     "server"
+    ],
+    "render_bucket": [
+     "bucket",
+     "labels"
+    ],
+    "render_firewall": [
+     "firewall",
+     "labels"
+    ],
+    "render_image": [
+     "image",
+     "labels"
+    ],
+    "render_primary_ip": [
+     "ip",
+     "labels",
+     "server"
+    ],
+    "render_record": [
+     "labels",
+     "record",
+     "values"
+    ],
+    "render_records": [
+     "labels",
+     "record",
+     "values"
+    ],
+    "render_server": [
+     "firewall",
+     "ips",
+     "labels",
+     "server",
+     "ssh_keys"
+    ],
+    "render_ssh_key": [
+     "digest",
+     "labels",
+     "name",
+     "public_key"
+    ],
+    "resource_labels": [
+     "type_",
+     "values"
+    ],
+    "server_id": [
+     "server"
+    ],
+    "server_status": [
+     "server"
+    ],
+    "token_env": []
+   },
+   "returns": {
+    "data_sources": "Resource",
+    "known_error": "InfraError",
+    "pin": "Pin",
+    "prices": "Prices",
+    "render_bucket": "Resource",
+    "render_firewall": "Resource",
+    "render_image": "Resource",
+    "render_primary_ip": "Resource",
+    "render_record": "Resource",
+    "render_records": "Resource",
+    "render_server": "Resource",
+    "render_ssh_key": "Resource"
    }
   },
   "Port": {
@@ -12565,6 +12799,7 @@
    "infra-credential-missing",
    "infra-credential-refused",
    "infra-credential-unsafe",
+   "infra-dns-api-disabled",
    "infra-foreign-resource",
    "infra-image-checksum",
    "infra-image-unavailable",
@@ -13810,6 +14045,9 @@
    "Otlp": {
     "class": "Otlp"
    },
+   "Porkbun": {
+    "class": "Porkbun"
+   },
    "PrimaryIp": {
     "class": "PrimaryIp"
    },
@@ -14693,6 +14931,7 @@
   "piceli.infra.machines.model",
   "piceli.infra.machines.openstack",
   "piceli.infra.machines.plan",
+  "piceli.infra.machines.porkbun",
   "piceli.infra.machines.provider",
   "piceli.infra.machines.register",
   "piceli.infra.machines.render",

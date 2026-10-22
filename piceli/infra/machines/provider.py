@@ -19,7 +19,7 @@ Importing this module is side-effect free.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         DnsRecord,
         Firewall,
         Image,
+        InfraError,
         PrimaryIp,
         Server,
     )
@@ -109,6 +110,12 @@ class Provider(ABC):
     supports_buckets: bool = False
     #: Whether this provider serves ``DnsRecord`` s.
     supports_dns: bool = True
+    #: Whether ``Server(provider=...)`` can be created here (a DNS-only
+    #: provider holds none).
+    supports_servers: bool = True
+    #: The TTL of a ``DnsRecord`` that gives none, and the shortest accepted.
+    default_ttl: int = 300
+    min_ttl: int = 60
 
     # ------------------------------------------------------------ pinning
     def pin(self) -> Pin | None:
@@ -192,9 +199,29 @@ class Provider(ABC):
         self, record: DnsRecord, values: list[str], labels: Mapping[str, str]
     ) -> Resource: ...
 
+    def render_records(
+        self, record: DnsRecord, values: list[str], labels: Mapping[str, str]
+    ) -> list[Resource]:
+        """The record's resources (default: one record set, :meth:`render_record`)."""
+        return [self.render_record(record, values, labels)]
+
     @abstractmethod
     def address(self, server: Resource, family: str) -> str:
         """A reference to the server's ``ipv4`` or ``ipv6`` address."""
+
+    def record_address(
+        self,
+        server: Server,
+        resource: Resource,
+        family: str,
+        ips: Mapping[str, Resource],
+    ) -> str:
+        """The reference a DNS record (at any provider) answers with for ``server``.
+
+        Default :meth:`address`; a provider whose fixed address outlives the
+        server (``ips``: the server's rendered ``PrimaryIp`` s) can point at it.
+        """
+        return self.address(resource, family)
 
     @abstractmethod
     def server_id(self, server: Resource) -> str:
@@ -214,6 +241,14 @@ class Provider(ABC):
     ) -> Mapping[str, str]:
         """The labels of a resource of OpenTofu type ``type_`` (default :meth:`labels_of`)."""
         return self.labels_of(values)
+
+    def ledger_owned(self, type_: str) -> bool:
+        """Whether resources of ``type_`` carry no labels (the ledger alone owns them)."""
+        return False
+
+    def known_error(self, diagnostics: Sequence[str]) -> InfraError | None:
+        """A refusal OpenTofu reported, as its registered code (``None``: not known)."""
+        return None
 
     # ------------------------------------------------------------ prices
     def prices(self, token: str | None) -> Prices | None:

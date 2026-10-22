@@ -157,7 +157,9 @@ class Tofu:
 
 
 def _secret_name(key: str) -> bool:
-    return key == "TF_ENCRYPTION" or key.endswith(("_TOKEN", "_PASSWORD", "_SECRET"))
+    return key == "TF_ENCRYPTION" or key.endswith(
+        ("_TOKEN", "_PASSWORD", "_SECRET", "_API_KEY")
+    )
 
 
 def locate(explicit: str | None = None) -> Tofu:

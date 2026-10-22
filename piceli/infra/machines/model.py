@@ -505,6 +505,8 @@ class Server:
             raise _invalid(
                 f"Server {self.name}: provider must be a Provider (like Hetzner(...))"
             )
+        if not self.provider.supports_servers:
+            raise _invalid(f"Server {self.name}: {self.provider.name} holds no servers")
         for attribute in ("type", "image"):
             value = getattr(self, attribute)
             if attribute == "image" and isinstance(value, Image):
@@ -600,6 +602,12 @@ class DnsRecord:
     give one record set with every address (round robin). Piceli manages the
     record set, never the zone. Health-checked failover is a later seam: it
     changes the answers of the same record set (see the infrastructure docs).
+
+    ``provider`` defaults to the first server's. The servers may be at
+    another provider than the record (``provider=Porkbun(...)`` for an
+    OpenStack server): each address is a reference through the server's own
+    provider, so the record follows a replaced server. ``ttl`` defaults to
+    the provider's (300 s; Porkbun's 600 s).
     """
 
     zone: str
@@ -608,7 +616,7 @@ class DnsRecord:
     value: str | Sequence[str] | None = None
     server: Server | None = None
     servers: Sequence[Server] = ()
-    ttl: int = 300
+    ttl: int | None = None
     provider: Provider | None = None
 
     def __post_init__(self) -> None:
@@ -669,12 +677,6 @@ class DnsRecord:
                     raise _invalid(
                         f"DnsRecord {self.key}: {text!r} does not fit type {self.type}"
                     )
-        if (
-            isinstance(self.ttl, bool)
-            or not isinstance(self.ttl, int)
-            or not 60 <= self.ttl <= 86400
-        ):
-            raise _invalid(f"DnsRecord {self.key}: ttl is seconds in 60..86400")
         provider = self.provider
         if provider is None and servers:
             provider = servers[0].provider
@@ -682,10 +684,20 @@ class DnsRecord:
             raise _invalid(f"DnsRecord {self.key}: provider= is required with value=")
         if not provider.supports_dns:
             raise _invalid(
-                f"DnsRecord {self.key}: {provider.name} serves no DNS records here"
+                f"DnsRecord {self.key}: {provider.name} serves no DNS records here "
+                "(give provider=, like Porkbun(...))"
             )
-        if any(item.provider != provider for item in servers):
-            raise _invalid(f"DnsRecord {self.key}: its servers are at another provider")
+        ttl = provider.default_ttl if self.ttl is None else self.ttl
+        if (
+            isinstance(ttl, bool)
+            or not isinstance(ttl, int)
+            or not provider.min_ttl <= ttl <= 86400
+        ):
+            raise _invalid(
+                f"DnsRecord {self.key}: ttl is seconds in "
+                f"{provider.min_ttl}..86400 at {provider.name}"
+            )
+        object.__setattr__(self, "ttl", ttl)
         object.__setattr__(self, "provider", provider)
 
     @property
