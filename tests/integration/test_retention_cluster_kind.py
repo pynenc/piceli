@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from kind_support import kubectl, wait_registry_removed
+from kind_support import config_digest, kubectl, wait_registry_removed
 from typer.testing import CliRunner
 
 from piceli import App, Pipeline, Registry, Target
@@ -64,13 +64,7 @@ def _image_id(image: str) -> str:
         capture_output=True,
         timeout=600,
     )
-    return subprocess.run(
-        ["docker", "image", "inspect", "--format", "{{.Id}}", image],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    ).stdout.strip()
+    return config_digest(image)
 
 
 @pytest.fixture
@@ -177,7 +171,11 @@ def test_retention_keeps_live_and_rollback_and_removes_the_orphan(
     refs = {}
     for name, image in IMAGES.items():
         repository = "e2e/orphan" if name == "orphan" else "e2e/app"
-        receipt = Backend().registry_deliver(route, _image_id(image), repository)
+        # Approve the config digest; the engine reads the image by its name
+        # (with Docker's containerd image store the config digest is no name).
+        receipt = Backend().registry_deliver(
+            route, _image_id(image), repository, local_id=image
+        )
         assert receipt["state"] == "succeeded", receipt.get("reason")
         refs[name] = receipt["pull_ref"]
     digest = {name: ref.rsplit("@", 1)[1] for name, ref in refs.items()}

@@ -33,6 +33,7 @@ from typer.testing import CliRunner
 
 from piceli.k8s.cli.release import app
 from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
+from tests.integration.kind_support import config_digest
 
 KUBECONFIG = os.environ.get("PICELI_KIND_KUBECONFIG", "")
 CONTEXT = os.environ.get("PICELI_KIND_CONTEXT", "")
@@ -89,7 +90,8 @@ def _spec(directory: Path, namespace: str) -> Path:
     return path
 
 
-def _build(directory: Path, login: str) -> str:
+def _build(directory: Path, login: str) -> tuple[str, str]:
+    """Build the image; its tag and config digest (the identity approved)."""
     tag = f"piceli-e2e/checks-web:{uuid.uuid4().hex[:8]}"
     subprocess.run(
         ["docker", "build", "-q", "--build-arg", f"LOGIN={login}", "-t", tag]
@@ -97,15 +99,11 @@ def _build(directory: Path, login: str) -> str:
         check=True,
         capture_output=True,
     )
-    return subprocess.run(
-        ["docker", "image", "inspect", "--format", "{{.Id}}", tag],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    return tag, config_digest(tag)
 
 
-def _deliver(directory: Path, image_id: str) -> None:
+def _deliver(directory: Path, image: tuple[str, str]) -> None:
+    tag, image_id = image
     receipt = directory / "web.delivery.json"
     result = subprocess.run(
         [
@@ -115,7 +113,7 @@ def _deliver(directory: Path, image_id: str) -> None:
             "artifacts",
             "deliver",
             "--image",
-            image_id,
+            tag,
             "--approve-digest",
             image_id,
             "--ref",
@@ -152,7 +150,7 @@ def test_broken_image_fails_its_checks_and_is_rolled_back(tmp_path, namespace):
     spec = _spec(tmp_path, namespace)
     good = _build(tmp_path, "yes")
     broken = _build(tmp_path, "no")
-    assert good != broken
+    assert good[1] != broken[1]
 
     _deliver(tmp_path, good)
     code, first, stderr = _run(spec, "apply", "--auto-approve")
@@ -164,7 +162,7 @@ def test_broken_image_fails_its_checks_and_is_rolled_back(tmp_path, namespace):
         "login-file",
         "login-python",
     ]
-    assert good[7:19] in _image(namespace)
+    assert good[1][7:19] in _image(namespace)
 
     _deliver(tmp_path, broken)
     code, failed, stderr = _run(spec, "apply", "--auto-approve")
@@ -179,7 +177,7 @@ def test_broken_image_fails_its_checks_and_is_rolled_back(tmp_path, namespace):
     assert rollback["state"] == "rolled-back", rollback
     assert rollback["target"] == first["release"]
     assert rollback["checks"]["passed"]
-    assert good[7:19] in _image(namespace)
+    assert good[1][7:19] in _image(namespace)
 
     code, status, _ = _run(spec, "status")
     assert code == 0

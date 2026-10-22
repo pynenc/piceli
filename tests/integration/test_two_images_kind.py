@@ -34,6 +34,7 @@ from typer.testing import CliRunner
 
 from piceli.k8s.cli.release import app
 from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
+from tests.integration.kind_support import config_digest
 
 KUBECONFIG = os.environ.get("PICELI_KIND_KUBECONFIG", "")
 CONTEXT = os.environ.get("PICELI_KIND_CONTEXT", "")
@@ -147,13 +148,7 @@ def _build(directory: Path, name: str, message: str) -> str:
         check=True,
         capture_output=True,
     )
-    image_id = subprocess.run(
-        ["docker", "image", "inspect", "--format", "{{.Id}}", tag],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    return image_id
+    return tag
 
 
 def _free_port() -> int:
@@ -162,8 +157,9 @@ def _free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def _deliver(directory: Path, namespace: str, name: str, image_id: str) -> dict:
+def _deliver(directory: Path, namespace: str, name: str, tag: str) -> dict:
     receipt = directory / f"{name}.delivery.json"
+    image_id = config_digest(tag)  # not `.Id`: see kind_support.config_digest
     result = subprocess.run(
         [
             sys.executable,
@@ -172,7 +168,7 @@ def _deliver(directory: Path, namespace: str, name: str, image_id: str) -> dict:
             "artifacts",
             "deliver",
             "--image",
-            image_id,
+            tag,
             "--approve-digest",
             image_id,
             "--to",

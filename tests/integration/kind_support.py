@@ -233,3 +233,26 @@ def wait_registry_removed(seconds: float = 180) -> None:
         seconds=seconds,
         message="the in-cluster registry to be deleted",
     )  # fmt: skip
+
+
+def config_digest(image: str, platform: str | None = None) -> str:
+    """The config digest of a local image: the identity a delivery approves.
+
+    Not ``docker image inspect --format '{{.Id}}'``: with Docker's containerd
+    image store (the default from Docker 29) that is the digest of the
+    image's index. The config digest is read from ``docker image save``, for
+    ``platform`` (default: the kind node's), in either store.
+    """
+    from piceli.artifacts.delivery import relay_image_stream
+
+    with subprocess.Popen(
+        ["docker", "image", "save", image],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    ) as save:
+        assert save.stdout is not None
+        identity = relay_image_stream(
+            save.stdout, None, platform=platform or node_platform()
+        )
+    assert save.returncode == 0, f"docker image save {image} failed"
+    return identity.config_digest

@@ -37,6 +37,7 @@ import secrets
 import shutil
 import stat
 import sys
+import tarfile
 import threading
 import time
 import tomllib
@@ -1776,7 +1777,13 @@ class _Execution:
                     )
                     images[key] = self._image(image, platform, multi, metadata, staging)
                     if image.smoke is not None:
-                        self._smoke(image, platform, images[key]["image_id"], staging)
+                        built = images[key]
+                        self._smoke(
+                            image,
+                            platform,
+                            built.get("local_id", built["image_id"]),
+                            staging,
+                        )
             self._verify_consumed()
             files = self._publish(collected, output_dir)
         return {"files": files, "images": images}
@@ -1800,7 +1807,7 @@ class _Execution:
             self._call(["docker", "image", "rm", "--no-prune", loaded], staging, 60)
         except BuildSpecError:
             pass  # a leftover pending tag is harmless; the final tag is set
-        resolved = self._inspect(final, platform, metadata, staging)
+        resolved = self._inspect(final, platform, metadata, staging, known=result)
         if resolved["image_id"] != result["image_id"]:
             raise BuildSpecError("image-mismatch", "tagged image differs from build")
         return resolved
@@ -1957,21 +1964,44 @@ class _Execution:
         platform: str,
         metadata: Mapping[str, Any],
         staging: Path,
+        *,
+        known: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """The loaded image's identity: its config digest and local ID.
+
+        Docker's classic image store uses the config digest as the image ID.
+        Its containerd image store (the default from Docker 29, optional in
+        Docker Desktop) uses the digest of the image's index or manifest
+        instead, which nothing past this machine sees: there the config digest
+        is read from ``docker image save`` (the manifest for ``platform``,
+        attestations ignored). ``image_id`` is always the config digest, the
+        identity deliveries approve and nodes report; ``local_id``, present
+        only when it differs, is how the engine names the image. ``known`` is
+        an earlier result for the same local ID, so it is not saved twice.
+        """
         raw = self._call(["docker", "image", "inspect", ref], staging, 60)
         try:
             value = strict_json(raw.decode(), 16 * 1024 * 1024)
             image = value[0]
-            image_id = image["Id"]
+            local_id = image["Id"]
             actual = f"{image['Os']}/{image['Architecture']}"
             if image.get("Variant"):
                 actual += f"/{image['Variant']}"
+            descriptor = image.get("Descriptor")
         except (ValueError, KeyError, IndexError, TypeError, UnicodeDecodeError):
             raise BuildSpecError("image-invalid", "invalid image inspection") from None
-        if not isinstance(image_id, str) or _DIGEST.fullmatch(image_id) is None:
+        if not isinstance(local_id, str) or _DIGEST.fullmatch(local_id) is None:
             raise BuildSpecError("image-invalid", "invalid image id")
         if actual != platform:
             raise BuildSpecError("image-mismatch", "image platform mismatch")
+        image_id = local_id
+        # Only the containerd image store describes the image by a descriptor
+        # (an index or manifest); its ID is that descriptor's digest.
+        if isinstance(descriptor, dict) and descriptor.get("digest") == local_id:
+            if known is not None and known.get("local_id") == local_id:
+                image_id = known["image_id"]
+            else:
+                image_id = self._saved_config(local_id, platform, staging)
         config = metadata.get("containerimage.config.digest")
         if config is not None and config != image_id:
             raise BuildSpecError("image-mismatch", "loaded image differs from build")
@@ -1979,18 +2009,41 @@ class _Execution:
         if not isinstance(manifest, str) or _DIGEST.fullmatch(manifest) is None:
             manifest = None
         # Docker's classic image store keeps no manifest: its "digest" is the
-        # config digest. Only a distinct value is a real manifest digest.
-        if manifest == image_id:
+        # config digest. The containerd store's is the local index. Only a
+        # distinct value is a real manifest digest.
+        if manifest in {image_id, local_id}:
             manifest = None
         size = image.get("Size")
         return {
             "image_id": image_id,
+            # Added in 0.24.0: the engine's own ID when it is not the config
+            # digest (containerd image store); local commands use it.
+            **({"local_id": local_id} if local_id != image_id else {}),
             "digest": manifest,
             "platform": platform,
             "ref": ref,
             # Added in 0.8.0: the engine's size of the image, for summaries.
             **({"size_bytes": size} if type(size) is int and size >= 0 else {}),
         }
+
+    def _saved_config(self, local_id: str, platform: str, staging: Path) -> str:
+        """The config digest of ``platform``'s image in ``docker image save``."""
+        from piceli.artifacts.delivery import relay_image_stream
+
+        path = staging / f"saved-{self.nonce}.tar"
+        self._call(
+            ["docker", "image", "save", "--output", str(path), local_id],
+            staging,
+            self.spec.timeout_seconds,
+        )
+        try:
+            with path.open("rb") as stream:
+                identity = relay_image_stream(stream, None, platform=platform)
+        except (OSError, ValueError, LookupError, tarfile.TarError):
+            raise BuildSpecError("image-invalid", "invalid saved image") from None
+        finally:
+            path.unlink(missing_ok=True)  # the staging directory goes too
+        return identity.config_digest
 
     def _publish(
         self, collected: Mapping[str, tuple[Path, str]], output_dir: Path

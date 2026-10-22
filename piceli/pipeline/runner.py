@@ -929,10 +929,18 @@ class PipelineRunner:
         }
         return shown, hashed
 
+    def _local_present(self, entry: Mapping[str, Any], image_id: str) -> bool:
+        """The local engine holds the built image (by its own ID when that is
+        not the config digest: Docker's containerd image store)."""
+        local_id = entry.get("local_id")
+        if isinstance(local_id, str):
+            return self.backend.image_present(image_id, local_id=local_id)
+        return self.backend.image_present(image_id)
+
     def _image_here(self, item: _BuildWork, name: str, image_id: str) -> bool:
         """The built image is on this machine (docker engine, or a host archive)."""
         if not item.host:
-            return self.backend.image_present(image_id)
+            return self._local_present(item.images.get(name) or {}, image_id)
         path = item.archive(name)
         return path is not None and path.is_file()
 
@@ -959,7 +967,7 @@ class PipelineRunner:
                     and (item.directory / "outputs" / path).is_file()
                 ):
                     continue
-            elif self.backend.image_present(image_id):
+            elif self._local_present(entry, image_id):
                 continue
             # Another runner built it: the build is not needed again when the
             # registry or node still has this exact image (by digest).
@@ -2138,6 +2146,17 @@ class PipelineRunner:
             return None
         return work.producer[name].archive(name)
 
+    def _source(self, name: str) -> dict[str, Any]:
+        """Where a delivery reads image ``name``: a host build's archive, or the
+        engine's own ID when it is not the config digest; else nothing extra."""
+        archive = self._archive(name)
+        if archive is not None:
+            return {"archive": archive}
+        work = self._work
+        entry = work.producer[name].images.get(name) if work is not None else None
+        local_id = entry.get("local_id") if isinstance(entry, dict) else None
+        return {"local_id": local_id} if isinstance(local_id, str) else {}
+
     def _deliver(self, name: str, config: str) -> str:
         """Deliver one image; returns the receipt's result (pushed, imported …)."""
         strategy = self.pipeline.deliver
@@ -2146,25 +2165,15 @@ class PipelineRunner:
 
             reference = f"{self._repository(name)}:{content_tag(config)}"
             self.say(f"[deliver] {name}: importing into the node as {reference}")
-            archive = self._archive(name)
-            receipt = (
-                self.backend.node_deliver(
-                    self._node_url(), config, reference, archive=archive
-                )
-                if archive is not None
-                else self.backend.node_deliver(self._node_url(), config, reference)
+            receipt = self.backend.node_deliver(
+                self._node_url(), config, reference, **self._source(name)
             )
         else:
             route = self._route()
             repository = self._repository(name)
             self.say(f"[deliver] {name}: pushing to {repository}")
-            archive = self._archive(name)
-            receipt = (
-                self.backend.registry_deliver(
-                    route, config, repository, archive=archive
-                )
-                if archive is not None
-                else self.backend.registry_deliver(route, config, repository)
+            receipt = self.backend.registry_deliver(
+                route, config, repository, **self._source(name)
             )
         path = self._delivery_path(name, config)
         write_private(path, json.dumps(receipt, sort_keys=True, indent=2) + "\n")

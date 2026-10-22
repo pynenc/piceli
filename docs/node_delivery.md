@@ -28,6 +28,22 @@ of the image configuration JSON. Docker's classic image store uses it as the
 image ID (`docker image inspect --format '{{.Id}}'`), and the Kubernetes CRI
 uses it as the image ID too (`crictl images`, `crictl inspecti`).
 
+Docker's **containerd image store** (the default from Docker 29, an option in
+Docker Desktop; `docker info` shows `driver-type: io.containerd.snapshotter.v1`)
+uses the digest of the image's index as the image ID instead. Approving that
+ID is refused with `digest-mismatch`. Read the config digest from the saved
+image, which works with either store:
+
+```sh
+docker image save example/app:1.4.2 | tar -xOf - manifest.json \
+  | jq -r '"sha256:" + (.[0].Config | sub(".*/"; "") | sub("\\.json$"; ""))'
+```
+
+For an image that holds several platforms, save one of them
+(`docker image save --platform linux/amd64 …`). Builds from a build spec
+record the config digest as `image_id` in either store, and the engine's own
+ID as `local_id` when it differs.
+
 The config digest is used because it is the only identifier that stays the same
 everywhere an image goes:
 
@@ -393,8 +409,9 @@ nodes. For everything else, prefer registry delivery.
    recomputes the config digest from the config bytes and checks that the
    config file name matches its hash. For a Docker image, it compares the
    local image ID with the approval. A mismatch stops here, before any byte
-   leaves the machine. With Docker's containerd image store the local ID is a
-   manifest digest, so this check is skipped and step 4 decides.
+   leaves the machine. With Docker's containerd image store the local ID is
+   the digest of the image's index, so this check is skipped and step 4
+   decides.
 3. **Skip if already present.** Piceli runs `ctr images ls` on the node and
    follows the named image's manifest (or index) with `ctr content get` to its
    config digest. If that digest is the approved one, the result is
@@ -485,7 +502,7 @@ with a content tag:
 
 ```sh
 ID=$(docker image inspect --format '{{.Id}}' example/app:1.4.2)   # classic store
-python -m piceli artifacts deliver --image "$ID" --approve-digest "$ID" \
+python -m piceli artifacts deliver --image example/app:1.4.2 --approve-digest "$ID" \
   --ref "registry.test/app:sha256-${ID:7:12}" \
   --to 'ssh://ops@node-1.example?runtime=k3s-containerd' --receipt app.node.json
 ```

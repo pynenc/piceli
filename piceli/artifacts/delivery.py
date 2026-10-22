@@ -38,6 +38,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
 
 from piceli.artifacts.delivery_inputs import DeliveryInputError, verify_tools
+from piceli.artifacts.image_manifest import choose_image
 from piceli.artifacts.node_transport import (
     NodeTarget,
     Runner,
@@ -175,13 +176,23 @@ def _json_object(body: bytes) -> dict[str, Any]:
 
 
 def resolve_configs(
-    descriptor: Mapping[str, Any], fetch: Callable[[str], bytes], depth: int = 0
+    descriptor: Mapping[str, Any], fetch: Callable[[str], bytes]
 ) -> list[str]:
     """Config digests reachable from a manifest or (nested) index descriptor.
 
     ``fetch`` must return bytes whose SHA-256 equals the digest, or raise
     ``LookupError`` for content that is absent (other platforms on a node).
     Attestation manifests (platform ``unknown``) are ignored.
+    """
+    return [config for _, config in resolve_manifests(descriptor, fetch)]
+
+
+def resolve_manifests(
+    descriptor: Mapping[str, Any], fetch: Callable[[str], bytes], depth: int = 0
+) -> list[tuple[dict[str, Any], str]]:
+    """Runnable ``(manifest descriptor, config digest)`` pairs under a descriptor.
+
+    As :func:`resolve_configs`, keeping each image manifest's descriptor.
     """
     if depth > 2:
         raise ValueError("image index nesting too deep")
@@ -195,7 +206,7 @@ def resolve_configs(
         children = document.get("manifests")
         if not isinstance(children, list) or len(children) > 64:
             raise ValueError("invalid image index")
-        found: list[str] = []
+        found: list[tuple[dict[str, Any], str]] = []
         for child in children:
             platform = child.get("platform") if isinstance(child, dict) else None
             if isinstance(platform, dict) and "unknown" in (
@@ -204,7 +215,7 @@ def resolve_configs(
             ):
                 continue
             try:
-                found.extend(resolve_configs(child, fetch, depth + 1))
+                found.extend(resolve_manifests(child, fetch, depth + 1))
             except LookupError:
                 continue
         return found
@@ -212,7 +223,7 @@ def resolve_configs(
         config = document.get("config")
         if not isinstance(config, dict):
             raise ValueError("invalid image manifest")
-        return [validate_digest(config.get("digest"))]  # type: ignore[arg-type]
+        return [(dict(descriptor), validate_digest(config.get("digest")))]  # type: ignore[arg-type]
     raise ValueError("unsupported image media type")
 
 
@@ -275,21 +286,55 @@ def _blob(kept: Mapping[str, bytes], digest: str) -> bytes:
         raise LookupError("blob absent from archive") from error
 
 
+@dataclass(frozen=True)
+class _Identified:
+    format: str
+    config_digest: str
+    names: tuple[str, ...]
+    # The image manifest an OCI archive's index must name on import (it
+    # differs from the archive's own entry when that is an index).
+    manifest: dict[str, Any] | None = None
+
+
 def _identify(
-    metadata: Mapping[str, bytes], kept: Mapping[str, bytes], seen: set[str]
-) -> tuple[str, str, tuple[str, ...]]:
+    metadata: Mapping[str, bytes],
+    kept: Mapping[str, bytes],
+    seen: set[str],
+    approved_digest: str | None = None,
+    platform: str | None = None,
+) -> _Identified:
     if "oci-layout" in metadata:
         index = _json_object(metadata.get("index.json", b"{}"))
         manifests = index.get("manifests")
         if not isinstance(manifests, list) or len(manifests) != 1:
             raise ValueError("expected exactly one image in the OCI archive")
-        configs = resolve_configs(manifests[0], lambda d: _blob(kept, d))
-        if len(configs) != 1:
-            raise ValueError("expected exactly one runnable platform image")
-        _blob(kept, configs[0])  # the config itself must be in the stream
+        descriptor, config = choose_image(
+            resolve_manifests(manifests[0], lambda d: _blob(kept, d)),
+            lambda item: item[1],
+            lambda d: _blob(kept, d),
+            approved_digest=approved_digest,
+            platform=platform,
+        )
+        body = _blob(kept, config)  # the config itself must be in the stream
         annotations = manifests[0].get("annotations") or {}
         name = annotations.get(IMAGE_NAME)
-        return "oci", configs[0], (name,) if isinstance(name, str) else ()
+        selected = None
+        if descriptor.get("digest") != manifests[0].get("digest"):
+            image = _json_object(body)
+            selected = {
+                "mediaType": descriptor.get("mediaType")
+                or "application/vnd.oci.image.manifest.v1+json",
+                "digest": descriptor["digest"],
+                "size": descriptor.get("size"),
+                "platform": {
+                    key: image[key]
+                    for key in ("os", "architecture", "variant")
+                    if isinstance(image.get(key), str)
+                },
+            }
+        return _Identified(
+            "oci", config, (name,) if isinstance(name, str) else (), selected
+        )
     if "manifest.json" not in metadata:
         raise ValueError("unrecognized image archive format")
     entries = json.loads(metadata["manifest.json"])
@@ -322,17 +367,30 @@ def _identify(
     tags = entry.get("RepoTags") or []
     if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
         raise ValueError("invalid Docker archive tags")
-    return "docker", digest, tuple(tags)
+    return _Identified("docker", digest, tuple(tags))
 
 
 def _rename(
-    metadata: dict[str, bytes], archive_format: str, reference: str
+    metadata: dict[str, bytes], identified: _Identified, reference: str
 ) -> list[tuple[str, bytes]]:
-    """Index members that name the image exactly ``reference`` and nothing else."""
+    """Index members that name the image exactly ``reference`` and nothing else.
+
+    An OCI archive's index is pointed at the one chosen image manifest, and a
+    ``manifest.json`` beside it keeps only that image's entry: the runtime
+    never gets a name for another platform's image.
+    """
     out: list[tuple[str, bytes]] = []
-    if archive_format == "oci":
+    entries = (
+        json.loads(metadata["manifest.json"]) if "manifest.json" in metadata else None
+    )
+    if identified.format == "oci":
         index = _json_object(metadata["index.json"])
         descriptor = index["manifests"][0]
+        if identified.manifest is not None:
+            index["manifests"][0] = descriptor = {
+                **identified.manifest,
+                "annotations": descriptor.get("annotations") or {},
+            }
         annotations = {
             key: value
             for key, value in (descriptor.get("annotations") or {}).items()
@@ -343,8 +401,14 @@ def _rename(
         descriptor["annotations"] = annotations
         out.append(("oci-layout", metadata["oci-layout"]))
         out.append(("index.json", json.dumps(index, sort_keys=True).encode()))
-    if "manifest.json" in metadata:
-        entries = json.loads(metadata["manifest.json"])
+        if isinstance(entries, list):
+            config = "blobs/sha256/" + identified.config_digest[7:]
+            entries = [
+                entry
+                for entry in entries
+                if isinstance(entry, dict) and entry.get("Config") == config
+            ][:1] or None
+    if entries:
         entries[0]["RepoTags"] = [reference]
         out.append(("manifest.json", json.dumps(entries, sort_keys=True).encode()))
     return out
@@ -374,12 +438,17 @@ def relay_image_stream(
     reference: str | None = None,
     max_bytes: int = 16 * 1024**3,
     cancel: threading.Event | None = None,
+    platform: str | None = None,
 ) -> StreamIdentity:
     """Validate an image tar stream and, optionally, re-emit it for import.
 
     Layers are forwarded as they arrive; index members are withheld until the
     config digest recomputed from the stream equals ``approved_digest``. With a
     ``reference`` the emitted archive names the image exactly that.
+
+    An archive with several images (Docker's containerd image store saves an
+    index of every platform it holds) resolves to the approved one, or before
+    any approval to the one for ``platform``; attestations are ignored.
     """
     if (destination is None) != (reference is None):
         raise ValueError("a relay destination needs exactly one image reference")
@@ -392,7 +461,7 @@ def relay_image_stream(
         else None
     )
     try:
-        return _relay(buffered, reader, output, approved_digest, reference)
+        return _relay(buffered, reader, output, approved_digest, reference, platform)
     except BaseException:
         if sink is not None:
             sink.sealed = True  # a pending tar buffer must never reach the node
@@ -405,6 +474,7 @@ def _relay(
     output: tarfile.TarFile | None,
     approved_digest: str | None,
     reference: str | None,
+    platform: str | None = None,
 ) -> StreamIdentity:
     metadata: dict[str, bytes] = {}
     kept: dict[str, bytes] = {}
@@ -442,21 +512,21 @@ def _relay(
                 output.addfile(_header(info, name), stream)
     while buffered.read(1024 * 1024):  # trailing tar padding is part of the hash
         pass
-    archive_format, config_digest, names = _identify(metadata, kept, seen)
-    if approved_digest is not None and config_digest != approved_digest:
+    identified = _identify(metadata, kept, seen, approved_digest, platform)
+    if approved_digest is not None and identified.config_digest != approved_digest:
         raise DeliveryRejected("image config digest differs from the approval")
     if output is not None:
         assert reference is not None
-        for name, body in _rename(metadata, archive_format, reference):
+        for name, body in _rename(metadata, identified, reference):
             info = tarfile.TarInfo(name)
             info.size = len(body)
             info.mode = 0o644
             output.addfile(info, io.BytesIO(body))
         output.close()  # end-of-archive blocks; the destination stays open
     return StreamIdentity(
-        archive_format,
-        config_digest,
-        names,
+        identified.format,
+        identified.config_digest,
+        identified.names,
         "sha256:" + reader.hash.hexdigest(),
         reader.count,
     )
@@ -610,13 +680,19 @@ class NodeDelivery:
         )
 
     def _scan_archive(
-        self, source: ArchiveSource, cancel: threading.Event | None
+        self, source: ArchiveSource, approved: str, cancel: threading.Event | None
     ) -> StreamIdentity:
         try:
             with _RegularFile(source.path, source.max_bytes) as stream:
                 return relay_image_stream(
-                    stream, None, max_bytes=source.max_bytes, cancel=cancel
+                    stream,
+                    None,
+                    approved_digest=approved,
+                    max_bytes=source.max_bytes,
+                    cancel=cancel,
                 )
+        except DeliveryRejected as error:
+            raise _Failure("rejected", "digest-mismatch") from error
         except (ValueError, OSError, tarfile.TarError, LookupError) as error:
             raise _Failure("rejected", "invalid-archive") from error
 
@@ -720,7 +796,7 @@ class NodeDelivery:
                 raise _Failure("rejected", "digest-mismatch")
             save_argv = self._docker("image", "save", local_id)
         else:
-            scanned = self._scan_archive(source, cancel)
+            scanned = self._scan_archive(source, approved, cancel)
             receipt["source"].update(
                 format=scanned.format,
                 archive_sha256=scanned.stream_sha256,

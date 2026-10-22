@@ -377,7 +377,10 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "invalid-approved-digest",
         "Invalid approved digest",
         "`--approve-digest` is not `sha256:` followed by 64 lowercase hex characters.",
-        "Pass the image config digest, e.g. from `docker image inspect --format '{{.Id}}'`.",
+        "Pass the image config digest: `docker image inspect --format '{{.Id}}'` "
+        "with Docker's classic image store; with its containerd image store "
+        "the `Config` of `manifest.json` in `docker image save` "
+        "(docs/node_delivery.md).",
         False,
         "artifacts-input",
     ),

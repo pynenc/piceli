@@ -262,6 +262,10 @@ def _grouped(
             manifest = entry.get("digest")
             if manifest is not None:
                 validate_digest(manifest)
+            # How the engine names the image: its own ID (0.24.0, Docker's
+            # containerd image store), else the config digest (classic store).
+            local = entry.get("local_id")
+            local = config if local is None else validate_digest(local)
         except (KeyError, TypeError, ValueError):
             raise PublishError("invalid-receipt", "incomplete build receipt") from None
         repository = ref.split("@", 1)[0]
@@ -287,7 +291,7 @@ def _grouped(
             config,
             manifest if isinstance(archive, str) else None,
             _inside(output_dir, archive) if isinstance(archive, str) else None,
-            None if isinstance(archive, str) else config,
+            None if isinstance(archive, str) else local,
             tuple(attestations),
         )
         known = result.setdefault(name, (repository, []))

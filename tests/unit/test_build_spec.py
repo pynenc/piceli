@@ -7,6 +7,7 @@ Set ``PICELI_DOCKER_TESTS=1`` to also run the real ``rust-hello`` example.
 import argparse
 import dataclasses
 import hashlib
+import io
 import json
 import os
 import re
@@ -30,8 +31,10 @@ from piceli.artifacts.build_spec import (
     add_build_spec_commands,
     run_build_spec_command,
 )
+from piceli.artifacts.delivery import relay_image_stream
 from piceli.artifacts.process import ProcessLimits, ToolPin
 from piceli.errors import ERRORS
+from tests.unit.containerd_store import containerd_save
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples/builds/rust-hello"
@@ -55,6 +58,10 @@ class FakeDocker:
         self.smoke_stdout = b"self-test output\n"
         self.smoke_stderr = b""
         self.salt = ""
+        # Docker's containerd image store: `.Id` is the index digest and the
+        # docker build driver reports no config digest (Docker 29 default).
+        self.containerd_store = False
+        self.saved: dict[str, bytes] = {}
 
     def __call__(
         self,
@@ -98,6 +105,10 @@ class FakeDocker:
             return ok, b"default\n", b""
         if command[:1] == ["info"]:
             return ok, self.native.encode() + b"\n", b""
+        if command[:2] == ["image", "save"]:
+            assert command[2] == "--output", argv
+            Path(command[3]).write_bytes(self.saved[command[4]])
+            return ok, b"", b""
         if command[:2] == ["image", "inspect"]:
             image = self.images.get(command[2])
             if image is None:
@@ -146,13 +157,19 @@ class FakeDocker:
                 + hashlib.sha256((seed + option["--target"]).encode()).hexdigest()
             )
             os_name, arch = platform.split("/", 1)
-            self.images[option["--tag"]] = {
-                "Id": image_id,
-                "Os": os_name,
-                "Architecture": arch,
-            }
-            metadata["containerimage.config.digest"] = image_id
-            metadata["containerimage.digest"] = image_id
+            if self.containerd_store:
+                saved = containerd_save((platform,), marker=image_id.encode())
+                self.saved[saved.local_id] = saved.archive
+                self.images[option["--tag"]] = saved.inspect(platform)
+                metadata["containerimage.digest"] = saved.local_id
+            else:
+                self.images[option["--tag"]] = {
+                    "Id": image_id,
+                    "Os": os_name,
+                    "Architecture": arch,
+                }
+                metadata["containerimage.config.digest"] = image_id
+                metadata["containerimage.digest"] = image_id
         Path(option["--metadata-file"]).write_text(json.dumps(metadata))
         return ok, b"", b"#1 building\n"
 
@@ -1398,3 +1415,45 @@ def test_rust_hello_source_change_produces_a_new_binary(tmp_path: Path) -> None:
     second = build("b")
     assert second != first
     assert b"edited rust-hello" in second and b"hello from rust-hello" not in second
+
+
+def test_containerd_store_records_the_config_digest_and_the_local_id(
+    tmp_path: Path, docker_tool: DockerTool
+) -> None:
+    # Docker 29's default store: `.Id` is the image index, which no node or
+    # registry ever reports. The receipt's image_id is the config digest read
+    # from `docker image save`; local commands use the engine's own ID.
+    project(tmp_path)
+    spec = BuildSpec.from_dict(
+        image_doc(
+            tag="dev-{image_id:12}",
+            smoke={"command": ["--self-test"], "timeout_seconds": 30},
+        ),
+        tmp_path,
+    )
+    fake = FakeDocker()
+    fake.containerd_store = True
+    receipt = spec.run(grant(), tmp_path / "o", docker=docker_tool, runner=fake)
+    image = receipt.images["svc"]
+    local_id = fake.images[image["ref"]]["Id"]
+    expected = relay_image_stream(io.BytesIO(fake.saved[local_id]), None).config_digest
+    assert image["image_id"] == expected != local_id
+    assert image["local_id"] == local_id
+    assert image["digest"] is None  # the local index is not a registry manifest
+    assert image["ref"] == f"example/svc:dev-{expected[7:19]}"
+    [run] = [argv for argv in fake.calls if argv[1] == "run"]
+    assert run[-2:] == [local_id, "--self-test"]
+    # Saved once (the retag reuses it); the temporary archive is gone.
+    saves = [argv for argv in fake.calls if argv[1:3] == ["image", "save"]]
+    assert len(saves) == 1 and not Path(saves[0][4]).exists()
+
+
+def test_classic_store_receipt_has_no_local_id(
+    tmp_path: Path, docker_tool: DockerTool
+) -> None:
+    project(tmp_path)
+    spec = BuildSpec.from_dict(image_doc(), tmp_path)
+    fake = FakeDocker()
+    receipt = spec.run(grant(), tmp_path / "o", docker=docker_tool, runner=fake)
+    assert "local_id" not in receipt.images["svc"]
+    assert not any(argv[1:3] == ["image", "save"] for argv in fake.calls)

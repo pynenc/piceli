@@ -481,7 +481,7 @@ echoed.
 | `network`, `source_date_epoch` | As built. |
 | `tool` | `docker_sha256`, `buildx_version`, `buildx_builder`. |
 | `outputs.files` | `{path: "sha256:..."}`. With several platforms each path is prefixed with `linux-<arch>/`. |
-| `outputs.images` | `{name: {"image_id", "digest", "platform", "ref"}}`. With several platforms the key is `name/linux-<arch>` and the tag gets a `-<arch>` suffix. `image_id` is the config digest. `digest` is the manifest digest, or `null` when the engine keeps none (Docker's classic image store). `ref` is the resolved tag for a template. |
+| `outputs.images` | `{name: {"image_id", "digest", "platform", "ref"}}`. With several platforms the key is `name/linux-<arch>` and the tag gets a `-<arch>` suffix. `image_id` is the config digest, in either Docker image store. `digest` is the manifest digest, or `null` when the engine keeps none (Docker's classic image store) or only a local index (its containerd image store). `ref` is the resolved tag for a template. With the containerd image store `local_id` is the engine's own image ID (the index digest), which local commands use; the config digest is then read from `docker image save`. |
 | `smoke` | Only when an image declares one: `{name: {"command", "expect_exit", "timeout_seconds", …}}`, each smoke table as declared (`env`, `entrypoint`, `expect_stdout`, `expect_stderr` when set). |
 | `steps` | Per invocation and smoke check: `platform`, `kind` (`files`, `image:<name>`, `smoke:<name>`), `state`, `exit_code`, `seconds`. A failed smoke step whose output did not match also has `unmatched` (the stream names). |
 | `state`, `started_at`, `finished_at` | `"succeeded"`, RFC 3339 UTC. |

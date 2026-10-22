@@ -39,6 +39,7 @@ from typer.testing import CliRunner
 
 from piceli import App, Pipeline, Registry, Target
 from piceli.k8s.cli import app
+from tests.integration.kind_support import config_digest
 
 NAME = "piceli-wpe"
 CONTEXT = f"k3d-{NAME}"
@@ -265,7 +266,9 @@ k3s = Cluster(
     namespace = "e2e-" + uuid.uuid4().hex[:6]
     _kubectl(k3s, "create", "namespace", namespace)
     _run("docker", "pull", "--quiet", SOURCE_IMAGE)
-    image_id = _run("docker", "image", "inspect", "--format", "{{.Id}}", SOURCE_IMAGE)
+    # The config digest, not `.Id` (the index digest with Docker's containerd
+    # image store); the engine reads the image by its name.
+    image_id = config_digest(SOURCE_IMAGE)
     pipeline = Pipeline(
         App("e2e"),
         Target.kubeconfig(k3s, context=CONTEXT, namespace=namespace),
@@ -275,7 +278,7 @@ k3s = Cluster(
     runner = PipelineRunner.__new__(PipelineRunner)
     runner.pipeline = pipeline
     receipt = Backend().registry_deliver(
-        runner._route(), image_id.strip(), "e2e/busybox"
+        runner._route(), image_id, "e2e/busybox", local_id=SOURCE_IMAGE
     )
     assert receipt["state"] == "succeeded", receipt.get("reason")
     pull_ref = receipt["pull_ref"]

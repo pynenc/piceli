@@ -32,6 +32,7 @@ from piceli.artifacts.node_transport import (
     Transport,
 )
 from piceli.artifacts.process import ProcessLimits, ToolPin
+from tests.unit.containerd_store import containerd_save
 
 DOCKER_TARGET = "docker://node-1?runtime=containerd"
 SSH_TARGET = "ssh://ops@node-1.example:2222?runtime=k3s-containerd"
@@ -617,3 +618,118 @@ import piceli.artifacts.delivery, piceli.artifacts.node_transport
         [sys.executable, "-c", script], capture_output=True, text=True, timeout=10
     )
     assert result.returncode == 0, result.stderr
+
+
+# --- Docker's containerd image store (the default from Docker 29) -------------
+
+
+def test_containerd_store_image_id_is_not_the_config_digest(docker_pin):
+    # What CI's Docker 29 runner did: `docker image inspect .Id` is the index
+    # digest. Approving it is refused; nothing reaches the node.
+    saved = containerd_save()
+    node = FakeNode({"example/app:1": (saved.local_id, saved.archive)})
+    node.containerd_store = True
+    receipt = delivery(node, docker_pin).deliver(
+        DockerImageSource("example/app:1"),
+        NodeTarget.parse(DOCKER_TARGET),
+        grant(saved.local_id),
+    )
+    assert (receipt["result"], receipt["reason"]) == ("rejected", "digest-mismatch")
+    assert node.names == {}
+
+
+def test_containerd_store_image_is_delivered_by_its_config_digest(docker_pin):
+    saved = containerd_save()
+    config = saved.configs["linux/arm64"]
+    node = FakeNode({"example/app:1": (saved.local_id, saved.archive)})
+    node.containerd_store = True
+    receipt = delivery(node, docker_pin).deliver(
+        DockerImageSource("example/app:1"),
+        NodeTarget.parse(DOCKER_TARGET),
+        grant(config),
+        reference="registry.test/app:sha256-" + config[7:19],
+    )
+    assert receipt["result"] == "imported", receipt
+    assert receipt["source"]["local_image_id"] == saved.local_id
+    assert receipt["image"]["config_digest"] == config
+    assert ["image", "save", saved.local_id] in [call[-3:] for call in node.calls]
+    with tarfile.open(fileobj=io.BytesIO(node.imports[0])) as sent:
+        index = json.loads(sent.extractfile("index.json").read())
+    # The node's index names the platform manifest, not the local index with
+    # its attestation.
+    (descriptor,) = index["manifests"]
+    assert descriptor["digest"] == saved.manifests["linux/arm64"]
+    assert descriptor["platform"] == {"os": "linux", "architecture": "arm64"}
+
+
+def test_multi_platform_archive_delivers_only_the_approved_image(docker_pin):
+    saved = containerd_save(("linux/amd64", "linux/arm64"))
+    approved = saved.configs["linux/arm64"]
+    sink = io.BytesIO()
+    identity = relay_image_stream(
+        io.BytesIO(saved.archive),
+        sink,
+        approved_digest=approved,
+        reference="registry.test/app:arm",
+    )
+    assert identity.config_digest == approved
+    with tarfile.open(fileobj=io.BytesIO(sink.getvalue())) as sent:
+        index = json.loads(sent.extractfile("index.json").read())
+        entries = json.loads(sent.extractfile("manifest.json").read())
+    assert [d["digest"] for d in index["manifests"]] == [saved.manifests["linux/arm64"]]
+    assert index["manifests"][0]["annotations"]["io.containerd.image.name"] == (
+        "registry.test/app:arm"
+    )
+    # The Docker-format entry of the other platform must not name the image.
+    assert entries == [
+        {
+            "Config": "blobs/sha256/" + approved[7:],
+            "Layers": entries[0]["Layers"],
+            "RepoTags": ["registry.test/app:arm"],
+        }
+    ]
+    # An approval of neither platform is a mismatch, not a guess.
+    with pytest.raises(DeliveryRejected):
+        relay_image_stream(
+            io.BytesIO(saved.archive),
+            io.BytesIO(),
+            approved_digest="sha256:" + "5" * 64,
+            reference="registry.test/app:arm",
+        )
+
+
+def test_relay_picks_the_requested_platform_before_any_approval():
+    saved = containerd_save(("linux/amd64", "linux/arm64"))
+    for platform, config in saved.configs.items():
+        scanned = relay_image_stream(io.BytesIO(saved.archive), None, platform=platform)
+        assert (scanned.format, scanned.config_digest) == ("oci", config)
+    with pytest.raises(ValueError, match="exactly one runnable"):
+        relay_image_stream(io.BytesIO(saved.archive), None)
+    with pytest.raises(ValueError, match="exactly one runnable"):
+        relay_image_stream(io.BytesIO(saved.archive), None, platform="linux/s390x")
+    # One platform plus its attestation is one image.
+    single = containerd_save(("linux/amd64",))
+    assert (
+        relay_image_stream(io.BytesIO(single.archive), None).config_digest
+        == single.configs["linux/amd64"]
+    )
+
+
+def test_multi_platform_archive_file_is_delivered_by_its_approval(docker_pin, tmp_path):
+    saved = containerd_save(("linux/amd64", "linux/arm64"))
+    path = tmp_path / "image.tar"
+    path.write_bytes(saved.archive)
+    node = FakeNode()
+    receipt = delivery(node, docker_pin).deliver(
+        ArchiveSource(path),
+        NodeTarget.parse(DOCKER_TARGET),
+        grant(saved.configs["linux/amd64"]),
+    )
+    assert receipt["result"] == "imported", receipt
+    assert receipt["image"]["config_digest"] == saved.configs["linux/amd64"]
+    wrong = delivery(node, docker_pin).deliver(
+        ArchiveSource(path),
+        NodeTarget.parse(DOCKER_TARGET),
+        grant("sha256:" + "6" * 64),
+    )
+    assert (wrong["result"], wrong["reason"]) == ("rejected", "digest-mismatch")

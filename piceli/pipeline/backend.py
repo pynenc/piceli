@@ -104,8 +104,13 @@ class Backend:
         return open_sources(inputs, lock).to_dict()
 
     # ------------------------------------------------------------ build
-    def image_present(self, image_id: str) -> bool:
-        """Whether the local engine still holds the image with this config digest."""
+    def image_present(self, image_id: str, local_id: str | None = None) -> bool:
+        """Whether the local engine still holds the image with this config digest.
+
+        ``local_id`` is the engine's own ID when it is not the config digest
+        (Docker's containerd image store, 0.24.0); the engine is asked for it.
+        """
+        wanted = local_id or image_id
         from piceli.artifacts.node_transport import SubprocessRunner
         from piceli.artifacts.process import ProcessLimits
 
@@ -119,14 +124,14 @@ class Backend:
                 "inspect",
                 "--format",
                 "{{.Id}}",
-                image_id,
+                wanted,
             ],
             ProcessLimits(30, 65536),
             {},
         )
         return (
             result.state == "succeeded"
-            and result.stdout.decode(errors="replace").strip() == image_id
+            and result.stdout.decode(errors="replace").strip() == wanted
         )
 
     def build(
@@ -238,11 +243,14 @@ class Backend:
         repository: str,
         *,
         archive: Path | None = None,
+        local_id: str | None = None,
     ) -> dict[str, Any]:
         """Push one image by digest; only blobs the registry lacks are sent.
 
         ``archive`` is the OCI image-layout tar of a host build: then no
-        docker is needed. Otherwise the image is read from the local engine.
+        docker is needed. Otherwise the image is read from the local engine,
+        by ``local_id`` when the engine's ID is not the config digest
+        (Docker's containerd image store, 0.24.0).
         """
         from piceli.artifacts.delivery import (
             ArchiveSource,
@@ -265,7 +273,7 @@ class Backend:
         return delivery.deliver(
             ArchiveSource(archive.absolute())
             if archive is not None
-            else DockerImageSource(image_id),
+            else DockerImageSource(local_id or image_id),
             RegistryTarget.parse(url),
             DeliveryGrant(image_id, url, time.time() + GRANT_SECONDS),
             node_registry=route.node_registry,
@@ -508,8 +516,10 @@ class Backend:
         *,
         archive: Path | None = None,
         ssh_agent_socket: Path | None = None,
+        local_id: str | None = None,
     ) -> dict[str, Any]:
-        """Import one image into the node; ``archive`` as for :meth:`registry_deliver`.
+        """Import one image into the node; ``archive`` and ``local_id`` as for
+        :meth:`registry_deliver`.
 
         ``ssh_agent_socket`` (0.22.0) is forwarded to ``ssh`` (an ``ssh://``
         target), so keys held by the user's agent reach the node.
@@ -527,7 +537,7 @@ class Backend:
             delivery.deliver(
                 ArchiveSource(archive.absolute())
                 if archive is not None
-                else DockerImageSource(image_id),
+                else DockerImageSource(local_id or image_id),
                 target,
                 DeliveryGrant(image_id, url, time.time() + GRANT_SECONDS),
                 reference=reference,

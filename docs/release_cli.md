@@ -265,7 +265,7 @@ For node import, name the image by its content tag, which
 
 ```bash
 ID=$(docker image inspect --format '{{.Id}}' app/api:dev)   # classic store: the config digest
-piceli artifacts deliver --image "$ID" --approve-digest "$ID" \
+piceli artifacts deliver --image app/api:dev --approve-digest "$ID" \
   --ref "app/api:sha256-${ID:7:12}" \
   --to 'ssh://ops@node-1.example?runtime=k3s-containerd' --receipt api.node.json
 ```

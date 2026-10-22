@@ -858,7 +858,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 **Invalid approved digest.** `--approve-digest` is not `sha256:` followed by 64 lowercase hex characters.
 
-- **Fix:** Pass the image config digest, e.g. from `docker image inspect --format '{{.Id}}'`.
+- **Fix:** Pass the image config digest: `docker image inspect --format '{{.Id}}'` with Docker's classic image store; with its containerd image store the `Config` of `manifest.json` in `docker image save` (docs/node_delivery.md).
 - **Retry-safe:** no
 
 (error-invalid-ca-file)=

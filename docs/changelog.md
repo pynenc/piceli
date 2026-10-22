@@ -158,6 +158,19 @@ and rollback.
   NAME --infra MODULE` finds the `NixHost` the module declares by its name,
   and reads it with the host keys pinned in the infrastructure's state;
   `--infra` takes a module or `MODULE:ATTR`.
+- **Docker's containerd image store.** Docker 29 stores images in
+  containerd by default (Docker Desktop offers it as an option). There the
+  image ID (`docker image inspect --format '{{.Id}}'`) is the digest of the
+  image's index, not of its config, so every delivery of a Docker build was
+  refused with `digest-mismatch`. A build now reads the config digest from
+  `docker image save` (the manifest for the built platform; attestation
+  manifests are ignored) and records it as `image_id`, the identity
+  deliveries approve and nodes report; the engine's own ID is the new
+  `local_id`, used for the smoke check, presence checks and `docker image
+  save`. A delivery of an archive that holds several platforms takes the
+  image whose config was approved, and the node is given only that image.
+  The classic store is unchanged. To approve an image by hand, read its
+  config digest as {doc}`node_delivery` shows.
 
 ## Version 0.23.0
 
