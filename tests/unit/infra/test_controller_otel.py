@@ -673,8 +673,11 @@ def black_hole() -> Iterator[str]:
 def test_an_unreachable_endpoint_never_slows_or_fails_a_deploy(
     world: dict[str, Any], black_hole: str, protocol: str
 ) -> None:
+    # A blocking export would wait the exporter's whole timeout: 600 s, so the
+    # bound below can leave a loaded runner (the two polls alone take ~7 s,
+    # more under a full parallel run) twenty times that and still prove it.
     settings = otel.Settings(
-        endpoint=black_hole, protocol=protocol, insecure=True, timeout=60.0
+        endpoint=black_hole, protocol=protocol, insecure=True, timeout=600.0
     )
     providers = otel.otlp_providers(
         settings, otel.resource_attributes(version="0.16.0")
@@ -702,9 +705,8 @@ def test_an_unreachable_endpoint_never_slows_or_fails_a_deploy(
         status = controller.poll_once()
         took = time.monotonic() - began
         assert status["envs"]["main"]["state"] == "deployed"
-        # Exports wait in the background: blocking ones would take the 60 s
-        # timeout at least twice (two runs); a loaded runner needs ~7 s.
-        assert took < 30, took
+        # Exports wait in the background: a blocking one would take 600 s.
+        assert took < 300, took
         processor = providers.tracer_provider._active_span_processor._span_processors[0]
         queue = processor._batch_processor._queue
         assert queue.maxlen == otel.MAX_QUEUE
