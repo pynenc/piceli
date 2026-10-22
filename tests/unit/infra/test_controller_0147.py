@@ -272,7 +272,7 @@ def test_a_forever_forward_backs_off_capped_and_never_gives_up(attempts: int) ->
 def test_a_failed_checks_detail_is_in_the_record_and_the_log(
     journaled: dict[str, Any],
 ) -> None:
-    """0.19 (IH item 12): ``gitops status``, ``wait`` and the UI showed only
+    """0.19: ``gitops status``, ``wait`` and the UI showed only
     ``check-failed``; the check's own reason is now in the record."""
     controller, channel, ports = (
         journaled["controller"],

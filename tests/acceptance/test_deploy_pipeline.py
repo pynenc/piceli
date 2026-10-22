@@ -430,3 +430,41 @@ def test_checks_without_a_runner_are_refused(shop, monkeypatch) -> None:
     assert code == 2, result.stdout + result.stderr
     assert events[-1]["reason"] == "pipeline-checks-unavailable"
     assert events[-1]["stage"] == "checks"
+
+
+class ContainerdStoreBackend(FakeBackend):
+    """Docker's containerd image store: the engine's ID is not the config digest."""
+
+    local_id = "sha256:" + "9" * 64
+    asked: list[tuple[str, str | None]] = []
+
+    def image_present(self, image_id: str, local_id: str | None = None) -> bool:
+        self.asked.append(("present", local_id))
+        return local_id == self.local_id and image_id in self.local
+
+    def build(self, spec, grant, output_dir, **kwargs):  # type: ignore[no-untyped-def]
+        receipt = super().build(spec, grant, output_dir, **kwargs)
+        for entry in receipt["outputs"]["images"].values():
+            entry["local_id"] = self.local_id
+        return receipt
+
+    def registry_deliver(self, route, image_id, repository, local_id=None):  # type: ignore[no-untyped-def]
+        self.asked.append(("deliver", local_id))
+        return super().registry_deliver(route, image_id, repository)
+
+
+def test_containerd_store_images_are_read_by_their_local_id(shop, monkeypatch) -> None:
+    api, tmp_path = shop
+    ContainerdStoreBackend.asked = []
+    monkeypatch.setattr("piceli.pipeline.runner.Backend", ContainerdStoreBackend)
+    code, events, result = deploy(tmp_path, "--auto-approve", "--json")
+    assert code == 0, result.stdout + result.stderr
+    # Delivery approves the config digest and reads the engine's own ID.
+    assert ("deliver", ContainerdStoreBackend.local_id) in ContainerdStoreBackend.asked
+    receipt = next((tmp_path / "state" / "deliveries").glob("*.json"))
+    assert json.loads(receipt.read_text())["approved_digest"] == FakeBackend.image_id
+    # The cached build is found by the engine's own ID, not rebuilt.
+    code, events, result = deploy(tmp_path, "--auto-approve", "--json")
+    assert code == 0, result.stdout + result.stderr
+    assert events[-1]["stages"]["build"] == "skipped"
+    assert ("present", ContainerdStoreBackend.local_id) in ContainerdStoreBackend.asked

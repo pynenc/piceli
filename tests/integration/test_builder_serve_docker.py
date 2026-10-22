@@ -252,7 +252,7 @@ def test_a_build_host_builds_a_two_source_spec_from_private_repositories(
     registry: int,
     tmp_path: Path,
 ) -> None:
-    """IH's shape (0.21.1): a spec in one repository building another's crate,
+    """A two-repository app (0.21.1): a spec in one repository building another's crate,
     both private (HTTPS has no credential, SSH has), both verified by their
     Git identity inside the builder container."""
     from piceli.dev.hosts import ContainerCli

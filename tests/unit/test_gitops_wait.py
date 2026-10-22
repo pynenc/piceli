@@ -173,7 +173,7 @@ def test_status_json_has_a_summary_per_environment(tmp_path: Path) -> None:
 
 
 def test_status_and_wait_print_gits_error_and_the_check_details(tmp_path: Path) -> None:
-    """0.19 (IH items 11, 12): the cause, not only its code."""
+    """0.19: the cause, not only its code."""
     detail = (
         "product: git ls-remote failed (exit 128): remote: Invalid username or token."
     )
@@ -217,15 +217,15 @@ def test_status_and_wait_print_gits_error_and_the_check_details(tmp_path: Path) 
 
 
 def test_gitops_cache_clear_records_a_request(tmp_path: Path) -> None:
-    """0.19 (IH item 10)."""
+    """0.19."""
     from piceli.gitops.state import DirectoryChannel
 
     result = CliRunner().invoke(
         cli,
-        ["gitops", "cache", "clear", "--crate", "ags", "--state-dir", str(tmp_path)],
+        ["gitops", "cache", "clear", "--crate", "canvas", "--state-dir", str(tmp_path)],
     )
     assert result.exit_code == 0, result.stdout + result.stderr
     body = json.loads(result.stdout)
-    assert body["state"] == "requested" and body["crates"] == ["ags"]
+    assert body["state"] == "requested" and body["crates"] == ["canvas"]
     pending = DirectoryChannel(tmp_path).requests()
     assert [item["kind"] for item in pending.values()] == ["cache-clear"]

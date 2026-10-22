@@ -39,6 +39,11 @@ the host and therefore require an explicit network-capable grant.
 binary, absolute Unix socket and `LocalImportGrant` for the exact OCI manifest.
 It validates the layout before loading, creates no tag, performs no push, and
 returns a secret-safe receipt. Callers own daemon authorization and image cleanup.
+The receipt's `image_id` is the config digest. With Docker's containerd image
+store (the default from Docker 29) the engine names the loaded image by a
+manifest digest of its own instead, so the receipt also has `local_id`; pass it
+as `LocalRunGrant(local_id=...)` and the runner finds and runs the image by it,
+after checking that its saved config is `image_id`.
 
 ## Thin CLI
 

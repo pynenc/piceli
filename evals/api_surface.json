@@ -368,6 +368,7 @@
      "pull_policy",
      "ready",
      "resources",
+     "roll_on_change",
      "security",
      "selector",
      "service_account",
@@ -403,6 +404,7 @@
      "ready",
      "replicas",
      "resources",
+     "roll_on_change",
      "security",
      "selector",
      "service_account",
@@ -587,6 +589,7 @@
      "ready",
      "replicas",
      "resources",
+     "roll_on_change",
      "security",
      "selector",
      "service_account",
@@ -1047,6 +1050,20 @@
     "matches": [
      "branch"
     ]
+   }
+  },
+  "Bucket": {
+   "attrs": [
+    "describe",
+    "protect"
+   ],
+   "init": [
+    "name",
+    "protect",
+    "provider"
+   ],
+   "methods": {
+    "describe": []
    }
   },
   "Build": {
@@ -2249,6 +2266,7 @@
     "pod_spec",
     "references",
     "restart_policy",
+    "roll_on_change",
     "schedule",
     "security",
     "selector",
@@ -2279,6 +2297,7 @@
     "node_selector",
     "parallelism",
     "restart_policy",
+    "roll_on_change",
     "schedule",
     "security",
     "selector",
@@ -2360,6 +2379,7 @@
     "pod_labels",
     "pod_spec",
     "references",
+    "roll_on_change",
     "security",
     "selector",
     "selector_labels",
@@ -2379,6 +2399,7 @@
     "name",
     "node",
     "node_selector",
+    "roll_on_change",
     "security",
     "selector",
     "service_account",
@@ -2504,6 +2525,7 @@
     "pod_spec",
     "references",
     "replicas",
+    "roll_on_change",
     "security",
     "selector",
     "selector_labels",
@@ -2524,6 +2546,7 @@
     "node",
     "node_selector",
     "replicas",
+    "roll_on_change",
     "security",
     "selector",
     "service_account",
@@ -2602,6 +2625,7 @@
     "plan_hash",
     "protected_resources",
     "schema_version",
+    "secret_adoptions",
     "snapshot_hash",
     "summary",
     "target",
@@ -2613,6 +2637,7 @@
     "levels",
     "protected_resources",
     "schema_version",
+    "secret_adoptions",
     "snapshot_hash",
     "target"
    ],
@@ -2841,9 +2866,11 @@
     "cpu",
     "describe",
     "env",
+    "for_nix",
     "image",
     "memory",
     "name",
+    "nix",
     "prefetch",
     "timeout",
     "toolchain",
@@ -2856,6 +2883,7 @@
     "image",
     "memory",
     "name",
+    "nix",
     "prefetch",
     "timeout",
     "toolchain",
@@ -2863,7 +2891,11 @@
     "tools"
    ],
    "methods": {
-    "describe": []
+    "describe": [],
+    "for_nix": null
+   },
+   "returns": {
+    "for_nix": "DevProfile"
    }
   },
   "DiscoveredResource": {
@@ -3343,7 +3375,8 @@
     "inspect_image": [
      "expected_platform",
      "image_id",
-     "limits"
+     "limits",
+     "local_id"
     ],
     "run_image": [
      "arguments",
@@ -4249,24 +4282,42 @@
    "attrs": [
     "address",
     "check_server",
+    "credential_env",
     "credentials",
+    "data_sources",
+    "default_ttl",
     "describe",
     "endpoint",
+    "known_error",
     "labels_of",
+    "ledger_owned",
     "location",
+    "min_ttl",
     "name",
     "pin",
+    "plan_check",
     "poll_interval",
     "prices",
     "provider_block",
+    "record_address",
+    "render_bucket",
     "render_firewall",
+    "render_image",
     "render_primary_ip",
     "render_record",
+    "render_records",
     "render_server",
     "render_ssh_key",
+    "render_user_data",
+    "resource_labels",
     "server_id",
     "server_status",
     "server_types",
+    "supports_buckets",
+    "supports_dns",
+    "supports_images",
+    "supports_servers",
+    "supports_user_data",
     "token_env"
    ],
    "init": [
@@ -4284,17 +4335,46 @@
     "check_server": [
      "server"
     ],
+    "credential_env": [
+     "value"
+    ],
+    "data_sources": [],
     "describe": [],
+    "known_error": [
+     "diagnostics"
+    ],
     "labels_of": [
      "values"
     ],
+    "ledger_owned": [
+     "type_"
+    ],
     "pin": [],
+    "plan_check": [
+     "credential",
+     "document",
+     "ledger"
+    ],
     "prices": [
      "token"
     ],
     "provider_block": [],
+    "record_address": [
+     "family",
+     "ips",
+     "resource",
+     "server"
+    ],
+    "render_bucket": [
+     "bucket",
+     "labels"
+    ],
     "render_firewall": [
      "firewall",
+     "labels"
+    ],
+    "render_image": [
+     "image",
      "labels"
     ],
     "render_primary_ip": [
@@ -4303,6 +4383,11 @@
      "server"
     ],
     "render_record": [
+     "labels",
+     "record",
+     "values"
+    ],
+    "render_records": [
      "labels",
      "record",
      "values"
@@ -4320,6 +4405,14 @@
      "name",
      "public_key"
     ],
+    "render_user_data": [
+     "reference",
+     "server"
+    ],
+    "resource_labels": [
+     "type_",
+     "values"
+    ],
     "server_id": [
      "server"
     ],
@@ -4329,13 +4422,19 @@
     "token_env": []
    },
    "returns": {
+    "data_sources": "Resource",
+    "known_error": "InfraError",
     "pin": "Pin",
     "prices": "Prices",
+    "render_bucket": "Resource",
     "render_firewall": "Resource",
+    "render_image": "Resource",
     "render_primary_ip": "Resource",
     "render_record": "Resource",
+    "render_records": "Resource",
     "render_server": "Resource",
-    "render_ssh_key": "Resource"
+    "render_ssh_key": "Resource",
+    "render_user_data": "Resource"
    }
   },
   "Hook": {
@@ -4380,6 +4479,64 @@
     "get": []
    },
    "pydantic": true
+  },
+  "HostCheck": {
+   "attrs": [
+    "command",
+    "describe",
+    "http",
+    "kind",
+    "name",
+    "target",
+    "timeout",
+    "unit"
+   ],
+   "init": [
+    "kind",
+    "name",
+    "target",
+    "timeout"
+   ],
+   "methods": {
+    "command": [
+     "name",
+     "timeout"
+    ],
+    "describe": [
+     "index"
+    ],
+    "http": [
+     "name",
+     "timeout",
+     "url"
+    ],
+    "unit": [
+     "name",
+     "timeout",
+     "unit"
+    ]
+   },
+   "returns": {
+    "command": "HostCheck",
+    "http": "HostCheck",
+    "unit": "HostCheck"
+   }
+  },
+  "HostReport": {
+   "attrs": [
+    "describe",
+    "endpoint",
+    "headers_file",
+    "insecure"
+   ],
+   "init": [
+    "endpoint",
+    "headers_file",
+    "insecure"
+   ],
+   "methods": {
+    "describe": []
+   }
   },
   "HttpCheck": {
    "attrs": [
@@ -4475,6 +4632,41 @@
     "env": [],
     "render": [],
     "secrets": []
+   }
+  },
+  "Image": {
+   "attrs": [
+    "describe",
+    "file",
+    "format",
+    "from_build",
+    "local_path",
+    "min_disk_gb",
+    "name",
+    "properties",
+    "sha256",
+    "url"
+   ],
+   "init": [
+    "file",
+    "format",
+    "min_disk_gb",
+    "name",
+    "properties",
+    "sha256",
+    "url"
+   ],
+   "methods": {
+    "describe": [],
+    "from_build": [
+     "build",
+     "min_disk_gb",
+     "name",
+     "properties"
+    ]
+   },
+   "returns": {
+    "from_build": "Image"
    }
   },
   "ImageHandle": {
@@ -4715,12 +4907,198 @@
    },
    "pydantic": true
   },
+  "Infomaniak": {
+   "attrs": [
+    "address",
+    "auth_url",
+    "check_server",
+    "credential_env",
+    "credentials",
+    "currency",
+    "data_sources",
+    "default_ttl",
+    "describe",
+    "flavors",
+    "ip_prices",
+    "known_error",
+    "labels_of",
+    "ledger_owned",
+    "location",
+    "min_ttl",
+    "name",
+    "pin",
+    "plan_check",
+    "preset",
+    "prices",
+    "prices_monthly",
+    "provider_block",
+    "public_network",
+    "record_address",
+    "region",
+    "render_bucket",
+    "render_firewall",
+    "render_image",
+    "render_primary_ip",
+    "render_record",
+    "render_records",
+    "render_server",
+    "render_ssh_key",
+    "render_user_data",
+    "resource_labels",
+    "server_id",
+    "server_status",
+    "supports_buckets",
+    "supports_dns",
+    "supports_images",
+    "supports_servers",
+    "supports_user_data",
+    "token_env"
+   ],
+   "init": [
+    "auth_url",
+    "credentials",
+    "currency",
+    "flavors",
+    "ip_prices",
+    "prices",
+    "public_network",
+    "region"
+   ],
+   "methods": {
+    "address": [
+     "family",
+     "server"
+    ],
+    "check_server": [
+     "server"
+    ],
+    "credential_env": [
+     "value"
+    ],
+    "data_sources": [],
+    "describe": [],
+    "known_error": [
+     "diagnostics"
+    ],
+    "labels_of": [
+     "values"
+    ],
+    "ledger_owned": [
+     "type_"
+    ],
+    "pin": [],
+    "plan_check": [
+     "credential",
+     "document",
+     "ledger"
+    ],
+    "prices": [
+     "token"
+    ],
+    "provider_block": [],
+    "record_address": [
+     "family",
+     "ips",
+     "resource",
+     "server"
+    ],
+    "render_bucket": [
+     "bucket",
+     "labels"
+    ],
+    "render_firewall": [
+     "firewall",
+     "labels"
+    ],
+    "render_image": [
+     "image",
+     "labels"
+    ],
+    "render_primary_ip": [
+     "ip",
+     "labels",
+     "server"
+    ],
+    "render_record": [
+     "labels",
+     "record",
+     "values"
+    ],
+    "render_records": [
+     "labels",
+     "record",
+     "values"
+    ],
+    "render_server": [
+     "firewall",
+     "ips",
+     "labels",
+     "server",
+     "ssh_keys"
+    ],
+    "render_ssh_key": [
+     "digest",
+     "labels",
+     "name",
+     "public_key"
+    ],
+    "render_user_data": [
+     "reference",
+     "server"
+    ],
+    "resource_labels": [
+     "type_",
+     "values"
+    ],
+    "server_id": [
+     "server"
+    ],
+    "server_status": [
+     "server"
+    ],
+    "token_env": []
+   },
+   "returns": {
+    "data_sources": "Resource",
+    "known_error": "InfraError",
+    "pin": "Pin",
+    "prices": "Prices",
+    "render_bucket": "Resource",
+    "render_firewall": "Resource",
+    "render_image": "Resource",
+    "render_primary_ip": "Resource",
+    "render_record": "Resource",
+    "render_records": "Resource",
+    "render_server": "Resource",
+    "render_ssh_key": "Resource",
+    "render_user_data": "Resource"
+   }
+  },
+  "InfraError": {
+   "attrs": [
+    "add_note",
+    "args",
+    "with_traceback"
+   ],
+   "init": [
+    "code",
+    "details",
+    "fields",
+    "message"
+   ],
+   "methods": {
+    "add_note": null,
+    "with_traceback": null
+   }
+  },
   "Infrastructure": {
    "attrs": [
     "backend",
+    "buckets",
     "describe",
     "firewalls",
     "home",
+    "images",
     "providers",
     "records",
     "server",
@@ -4730,6 +5108,7 @@
    ],
    "init": [
     "backend",
+    "buckets",
     "home",
     "name",
     "records",
@@ -4740,6 +5119,7 @@
    "methods": {
     "describe": [],
     "firewalls": [],
+    "images": [],
     "providers": [],
     "server": [
      "name"
@@ -4947,6 +5327,7 @@
     "pod_spec",
     "references",
     "restart_policy",
+    "roll_on_change",
     "security",
     "selector",
     "selector_labels",
@@ -4970,6 +5351,7 @@
     "node_selector",
     "parallelism",
     "restart_policy",
+    "roll_on_change",
     "security",
     "selector",
     "service_account",
@@ -5305,12 +5687,14 @@
    "attrs": [
     "expires_at",
     "image_id",
+    "local_id",
     "platform",
     "socket"
    ],
    "init": [
     "expires_at",
     "image_id",
+    "local_id",
     "platform",
     "socket"
    ],
@@ -5541,6 +5925,89 @@
    "pydantic": true,
    "returns": {
     "dns": "NetworkRule"
+   }
+  },
+  "NixCache": {
+   "attrs": [
+    "bucket",
+    "bucket_name",
+    "describe",
+    "endpoint",
+    "key_name",
+    "manifest_url",
+    "public_key",
+    "region",
+    "scheme",
+    "signing_credential",
+    "signing_key",
+    "store_url",
+    "url",
+    "write_credentials"
+   ],
+   "init": [
+    "bucket",
+    "endpoint",
+    "public_key",
+    "region",
+    "signing_key",
+    "url",
+    "write_credentials"
+   ],
+   "methods": {
+    "describe": [],
+    "manifest_url": [
+     "commit",
+     "name"
+    ]
+   }
+  },
+  "NixHost": {
+   "attr_types": {
+    "checks": "HostCheck",
+    "follow": "Tag",
+    "report": "HostReport"
+   },
+   "attrs": [
+    "age_identity",
+    "age_key_file",
+    "attribute",
+    "build",
+    "cache",
+    "checks",
+    "flake",
+    "follow",
+    "generations",
+    "history",
+    "name",
+    "poll_seconds",
+    "read_credentials_file",
+    "report",
+    "server",
+    "ssh_target"
+   ],
+   "init": [
+    "age_identity",
+    "age_key_file",
+    "build",
+    "cache",
+    "checks",
+    "flake",
+    "follow",
+    "generations",
+    "history",
+    "name",
+    "poll_seconds",
+    "read_credentials_file",
+    "report",
+    "server"
+   ],
+   "methods": {
+    "ssh_target": [
+     "address"
+    ]
+   },
+   "returns": {
+    "ssh_target": "SshTarget"
    }
   },
   "Node": {
@@ -5984,6 +6451,173 @@
     "summary": []
    }
   },
+  "OpenStack": {
+   "attrs": [
+    "address",
+    "auth_url",
+    "check_server",
+    "credential_env",
+    "credentials",
+    "currency",
+    "data_sources",
+    "default_ttl",
+    "describe",
+    "flavors",
+    "ip_prices",
+    "known_error",
+    "labels_of",
+    "ledger_owned",
+    "location",
+    "min_ttl",
+    "name",
+    "pin",
+    "plan_check",
+    "preset",
+    "prices",
+    "prices_monthly",
+    "provider_block",
+    "public_network",
+    "record_address",
+    "region",
+    "render_bucket",
+    "render_firewall",
+    "render_image",
+    "render_primary_ip",
+    "render_record",
+    "render_records",
+    "render_server",
+    "render_ssh_key",
+    "render_user_data",
+    "resource_labels",
+    "server_id",
+    "server_status",
+    "supports_buckets",
+    "supports_dns",
+    "supports_images",
+    "supports_servers",
+    "supports_user_data",
+    "token_env"
+   ],
+   "init": [
+    "auth_url",
+    "credentials",
+    "currency",
+    "flavors",
+    "ip_prices",
+    "prices",
+    "public_network",
+    "region"
+   ],
+   "methods": {
+    "address": [
+     "family",
+     "server"
+    ],
+    "check_server": [
+     "server"
+    ],
+    "credential_env": [
+     "value"
+    ],
+    "data_sources": [],
+    "describe": [],
+    "known_error": [
+     "diagnostics"
+    ],
+    "labels_of": [
+     "values"
+    ],
+    "ledger_owned": [
+     "type_"
+    ],
+    "pin": [],
+    "plan_check": [
+     "credential",
+     "document",
+     "ledger"
+    ],
+    "prices": [
+     "token"
+    ],
+    "provider_block": [],
+    "record_address": [
+     "family",
+     "ips",
+     "resource",
+     "server"
+    ],
+    "render_bucket": [
+     "bucket",
+     "labels"
+    ],
+    "render_firewall": [
+     "firewall",
+     "labels"
+    ],
+    "render_image": [
+     "image",
+     "labels"
+    ],
+    "render_primary_ip": [
+     "ip",
+     "labels",
+     "server"
+    ],
+    "render_record": [
+     "labels",
+     "record",
+     "values"
+    ],
+    "render_records": [
+     "labels",
+     "record",
+     "values"
+    ],
+    "render_server": [
+     "firewall",
+     "ips",
+     "labels",
+     "server",
+     "ssh_keys"
+    ],
+    "render_ssh_key": [
+     "digest",
+     "labels",
+     "name",
+     "public_key"
+    ],
+    "render_user_data": [
+     "reference",
+     "server"
+    ],
+    "resource_labels": [
+     "type_",
+     "values"
+    ],
+    "server_id": [
+     "server"
+    ],
+    "server_status": [
+     "server"
+    ],
+    "token_env": []
+   },
+   "returns": {
+    "data_sources": "Resource",
+    "known_error": "InfraError",
+    "pin": "Pin",
+    "prices": "Prices",
+    "render_bucket": "Resource",
+    "render_firewall": "Resource",
+    "render_image": "Resource",
+    "render_primary_ip": "Resource",
+    "render_record": "Resource",
+    "render_records": "Resource",
+    "render_server": "Resource",
+    "render_ssh_key": "Resource",
+    "render_user_data": "Resource"
+   }
+  },
   "OperatorUser": {
    "attrs": [
     "created_at",
@@ -6421,6 +7055,7 @@
     "previous",
     "prune_managed",
     "replace_resources",
+    "secret_adoptions",
     "target"
    ],
    "init": [
@@ -6431,6 +7066,7 @@
     "previous",
     "prune_managed",
     "replace_resources",
+    "secret_adoptions",
     "target"
    ],
    "methods": {}
@@ -6677,6 +7313,160 @@
    ],
    "methods": {
     "to_dict": []
+   }
+  },
+  "Porkbun": {
+   "attrs": [
+    "address",
+    "check_server",
+    "credential_env",
+    "credentials",
+    "data_sources",
+    "default_ttl",
+    "describe",
+    "known_error",
+    "labels_of",
+    "ledger_owned",
+    "location",
+    "min_ttl",
+    "name",
+    "pin",
+    "plan_check",
+    "prices",
+    "provider_block",
+    "record_address",
+    "render_bucket",
+    "render_firewall",
+    "render_image",
+    "render_primary_ip",
+    "render_record",
+    "render_records",
+    "render_server",
+    "render_ssh_key",
+    "render_user_data",
+    "resource_labels",
+    "server_id",
+    "server_status",
+    "supports_buckets",
+    "supports_dns",
+    "supports_images",
+    "supports_servers",
+    "supports_user_data",
+    "token_env"
+   ],
+   "init": [
+    "credentials",
+    "location"
+   ],
+   "methods": {
+    "address": [
+     "family",
+     "server"
+    ],
+    "check_server": [
+     "server"
+    ],
+    "credential_env": [
+     "value"
+    ],
+    "data_sources": [],
+    "describe": [],
+    "known_error": [
+     "diagnostics"
+    ],
+    "labels_of": [
+     "values"
+    ],
+    "ledger_owned": [
+     "type_"
+    ],
+    "pin": [],
+    "plan_check": [
+     "credential",
+     "document",
+     "ledger",
+     "post"
+    ],
+    "prices": [
+     "token"
+    ],
+    "provider_block": [],
+    "record_address": [
+     "family",
+     "ips",
+     "resource",
+     "server"
+    ],
+    "render_bucket": [
+     "bucket",
+     "labels"
+    ],
+    "render_firewall": [
+     "firewall",
+     "labels"
+    ],
+    "render_image": [
+     "image",
+     "labels"
+    ],
+    "render_primary_ip": [
+     "ip",
+     "labels",
+     "server"
+    ],
+    "render_record": [
+     "labels",
+     "record",
+     "values"
+    ],
+    "render_records": [
+     "labels",
+     "record",
+     "values"
+    ],
+    "render_server": [
+     "firewall",
+     "ips",
+     "labels",
+     "server",
+     "ssh_keys"
+    ],
+    "render_ssh_key": [
+     "digest",
+     "labels",
+     "name",
+     "public_key"
+    ],
+    "render_user_data": [
+     "reference",
+     "server"
+    ],
+    "resource_labels": [
+     "type_",
+     "values"
+    ],
+    "server_id": [
+     "server"
+    ],
+    "server_status": [
+     "server"
+    ],
+    "token_env": []
+   },
+   "returns": {
+    "data_sources": "Resource",
+    "known_error": "InfraError",
+    "pin": "Pin",
+    "prices": "Prices",
+    "render_bucket": "Resource",
+    "render_firewall": "Resource",
+    "render_image": "Resource",
+    "render_primary_ip": "Resource",
+    "render_record": "Resource",
+    "render_records": "Resource",
+    "render_server": "Resource",
+    "render_ssh_key": "Resource",
+    "render_user_data": "Resource"
    }
   },
   "Port": {
@@ -8269,6 +9059,25 @@
     "key": "SecretKey"
    }
   },
+  "SecretAdoption": {
+   "attr_types": {
+    "resource": "ResourceRef"
+   },
+   "attrs": [
+    "generator",
+    "resource",
+    "summary",
+    "uid"
+   ],
+   "init": [
+    "generator",
+    "resource",
+    "uid"
+   ],
+   "methods": {
+    "summary": []
+   }
+  },
   "SecretBinding": {
    "attr_types": {
     "reference": "SecretVersionRef"
@@ -8316,6 +9125,8 @@
     "close",
     "contains",
     "discard",
+    "fingerprint",
+    "fingerprint_value",
     "put",
     "put_once",
     "resolve",
@@ -8336,6 +9147,13 @@
      "references",
      "session_id",
      "target"
+    ],
+    "fingerprint": [
+     "reference",
+     "target"
+    ],
+    "fingerprint_value": [
+     "value"
     ],
     "put": [
      "target",
@@ -8467,7 +9285,8 @@
     "ipv6",
     "location",
     "primary_ips",
-    "ssh_keys"
+    "ssh_keys",
+    "user_data"
    ],
    "init": [
     "cluster",
@@ -8482,7 +9301,8 @@
     "provider",
     "ssh",
     "ssh_keys",
-    "type"
+    "type",
+    "user_data"
    ],
    "methods": {
     "describe": [],
@@ -8844,6 +9664,27 @@
    ],
    "methods": {}
   },
+  "SshTarget": {
+   "attrs": [
+    "address",
+    "parse",
+    "port",
+    "user"
+   ],
+   "init": [
+    "address",
+    "port",
+    "user"
+   ],
+   "methods": {
+    "parse": [
+     "text"
+    ]
+   },
+   "returns": {
+    "parse": "SshTarget"
+   }
+  },
   "Stack": {
    "attrs": [
     "components",
@@ -8918,6 +9759,7 @@
     "pod_spec",
     "references",
     "replicas",
+    "roll_on_change",
     "security",
     "selector",
     "selector_labels",
@@ -8940,6 +9782,7 @@
     "node_selector",
     "pod_management",
     "replicas",
+    "roll_on_change",
     "security",
     "selector",
     "service_account",
@@ -9419,6 +10262,15 @@
    "methods": {},
    "pydantic": true
   },
+  "UserData": {
+   "attrs": [
+    "secret"
+   ],
+   "init": [
+    "secret"
+   ],
+   "methods": {}
+  },
   "UserStore": {
    "attrs": [
     "authenticate",
@@ -9681,6 +10533,7 @@
     "pod_labels",
     "pod_spec",
     "references",
+    "roll_on_change",
     "security",
     "selector",
     "selector_labels",
@@ -9698,6 +10551,7 @@
     "name",
     "node",
     "node_selector",
+    "roll_on_change",
     "security",
     "selector",
     "service_account",
@@ -9767,6 +10621,7 @@
      "gitops",
      "heavy",
      "help-json",
+     "host",
      "import",
      "infra",
      "inputs",
@@ -10310,6 +11165,7 @@
      "cancel",
      "hosts",
      "logs",
+     "nix",
      "release-host",
      "run",
      "schedule",
@@ -10372,6 +11228,51 @@
      "--follow",
      "--tail",
      "--transport"
+    ],
+    "subcommands": []
+   },
+   "dev nix": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "build",
+     "gc"
+    ]
+   },
+   "dev nix build": {
+    "arguments": [
+     "attr"
+    ],
+    "flags": [
+     "--approve",
+     "--artifacts-dir",
+     "--branch",
+     "--cluster",
+     "--dev",
+     "--host",
+     "--image",
+     "--json",
+     "--name",
+     "--profile",
+     "--publish",
+     "--queue-timeout",
+     "--quiet",
+     "--ref",
+     "--repo",
+     "--worktree"
+    ],
+    "subcommands": []
+   },
+   "dev nix gc": {
+    "arguments": [],
+    "flags": [
+     "--approve",
+     "--cache",
+     "--grace",
+     "--json",
+     "--keep-tags",
+     "--main",
+     "--repo"
     ],
     "subcommands": []
    },
@@ -10800,6 +11701,95 @@
    "help-json": {
     "arguments": [],
     "flags": [],
+    "subcommands": []
+   },
+   "host": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "module",
+     "pin",
+     "rollback",
+     "secrets",
+     "status",
+     "unpin",
+     "wait"
+    ]
+   },
+   "host module": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--output"
+    ],
+    "subcommands": []
+   },
+   "host pin": {
+    "arguments": [
+     "target",
+     "tag"
+    ],
+    "flags": [
+     "--infra",
+     "--json"
+    ],
+    "subcommands": []
+   },
+   "host rollback": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--infra",
+     "--json"
+    ],
+    "subcommands": []
+   },
+   "host secrets": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--approve",
+     "--infra",
+     "--json",
+     "--replace"
+    ],
+    "subcommands": []
+   },
+   "host status": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--infra",
+     "--json"
+    ],
+    "subcommands": []
+   },
+   "host unpin": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--infra",
+     "--json"
+    ],
+    "subcommands": []
+   },
+   "host wait": {
+    "arguments": [
+     "target",
+     "rev"
+    ],
+    "flags": [
+     "--infra",
+     "--interval",
+     "--json",
+     "--published-after",
+     "--timeout"
+    ],
     "subcommands": []
    },
    "import": {
@@ -11563,11 +12553,27 @@
     "arguments": [],
     "flags": [],
     "subcommands": [
+     "age",
      "cluster",
+     "delete",
      "git",
+     "nix-cache",
      "provider",
-     "state-key"
+     "s3",
+     "state-key",
+     "user-data"
     ]
+   },
+   "secrets age": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--generate",
+     "--prompt",
+     "--replace"
+    ],
+    "subcommands": []
    },
    "secrets cluster": {
     "arguments": [],
@@ -11584,6 +12590,16 @@
     ],
     "subcommands": []
    },
+   "secrets delete": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--kind",
+     "--yes"
+    ],
+    "subcommands": []
+   },
    "secrets git": {
     "arguments": [],
     "flags": [
@@ -11596,7 +12612,28 @@
     ],
     "subcommands": []
    },
+   "secrets nix-cache": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--generate",
+     "--key-name",
+     "--prompt",
+     "--replace"
+    ],
+    "subcommands": []
+   },
    "secrets provider": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--prompt"
+    ],
+    "subcommands": []
+   },
+   "secrets s3": {
     "arguments": [
      "name"
     ],
@@ -11613,6 +12650,16 @@
      "--generate",
      "--prompt",
      "--replace"
+    ],
+    "subcommands": []
+   },
+   "secrets user-data": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--file",
+     "--prompt"
     ],
     "subcommands": []
    },
@@ -12041,6 +13088,17 @@
    "dev-host-unavailable",
    "dev-host-unknown",
    "dev-isolation-not-enforced",
+   "dev-nix-cache-invalid",
+   "dev-nix-crypto-unavailable",
+   "dev-nix-gc-failed",
+   "dev-nix-host-unsupported",
+   "dev-nix-invalid",
+   "dev-nix-key-invalid",
+   "dev-nix-key-mismatch",
+   "dev-nix-manifest-failed",
+   "dev-nix-no-output",
+   "dev-nix-plan-changed",
+   "dev-nix-publish-failed",
    "dev-not-enabled",
    "dev-profile-unknown",
    "dev-queue-timeout",
@@ -12164,12 +13222,46 @@
    "heavy-command-empty",
    "heavy-command-missing",
    "heavy-lock-timeout",
+   "host-address-unknown",
+   "host-build-bad",
    "host-build-invalid",
+   "host-busy",
+   "host-cache-unreachable",
+   "host-check-failed",
+   "host-check-invalid",
+   "host-control-unsupported",
+   "host-credentials-exposed",
+   "host-credentials-missing",
+   "host-deploy-failed",
+   "host-invalid",
+   "host-manifest-mismatch",
+   "host-narinfo-mismatch",
+   "host-not-found",
    "host-output-missing",
+   "host-pin-not-found",
+   "host-pinned",
+   "host-pointer-replayed",
+   "host-prune-failed",
+   "host-realise-failed",
+   "host-report-failed",
+   "host-rollback-failed",
+   "host-rollback-unavailable",
+   "host-rolled-back",
+   "host-secret-activation-failed",
+   "host-secret-exists",
+   "host-secret-plan-changed",
+   "host-secret-undeclared",
+   "host-secret-write-failed",
+   "host-signature-invalid",
+   "host-status-missing",
+   "host-switch-failed",
+   "host-system-mismatch",
    "host-tool-missing",
    "host-toolchain-checksum",
    "host-toolchain-failed",
    "host-toolchain-invalid",
+   "host-unreachable",
+   "host-wait-timeout",
    "identity-mismatch",
    "image-declared-twice",
    "image-digest-mismatch",
@@ -12196,7 +13288,13 @@
    "infra-credential-missing",
    "infra-credential-refused",
    "infra-credential-unsafe",
+   "infra-dns-api-disabled",
+   "infra-dns-check-failed",
+   "infra-dns-record-conflict",
    "infra-foreign-resource",
+   "infra-image-build-invalid",
+   "infra-image-checksum",
+   "infra-image-unavailable",
    "infra-install-changed",
    "infra-install-failed",
    "infra-install-unavailable",
@@ -12219,6 +13317,7 @@
    "infra-tofu-failed",
    "infra-tofu-missing",
    "infra-tofu-unsupported",
+   "infra-user-data-missing",
    "inputs-io-error",
    "inputs-lock-invalid",
    "invalid-access-profile",
@@ -12438,6 +13537,8 @@
    "runner-memory-low",
    "runner-tool-missing",
    "scope-mismatch",
+   "secret-adoption-incomplete",
+   "secret-adoption-invalid",
    "secret-dependency-cycle",
    "secret-generator-failed",
    "secret-import-unavailable",
@@ -12836,6 +13937,7 @@
    "errors": {},
    "gcp": {},
    "gitops": {},
+   "hosts": {},
    "importing": {},
    "infra": {},
    "integrity": {},
@@ -13377,6 +14479,12 @@
    }
   },
   "piceli.infra": {
+   "Branch": {
+    "class": "Branch"
+   },
+   "Bucket": {
+    "class": "Bucket"
+   },
    "BuildHost": {
     "class": "BuildHost"
    },
@@ -13410,8 +14518,20 @@
    "Hook": {
     "class": "Hook"
    },
+   "HostCheck": {
+    "class": "HostCheck"
+   },
+   "HostReport": {
+    "class": "HostReport"
+   },
    "HttpState": {
     "class": "HttpState"
+   },
+   "Image": {
+    "class": "Image"
+   },
+   "Infomaniak": {
+    "class": "Infomaniak"
    },
    "Infrastructure": {
     "class": "Infrastructure"
@@ -13419,11 +14539,23 @@
    "LocalState": {
     "class": "LocalState"
    },
+   "NixCache": {
+    "class": "NixCache"
+   },
+   "NixHost": {
+    "class": "NixHost"
+   },
    "Node": {
     "class": "Node"
    },
+   "OpenStack": {
+    "class": "OpenStack"
+   },
    "Otlp": {
     "class": "Otlp"
+   },
+   "Porkbun": {
+    "class": "Porkbun"
    },
    "PrimaryIp": {
     "class": "PrimaryIp"
@@ -13440,8 +14572,14 @@
    "Ssh": {
     "class": "Ssh"
    },
+   "Tag": {
+    "class": "Tag"
+   },
    "Ui": {
     "class": "Ui"
+   },
+   "UserData": {
+    "class": "UserData"
    },
    "register_cluster": {
     "params": [
@@ -14256,6 +15394,9 @@
   "piceli.dev.hosts",
   "piceli.dev.jobs",
   "piceli.dev.model",
+  "piceli.dev.nix",
+  "piceli.dev.nix_publish",
+  "piceli.dev.nix_verify",
   "piceli.dev.pack",
   "piceli.dev.pod",
   "piceli.dev.scheduler",
@@ -14287,6 +15428,12 @@
   "piceli.gitops.state",
   "piceli.gitops.token_expiry",
   "piceli.gitops.wait",
+  "piceli.hosts",
+  "piceli.hosts.age",
+  "piceli.hosts.agent",
+  "piceli.hosts.model",
+  "piceli.hosts.module",
+  "piceli.hosts.remote",
   "piceli.importing",
   "piceli.importing.clean",
   "piceli.importing.codegen",
@@ -14303,9 +15450,12 @@
   "piceli.infra.machines",
   "piceli.infra.machines.credentials",
   "piceli.infra.machines.hetzner",
+  "piceli.infra.machines.images",
   "piceli.infra.machines.install",
   "piceli.infra.machines.model",
+  "piceli.infra.machines.openstack",
   "piceli.infra.machines.plan",
+  "piceli.infra.machines.porkbun",
   "piceli.infra.machines.provider",
   "piceli.infra.machines.register",
   "piceli.infra.machines.render",
@@ -14335,11 +15485,13 @@
   "piceli.k8s.cli.contract",
   "piceli.k8s.cli.deploy_pipeline",
   "piceli.k8s.cli.dev",
+  "piceli.k8s.cli.dev_nix",
   "piceli.k8s.cli.env",
   "piceli.k8s.cli.env_push",
   "piceli.k8s.cli.env_stop",
   "piceli.k8s.cli.gitops",
   "piceli.k8s.cli.heavy",
+  "piceli.k8s.cli.host",
   "piceli.k8s.cli.importing",
   "piceli.k8s.cli.infra",
   "piceli.k8s.cli.inputs",
@@ -14374,6 +15526,7 @@
   "piceli.k8s.operator_state",
   "piceli.k8s.ops",
   "piceli.k8s.ops.bounds",
+  "piceli.k8s.ops.content_digest",
   "piceli.k8s.ops.diagnosis",
   "piceli.k8s.ops.discovery",
   "piceli.k8s.ops.dry_run",
@@ -14398,6 +15551,7 @@
   "piceli.k8s.release_secret_spec",
   "piceli.k8s.release_secrets",
   "piceli.k8s.release_spec",
+  "piceli.k8s.secret_adoption",
   "piceli.k8s.secret_sources",
   "piceli.k8s.templates",
   "piceli.k8s.templates.auxiliary",
@@ -14546,5 +15700,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.22.0"
+ "version": "0.24.0"
 }

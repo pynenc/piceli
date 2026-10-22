@@ -3,8 +3,10 @@
 The same web + api app is written with Piceli, Helm, Kustomize, cdk8s and
 Pulumi. For ``dev``, ``staging`` and ``prod`` each tool's output is compared
 with ``piceli render --env <env>``: the same objects (kind, name, namespace)
-with the same labels, data and spec. Annotations are ignored, and integral
-numbers compare equal whatever their JSON type (Pulumi's mocks send floats).
+with the same labels, data and spec. Annotations are ignored (also Piceli's
+content digests on pod templates: each tool rolls pods on a configuration
+change its own way), and integral numbers compare equal whatever their JSON
+type (Pulumi's mocks send floats).
 
 Each tool is optional locally: its test is skipped when the tool (``helm``,
 ``kustomize`` or ``kubectl``, the ``cdk8s`` packages plus ``node``, the
@@ -36,6 +38,10 @@ import yaml
 from typer.testing import CliRunner
 
 from piceli.k8s.cli import app as cli
+from piceli.k8s.ops.content_digest import (
+    CONFIG_DIGEST_ANNOTATION,
+    SECRET_DIGEST_ANNOTATION,
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 EXAMPLES = ROOT / "examples" / "comparisons"
@@ -91,6 +97,12 @@ def _objects(documents: list[Any]) -> Objects:
             continue
         doc = _normalize(doc)
         doc["metadata"].pop("annotations", None)
+        template = (doc.get("spec") or {}).get("template") or {}
+        annotations = (template.get("metadata") or {}).get("annotations") or {}
+        for name in (CONFIG_DIGEST_ANNOTATION, SECRET_DIGEST_ANNOTATION):
+            annotations.pop(name, None)
+        if not annotations:
+            (template.get("metadata") or {}).pop("annotations", None)
         key = (doc["kind"], doc["metadata"]["name"])
         assert key not in objects, f"{key} rendered twice"
         objects[key] = doc

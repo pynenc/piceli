@@ -16,6 +16,10 @@ waits until the API answers with a Ready node, and stores it ``0600``
 under ``$PICELI_CREDENTIALS_DIR/kubeconfigs/`` (never in Git, never
 printed). Then :func:`register_cluster` makes it the cluster's credentials.
 
+A server without ``cluster=`` (0.24.0: a Nix host) is registered for its
+host keys only: approved, they are pinned in the same ``known_hosts``, which
+``piceli host`` uses with ``--infra``; nothing else is read or written.
+
 :func:`register_cluster` calls the multi-cluster
 registration (``piceli.infra.multicluster.register_cluster``: local profile
 plus the home controller's Secret) when it exists and the infrastructure
@@ -108,9 +112,9 @@ def _host(address: str, port: int) -> str:
 class RegisterPreview:
     infra: str
     server: str
-    cluster: str
-    api: str
-    profile: str
+    cluster: str | None
+    api: str | None
+    profile: str | None
     source: str
     address: str | None
     host_keys: tuple[tuple[str, str], ...]
@@ -133,8 +137,14 @@ class RegisterPreview:
             ],
             "kubeconfig_ca": self.kubeconfig_ca,
             "profile_exists": self.profile_exists,
+            "mode": self.mode,
             "digest": self.digest,
         }
+
+    @property
+    def mode(self) -> str:
+        """``cluster`` (k3s becomes the cluster) or ``host-keys`` (pinned only)."""
+        return "cluster" if self.cluster is not None else "host-keys"
 
 
 def _read_yaml(text: str) -> dict[str, Any]:
@@ -241,13 +251,17 @@ def preview_register(
         raise InfraError(
             "infra-server-unknown", f"no server named {name!r} is declared"
         )
-    cluster = _target(server)
+    cluster = server.cluster
+    if cluster is None and kubeconfig is not None:
+        _target(server)  # infra-no-cluster: a kubeconfig needs a cluster
     values = server_values(infra, directory, server)
-    try:
-        load_profile(cluster.credentials)
-        exists = True
-    except ProfileError:
-        exists = False
+    exists = False
+    if cluster is not None:
+        try:
+            load_profile(cluster.credentials)
+            exists = True
+        except ProfileError:
+            exists = False
     address: str | None = None
     keys: tuple[tuple[str, str], ...] = ()
     ca: str | None = None
@@ -268,9 +282,9 @@ def preview_register(
         {
             "infra": infra.name,
             "server": name,
-            "cluster": cluster.name,
-            "api": cluster.api,
-            "profile": cluster.credentials,
+            "cluster": cluster.name if cluster else None,
+            "api": cluster.api if cluster else None,
+            "profile": cluster.credentials if cluster else None,
             "source": source,
             "address": address,
             "port": server.ssh.port,
@@ -285,9 +299,9 @@ def preview_register(
     return RegisterPreview(
         infra.name,
         name,
-        cluster.name,
-        cluster.api,
-        cluster.credentials,
+        cluster.name if cluster else None,
+        cluster.api if cluster else None,
+        cluster.credentials if cluster else None,
         source,
         address,
         keys,
@@ -390,6 +404,29 @@ def wait_ready(
         time.sleep(3)
 
 
+def pin_host_keys(
+    directory: Path, host: str, keys: tuple[tuple[str, str], ...]
+) -> Path:
+    """Replace ``host``'s lines in the state's ``known_hosts`` with ``keys``;
+    other servers' lines stay."""
+    known = directory / KNOWN_HOSTS
+    try:
+        kept = [
+            line
+            for line in known.read_text().splitlines()
+            if line.strip() and line.split()[0] != host
+        ]
+    except FileNotFoundError:
+        kept = []
+    lines = sorted(kept + [f"{host} {kind} {key}" for kind, key in keys])
+    staged = known.with_name(f".{KNOWN_HOSTS}.partial")
+    descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w") as handle:
+        handle.write("\n".join(lines) + "\n")
+    os.replace(staged, known)
+    return known
+
+
 def kubeconfig_path(cluster: Cluster) -> Path:
     from piceli.infra.machines.credentials import credentials_dir
 
@@ -453,24 +490,31 @@ def run_register(
 
     server = infra.server(preview.server)
     assert server is not None
-    cluster = _target(server)
     deadline = time.monotonic() + max(0.0, wait)
+    if preview.source == "ssh":
+        assert preview.address is not None
+        known = pin_host_keys(
+            directory, _host(preview.address, server.ssh.port), preview.host_keys
+        )
+        say(f"pinned {len(preview.host_keys)} host key(s) of {preview.address}")
+    if server.cluster is None:
+        outcome: dict[str, Any] = {
+            "state": "pinned", "cluster": None, "address": preview.address,
+            "host_keys": preview.to_dict()["host_keys"], "digest": preview.digest,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }  # fmt: skip
+        record = read_record(directory, REGISTRATIONS)
+        record[preview.server] = outcome
+        write_record(directory, REGISTRATIONS, record)
+        return outcome
+    cluster = _target(server)
     if preview.source == "file":
         assert kubeconfig is not None
         text = _read_file(kubeconfig)
         base: Path | None = kubeconfig.absolute().parent
     else:
         assert preview.address is not None
-        known = directory / KNOWN_HOSTS
-        lines = sorted(
-            f"{_host(preview.address, server.ssh.port)} {kind} {key}"
-            for kind, key in preview.host_keys
-        )
-        known.write_text("\n".join(lines) + "\n")
-        known.chmod(0o600)
-        say(
-            f"pinned {len(lines)} host key(s) of {preview.address}; reading the k3s kubeconfig over SSH"
-        )
+        say("reading the k3s kubeconfig over SSH")
         text = fetch_over_ssh(server, preview.address, known, deadline)
         base = None
     document = rewrite_kubeconfig(

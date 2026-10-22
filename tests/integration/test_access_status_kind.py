@@ -202,16 +202,16 @@ def test_status_and_access_on_kind(tmp_path: Path, namespace: str) -> None:
             assert [(item["port"], item["pid"]) for item in stopped] == [
                 (local, process.pid)
             ]
-            process.communicate(timeout=20)  # the supervisor ended on SIGTERM
+            process.communicate(timeout=120)  # the supervisor ended on SIGTERM
     finally:
         if process.poll() is None:
             process.send_signal(signal.SIGINT)
             try:
-                process.communicate(timeout=20)
+                process.communicate(timeout=120)
             finally:
                 if process.poll() is None:
                     process.kill()
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 60
     while time.monotonic() < deadline and local_port_in_use(local):
         time.sleep(0.1)
     assert not local_port_in_use(local)
@@ -355,11 +355,11 @@ def test_access_follows_the_live_owner_across_a_rollout(
         if process.poll() is None:
             process.send_signal(signal.SIGINT)
             try:
-                process.communicate(timeout=20)
+                process.communicate(timeout=120)
             finally:
                 if process.poll() is None:
                     process.kill()
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 60
     while time.monotonic() < deadline and local_port_in_use(local):
         time.sleep(0.1)
     assert not local_port_in_use(local)

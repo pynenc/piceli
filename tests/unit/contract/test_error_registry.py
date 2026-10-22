@@ -62,6 +62,8 @@ FIRST_ARGUMENT = {
     "SupportError",
     "DevError",
     "RunError",
+    "HostError",
+    "Failure",
 }
 # ``_Failure(result, reason)`` in the delivery modules; ``reject_error(error, default)``;
 # ``DryRunUnavailable(resource, reason)`` in ``k8s/ops/dry_run.py``.
@@ -72,6 +74,13 @@ RULES = {"rejecting"}
 # Codes built at runtime, which a literal scan cannot see. Keep this list next
 # to the code that builds them.
 DYNAMIC = {
+    # hosts.agent and hosts.remote: reasons an attempt or a wait records
+    "host-build-bad",
+    "host-rollback-failed",
+    "host-rolled-back",
+    "host-deploy-failed",
+    "host-pinned",
+    "host-prune-failed",
     # dev.hosts.UNAVAILABLE: a build host that cannot take a run
     "dev-host-unavailable",
     # envs.access (SKIPPED, UNCHANGED) and k8s.env_access (TAILNET_*,

@@ -157,17 +157,19 @@ def lease_expired(api: FakeAPI) -> bool:
 def test_a_killed_holder_is_taken_over_after_its_lease_expires(cluster) -> None:
     api, root = cluster
     api.ready = False
-    victim = start(root, "a", "--auto-approve", readiness=90, lease=20)
+    # 45 s: the second runner must start (a busy runner takes many seconds)
+    # while the killed holder's lease is still valid.
+    victim = start(root, "a", "--auto-approve", readiness=90, lease=45)
     wait_for(lambda: applying(api, victim))
     time.sleep(0.5)
     victim.kill()  # SIGKILL, no cleanup: the lease stays held
     victim.communicate(timeout=30)
-    code, body, stderr = finish(start(root, "b", "--resume", lease=20))
+    code, body, stderr = finish(start(root, "b", "--resume", lease=45))
     assert (code, body.get("reason")) == (2, "pipeline-locked"), stderr
     assert f"/{victim.pid}/" in body["lock"]["holder"]
     api.ready = True
-    wait_for(lambda: lease_expired(api), seconds=40)  # nobody renews it
-    code, body, stderr = finish(start(root, "c", "--resume", lease=20))
+    wait_for(lambda: lease_expired(api), seconds=90)  # nobody renews it
+    code, body, stderr = finish(start(root, "c", "--resume", lease=45))
     assert code == 0 and body["state"] == "ready", stderr
     taken = stderr.split("took over the expired lock of 'shop' from ", 1)[1]
     assert f"/{victim.pid}/" in taken.split()[0]

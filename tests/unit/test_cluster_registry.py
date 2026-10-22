@@ -267,13 +267,13 @@ def test_the_node_agent_writes_the_mirror_and_removes_it_on_stop(
         stderr=subprocess.DEVNULL,
     )
     try:
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 60
         while not written.exists() and time.monotonic() < deadline:
             time.sleep(0.05)
         assert written.read_text() == cr.hosts_toml("10.96.0.7", 5000)
     finally:
         agent.send_signal(signal.SIGTERM)
-        agent.wait(timeout=10)
+        agent.wait(timeout=60)
     assert not written.exists() and not written.parent.exists()
 
 

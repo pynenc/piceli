@@ -72,7 +72,10 @@ differs. Each platform gets its own layers, SBOM and provenance under
 inputs give the same index digest. One approval (`--approve-plan`) covers
 every platform; the plan hash covers each platform's plan. With one
 platform the plan hash and the receipt are those of a single-platform
-build. A `build.platforms` list also restricts which node a
+build. Steps whose result is the same for every platform (a `wasm32`
+browser bundle) belong in `build.shared_commands`: they run once, with the
+first platform, into a target directory every platform's images copy from
+(see {doc}`host_builds`). A `build.platforms` list also restricts which node a
 `Build.spec(..., builder="host")` deploys to (`node-platform-mismatch`).
 
 **Docker builds** ({doc}`containerized_builds`): list the platforms in the

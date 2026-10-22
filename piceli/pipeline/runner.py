@@ -929,10 +929,18 @@ class PipelineRunner:
         }
         return shown, hashed
 
+    def _local_present(self, entry: Mapping[str, Any], image_id: str) -> bool:
+        """The local engine holds the built image (by its own ID when that is
+        not the config digest: Docker's containerd image store)."""
+        local_id = entry.get("local_id")
+        if isinstance(local_id, str):
+            return self.backend.image_present(image_id, local_id=local_id)
+        return self.backend.image_present(image_id)
+
     def _image_here(self, item: _BuildWork, name: str, image_id: str) -> bool:
         """The built image is on this machine (docker engine, or a host archive)."""
         if not item.host:
-            return self.backend.image_present(image_id)
+            return self._local_present(item.images.get(name) or {}, image_id)
         path = item.archive(name)
         return path is not None and path.is_file()
 
@@ -959,7 +967,7 @@ class PipelineRunner:
                     and (item.directory / "outputs" / path).is_file()
                 ):
                     continue
-            elif self.backend.image_present(image_id):
+            elif self._local_present(entry, image_id):
                 continue
             # Another runner built it: the build is not needed again when the
             # registry or node still has this exact image (by digest).
@@ -1329,6 +1337,12 @@ class PipelineRunner:
             # The preview itself is never hashed (its digests are
             # placeholders); only its ownership outcome is, and after
             # delivery the real plan may not go beyond it (see _run_plan).
+            hashed_preview: dict[str, Any] = {
+                "model": fingerprint,
+                "ownership": _ownership(preview["changes"]),
+            }
+            if preview.get("secret_adoptions"):
+                hashed_preview["secret_adoptions"] = preview["secret_adoptions"]
             return (
                 {
                     "state": "pending",
@@ -1336,11 +1350,12 @@ class PipelineRunner:
                     "preview": preview,
                     **access,
                 },
-                {"model": fingerprint, "ownership": _ownership(preview["changes"])},
+                hashed_preview,
             )
         result = self._release_plan(work)
         drift = _drift(result)
         kept = result.to_dict()["kept_orphaned"]
+        adopted = result.secret_adoptions
         stage = {
             "state": "planned",
             "release": result.release,
@@ -1350,6 +1365,7 @@ class PipelineRunner:
             "drift": drift,
             "images": work.release_images,
             **({"kept_orphaned": kept} if kept else {}),
+            **({"secret_adoptions": adopted} if adopted else {}),
             **access,
         }
         hashed = {
@@ -1358,6 +1374,10 @@ class PipelineRunner:
             "actions": _hex(_compact(result)),
             "drift": drift,
         }
+        if adopted:
+            # Only when secret values are read back from the cluster, so other
+            # plans keep their hash.
+            hashed["secret_adoptions"] = adopted
         if kept:
             # Only when a prune keeps something, so other plans keep their hash.
             hashed["kept_orphaned"] = [
@@ -1417,6 +1437,11 @@ class PipelineRunner:
             "authorized": result["authorized"],
             "dry_run_skipped": result["dry_run_skipped"],
             "dry_run_unavailable": result["dry_run_unavailable"],
+            **(
+                {"secret_adoptions": result["secret_adoptions"]}
+                if result.get("secret_adoptions")
+                else {}
+            ),
         }
         preview["preview_hash"] = _hex(
             {
@@ -2121,6 +2146,17 @@ class PipelineRunner:
             return None
         return work.producer[name].archive(name)
 
+    def _source(self, name: str) -> dict[str, Any]:
+        """Where a delivery reads image ``name``: a host build's archive, or the
+        engine's own ID when it is not the config digest; else nothing extra."""
+        archive = self._archive(name)
+        if archive is not None:
+            return {"archive": archive}
+        work = self._work
+        entry = work.producer[name].images.get(name) if work is not None else None
+        local_id = entry.get("local_id") if isinstance(entry, dict) else None
+        return {"local_id": local_id} if isinstance(local_id, str) else {}
+
     def _deliver(self, name: str, config: str) -> str:
         """Deliver one image; returns the receipt's result (pushed, imported …)."""
         strategy = self.pipeline.deliver
@@ -2129,25 +2165,15 @@ class PipelineRunner:
 
             reference = f"{self._repository(name)}:{content_tag(config)}"
             self.say(f"[deliver] {name}: importing into the node as {reference}")
-            archive = self._archive(name)
-            receipt = (
-                self.backend.node_deliver(
-                    self._node_url(), config, reference, archive=archive
-                )
-                if archive is not None
-                else self.backend.node_deliver(self._node_url(), config, reference)
+            receipt = self.backend.node_deliver(
+                self._node_url(), config, reference, **self._source(name)
             )
         else:
             route = self._route()
             repository = self._repository(name)
             self.say(f"[deliver] {name}: pushing to {repository}")
-            archive = self._archive(name)
-            receipt = (
-                self.backend.registry_deliver(
-                    route, config, repository, archive=archive
-                )
-                if archive is not None
-                else self.backend.registry_deliver(route, config, repository)
+            receipt = self.backend.registry_deliver(
+                route, config, repository, **self._source(name)
             )
         path = self._delivery_path(name, config)
         write_private(path, json.dumps(receipt, sort_keys=True, indent=2) + "\n")
@@ -2430,8 +2456,16 @@ class PipelineRunner:
                 or "no actions"
             )
         )
+        adopted = result.secret_adoptions
+        for item in adopted:
+            self.say(
+                f"[plan] secret {item['secret']}: adopted from Secret "
+                + ", ".join(item["from"])
+                + " (no record in the state; values kept, not rotated)"
+            )
         kept = result.to_dict()["kept_orphaned"]
         return "done", {
+            **({"secret_adoptions": adopted} if adopted else {}),
             "release": result.release,
             "mode": result.mode,
             "plan_hash": result.plan_hash,
@@ -2458,6 +2492,17 @@ class PipelineRunner:
             return
         allowed = set(_ownership(approved.get("changes", [])))
         extra = [item for item in _ownership(_changes(result)) if item not in allowed]
+        # Secret values read back from the cluster are covered only when the
+        # preview showed them (same generator, same Secrets).
+        shown = {
+            (item["secret"], tuple(item["from"]))
+            for item in approved.get("secret_adoptions", ())
+        }
+        extra += [
+            f"adopt secret {item['secret']} from Secret {', '.join(item['from'])}"
+            for item in result.secret_adoptions
+            if (item["secret"], tuple(item["from"])) not in shown
+        ]
         if extra:
             raise PipelineError(
                 "pipeline-preview-changed",

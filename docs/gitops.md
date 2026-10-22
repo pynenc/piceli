@@ -202,6 +202,15 @@ env push`.
 | ConfigMap `piceli-gitops-config` | The settings (pipeline, repository, globs, poll, build options); never a credential. |
 | Deployment `piceli-gitops` | One replica, `Recreate`, non-root, read-only root filesystem, no privilege escalation; the credentials Secret mounted read-only. Its pod template carries `piceli.io/config-hash`, so `gitops enable` with changed settings (a new `--builder-image`) restarts the controller. |
 
+**A new state volume** (0.23.0). The release state of every environment,
+generated secret values included, lives on the state volume. When it starts
+empty (the controller moved to a node where the volume is new), the first
+deploy adopts the generated Secrets the previous controller created, instead
+of generating new values that the retained Secrets would refuse: only
+Secrets with this app's owner annotation and field manager, values kept, the
+adoption shown in the plan and covered by its hash. See "When the state
+starts empty" in {doc}`secrets`.
+
 **Git credentials** stay in a Secret you create in the controller's namespace
 (`--credentials-secret`): `username` and `password` (a token) for HTTPS, or
 `ssh-privatekey` and `known_hosts` for SSH. The controller hands them to Git
@@ -243,7 +252,7 @@ not only the last lines. To empty the cache by hand:
 
 ```sh
 piceli gitops cache clear                 # every cargo target on the build cache claim
-piceli gitops cache clear --crate ags     # only these crates' artifacts
+piceli gitops cache clear --crate canvas     # only these crates' artifacts
 ```
 
 The controller runs it between steps, as a short Job on the builder node

@@ -1,4 +1,5 @@
-"""The typed declaration of machines: servers, fixed IPs, firewalls, DNS records.
+"""The typed declaration of machines: servers, fixed IPs, firewalls, DNS records,
+uploaded images and buckets.
 
 Every class is a frozen dataclass checked when it is built, so a wrong
 declaration fails at import with ``infra-invalid`` and never halfway through
@@ -24,15 +25,18 @@ if TYPE_CHECKING:
     from piceli.infra.machines.state import StateBackend
 
 __all__ = [
+    "Bucket",
     "DnsRecord",
     "Firewall",
     "Hook",
+    "Image",
     "InfraError",
     "Infrastructure",
     "PrimaryIp",
     "Rule",
     "Server",
     "Ssh",
+    "UserData",
 ]
 
 #: A name Piceli gives a resource: a DNS label (also an OpenTofu identifier
@@ -51,6 +55,12 @@ _LABEL_VALUE = re.compile(r"(?:[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?
 _TOKEN = re.compile(r"[A-Za-z0-9][-A-Za-z0-9_.]{0,127}")
 _HOST = re.compile(r"[A-Za-z0-9](?:[-A-Za-z0-9.]{0,251}[A-Za-z0-9])?")
 _USER = re.compile(r"[a-z_][-a-z0-9_]{0,31}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+_URL = re.compile(r"https?://[^\s@]+")
+#: S3-compatible bucket names: 3..63 lower-case letters, digits and hyphens.
+_BUCKET = re.compile(r"[a-z0-9][-a-z0-9]{1,61}[a-z0-9]")
+_PROPERTY = re.compile(r"[a-z][a-z0-9_:.-]{0,127}")
+IMAGE_FORMATS = ("qcow2", "raw", "vmdk", "vdi", "vhd", "vhdx", "iso")
 #: Placeholders a :class:`Hook` may use, filled from the server's outputs.
 HOOK_FIELDS = ("name", "id", "ipv4", "ipv6", "address")
 RECORD_TYPES = ("A", "AAAA", "CNAME", "TXT")
@@ -63,11 +73,19 @@ RESOURCE_LABEL = "piceli.io/resource"
 class InfraError(ValueError):
     """A machine declaration or ``piceli infra`` command refused, with a code."""
 
-    def __init__(self, code: str, message: str, details: Sequence[str] = ()) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        details: Sequence[str] = (),
+        fields: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         #: Redacted diagnostics (OpenTofu's errors) for stderr, never stdout.
         self.details = list(details)
+        #: Machine fields for stdout (a partial apply: what was applied).
+        self.fields = dict(fields or {})
 
 
 def _invalid(message: str) -> InfraError:
@@ -336,6 +354,186 @@ class Ssh:
             raise _invalid("Ssh(kubeconfig_path=) is an absolute path without spaces")
 
 
+@dataclass(frozen=True)
+class UserData:
+    """The user data a server gets at creation: a stored secret, never in a file.
+
+    ``secret`` names a local credential (``piceli secrets user-data NAME
+    --file PATH``) holding the whole user data: a cloud-config, a script or
+    a single value the image reads (a pre-authorized VPN key). It reaches
+    OpenTofu as a sensitive variable in its environment and is loaded only
+    by a plan that creates (or replaces) the server; later plans ignore it,
+    so a missing, changed or expired value never replaces the server. The
+    plan shows the secret's name and a short digest, never the value.
+    """
+
+    secret: str
+
+    def __post_init__(self) -> None:
+        from piceli.profiles import ProfileError, check_name
+
+        try:
+            check_name(self.secret)
+        except (ProfileError, TypeError):
+            raise _invalid("UserData(secret=) is a credential name") from None
+
+
+@dataclass(frozen=True)
+class Image:
+    """A disk image Piceli uploads for ``Server(image=Image(...))``.
+
+    Exactly one of ``file`` (a local file) or ``url`` (downloaded by Piceli
+    at apply time); ``sha256`` is required and checked before anything is
+    uploaded (``infra-image-checksum``). The configuration names the image
+    by its checksum only, never by its path or URL, so moving the file
+    changes nothing and a new checksum is a new image (and a replaced
+    server). ``properties`` are the provider's image properties (for example
+    ``{"hw_firmware_type": "uefi"}``).
+    """
+
+    name: str
+    file: Path | str | None = None
+    url: str | None = None
+    sha256: str = ""
+    format: str = "qcow2"
+    min_disk_gb: int | None = None
+    properties: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _name(self.name, "Image name")
+        if (self.file is None) == (self.url is None):
+            raise _invalid(f"Image {self.name}: give one of file= or url=")
+        if self.file is not None:
+            if not isinstance(self.file, (str, Path)) or not str(self.file):
+                raise _invalid(f"Image {self.name}: file= is a path")
+            object.__setattr__(self, "file", Path(self.file).expanduser())
+        if self.url is not None and (
+            not isinstance(self.url, str) or not _URL.fullmatch(self.url)
+        ):
+            raise _invalid(
+                f"Image {self.name}: url= is an http(s) URL without credentials"
+            )
+        if not isinstance(self.sha256, str) or not _SHA256.fullmatch(self.sha256):
+            raise _invalid(
+                f"Image {self.name}: sha256= is required (64 lower-case hex digits)"
+            )
+        if self.format not in IMAGE_FORMATS:
+            raise _invalid(
+                f"Image {self.name}: format is one of {', '.join(IMAGE_FORMATS)}"
+            )
+        if self.min_disk_gb is not None and (
+            isinstance(self.min_disk_gb, bool)
+            or not isinstance(self.min_disk_gb, int)
+            or not 1 <= self.min_disk_gb <= 65536
+        ):
+            raise _invalid(f"Image {self.name}: min_disk_gb is a size in GB")
+        if not isinstance(self.properties, Mapping) or not all(
+            isinstance(k, str)
+            and _PROPERTY.fullmatch(k)
+            and isinstance(v, str)
+            and len(v) <= 255
+            for k, v in self.properties.items()
+        ):
+            raise _invalid(f"Image {self.name}: properties map names to strings")
+        object.__setattr__(self, "properties", dict(sorted(self.properties.items())))
+
+    def __hash__(self) -> int:
+        return hash(("Image", self.name, self.sha256))
+
+    @classmethod
+    def from_build(
+        cls,
+        name: str,
+        build: Path | str,
+        *,
+        min_disk_gb: int | None = None,
+        properties: Mapping[str, str] | None = None,
+    ) -> Image:
+        """The image ``piceli dev nix build --image`` wrote, from its sidecar
+        ``NAME.image.json``: the file (relative to the sidecar), its sha256
+        and format, so nobody copies a checksum by hand
+        (``infra-image-build-invalid`` when it is missing or malformed)."""
+        import json
+
+        path = Path(build).expanduser()
+        try:
+            body = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raise InfraError(
+                "infra-image-build-invalid",
+                f"Image {name}: {path} is not readable JSON; run piceli dev nix "
+                "build ... --image",
+            ) from None
+        file = body.get("file") if isinstance(body, dict) else None
+        if (
+            not isinstance(body, dict)
+            or body.get("schema") != "piceli.nix-image.v1"
+            or not isinstance(file, str)
+            or not file
+            or Path(file).is_absolute()
+            or not isinstance(body.get("sha256"), str)
+            or not _SHA256.fullmatch(body["sha256"])
+            or body.get("format") not in IMAGE_FORMATS
+        ):
+            raise InfraError(
+                "infra-image-build-invalid",
+                f"Image {name}: {path} is not a piceli.nix-image.v1 sidecar",
+            )
+        return cls(
+            name,
+            file=path.parent / file,
+            sha256=body["sha256"],
+            format=body["format"],
+            min_disk_gb=min_disk_gb,
+            properties=dict(properties or {}),
+        )
+
+    @property
+    def local_path(self) -> str:
+        """Where the verified file is staged, relative to the state directory."""
+        return f"images/{self.sha256}.{self.format}"
+
+    def describe(self) -> dict[str, Any]:
+        return {"name": self.name, "sha256": self.sha256, "format": self.format}
+
+
+@dataclass(frozen=True)
+class Bucket:
+    """An object-storage bucket (S3-compatible) at a provider that has them.
+
+    Piceli creates it and never empties it: destroying a bucket that still
+    holds objects fails. ``protect=True`` also refuses its destroy plan.
+    """
+
+    name: str
+    provider: Provider
+    protect: bool = False
+
+    def __post_init__(self) -> None:
+        from piceli.infra.machines.provider import Provider
+
+        if not isinstance(self.name, str) or not _BUCKET.fullmatch(self.name):
+            raise _invalid(
+                f"Bucket {self.name!r}: a bucket name is 3..63 lower-case letters, "
+                "digits and hyphens"
+            )
+        if not isinstance(self.provider, Provider):
+            raise _invalid(f"Bucket {self.name}: provider must be a Provider")
+        if not self.provider.supports_buckets:
+            raise _invalid(
+                f"Bucket {self.name}: {self.provider.name} cannot hold buckets"
+            )
+        if not isinstance(self.protect, bool):
+            raise _invalid(f"Bucket {self.name}: protect= is True or False")
+
+    def describe(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "provider": self.provider.name,
+            "protect": self.protect,
+        }
+
+
 def _family(value: object, what: str) -> bool | PrimaryIp:
     if isinstance(value, (bool, PrimaryIp)):
         return value
@@ -349,7 +547,8 @@ class Server:
     :param name: The server's name at the provider (a DNS label).
     :param provider: The provider (for example ``Hetzner(...)``).
     :param type: The provider's server type (``cax11``).
-    :param image: The image it boots first (the install hook may replace it).
+    :param image: The image it boots first (the install hook may replace it):
+        the provider's image name, or an :class:`Image` Piceli uploads.
     :param location: The provider's location (default: the provider's).
     :param ipv4: ``True`` (an address that goes with the server), ``False``,
         or a :class:`PrimaryIp` (a fixed address).
@@ -360,14 +559,16 @@ class Server:
     :param install: The :class:`Hook` that installs the OS.
     :param ssh: How to reach it to fetch the k3s kubeconfig (:class:`Ssh`).
     :param cluster: The :class:`~piceli.infra.Cluster` its k3s becomes
-        (``piceli infra register``).
+        (``piceli infra register``); ``None`` for a plain host.
     :param labels: Extra provider labels (``piceli.io/`` keys are Piceli's).
+    :param user_data: :class:`UserData` given to the server at creation only
+        (providers with ``supports_user_data``).
     """
 
     name: str
     provider: Provider
     type: str
-    image: str
+    image: str | Image
     location: str | None = None
     ipv4: bool | PrimaryIp = True
     ipv6: bool | PrimaryIp = True
@@ -377,6 +578,7 @@ class Server:
     ssh: Ssh = field(default_factory=Ssh)
     cluster: Cluster | None = None
     labels: Mapping[str, str] = field(default_factory=dict)
+    user_data: UserData | None = None
 
     def __post_init__(self) -> None:
         from piceli.infra import Cluster
@@ -387,10 +589,18 @@ class Server:
             raise _invalid(
                 f"Server {self.name}: provider must be a Provider (like Hetzner(...))"
             )
+        if not self.provider.supports_servers:
+            raise _invalid(f"Server {self.name}: {self.provider.name} holds no servers")
         for attribute in ("type", "image"):
-            if not isinstance(getattr(self, attribute), str) or not _TOKEN.fullmatch(
-                getattr(self, attribute)
-            ):
+            value = getattr(self, attribute)
+            if attribute == "image" and isinstance(value, Image):
+                if not self.provider.supports_images:
+                    raise _invalid(
+                        f"Server {self.name}: {self.provider.name} cannot upload "
+                        "images (image= is an image name there)"
+                    )
+                continue
+            if not isinstance(value, str) or not _TOKEN.fullmatch(value):
                 raise _invalid(
                     f"Server {self.name}: {attribute} must be a provider name like cax11"
                 )
@@ -442,6 +652,13 @@ class Server:
         object.__setattr__(
             self, "labels", _labels(self.labels, f"Server {self.name}: labels")
         )
+        if self.user_data is not None:
+            if not isinstance(self.user_data, UserData):
+                raise _invalid(f"Server {self.name}: user_data is a UserData(secret=)")
+            if not self.provider.supports_user_data:
+                raise _invalid(
+                    f"Server {self.name}: {self.provider.name} takes no user data here"
+                )
         self.provider.check_server(self)
 
     def __hash__(self) -> int:
@@ -455,7 +672,7 @@ class Server:
             "name": self.name,
             "provider": self.provider.name,
             "type": self.type,
-            "image": self.image,
+            "image": self.image.name if isinstance(self.image, Image) else self.image,
             "location": self.location,
             "ipv4": self.ipv4.name if isinstance(self.ipv4, PrimaryIp) else self.ipv4,
             "ipv6": self.ipv6.name if isinstance(self.ipv6, PrimaryIp) else self.ipv6,
@@ -464,6 +681,7 @@ class Server:
             else None,
             "install": list(self.install.argv) if self.install is not None else None,
             "cluster": self.cluster.name if self.cluster is not None else None,
+            "user_data": self.user_data.secret if self.user_data else None,
         }
 
 
@@ -476,6 +694,12 @@ class DnsRecord:
     give one record set with every address (round robin). Piceli manages the
     record set, never the zone. Health-checked failover is a later seam: it
     changes the answers of the same record set (see the infrastructure docs).
+
+    ``provider`` defaults to the first server's. The servers may be at
+    another provider than the record (``provider=Porkbun(...)`` for an
+    OpenStack server): each address is a reference through the server's own
+    provider, so the record follows a replaced server. ``ttl`` defaults to
+    the provider's (300 s; Porkbun's 600 s).
     """
 
     zone: str
@@ -484,7 +708,7 @@ class DnsRecord:
     value: str | Sequence[str] | None = None
     server: Server | None = None
     servers: Sequence[Server] = ()
-    ttl: int = 300
+    ttl: int | None = None
     provider: Provider | None = None
 
     def __post_init__(self) -> None:
@@ -545,19 +769,27 @@ class DnsRecord:
                     raise _invalid(
                         f"DnsRecord {self.key}: {text!r} does not fit type {self.type}"
                     )
-        if (
-            isinstance(self.ttl, bool)
-            or not isinstance(self.ttl, int)
-            or not 60 <= self.ttl <= 86400
-        ):
-            raise _invalid(f"DnsRecord {self.key}: ttl is seconds in 60..86400")
         provider = self.provider
         if provider is None and servers:
             provider = servers[0].provider
         if not isinstance(provider, Provider):
             raise _invalid(f"DnsRecord {self.key}: provider= is required with value=")
-        if any(item.provider != provider for item in servers):
-            raise _invalid(f"DnsRecord {self.key}: its servers are at another provider")
+        if not provider.supports_dns:
+            raise _invalid(
+                f"DnsRecord {self.key}: {provider.name} serves no DNS records here "
+                "(give provider=, like Porkbun(...))"
+            )
+        ttl = provider.default_ttl if self.ttl is None else self.ttl
+        if (
+            isinstance(ttl, bool)
+            or not isinstance(ttl, int)
+            or not provider.min_ttl <= ttl <= 86400
+        ):
+            raise _invalid(
+                f"DnsRecord {self.key}: ttl is seconds in "
+                f"{provider.min_ttl}..86400 at {provider.name}"
+            )
+        object.__setattr__(self, "ttl", ttl)
         object.__setattr__(self, "provider", provider)
 
     @property
@@ -599,6 +831,7 @@ class Infrastructure:
     :param home: The cluster whose GitOps controller deploys onto these
         machines; ``piceli infra register`` then also gives that controller
         the new cluster's credentials (multi-cluster registration).
+    :param buckets: The :class:`Bucket` s (object storage).
     """
 
     name: str
@@ -608,6 +841,7 @@ class Infrastructure:
     state_key: str | None = None
     backend: StateBackend | None = None
     home: Cluster | None = None
+    buckets: tuple[Bucket, ...] = ()
 
     def __post_init__(self) -> None:
         from piceli.infra import Cluster
@@ -621,8 +855,14 @@ class Infrastructure:
             raise _invalid("Infrastructure servers are Server objects")
         if not all(isinstance(item, DnsRecord) for item in records):
             raise _invalid("Infrastructure records are DnsRecord objects")
+        buckets = _tuple(self.buckets, "Infrastructure(buckets=)")
+        if not all(isinstance(item, Bucket) for item in buckets):
+            raise _invalid("Infrastructure buckets are Bucket objects")
+        if len({item.name for item in buckets}) != len(buckets):
+            raise _invalid("a bucket is declared twice")
         object.__setattr__(self, "servers", servers)
         object.__setattr__(self, "records", records)
+        object.__setattr__(self, "buckets", buckets)
         names = [item.name for item in servers]
         if len(set(names)) != len(names):
             raise _invalid("a server is declared twice")
@@ -647,10 +887,20 @@ class Infrastructure:
             for ip in item.primary_ips():
                 if ips.setdefault(ip.name, item.name) != item.name:
                     raise _invalid(f"PrimaryIp {ip.name} is given to two servers")
+        images: dict[str, Server] = {}
+        for item in servers:
+            if isinstance(item.image, Image):
+                seen_by = images.setdefault(item.image.name, item)
+                if seen_by.image != item.image or seen_by.provider != item.provider:
+                    raise _invalid(
+                        f"two different images (or providers) are named {item.image.name}"
+                    )
         providers: dict[str, Provider] = {}
-        for provider in [item.provider for item in servers] + [
-            r.provider for r in records
-        ]:
+        for provider in (
+            [item.provider for item in servers]
+            + [r.provider for r in records]
+            + [b.provider for b in buckets]
+        ):
             assert provider is not None
             if providers.setdefault(provider.name, provider) != provider:
                 raise _invalid(f"two different {provider.name} providers are declared")
@@ -685,6 +935,16 @@ class Infrastructure:
         for record in self.records:
             assert record.provider is not None
             found.setdefault(record.provider.name, record.provider)
+        for bucket in self.buckets:
+            found.setdefault(bucket.provider.name, bucket.provider)
+        return [found[name] for name in sorted(found)]
+
+    def images(self) -> list[tuple[Image, Provider]]:
+        """Each uploaded image once (with its provider), sorted by name."""
+        found: dict[str, tuple[Image, Provider]] = {}
+        for item in self.servers:
+            if isinstance(item.image, Image):
+                found.setdefault(item.image.name, (item.image, item.provider))
         return [found[name] for name in sorted(found)]
 
     def firewalls(self) -> list[Firewall]:
@@ -697,7 +957,7 @@ class Infrastructure:
 
     def describe(self) -> dict[str, Any]:
         """The declaration as data (``piceli.infra.v1``); no credentials, no paths."""
-        return {
+        body: dict[str, Any] = {
             "schema": "piceli.infra.v1",
             "name": self.name,
             "servers": [item.describe() for item in self.servers],
@@ -706,3 +966,9 @@ class Infrastructure:
             "providers": [item.describe() for item in self.providers()],
             "backend": self.backend.describe() if self.backend is not None else None,
         }
+        images = self.images()
+        if images:
+            body["images"] = [image.describe() for image, _ in images]
+        if self.buckets:
+            body["buckets"] = [item.describe() for item in self.buckets]
+        return body

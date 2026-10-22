@@ -800,10 +800,19 @@ class PlanAuthorization:
     # The owner's approval policy (``auto_approve``): recorded in the plan
     # and so in its hash; it decides nothing here (see approval_policy).
     approval_policy: ApprovalPolicy | None = None
+    # Generated secret values read back from live Secrets of an earlier
+    # release (see :mod:`piceli.k8s.secret_adoption`): recorded in the plan
+    # and so in its hash.
+    secret_adoptions: tuple[SecretAdoption, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self, "adopt_resources", tuple(sorted(set(self.adopt_resources)))
+        )
+        if any(not isinstance(item, SecretAdoption) for item in self.secret_adoptions):
+            raise ValueError("secret adoptions must be SecretAdoption entries")
+        object.__setattr__(
+            self, "secret_adoptions", tuple(sorted(set(self.secret_adoptions)))
         )
         previous = tuple(sorted(self.previous, key=lambda item: item.ref))
         if any(not isinstance(item, ResourceIntent) for item in previous) or len(
@@ -830,6 +839,26 @@ class PlanAuthorization:
         object.__setattr__(
             self, "inherited_owner_ids", tuple(sorted(set(self.inherited_owner_ids)))
         )
+
+
+@dataclass(frozen=True, order=True)
+class SecretAdoption:
+    """A generator whose values a plan reads back from one live Secret.
+
+    ``uid`` binds the plan to that exact object. No value, digest or key of
+    a value is part of it.
+    """
+
+    generator: str
+    resource: ResourceRef
+    uid: str
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "generator": self.generator,
+            "resource": self.resource.__dict__,
+            "uid": self.uid,
+        }
 
 
 class PlanOperation(StrEnum):
@@ -963,6 +992,9 @@ class DeploymentPlan:
     # The owner's approval policy, bound into the hash only when declared
     # (plans without one keep their hash).
     approval_policy: ApprovalPolicy | None = None
+    # Bound into the hash only when a plan adopts secret values (other plans
+    # keep their hash).
+    secret_adoptions: tuple[SecretAdoption, ...] = ()
     plan_hash: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -980,6 +1012,10 @@ class DeploymentPlan:
         }
         if self.approval_policy is not None:
             material["approval_policy"] = self.approval_policy.identity()
+        if self.secret_adoptions:
+            material["secret_adoptions"] = [
+                item.summary() for item in self.secret_adoptions
+            ]
         object.__setattr__(self, "plan_hash", _digest(material))
 
     def validate_for(self, snapshot: ObservedSnapshot) -> None:
@@ -1007,6 +1043,10 @@ class DeploymentPlan:
         value = self._summary()
         if self.approval_policy is not None:
             value["approval_policy"] = self.approval_policy.identity()
+        if self.secret_adoptions:
+            value["secret_adoptions"] = [
+                item.summary() for item in self.secret_adoptions
+            ]
         return value
 
     def _summary(self) -> dict[str, Any]:
@@ -2206,4 +2246,18 @@ def build_plan(
         levels,
         tuple(sorted(set(protected))),
         approval_policy=authorization.approval_policy,
+        secret_adoptions=_secret_adoptions(authorization, observed),
     )
+
+
+def _secret_adoptions(
+    authorization: PlanAuthorization, observed: Mapping[ResourceRef, ObservedResource]
+) -> tuple[SecretAdoption, ...]:
+    """The authorization's secret adoptions, each naming a live object."""
+    for item in authorization.secret_adoptions:
+        current = observed.get(item.resource)
+        if current is None or current.precondition.uid != item.uid:
+            raise ValueError(
+                f"adopted secret source changed after planning: {item.resource}"
+            )
+    return authorization.secret_adoptions

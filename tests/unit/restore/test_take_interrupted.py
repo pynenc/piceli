@@ -1,6 +1,6 @@
 """A restore point whose process died mid-copy, and the attempt after it.
 
-Reproduces IH's k-lab deploy of 2026-10-07 small: a 50 MB claim, the
+A small version of an interrupted deploy: a 50 MB claim, the
 process taking the restore point killed while the archive streams (it
 leaves a ``.partial`` file, a ``running`` record and the writers at zero
 replicas), then a retry.

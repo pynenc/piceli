@@ -15,6 +15,7 @@ from piceli.k8s.cli.dev import register as register_dev_commands
 from piceli.k8s.cli.env import register as register_env_commands
 from piceli.k8s.cli.gitops import register as register_gitops_commands
 from piceli.k8s.cli.heavy import register as register_heavy_commands
+from piceli.k8s.cli.host import register as register_host_commands
 from piceli.k8s.cli.importing import app as import_app
 from piceli.k8s.cli.infra import register as register_infra_commands
 from piceli.k8s.cli.inputs import app as inputs_app
@@ -60,6 +61,7 @@ register_profile_commands(app)
 register_bundle_commands(app)
 register_dev_commands(app)
 register_builder_commands(app)
+register_host_commands(app)
 
 
 def _version(value: bool) -> None:

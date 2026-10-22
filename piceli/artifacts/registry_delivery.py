@@ -462,7 +462,7 @@ class RegistryDelivery:
             source,
             save_argv,
             lambda stream: scan_image_stream(
-                stream, max_bytes=max_bytes, cancel=cancel
+                stream, max_bytes=max_bytes, cancel=cancel, approved_digest=approved
             ),
             deadline,
             cancel,

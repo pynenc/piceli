@@ -46,14 +46,14 @@ def _dev(*hosts: BuildHost, node: str | None = None) -> DevBuilds:
 
 def test_hosts_are_declared_in_order_and_the_node_is_the_first_by_default() -> None:
     laptop = BuildHost.docker("laptop", slots=2, memory="6Gi")
-    mini = BuildHost.docker("mini", context="ssh://ih@mini.tail1.ts.net")
-    dev = _dev(laptop, mini, node="amedes")
+    mini = BuildHost.docker("mini", context="ssh://builder@mini.tail1.ts.net")
+    dev = _dev(laptop, mini, node="builder-1")
     assert [(h.name, h.kind) for h in dev.hosts] == [
-        ("amedes", "cluster"), ("laptop", "docker"), ("mini", "docker"),
+        ("builder-1", "cluster"), ("laptop", "docker"), ("mini", "docker"),
     ]  # fmt: skip
     # Placed explicitly, the cluster host keeps its place.
-    later = _dev(laptop, BuildHost.cluster("amedes"), node="amedes")
-    assert [h.name for h in later.hosts] == ["laptop", "amedes"]
+    later = _dev(laptop, BuildHost.cluster("builder-1"), node="builder-1")
+    assert [h.name for h in later.hosts] == ["laptop", "builder-1"]
     # Round trip through the cluster's config.
     assert DevBuilds.from_dict(dev.describe()).hosts == dev.hosts
     hostless = _dev(laptop)
@@ -71,7 +71,7 @@ def test_hosts_are_declared_in_order_and_the_node_is_the_first_by_default() -> N
         lambda: BuildHost.docker("x", image="example/builder:latest"),
         lambda: BuildHost("x", "cluster"),
         lambda: _dev(),
-        lambda: _dev(BuildHost.cluster("other"), node="amedes"),
+        lambda: _dev(BuildHost.cluster("other"), node="builder-1"),
         lambda: _dev(BuildHost.docker("a"), BuildHost.native("a")),
     ],
 )
@@ -155,12 +155,12 @@ def _state(
 
 
 def test_candidates_skip_down_hosts_and_prefer_a_free_slot() -> None:
-    amedes = BuildHost.cluster("amedes")
+    builder = BuildHost.cluster("builder-1")
     laptop = BuildHost.docker("laptop")
-    mini = BuildHost.docker("mini", context="ssh://ih@mini")
-    dev = _dev(amedes, laptop, mini, node="amedes")
+    mini = BuildHost.docker("mini", context="ssh://builder@mini")
+    dev = _dev(builder, laptop, mini, node="builder-1")
     states = {
-        "amedes": _state(amedes, up=False),
+        "builder-1": _state(builder, up=False),
         "laptop": _state(laptop, running=1),
         "mini": _state(mini),
     }
@@ -175,7 +175,7 @@ def test_candidates_skip_down_hosts_and_prefer_a_free_slot() -> None:
     assert unknown.value.code == "dev-host-unknown"
     with pytest.raises(DevError) as none:
         candidates(dev, probe=lambda h: _state(h, up=False))
-    assert none.value.code == "dev-host-unavailable" and "amedes: down" in str(
+    assert none.value.code == "dev-host-unavailable" and "builder-1: down" in str(
         none.value
     )
 
@@ -259,7 +259,7 @@ def test_the_docker_port_starts_a_bounded_container_in_its_slot() -> None:
     from piceli.dev.hosts import ContainerCli
     from piceli.dev.jobs import run_job
 
-    host = BuildHost.docker("mini", context="ssh://ih@mini", memory="6Gi", cpu="4")
+    host = BuildHost.docker("mini", context="ssh://builder@mini", memory="6Gi", cpu="4")
     dev = _dev(host)
     fake = FakeCli()
     port = DockerPort(
@@ -274,7 +274,7 @@ def test_the_docker_port_starts_a_bounded_container_in_its_slot() -> None:
     entry = Entry("r-1", "agent-1", "round", "2026-10-17T10:00:00.000Z")
     assert port._claim(2, entry, job, IMAGE)
     argv = fake.calls[-1]
-    assert argv[:3] == ["docker", "--host", "ssh://ih@mini"]
+    assert argv[:3] == ["docker", "--host", "ssh://builder@mini"]
     assert argv[3:7] == ["run", "-d", "--name", "piceli-dev-mini-2"]
     joined = " ".join(argv)
     for flag in (

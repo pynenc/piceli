@@ -182,7 +182,7 @@ class FakeEngine:
 
 
 def test_a_docker_hosts_events_are_labelled_volumes_on_its_engine() -> None:
-    host = BuildHost.docker("mini", context="ssh://ih@mini")
+    host = BuildHost.docker("mini", context="ssh://builder@mini")
     engine = FakeEngine()
     cli = ContainerCli(host, runner=engine)
     clock = {"now": 3 * DAY}
@@ -196,7 +196,7 @@ def test_a_docker_hosts_events_are_labelled_volumes_on_its_engine() -> None:
     found = health.record({"kind": "machine-check", "line": "mce: CPU 3"}, "dev-run")
     assert found is not None
     create = next(c for c in engine.calls if "create" in c)
-    assert create[:3] == ["docker", "--host", "ssh://ih@mini"]
+    assert create[:3] == ["docker", "--host", "ssh://builder@mini"]
     assert all(name.startswith("piceli-health-mini-") for name in engine.volumes)
     events = sorted(health.store.events(), key=lambda e: e.at)
     # The comma could not survive the CLI's k=v,k=v listing: it is replaced.

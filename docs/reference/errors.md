@@ -193,6 +193,17 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`dev-host-unavailable`](#error-dev-host-unavailable) | dev | no |
 | [`dev-host-unknown`](#error-dev-host-unknown) | dev | no |
 | [`dev-isolation-not-enforced`](#error-dev-isolation-not-enforced) | dev | no |
+| [`dev-nix-cache-invalid`](#error-dev-nix-cache-invalid) | dev | no |
+| [`dev-nix-crypto-unavailable`](#error-dev-nix-crypto-unavailable) | dev | no |
+| [`dev-nix-gc-failed`](#error-dev-nix-gc-failed) | dev | yes |
+| [`dev-nix-host-unsupported`](#error-dev-nix-host-unsupported) | dev | no |
+| [`dev-nix-invalid`](#error-dev-nix-invalid) | dev | no |
+| [`dev-nix-key-invalid`](#error-dev-nix-key-invalid) | dev | no |
+| [`dev-nix-key-mismatch`](#error-dev-nix-key-mismatch) | dev | no |
+| [`dev-nix-manifest-failed`](#error-dev-nix-manifest-failed) | dev | yes |
+| [`dev-nix-no-output`](#error-dev-nix-no-output) | dev | no |
+| [`dev-nix-plan-changed`](#error-dev-nix-plan-changed) | dev | no |
+| [`dev-nix-publish-failed`](#error-dev-nix-publish-failed) | dev | yes |
 | [`dev-not-enabled`](#error-dev-not-enabled) | dev | no |
 | [`dev-profile-unknown`](#error-dev-profile-unknown) | dev | no |
 | [`dev-queue-timeout`](#error-dev-queue-timeout) | dev | yes |
@@ -316,12 +327,46 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`heavy-command-empty`](#error-heavy-command-empty) | maintenance | no |
 | [`heavy-command-missing`](#error-heavy-command-missing) | maintenance | no |
 | [`heavy-lock-timeout`](#error-heavy-lock-timeout) | maintenance | yes |
+| [`host-address-unknown`](#error-host-address-unknown) | hosts | no |
+| [`host-build-bad`](#error-host-build-bad) | hosts | no |
 | [`host-build-invalid`](#error-host-build-invalid) | host-build | no |
+| [`host-busy`](#error-host-busy) | hosts | yes |
+| [`host-cache-unreachable`](#error-host-cache-unreachable) | hosts | yes |
+| [`host-check-failed`](#error-host-check-failed) | hosts | no |
+| [`host-check-invalid`](#error-host-check-invalid) | hosts | no |
+| [`host-control-unsupported`](#error-host-control-unsupported) | hosts | no |
+| [`host-credentials-exposed`](#error-host-credentials-exposed) | hosts | yes |
+| [`host-credentials-missing`](#error-host-credentials-missing) | hosts | yes |
+| [`host-deploy-failed`](#error-host-deploy-failed) | hosts | no |
+| [`host-invalid`](#error-host-invalid) | hosts | no |
+| [`host-manifest-mismatch`](#error-host-manifest-mismatch) | hosts | no |
+| [`host-narinfo-mismatch`](#error-host-narinfo-mismatch) | hosts | no |
+| [`host-not-found`](#error-host-not-found) | hosts | no |
 | [`host-output-missing`](#error-host-output-missing) | host-build | no |
+| [`host-pin-not-found`](#error-host-pin-not-found) | hosts | no |
+| [`host-pinned`](#error-host-pinned) | hosts | no |
+| [`host-pointer-replayed`](#error-host-pointer-replayed) | hosts | no |
+| [`host-prune-failed`](#error-host-prune-failed) | hosts | yes |
+| [`host-realise-failed`](#error-host-realise-failed) | hosts | yes |
+| [`host-report-failed`](#error-host-report-failed) | hosts | yes |
+| [`host-rollback-failed`](#error-host-rollback-failed) | hosts | no |
+| [`host-rollback-unavailable`](#error-host-rollback-unavailable) | hosts | no |
+| [`host-rolled-back`](#error-host-rolled-back) | hosts | no |
+| [`host-secret-activation-failed`](#error-host-secret-activation-failed) | hosts | yes |
+| [`host-secret-exists`](#error-host-secret-exists) | hosts | no |
+| [`host-secret-plan-changed`](#error-host-secret-plan-changed) | hosts | no |
+| [`host-secret-undeclared`](#error-host-secret-undeclared) | hosts | no |
+| [`host-secret-write-failed`](#error-host-secret-write-failed) | hosts | yes |
+| [`host-signature-invalid`](#error-host-signature-invalid) | hosts | no |
+| [`host-status-missing`](#error-host-status-missing) | hosts | yes |
+| [`host-switch-failed`](#error-host-switch-failed) | hosts | no |
+| [`host-system-mismatch`](#error-host-system-mismatch) | hosts | no |
 | [`host-tool-missing`](#error-host-tool-missing) | host-build | no |
 | [`host-toolchain-checksum`](#error-host-toolchain-checksum) | host-build | yes |
 | [`host-toolchain-failed`](#error-host-toolchain-failed) | host-build | yes |
 | [`host-toolchain-invalid`](#error-host-toolchain-invalid) | host-build | no |
+| [`host-unreachable`](#error-host-unreachable) | hosts | yes |
+| [`host-wait-timeout`](#error-host-wait-timeout) | hosts | yes |
 | [`identity-mismatch`](#error-identity-mismatch) | kubernetes | no |
 | [`image-declared-twice`](#error-image-declared-twice) | images | no |
 | [`image-digest-mismatch`](#error-image-digest-mismatch) | images | no |
@@ -348,7 +393,13 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`infra-credential-missing`](#error-infra-credential-missing) | infra | no |
 | [`infra-credential-refused`](#error-infra-credential-refused) | infra | no |
 | [`infra-credential-unsafe`](#error-infra-credential-unsafe) | infra | no |
+| [`infra-dns-api-disabled`](#error-infra-dns-api-disabled) | infra | no |
+| [`infra-dns-check-failed`](#error-infra-dns-check-failed) | infra | yes |
+| [`infra-dns-record-conflict`](#error-infra-dns-record-conflict) | infra | no |
 | [`infra-foreign-resource`](#error-infra-foreign-resource) | infra | no |
+| [`infra-image-build-invalid`](#error-infra-image-build-invalid) | infra | no |
+| [`infra-image-checksum`](#error-infra-image-checksum) | infra | no |
+| [`infra-image-unavailable`](#error-infra-image-unavailable) | infra | yes |
 | [`infra-install-changed`](#error-infra-install-changed) | infra | yes |
 | [`infra-install-failed`](#error-infra-install-failed) | infra | no |
 | [`infra-install-unavailable`](#error-infra-install-unavailable) | infra | no |
@@ -371,6 +422,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`infra-tofu-failed`](#error-infra-tofu-failed) | infra | yes |
 | [`infra-tofu-missing`](#error-infra-tofu-missing) | infra | no |
 | [`infra-tofu-unsupported`](#error-infra-tofu-unsupported) | infra | no |
+| [`infra-user-data-missing`](#error-infra-user-data-missing) | infra | yes |
 | [`inputs-io-error`](#error-inputs-io-error) | inputs | yes |
 | [`inputs-lock-invalid`](#error-inputs-lock-invalid) | inputs | no |
 | [`invalid-access-profile`](#error-invalid-access-profile) | observe | no |
@@ -590,6 +642,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`runner-memory-low`](#error-runner-memory-low) | maintenance | yes |
 | [`runner-tool-missing`](#error-runner-tool-missing) | maintenance | no |
 | [`scope-mismatch`](#error-scope-mismatch) | kubernetes | no |
+| [`secret-adoption-incomplete`](#error-secret-adoption-incomplete) | secrets | no |
+| [`secret-adoption-invalid`](#error-secret-adoption-invalid) | secrets | no |
 | [`secret-dependency-cycle`](#error-secret-dependency-cycle) | secrets | no |
 | [`secret-generator-failed`](#error-secret-generator-failed) | secrets | yes |
 | [`secret-import-unavailable`](#error-secret-import-unavailable) | secrets | yes |
@@ -806,7 +860,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 **Invalid approved digest.** `--approve-digest` is not `sha256:` followed by 64 lowercase hex characters.
 
-- **Fix:** Pass the image config digest, e.g. from `docker image inspect --format '{{.Id}}'`.
+- **Fix:** Pass the image config digest: `docker image inspect --format '{{.Id}}'` with Docker's classic image store; with its containerd image store the `Config` of `manifest.json` in `docker image save` (docs/node_delivery.md).
 - **Retry-safe:** no
 
 (error-invalid-ca-file)=
@@ -2124,6 +2178,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Invalid Secret data.** A live Secret's data could not be decoded (not base64, or not UTF-8 where text is required).
 
 - **Fix:** Fix the live Secret, or import from a file or environment variable instead.
+- **Retry-safe:** no
+
+(error-secret-adoption-incomplete)=
+### `secret-adoption-incomplete`
+
+**Live secret values incomplete.** Only some of a generator's values are in live Secrets of an earlier release (a tls-ca CA key never is), so they cannot be kept without new values. Nothing was written.
+
+- **Fix:** Rotate the generator (--rotate NAME) into Secrets with new names.
+- **Retry-safe:** no
+
+(error-secret-adoption-invalid)=
+### `secret-adoption-invalid`
+
+**Live secret values not adoptable.** No release in the state records a generator, and the live Secret an earlier release of this owner wrote holds values the generator could not have made (another key set, a malformed value, or copies that differ). Nothing was adopted or written.
+
+- **Fix:** Fix or delete the live Secret, or rotate the generator into a Secret with a new name.
 - **Retry-safe:** no
 
 (error-secret-dependency-cycle)=
@@ -4940,6 +5010,94 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Use a CNI that enforces NetworkPolicy (k3s's default does; on kind, kindnet does), then run again.
 - **Retry-safe:** no
 
+(error-dev-nix-cache-invalid)=
+### `dev-nix-cache-invalid`
+
+**Nix cache declaration refused.** `NixCache` needs a public key `NAME:base64`, one of `bucket=` or `url=` (`s3://`, `file://`, or a read-only `https://`), an S3 endpoint and `credentials=` for an S3 cache; or `--publish` did not name a `NixCache`, or names a read-only cache.
+
+- **Fix:** Fix the declaration; publish to the cache's `s3://` or `file://` URL.
+- **Retry-safe:** no
+
+(error-dev-nix-crypto-unavailable)=
+### `dev-nix-crypto-unavailable`
+
+**Signing library missing.** Generating Nix cache keys and signing build manifests need the `cryptography` package, which is not installed.
+
+- **Fix:** Install it (`pip install 'piceli[crypto]'`).
+- **Retry-safe:** no
+
+(error-dev-nix-gc-failed)=
+### `dev-nix-gc-failed`
+
+**Nix cache cleanup failed.** Listing, reading or deleting objects of the cache failed (credentials, endpoint, network); manifests go first, so no kept build lost a path.
+
+- **Fix:** Check the write credential and the endpoint, then plan `piceli dev nix gc` again and approve the new digest.
+- **Retry-safe:** yes
+
+(error-dev-nix-host-unsupported)=
+### `dev-nix-host-unsupported`
+
+**Build host cannot run Nix builds.** Nix builds run on docker or native build hosts (the host's own Nix); the chosen host is the cluster's builder node, or none is declared.
+
+- **Fix:** Declare `BuildHost.docker(...)` (a host with Nix, over `ssh://`) or `BuildHost.native(...)` and pass `--host`.
+- **Retry-safe:** no
+
+(error-dev-nix-invalid)=
+### `dev-nix-invalid`
+
+**Nix build request refused.** `piceli dev nix build` got an output that is not a flake attribute of the source (`.#ATTR`), a bad `--name`, `--publish` without `--ref` or `--name`, `--approve` without `--publish`, or a profile without `nix=True`.
+
+- **Fix:** Give `ATTR` or `.#ATTR`, a DNS-label `--name`, a commit with `--ref` when publishing, and declare `DevProfile.for_nix()`.
+- **Retry-safe:** no
+
+(error-dev-nix-key-invalid)=
+### `dev-nix-key-invalid`
+
+**Nix key refused.** A Nix key is `NAME:base64` (a secret key of 64 bytes, a public key of 32); the value given or stored is not one.
+
+- **Fix:** Generate one with `piceli secrets nix-cache NAME --generate`, or paste a key from `nix key generate-secret` with `--prompt`.
+- **Retry-safe:** no
+
+(error-dev-nix-key-mismatch)=
+### `dev-nix-key-mismatch`
+
+**Signing key does not match the cache.** The stored signing key's public key is not `NixCache(public_key=)`: hosts that trust the declared key would refuse what it signs.
+
+- **Fix:** Print the stored key's public key with `piceli secrets nix-cache NAME` and fix the declaration or `NixCache(signing_key=)`.
+- **Retry-safe:** no
+
+(error-dev-nix-manifest-failed)=
+### `dev-nix-manifest-failed`
+
+**Build manifest not stored.** The closure is in the cache but uploading `piceli/NAME/REV.json` failed.
+
+- **Fix:** Check the S3 credential's write access and run the approved command again.
+- **Retry-safe:** yes
+
+(error-dev-nix-no-output)=
+### `dev-nix-no-output`
+
+**Nix build gave no output.** The build passed but printed no store path, or `--image` found no disk image file in the output.
+
+- **Fix:** Check that the attribute builds a derivation (`nix build .#ATTR --print-out-paths`) and, with `--image`, that it is an image output.
+- **Retry-safe:** no
+
+(error-dev-nix-plan-changed)=
+### `dev-nix-plan-changed`
+
+**Publish plan changed.** The `--approve` digest is not the digest of the publish plan computed now (the commit, the output, the host, the cache or the key changed).
+
+- **Fix:** Run the command without `--approve`, review the new plan and approve its digest.
+- **Retry-safe:** no
+
+(error-dev-nix-publish-failed)=
+### `dev-nix-publish-failed`
+
+**Pushing to the Nix cache failed.** `nix copy` to the cache, or reading back the store path's signed narinfo, failed on the build host (credentials, endpoint, network, or no `nix` on the host).
+
+- **Fix:** Read the masked lines on stderr, check the bucket, the S3 credential and the endpoint, then run the approved command again (paths already in the cache are skipped).
+- **Retry-safe:** yes
+
 (error-dev-not-enabled)=
 ### `dev-not-enabled`
 
@@ -5025,7 +5183,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 **Source not usable.** A source is not `NAME=PATH[@REF]`, its path is not in a Git repository, two sources share a name, or a working tree could not be read.
 
-- **Fix:** Give each source a directory name and a path inside a Git repository (`--source ih-muse=../ih-muse@<sha>`).
+- **Fix:** Give each source a directory name and a path inside a Git repository (`--source app-sdk=../sdk@<sha>`).
 - **Retry-safe:** no
 
 (error-dev-tool-missing)=
@@ -6045,7 +6203,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-infra-apply-failed)=
 ### `infra-apply-failed`
 
-**OpenTofu apply failed.** `tofu apply` of the approved plan exited with an error; part of the plan may have been applied. The state and `piceli infra status` show what exists.
+**OpenTofu apply failed.** `tofu apply` of the approved plan exited with an error. When part of it was applied, the output has `partially_applied` and lists what was applied (address, action, the provider's id) and what was not; the next plan shows what remains.
 
 - **Fix:** Read the `tofu:` lines on stderr, fix the cause, then plan again (`piceli infra plan MODULE:ATTR`) and approve the new hash.
 - **Retry-safe:** no
@@ -6069,7 +6227,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-infra-credential-invalid)=
 ### `infra-credential-invalid`
 
-**Invalid credential.** A credential name is not a valid name, its file is damaged or of another kind, or the value read is empty, has control characters, or is a state passphrase shorter than 16 characters.
+**Invalid credential.** A credential name is not a valid name, its file is damaged or of another kind, or the value read is empty, has control characters, or is a state passphrase shorter than 16 characters, or an OpenStack credential is not `APPLICATION_CREDENTIAL_ID:SECRET` (a Porkbun one not `APIKEY:SECRETKEY`).
 
 - **Fix:** Store the credential again with `piceli secrets provider|state-key NAME --prompt`.
 - **Retry-safe:** no
@@ -6085,7 +6243,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-infra-credential-refused)=
 ### `infra-credential-refused`
 
-**Secret passed the unsafe way.** A secret was given as a command-line argument or in the environment (`HCLOUD_TOKEN`, `PICELI_PROVIDER_TOKEN`, `PICELI_STATE_KEY`), where it leaks into process listings and logs. It was not stored or echoed.
+**Secret passed the unsafe way.** A secret was given as a command-line argument or in the environment (`HCLOUD_TOKEN`, `OS_APPLICATION_CREDENTIAL_SECRET`, `PORKBUN_API_KEY`, `PORKBUN_SECRET_API_KEY`, `PICELI_PROVIDER_TOKEN`, `PICELI_STATE_KEY`), where it leaks into process listings and logs. It was not stored or echoed.
 
 - **Fix:** Unset the variable and run `piceli secrets provider|state-key NAME --prompt`, then type the value (or pipe it on stdin).
 - **Retry-safe:** no
@@ -6098,6 +6256,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Run `chmod 600` on the file named in the message (and `chmod 700` on its directory), then run the command again.
 - **Retry-safe:** no
 
+(error-infra-dns-api-disabled)=
+### `infra-dns-api-disabled`
+
+**DNS provider API access is off for the domain.** API access is not turned on for a record's domain (Porkbun turns it on per domain). A plan checks it for each domain it changes; an apply that meets it after changing something exits 1 with `partially_applied` and what it applied.
+
+- **Fix:** Turn API access on for the domain in the provider's console (Porkbun: Domain Management → Details → API Access), then plan again and approve the new hash.
+- **Retry-safe:** no
+
+(error-infra-dns-check-failed)=
+### `infra-dns-check-failed`
+
+**DNS provider API access could not be confirmed.** The plan changes records at a DNS provider whose API access it checks before approval (Porkbun: per domain), and the check could not confirm it: no key pair was loaded, the API did not answer in time, or it refused the request (a wrong key pair, a domain not in the account). The plan does not pass a check it did not run. Nothing was applied.
+
+- **Fix:** Check the network and the key pair (`piceli secrets provider NAME --prompt`; a domain in that account), then plan again.
+- **Retry-safe:** yes
+
+(error-infra-dns-record-conflict)=
+### `infra-dns-record-conflict`
+
+**DNS records Piceli did not create are in the way.** The zone holds records Piceli did not create (not in its ledger) where the plan creates one: a CNAME or ALIAS at the same name (a registrar's parking record at the apex), any record at a name where Piceli creates a CNAME, or a record of the same name and type (for TXT, the same content). The apply would fail or answer beside them, and Piceli never touches records it did not create. The output's `conflicts` lists each (type, name, content). Nothing was applied.
+
+- **Fix:** Remove or change those records at the registrar (Porkbun: Domain Management → DNS), or declare another name, then plan again and approve the new hash.
+- **Retry-safe:** no
+
 (error-infra-foreign-resource)=
 ### `infra-foreign-resource`
 
@@ -6105,6 +6287,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Remove the resource from the state with `tofu state rm` in the state directory (it is then left alone), or delete it at the provider yourself; then plan again.
 - **Retry-safe:** no
+
+(error-infra-image-build-invalid)=
+### `infra-image-build-invalid`
+
+**Image build sidecar unreadable.** `Image.from_build(NAME, PATH)` got a file that is missing, not JSON, or not a `piceli.nix-image.v1` sidecar (a relative `file`, a 64-hex `sha256`, a known `format`).
+
+- **Fix:** Build the image with `piceli dev nix build ... --image` (it writes `NAME.image.json` in `--artifacts-dir`) and point `from_build` at that file.
+- **Retry-safe:** no
+
+(error-infra-image-checksum)=
+### `infra-image-checksum`
+
+**Image checksum mismatch.** The file or download of an `Image` does not have the declared `sha256`; nothing was uploaded and nothing was applied.
+
+- **Fix:** Check that `file=` or `url=` is the image you meant and that `sha256=` is its checksum (`sha256sum FILE`), then plan and approve again.
+- **Retry-safe:** no
+
+(error-infra-image-unavailable)=
+### `infra-image-unavailable`
+
+**Image file unavailable.** The `file=` of an `Image` cannot be read, or its `url=` cannot be downloaded; nothing was applied.
+
+- **Fix:** Make the file readable or the URL reachable from this machine, then run the apply again.
+- **Retry-safe:** yes
 
 (error-infra-install-changed)=
 ### `infra-install-changed`
@@ -6165,9 +6371,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-infra-no-cluster)=
 ### `infra-no-cluster`
 
-**Server declares no cluster.** `piceli infra register` needs `Server(cluster=Cluster(...))`: the cluster the server's k3s becomes.
+**Server declares no cluster.** `piceli infra register --kubeconfig` needs `Server(cluster=Cluster(...))`: the cluster the server's k3s becomes. Without a cluster, `register` only pins the server's SSH host keys.
 
-- **Fix:** Add `cluster=Cluster(name, api=..., credentials=...)` to the server and run the command again.
+- **Fix:** Add `cluster=Cluster(name, api=..., credentials=...)` to the server, or drop `--kubeconfig` to pin its host keys only.
 - **Retry-safe:** no
 
 (error-infra-not-applied)=
@@ -6281,3 +6487,286 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Install OpenTofu 1.8 or later and pass it with `--tofu PATH`.
 - **Retry-safe:** no
+
+(error-infra-user-data-missing)=
+### `infra-user-data-missing`
+
+**User data not stored.** The plan creates (or replaces) a server declared with `UserData(secret=NAME)`, and no credential NAME holds its user data. Plans that do not create the server never need it.
+
+- **Fix:** Store it, then plan again: `piceli secrets user-data NAME --file PATH` (or `--prompt`). For a bootstrap key, mint a single-use key that expires within the hour just before.
+- **Retry-safe:** yes
+
+
+## Nix host releases (`piceli.infra.NixHost`, the host agent, `piceli host …`)
+
+(error-host-address-unknown)=
+### `host-address-unknown`
+
+**Host address unknown.** The host's `Server` has no `Ssh(address=)`, and no `--infra` names the infrastructure whose applied state has its address.
+
+- **Fix:** Pass `--infra MODULE:ATTR`, declare `Ssh(address=)`, or give an SSH target.
+- **Retry-safe:** no
+
+(error-host-build-bad)=
+### `host-build-bad`
+
+**Build marked bad.** The build failed on this host before (a refusal, a failed switch or check); the agent skips it until a newer pointer for it.
+
+- **Fix:** Publish a fixed build, or publish the same commit again to retry it.
+- **Retry-safe:** no
+
+(error-host-busy)=
+### `host-busy`
+
+**Host agent busy.** A poll held the agent's lock (a deploy in progress) for the whole wait of `piceli host pin`, `unpin` or `rollback`.
+
+- **Fix:** Wait for the deploy (`piceli host status`), then run the command again.
+- **Retry-safe:** yes
+
+(error-host-cache-unreachable)=
+### `host-cache-unreachable`
+
+**Nix cache not reachable.** Reading the cache (a pointer, a listing, a manifest or a narinfo) failed or the object is missing (network, endpoint, read credentials, or a gc that ran meanwhile).
+
+- **Fix:** The agent tries again at its next poll; check the cache's endpoint and the read-only credentials file.
+- **Retry-safe:** yes
+
+(error-host-check-failed)=
+### `host-check-failed`
+
+**Host check failed.** A check did not pass before its timeout after the switch; the agent switched back to the previous system.
+
+- **Fix:** Read the check in `piceli host status --json`, fix the service and publish a new build.
+- **Retry-safe:** no
+
+(error-host-check-invalid)=
+### `host-check-invalid`
+
+**Host check refused.** A `HostCheck` is `HostCheck.unit(NAME)`, `HostCheck.http(URL)` (http(s), no credentials) or `HostCheck.command(ARG, ...)`, with a timeout of 1 to 3600 s and a unique DNS-label name.
+
+- **Fix:** Fix the check.
+- **Retry-safe:** no
+
+(error-host-control-unsupported)=
+### `host-control-unsupported`
+
+**Host agent cannot run the command.** The host has no `piceli-host-agent` command, or it did not answer with a result: its module was rendered by an older Piceli, or `sudo -n` is not allowed for the SSH user.
+
+- **Fix:** Render the module again with `piceli host module`, switch the host once, and log in as root (or allow `sudo -n`).
+- **Retry-safe:** no
+
+(error-host-credentials-exposed)=
+### `host-credentials-exposed`
+
+**Host credentials file readable by others.** A credentials or headers file on the host is readable by its group or others; the agent does not use it.
+
+- **Fix:** `chmod 600` the file (owned by root).
+- **Retry-safe:** yes
+
+(error-host-credentials-missing)=
+### `host-credentials-missing`
+
+**Host credentials file missing.** The cache's read-only credentials file (`AWS_ACCESS_KEY_ID=`, `AWS_SECRET_ACCESS_KEY=`), or the report's headers file, is absent or incomplete on the host.
+
+- **Fix:** Put the read-only keys (never the write keys) into the file, `0600` root, as `docs/nix_hosts.md` shows.
+- **Retry-safe:** yes
+
+(error-host-deploy-failed)=
+### `host-deploy-failed`
+
+**Host refused or failed the build.** The host agent's last attempt at this build was refused (signature, manifest, system) or failed before the switch; the host still runs its previous system.
+
+- **Fix:** Read the attempt's stages and reason with `piceli host status --json` and `piceli explain` of that reason.
+- **Retry-safe:** no
+
+(error-host-invalid)=
+### `host-invalid`
+
+**Nix host declaration refused.** `NixHost` needs a DNS-label name, a `Server` or an `ssh://user@host` target, `flake=` as `.#NAME` or `.#ATTR`, `follow=Tag(...)` or `Branch(...)`, a `NixCache` (an `s3://` or `file://` one to follow tags), and absolute paths for its files; or `HostReport` got an endpoint that is not http(s), or plain `http://` to another machine without `insecure=True`.
+
+- **Fix:** Fix the declaration; `piceli explain host-invalid` and `docs/nix_hosts.md` list each field.
+- **Retry-safe:** no
+
+(error-host-manifest-mismatch)=
+### `host-manifest-mismatch`
+
+**Build manifest does not match.** The manifest's sha256 is not the pointer's, or it names another build, commit, store path or flake attribute than the host's `NixHost(flake=)`.
+
+- **Fix:** Publish the host's attribute under its build name (`piceli dev nix build .#nixosConfigurations.NAME.config.system.build.toplevel --name NAME --publish ...`).
+- **Retry-safe:** no
+
+(error-host-narinfo-mismatch)=
+### `host-narinfo-mismatch`
+
+**Narinfo does not match the manifest.** The store path's narinfo (or the realised path) has another `StorePath` or `NarHash` than the signed manifest.
+
+- **Fix:** Publish the build again; if it repeats, the cache holds a corrupt or replaced object.
+- **Retry-safe:** no
+
+(error-host-not-found)=
+### `host-not-found`
+
+**Not a Nix host.** The `MODULE:ATTR` given to `piceli host` did not load, or is not a `piceli.infra.NixHost`.
+
+- **Fix:** Point at the `NixHost` (`hosts.py:web`), or give an SSH target (`ssh://root@host`).
+- **Retry-safe:** no
+
+(error-host-pin-not-found)=
+### `host-pin-not-found`
+
+**No build of that tag.** `piceli host pin` names a tag with no published build for the host's build name in the cache (or not a tag name).
+
+- **Fix:** Publish the tag's build (`piceli dev nix build --ref TAG --publish ...`) or pin a published tag.
+- **Retry-safe:** no
+
+(error-host-pinned)=
+### `host-pinned`
+
+**Host is pinned.** The host holds a build (`piceli host pin`, or `piceli host rollback`) and deploys no other until `piceli host unpin`; `piceli host wait` stops instead of timing out.
+
+- **Fix:** Run `piceli host unpin HOST` to follow the declared ref again, or wait for the held build.
+- **Retry-safe:** no
+
+(error-host-pointer-replayed)=
+### `host-pointer-replayed`
+
+**Old ref pointer refused.** The ref pointer's `published_at` is older than one the agent already saw for that ref: an old, validly signed pointer was put back.
+
+- **Fix:** Publish the build again (a new pointer is newer); check who can write to the cache.
+- **Retry-safe:** no
+
+(error-host-prune-failed)=
+### `host-prune-failed`
+
+**Old systems not pruned.** After a deploy that passed its checks, deleting the system generations beyond `NixHost(generations=)` (`nix-env --delete-generations`) or collecting the store (`nix-store --gc`) failed or timed out. The deploy stands; the host keeps more systems and the disk fills sooner.
+
+- **Fix:** Read `prune` in `piceli host status --json` and the host's journal (`journalctl -u piceli-host-agent`); the next deploy tries again.
+- **Retry-safe:** yes
+
+(error-host-realise-failed)=
+### `host-realise-failed`
+
+**Fetching the build failed.** `nix copy --from` the cache failed: the network, the read credentials, or a path missing from the cache. The host never builds.
+
+- **Fix:** The agent tries again at its next poll; check the cache and that the whole closure was published.
+- **Retry-safe:** yes
+
+(error-host-report-failed)=
+### `host-report-failed`
+
+**Report endpoint not reached.** The OTLP endpoint did not accept the agent's events within 2 s; they wait in a bounded queue for the next run and the deploy goes on.
+
+- **Fix:** Check the endpoint and its headers file; nothing else is needed.
+- **Retry-safe:** yes
+
+(error-host-rollback-failed)=
+### `host-rollback-failed`
+
+**Rollback failed.** Switching back to the previous system failed after a failed switch or check; the host may run a mix of both.
+
+- **Fix:** Log in, run `/nix/var/nix/profiles/system/bin/switch-to-configuration switch` or boot the previous generation.
+- **Retry-safe:** no
+
+(error-host-rollback-unavailable)=
+### `host-rollback-unavailable`
+
+**No previous system to roll back to.** The agent has recorded no previous system, it is the one running, or it is no longer in the host's store (collected).
+
+- **Fix:** Pin a published tag instead (`piceli host pin HOST TAG`).
+- **Retry-safe:** no
+
+(error-host-rolled-back)=
+### `host-rolled-back`
+
+**Host rolled the build back.** The build was switched to, but the switch or a check failed and the agent switched back to the previous system; the build is marked bad and not tried again until a newer pointer.
+
+- **Fix:** Read the failed check in `piceli host status --json`, fix it, publish a new build (or publish the same commit again to retry it).
+- **Retry-safe:** no
+
+(error-host-secret-activation-failed)=
+### `host-secret-activation-failed`
+
+**Host activation failed after the key.** The key was written, but re-running the system's activation (`switch-to-configuration switch`) failed, so sops-nix may not have decrypted.
+
+- **Fix:** Read the host's journal, then run `/run/current-system/bin/switch-to-configuration switch` on it.
+- **Retry-safe:** yes
+
+(error-host-secret-exists)=
+### `host-secret-exists`
+
+**Host holds another age key.** The host's key file holds a different age identity; replacing it changes what sops-nix can decrypt.
+
+- **Fix:** Check which key `.sops.yaml` lists; pass `--replace` to the plan if the new one is meant, after re-encrypting the secrets to it.
+- **Retry-safe:** no
+
+(error-host-secret-plan-changed)=
+### `host-secret-plan-changed`
+
+**Host secrets plan changed.** What `piceli host secrets` would write (the key, the host's file, `--replace`) changed since the digest was approved.
+
+- **Fix:** Plan again and approve the new digest.
+- **Retry-safe:** no
+
+(error-host-secret-undeclared)=
+### `host-secret-undeclared`
+
+**Host declares no age identity.** `piceli host secrets` needs a `NixHost` with `age_identity=` (a credential from `piceli secrets age NAME --generate`).
+
+- **Fix:** Declare `NixHost(age_identity=NAME)` and give the `NixHost` (`MODULE:ATTR`).
+- **Retry-safe:** no
+
+(error-host-secret-write-failed)=
+### `host-secret-write-failed`
+
+**Writing the host's key failed.** Over SSH, checking or writing the key file failed: a read-only path, no root (or `sudo -n`), or missing `sh`, `sha256sum` or `mktemp`.
+
+- **Fix:** Check that `ssh USER@HOST` runs commands as root, then plan again.
+- **Retry-safe:** yes
+
+(error-host-signature-invalid)=
+### `host-signature-invalid`
+
+**Build signature refused.** A ref pointer, build manifest or narinfo is not signed by the cache's public key the host trusts; nothing was realised.
+
+- **Fix:** Publish with the key whose public key the `NixCache` declares; if nobody did, someone wrote to the cache: rotate its write keys.
+- **Retry-safe:** no
+
+(error-host-status-missing)=
+### `host-status-missing`
+
+**Host agent status missing.** The host answered but has no readable `/var/lib/piceli-host/status.json`: the agent's module is not imported yet, or it has not run once.
+
+- **Fix:** Render the module with `piceli host module`, import it, rebuild the host once; the agent writes its status at its first run (a minute after boot).
+- **Retry-safe:** yes
+
+(error-host-switch-failed)=
+### `host-switch-failed`
+
+**Switch failed.** `nix-env --set` or `switch-to-configuration switch` of the new system failed; the agent switched back.
+
+- **Fix:** Read the host's journal (`journalctl -u piceli-host-agent`), fix the configuration and publish a new build.
+- **Retry-safe:** no
+
+(error-host-system-mismatch)=
+### `host-system-mismatch`
+
+**Build is for another system.** The manifest's system (`x86_64-linux`, `aarch64-linux`) is not the host's.
+
+- **Fix:** Build the host's configuration for its own system.
+- **Retry-safe:** no
+
+(error-host-unreachable)=
+### `host-unreachable`
+
+**Host not reachable over SSH.** `ssh` failed: no route, a closed port, an unknown or changed host key (only known keys are accepted), or a refused login; or `ssh` is not installed.
+
+- **Fix:** Check that `ssh USER@HOST` works without a prompt (its host key in `~/.ssh/known_hosts`, or pinned by `piceli infra register`), then run the command again.
+- **Retry-safe:** yes
+
+(error-host-wait-timeout)=
+### `host-wait-timeout`
+
+**Host did not reach the build in time.** `piceli host wait` saw neither the build running with its checks passed nor a failed attempt before `--timeout`: the build may not be published yet, or the agent has not polled.
+
+- **Fix:** Check `piceli host status`, that the build was published (`piceli dev nix build --publish`) and its pointer names the ref the host follows; wait longer.
+- **Retry-safe:** yes

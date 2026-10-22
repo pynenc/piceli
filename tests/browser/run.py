@@ -51,11 +51,11 @@ def main() -> int:
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGTERM)
             try:
-                process.wait(timeout=5)
+                process.wait(timeout=60)
             except subprocess.TimeoutExpired:
                 with suppress(ProcessLookupError):
                     os.killpg(process.pid, signal.SIGKILL)
-                process.wait(timeout=5)
+                process.wait(timeout=60)
 
 
 if __name__ == "__main__":

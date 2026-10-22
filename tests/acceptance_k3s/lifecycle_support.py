@@ -835,7 +835,7 @@ class Served:
                 pass
         kill_group(self.pid, signal.SIGKILL)
         try:
-            self.process.wait(timeout=10)
+            self.process.wait(timeout=60)
         except subprocess.TimeoutExpired:
             pass
 

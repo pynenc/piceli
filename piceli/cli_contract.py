@@ -1288,6 +1288,113 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             exit_codes=(0,),
             notes="Read-only; never contacts a cluster.",
         ),
+        "host module": _C(
+            "Render the NixOS module that installs a NixHost's agent (the agent, "
+            "its configuration, a systemd service and timer).",
+            reads=("MODULE:ATTR (piceli.infra.NixHost)",),
+            writes=("--output FILE (else the module on stdout)",),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.24.0. Never contacts the host or the cache. The module holds "
+            "no secret (paths of root-only files only); commit it and import it "
+            "from the host's configuration. With --output prints one JSON object "
+            "(path, sha256).",
+        ),
+        "host status": _C(
+            "Read a Nix host agent's status over SSH: the current and previous "
+            "builds, the last attempt with its stages, checks and rollback.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.NixHost), its name with --infra, or "
+                "an SSH target",
+                "--infra MODULE[:ATTR] (declared hosts, applied address, pinned "
+                "host keys)",
+                "the host's /var/lib/piceli-host/status.json (ssh)",
+            ),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.24.0. Read-only; no cluster (works with every cluster down). "
+            "ssh runs with BatchMode and strict host key checking "
+            "(host-unreachable, host-status-missing).",
+        ),
+        "host wait": _C(
+            "Wait until a Nix host runs a commit or tag with its checks passed.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.NixHost) or an SSH target",
+                "the host's status file (ssh, every --interval)",
+            ),
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.24.0. Read-only; no cluster. Exit 0: the host runs REV and its "
+            "checks passed; 1: the attempt was refused or failed "
+            "(host-deploy-failed), rolled back (host-rolled-back), or "
+            "host-wait-timeout. The JSON carries the attempt's stage times.",
+        ),
+        "host pin": _C(
+            "Make a Nix host deploy a tag's published build (an older one too) "
+            "and hold it: no newer build until unpin.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.NixHost) or an SSH target",
+                "--infra MODULE[:ATTR] (address, pinned host keys, host names)",
+            ),
+            writes=("the host's system and /var/lib/piceli-host (ssh, as root)",),
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.24.0. No approval digest: it only goes to a build that is "
+            "signed, published and verified like every deploy, with checks and "
+            "a rollback on failure. Runs piceli-host-agent pin TAG over SSH. "
+            "Exit 1: the build failed its switch or checks and the host is back "
+            "on its previous system; 2: refused before any change "
+            "(host-pin-not-found, host-signature-invalid, host-busy). Reported "
+            "to the OTLP collector as piceli.host.pin.",
+        ),
+        "host unpin": _C(
+            "Drop a Nix host's pin or rollback hold: it follows its declared "
+            "ref again from the next poll (started at once).",
+            reads=("MODULE:ATTR (piceli.infra.NixHost) or an SSH target",),
+            writes=("/var/lib/piceli-host/state.json on the host (ssh, as root)",),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.24.0. Changes no system itself; the poll it starts deploys "
+            "the newest build of the followed ref. Reported as piceli.host.unpin.",
+        ),
+        "host rollback": _C(
+            "Switch a Nix host back to its previous system (already in its "
+            "store) and hold it until unpin.",
+            reads=("MODULE:ATTR (piceli.infra.NixHost) or an SSH target",),
+            writes=("the host's system and /var/lib/piceli-host (ssh, as root)",),
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.24.0. No approval digest: the previous system was verified "
+            "when it was deployed. Runs the checks and switches forward again "
+            "when one fails (exit 1). The hold keeps the next poll from "
+            "deploying what was rolled away from. host-rollback-unavailable "
+            "when no previous system is recorded or in the store. Reported as "
+            "piceli.host.rollback.",
+        ),
+        "host secrets": _C(
+            "Put a Nix host's age identity (its sops-nix key) on the host: "
+            "plan, then --approve DIGEST.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.NixHost with age_identity=)",
+                "$PICELI_CREDENTIALS_DIR/NAME.json (age-identity)",
+                "the host's key file, by fingerprint only (ssh)",
+            ),
+            writes=(
+                "NixHost(age_key_file=) on the host, 0600 root (ssh stdin, "
+                "atomic rename)",
+            ),
+            approval_required=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="0.24.0. The plan lists host, path, mode, owner, public key and "
+            "whether the host has the same, a different or no key (exit 3 with "
+            "the digest; 0 when it has the same). A different key is refused "
+            "without --replace (host-secret-exists). The key travels on ssh's "
+            "stdin, never in an argument, log or state. After writing, the "
+            "host re-runs switch-to-configuration switch so sops-nix decrypts.",
+        ),
         "gitops enable": _C(
             "Plan and, with --approve HASH, install the GitOps controller that "
             "deploys branches from Git (one environment per branch).",
@@ -1506,6 +1613,58 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             notes="Prints one JSON object with the local push URL, then runs "
             "until interrupted. Pushes through it go by digest; nodes pull "
             "by the stable name. " + _EXPLICIT_CONTEXT,
+        ),
+        "dev nix build": _C(
+            "Build a flake output (a NixOS system, a disk image) as a development "
+            "run on a docker or native build host with Nix; with --publish, sign "
+            "and push its closure to a NixCache and upload a signed build manifest.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.DevBuilds, or a Cluster with dev=)",
+                "MODULE:ATTR (piceli.infra.NixCache, --publish)",
+                "the local Git repository",
+                "credentials (signing key, S3 keys; --publish after approval)",
+            ),
+            writes=(
+                "--artifacts-dir RUN/ and NAME.image.json (with --image)",
+                "the build host's Nix store",
+                "the binary cache and piceli/NAME/REV.json (--publish)",
+            ),
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="0.24.0. Without --publish it is a development run (no approval; "
+            "covered like dev run). With --publish it prints the plan (commit, "
+            "output, host, cache, key) and exits 3; --approve DIGEST builds, then "
+            "a separate step on the same host receives the signing key and S3 "
+            "keys on stdin only (never the build), pushes with nix copy and the "
+            "client uploads the manifest. Prints the store path, the image's "
+            "sha256 and the public key, never a secret. Exit 1: the build "
+            "failed, no output (dev-nix-no-output), dev-nix-publish-failed, "
+            "dev-nix-manifest-failed.",
+        ),
+        "dev nix gc": _C(
+            "Remove the builds of old commits from a Nix cache: keep the manifests "
+            "of the newest --keep-tags tags (5) and the current --main, and every "
+            "path their closures reach; delete the rest after approval.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.NixCache)",
+                "the local Git repository (tags, main)",
+                "the cache's objects (write credentials)",
+            ),
+            writes=("the binary cache (deleted manifests, narinfos, NAR files)",),
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="0.24.0. Without --approve prints the keys it would delete and "
+            "the plan digest (exit 3; 0 and state clean when nothing goes). A "
+            "path a kept manifest's closure reaches is never deleted; objects "
+            "younger than --grace stay. --approve with another digest is "
+            "refused (dev-nix-plan-changed); a failed delete exits 1 "
+            "(dev-nix-gc-failed).",
         ),
         "dev run": _C(
             "Run a build or test command on the cluster's builder node for a "
@@ -1735,7 +1894,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
                 "MODULE:ATTR (piceli.infra.Infrastructure)",
                 "tofu binary",
                 "credentials (provider token, state passphrase)",
-                "provider API (plan refresh, prices)",
+                "provider API (plan refresh, prices, Porkbun API access per domain)",
             ),
             writes=("state directory (configuration, lock file, providers)",),
             contract="conforms",
@@ -1743,8 +1902,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             notes="Never changes a resource. Exit 3 with the plan and approve_command "
             "(piceli infra apply ... --approve HASH); 0 and state unchanged when "
             "nothing changes. Refuses a plan that would change or delete a resource "
-            "Piceli did not create (infra-foreign-resource). Tokens and the state "
-            "passphrase reach tofu through its environment only; its output is redacted.",
+            "Piceli did not create (infra-foreign-resource). A plan that changes "
+            "Porkbun records checks API access for each domain (infra-dns-api-disabled; "
+            "infra-dns-check-failed when it cannot) and records it in checks. Tokens and "
+            "the state passphrase reach tofu through its environment only; its output "
+            "is redacted.",
         ),
         "infra apply": _C(
             "Apply a declared Infrastructure: plan again and apply that plan only "
@@ -1766,8 +1928,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             exit_codes=(0, 1, 2, 3),
             notes="Without --approve it plans (exit 3). A hash that is not the fresh "
             "plan's is refused (infra-plan-changed). A failed tofu apply exits 1 "
-            "(infra-apply-failed); plan again to continue. One command at a time "
-            "per state (infra-state-locked).",
+            "(infra-apply-failed); one that changed something first exits 1 whatever "
+            "its code, with partially_applied, applied (address, action, id) and "
+            "not_applied; plan again to continue. One command at a time per state "
+            "(infra-state-locked).",
         ),
         "infra destroy": _C(
             "Destroy what Piceli created for a declared Infrastructure, with "
@@ -1787,7 +1951,8 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "piceli.io/managed-by=piceli and piceli.io/infra=<name> may be deleted; "
             "anything else refuses the whole plan (infra-foreign-resource). DNS zones "
             "are never deleted (Piceli manages record sets only). Credential "
-            "profiles of registered clusters are left in place.",
+            "profiles of registered clusters are left in place. A failure after "
+            "some deletions exits 1 with partially_applied, as for apply.",
         ),
         "infra status": _C(
             "Show a declared Infrastructure's servers (state, addresses, install, "
@@ -1822,7 +1987,8 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         ),
         "infra register": _C(
             "Wait for a server's k3s and make it the server's declared Cluster "
-            "(kubeconfig over SSH or --kubeconfig; a credential profile).",
+            "(kubeconfig over SSH or --kubeconfig; a credential profile); for a "
+            "server without cluster=, pin its SSH host keys only.",
             reads=(
                 "MODULE:ATTR (piceli.infra.Infrastructure)",
                 "the server over SSH (host keys, k3s kubeconfig) or --kubeconfig",
@@ -1853,6 +2019,69 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             notes="The token is read from stdin only (typed without echo, or piped); "
             "an argument or HCLOUD_TOKEN in the environment is refused "
             "(infra-credential-refused) without echoing it. Prints the name, never the value.",
+        ),
+        "secrets nix-cache": _C(
+            "Generate or import a Nix binary cache's signing key as a local "
+            "credential, or print its public key.",
+            reads=("stdin (--prompt)", "$PICELI_CREDENTIALS_DIR/NAME.json"),
+            writes=(
+                "$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600; --generate, --prompt)",
+            ),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.24.0. Prints the public key (NAME:base64), never the secret "
+            "key. Without --generate or --prompt it only reads. Refuses to "
+            "replace a key without --replace (infra-credential-exists): hosts "
+            "that trust the old key refuse what a new one signs.",
+        ),
+        "secrets age": _C(
+            "Generate or import a host's age identity (for sops-nix) as a local "
+            "credential, or print its public key.",
+            reads=("stdin (--prompt)", "$PICELI_CREDENTIALS_DIR/NAME.json"),
+            writes=(
+                "$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600; --generate, --prompt)",
+            ),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.24.0. Prints the public key (age1...) for .sops.yaml, never "
+            "the identity. Without --generate or --prompt it only reads. Refuses "
+            "to replace an identity without --replace (infra-credential-exists).",
+        ),
+        "secrets s3": _C(
+            "Store a bucket's S3 access keys (access key id and secret) as a "
+            "local credential.",
+            reads=("stdin (--prompt)",),
+            writes=("$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)",),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.24.0. Two lines on stdin (typed without echo, or piped); an "
+            "argument is refused (infra-credential-refused) without echoing it. "
+            "Prints the name, never a value.",
+        ),
+        "secrets user-data": _C(
+            "Store a server's user data (a cloud-config, a script or a bootstrap "
+            "key) as a local credential.",
+            reads=("stdin (--prompt)", "PATH (--file)"),
+            writes=("$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)",),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.24.0. Prints the name, size and a short digest (the one the "
+            "plan shows), never the value; an argument is refused "
+            "(infra-credential-refused) without echoing it. Used only by a plan "
+            "that creates the server (Server(user_data=UserData(NAME))).",
+        ),
+        "secrets delete": _C(
+            "Delete a stored local credential (a spent bootstrap key, an old token).",
+            reads=("$PICELI_CREDENTIALS_DIR/NAME.json (its kind, never the value)",),
+            writes=("$PICELI_CREDENTIALS_DIR/NAME.json (removed)",),
+            approval_required=True,
+            contract="conforms",
+            exit_codes=(0, 2, 3),
+            notes="0.24.0. Never prints the value. Without --yes it asks for the "
+            "name on a terminal; otherwise it exits 3 (approval-required, with "
+            "the command to run) and deletes nothing. --kind (provider, "
+            "state-key, nix-cache, s3, age, user-data) refuses another kind "
+            "(infra-credential-invalid); a missing one is infra-credential-missing.",
         ),
         "secrets state-key": _C(
             "Store the passphrase that encrypts an Infrastructure's OpenTofu state "

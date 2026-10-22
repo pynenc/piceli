@@ -20,7 +20,14 @@ def homes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("PICELI_CREDENTIALS_DIR", str(tmp_path / "credentials"))
     monkeypatch.setenv("PICELI_PROFILES_DIR", str(tmp_path / "profiles"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
-    for name in ("HCLOUD_TOKEN", "PICELI_PROVIDER_TOKEN", "PICELI_STATE_KEY"):
+    for name in (
+        "HCLOUD_TOKEN",
+        "OS_APPLICATION_CREDENTIAL_SECRET",
+        "PORKBUN_API_KEY",
+        "PORKBUN_SECRET_API_KEY",
+        "PICELI_PROVIDER_TOKEN",
+        "PICELI_STATE_KEY",
+    ):
         monkeypatch.delenv(name, raising=False)
     tofu = _tofu()
     if tofu:

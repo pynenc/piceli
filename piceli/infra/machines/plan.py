@@ -16,7 +16,26 @@ apply, the addresses the plan creates are added to the ledger
 (``inventory.json`` ``created``); a plan that would update, replace or
 delete a resource that is not in the ledger, or whose labels are not
 ``piceli.io/managed-by=piceli`` and ``piceli.io/infra=<name>``, is refused
-(``infra-foreign-resource``) before anything runs.
+(``infra-foreign-resource``) before anything runs. A resource type that
+carries no labels (``Provider.ledger_owned``: Porkbun records) is owned by
+the ledger alone.
+
+Checks: after ``tofu plan``, each provider may check what the plan needs and
+OpenTofu cannot see (:meth:`Provider.plan_check`: Porkbun's API access for
+each domain the plan changes). A check that fails fails the plan; whether
+each one ran is in the plan's ``checks``, outside the hash.
+
+User data: a server's :class:`~piceli.infra.machines.model.UserData` is
+loaded only when the plan creates (or replaces) that server. The plan runs
+once without it; if it creates such a server, the secret goes into
+``TF_VAR_user_data_<server>`` and the plan runs again (a missing secret is
+``infra-user-data-missing``). The plan shows the secret's name and a short
+digest, which the plan hash covers; the value is redacted from every output.
+
+Partial applies: ``tofu apply -json`` prints an ``apply_complete`` line per
+finished change. When the apply fails after one of them, the error carries
+``partially_applied``, what was applied (address, action, the provider's id)
+and what was not; the next plan shows what remains.
 
 Importing this module is side-effect free.
 """
@@ -26,12 +45,13 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from piceli.infra.machines.images import stage_image, unstage_images
 from piceli.infra.machines.model import (
     INFRA_LABEL,
     MANAGED_BY,
@@ -39,7 +59,7 @@ from piceli.infra.machines.model import (
     Infrastructure,
 )
 from piceli.infra.machines.provider import Prices, Provider
-from piceli.infra.machines.render import Rendered, render
+from piceli.infra.machines.render import Rendered, render, user_data_variable
 from piceli.infra.machines.state import (
     encryption_env,
     locked,
@@ -73,6 +93,8 @@ class Workspace:
     rendered: Rendered
     env: dict[str, str]
     tokens: dict[str, str] = field(default_factory=dict)
+    #: Server address -> its user data, once a plan that creates it loaded it.
+    user_data: dict[str, str] = field(default_factory=dict, repr=False)
 
     def run(self, *args: str, timeout: float = 1800) -> TofuResult:
         return self.tofu.run(
@@ -83,10 +105,24 @@ class Workspace:
         return set(read_record(self.directory, INVENTORY).get("created") or ())
 
 
-def _check(result: TofuResult, code: str, what: str) -> TofuResult:
+def _check(
+    result: TofuResult, code: str, what: str, ws: Workspace | None = None
+) -> TofuResult:
     if result.code != 0:
-        raise InfraError(code, f"tofu {what} failed", result.diagnostics())
+        diagnostics = result.diagnostics()
+        raise _known(ws, diagnostics) or InfraError(
+            code, f"tofu {what} failed", diagnostics
+        )
     return result
+
+
+def _known(ws: Workspace | None, diagnostics: list[str]) -> InfraError | None:
+    """The registered code a provider gives a refusal it knows (Porkbun's API access)."""
+    for provider in ws.infra.providers() if ws is not None else ():
+        known = provider.known_error(diagnostics)
+        if known is not None:
+            return known
+    return None
 
 
 @contextmanager
@@ -101,14 +137,23 @@ def workspace(infra: Infrastructure, *, tofu: str | None = None) -> Iterator[Wor
         passphrase = load_credential(infra.state_key, "state-key")
         env = encryption_env(passphrase)
         tokens: dict[str, str] = {}
+        parts: list[str] = []
         for provider in infra.providers():
             variable = provider.token_env()
             if variable is not None and provider.credentials is not None:
-                tokens[provider.name] = env[variable] = load_credential(
+                tokens[provider.name] = load_credential(
                     provider.credentials, "provider-token"
                 )
+                provided = provider.credential_env(tokens[provider.name])
+                env.update(provided)
+                parts.extend(provided.values())
         env.update(infra.backend.env())
-        binary.secrets = [passphrase, *tokens.values(), *infra.backend.secrets()]
+        binary.secrets = [
+            passphrase,
+            *tokens.values(),
+            *parts,
+            *infra.backend.secrets(),
+        ]
         backend = infra.backend.describe()
         recorded = read_record(directory, BACKEND)
         if recorded and recorded != backend:
@@ -198,6 +243,9 @@ class InfraPlan:
     estimate: dict[str, Any] | None
     tofu: str
     file: Path | None = None
+    checks: tuple[dict[str, Any], ...] = ()
+    #: The user data the plan passes: server, secret name, short digest.
+    user_data: tuple[dict[str, str], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -211,6 +259,8 @@ class InfraPlan:
             "foreign": list(self.foreign),
             "estimate": self.estimate,
             "tofu": self.tofu,
+            "checks": [dict(check) for check in self.checks],
+            "user_data": [dict(item) for item in self.user_data],
         }
 
 
@@ -221,8 +271,14 @@ def _summary(changes: tuple[Change, ...]) -> dict[str, int]:
     return counts
 
 
-def plan_hash(operation: str, rendered: Rendered, document: Mapping[str, Any]) -> str:
-    """The approval hash: configuration, operation and plan JSON (no timestamp)."""
+def plan_hash(
+    operation: str,
+    rendered: Rendered,
+    document: Mapping[str, Any],
+    user_data: Sequence[Mapping[str, str]] = (),
+) -> str:
+    """The approval hash: configuration, operation, plan JSON (no timestamp)
+    and the digests of the user data it passes."""
     stable = {k: v for k, v in document.items() if k not in VOLATILE}
     # OpenTofu lists these in map order, which changes from run to run.
     for key in UNORDERED:
@@ -230,8 +286,15 @@ def plan_hash(operation: str, rendered: Rendered, document: Mapping[str, Any]) -
             stable[key] = sorted(
                 stable[key], key=lambda item: json.dumps(item, sort_keys=True)
             )
+    hashed: dict[str, Any] = {
+        "operation": operation,
+        "config": rendered.digest,
+        "plan": stable,
+    }
+    if user_data:
+        hashed["user_data"] = [dict(item) for item in user_data]
     body = json.dumps(
-        {"operation": operation, "config": rendered.digest, "plan": stable},
+        hashed,
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -260,7 +323,11 @@ def owned(
     provider = _provider_of(ws, address)
     if provider is None:
         return False
-    found = provider.labels_of(before)
+    type_ = address.split(".", 1)[0]
+    if provider.ledger_owned(type_):
+        # No labels to read (Porkbun records): the ledger alone owns it.
+        return True
+    found = provider.resource_labels(type_, before)
     return found.get(MANAGED_BY) == "piceli" and found.get(INFRA_LABEL) == ws.infra.name
 
 
@@ -345,6 +412,60 @@ def estimate(ws: Workspace) -> dict[str, Any] | None:
     }
 
 
+def _creates_with_user_data(ws: Workspace, document: Mapping[str, Any]) -> list[str]:
+    """Server addresses with user data that the plan creates (or replaces)."""
+    found: list[str] = []
+    for item in document.get("resource_changes") or ():
+        if not isinstance(item, dict):
+            continue
+        actions = (item.get("change") or {}).get("actions") or ()
+        address = item.get("address")
+        if address in ws.rendered.user_data and "create" in actions:
+            found.append(str(address))
+    return sorted(found)
+
+
+def _load_user_data(ws: Workspace, addresses: list[str]) -> bool:
+    """Put each server's user data into OpenTofu's environment (``True``: new ones)."""
+    from piceli.infra.machines.credentials import credential_present, load_credential
+
+    loaded = False
+    for address in addresses:
+        if address in ws.user_data:
+            continue
+        server, secret = ws.rendered.user_data[address]
+        if not credential_present(secret):
+            raise InfraError(
+                "infra-user-data-missing",
+                f"this plan creates server {server}, which needs its user data; "
+                f"store it first: piceli secrets user-data {secret} --file PATH",
+            )
+        value = load_credential(secret, "user-data")
+        ws.user_data[address] = value
+        ws.env["TF_VAR_" + user_data_variable(server)] = value
+        loaded = True
+    return loaded
+
+
+def user_data_digest(value: str) -> str:
+    """A short digest of user data: names it in a plan, never reveals it."""
+    return "sha256:" + hashlib.sha256(value.encode()).hexdigest()[:16]
+
+
+def _plan_document(ws: Workspace, args: list[str], file: Path) -> dict[str, Any]:
+    _check(ws.run(*args), "infra-tofu-failed", "plan", ws)
+    shown = _check(ws.run("show", "-json", str(file)), "infra-tofu-failed", "show")
+    try:
+        document = json.loads(shown.stdout)
+    except ValueError:
+        raise InfraError(
+            "infra-tofu-failed", "tofu show -json did not print a plan"
+        ) from None
+    if not isinstance(document, dict):
+        raise InfraError("infra-tofu-failed", "tofu show -json did not print a plan")
+    return document
+
+
 def plan(
     ws: Workspace,
     *,
@@ -363,24 +484,43 @@ def plan(
         args = ["plan", "-input=false", "-json", "-out=" + str(file)]
         if destroy:
             args.append("-destroy")
-        _check(ws.run(*args), "infra-tofu-failed", "plan")
-        shown = _check(ws.run("show", "-json", str(file)), "infra-tofu-failed", "show")
-        try:
-            document = json.loads(shown.stdout)
-        except ValueError:
-            raise InfraError(
-                "infra-tofu-failed", "tofu show -json did not print a plan"
-            ) from None
+        document = _plan_document(ws, args, file)
+        creates: list[str] = []
+        if not destroy and ws.rendered.user_data:
+            # Without the user data first: only a plan that creates the
+            # server loads it, then plans again with it.
+            creates = _creates_with_user_data(ws, document)
+            if _load_user_data(ws, creates):
+                document = _plan_document(ws, args, file)
+                creates = _creates_with_user_data(ws, document)
+                _load_user_data(ws, creates)
+        user_data = tuple(
+            {
+                "server": ws.rendered.user_data[address][0],
+                "secret": ws.rendered.user_data[address][1],
+                "digest": user_data_digest(ws.user_data[address]),
+            }
+            for address in creates
+        )
         changes, foreign = changes_of(ws, document)
+        ledger = frozenset(ws.ledger())
+        checks: list[dict[str, Any]] = []
+        for provider in ws.infra.providers():
+            found = provider.plan_check(
+                document, ws.tokens.get(provider.name), ledger=ledger
+            )
+            checks += [found] if isinstance(found, dict) else list(found or ())
         result = InfraPlan(
             ws.infra.name,
             operation,
-            plan_hash(operation, ws.rendered, document),
+            plan_hash(operation, ws.rendered, document, user_data),
             ws.rendered.digest,
             changes,
             foreign,
             estimate(ws) if prices and not destroy else None,
             ws.tofu.version_text,
+            checks=tuple(checks),
+            user_data=user_data,
         )
         if keep is not None:
             target = keep / "plan.tfplan"
@@ -421,14 +561,90 @@ def apply(
         record["created"] = sorted(ledger | creates)
         write_record(ws.directory, INVENTORY, record)
         assert fresh.file is not None
-        say(f"applying {len(fresh.changes)} change(s) with tofu {ws.tofu.version_text}")
-        result = ws.run("apply", "-input=false", "-json", str(fresh.file), timeout=3600)
-        inventory = refresh_inventory(ws, prices=fresh.estimate)
-        if result.code != 0:
-            raise InfraError(
-                "infra-apply-failed", "tofu apply failed", result.diagnostics()
+        uploads = {
+            c.name for c in fresh.changes if c.kind == "image" and "create" in c.actions
+        }
+        try:
+            for image, _ in ws.infra.images():
+                if image.name in uploads:
+                    say(f"verifying image {image.name} (sha256 {image.sha256[:12]}…)")
+                    stage_image(image, ws.directory)
+            say(
+                f"applying {len(fresh.changes)} change(s) with tofu {ws.tofu.version_text}"
             )
-        return fresh, inventory
+            result = ws.run(
+                "apply", "-input=false", "-json", str(fresh.file), timeout=3600
+            )
+        finally:
+            unstage_images(ws.directory)
+        if result.code == 0:
+            return fresh, refresh_inventory(ws, prices=fresh.estimate)
+        diagnostics = result.diagnostics()
+        error = _known(ws, diagnostics) or InfraError(
+            "infra-apply-failed", "tofu apply failed", diagnostics
+        )
+        error.fields.update(progress(result, fresh.changes))
+        try:
+            refresh_inventory(ws, prices=fresh.estimate)
+        except InfraError:
+            if not error.fields:
+                raise
+        raise error
+
+
+def progress(result: TofuResult, changes: tuple[Change, ...]) -> dict[str, Any]:
+    """What a failed apply changed (``apply_complete`` lines); ``{}`` if nothing.
+
+    ``applied``: address, action and the provider's id where OpenTofu
+    reports one; ``not_applied``: the plan's other changes (``failed`` for
+    the ones OpenTofu reported as errored). A replacement is applied when
+    both its halves finished.
+    """
+    done: dict[str, list[str]] = {}
+    ids: dict[str, str] = {}
+    errored: set[str] = set()
+    for line in result.stdout.splitlines():
+        try:
+            item = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(item, dict) or not isinstance(item.get("hook"), dict):
+            continue
+        hook = item["hook"]
+        address = (hook.get("resource") or {}).get("addr")
+        action = hook.get("action")
+        if not isinstance(address, str) or action in (None, "read", "noop"):
+            continue
+        if item.get("type") == "apply_errored":
+            errored.add(address)
+        elif item.get("type") == "apply_complete":
+            done.setdefault(address, []).append(str(action))
+            if hook.get("id_value"):
+                ids[address] = str(hook["id_value"])
+    if not done:
+        return {}
+    applied: list[dict[str, Any]] = []
+    for address, actions in sorted(done.items()):
+        entry: dict[str, Any] = {"address": address, "action": _finished(actions)}
+        if address in ids:
+            entry["id"] = ids[address]
+        applied.append(entry)
+    not_applied: list[dict[str, Any]] = []
+    for change in changes:
+        finished = _finished(done.get(change.address, []))
+        if finished == change.action or (finished and change.action != "replace"):
+            continue
+        entry = {"address": change.address, "action": change.action}
+        if change.address in errored:
+            entry["failed"] = True
+        not_applied.append(entry)
+    return {"partially_applied": True, "applied": applied, "not_applied": not_applied}
+
+
+def _finished(actions: list[str]) -> str:
+    if "replace" in actions or {"create", "delete"} <= set(actions):
+        return "replace"
+    return actions[-1] if actions else ""
 
 
 def refresh_inventory(
@@ -457,7 +673,11 @@ def refresh_inventory(
                 "provider": provider.name if provider else None,
                 "kind": owner[1] if owner else "unknown",
                 "name": owner[2] if owner else address,
-                "labels": dict(provider.labels_of(item.get("values") or {}))
+                "labels": dict(
+                    provider.resource_labels(
+                        str(item.get("type")), item.get("values") or {}
+                    )
+                )
                 if provider
                 else {},
             }

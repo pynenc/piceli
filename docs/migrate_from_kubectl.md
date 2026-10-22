@@ -113,6 +113,7 @@ def build(ctx: ReleaseContext) -> DeploymentComposition:
         ready=app.probe.http("/", 80, period_seconds=2),
         volumes={"/data": ExistingClaim("web-data", name="data")},
         selector={"app": "web"},
+        roll_on_change=False,
     )
     # not typed: spec.template.spec.containers[nginx].securityContext
     app.override(
@@ -147,6 +148,7 @@ What the importer did:
 | ConfigMap, Deployment, Service, NetworkPolicy | Declared with the typed API (`app.config`, `app.deployment`, `app.service`, `app.network_policy`) |
 | Secret | `app.secret(...)` with one `ctx.secret(...)` input per key. **Values are never copied**: the docstring lists an `import` generator for each key |
 | PersistentVolumeClaim | `ExistingClaim(...)` where a Deployment mounts it: the release never creates, changes or deletes it |
+| A Deployment that reads a ConfigMap or Secret | `roll_on_change=False`, so the adoption changes nothing (the content digest would roll the pods once); remove it to roll the pods when their configuration changes ({ref}`roll-on-change`) |
 | A field the typed API does not cover (a security context, tolerations, an extra label, an env var from `resourceFieldRef`, a list order the model cannot produce) | `app.override(obj, {...})`, with one `# not typed: <field>` comment per field |
 | Another kind (StatefulSet, Ingress, …) or an object the typed API cannot express | A raw manifest in `app.add(DeploymentComponent(...))`, with a comment giving the reason |
 | Server-populated fields (UIDs, status, cluster IPs, `managedFields`, revision annotations) and API defaults (`dnsPolicy: ClusterFirst`, `protocol: TCP` …) | Left out |

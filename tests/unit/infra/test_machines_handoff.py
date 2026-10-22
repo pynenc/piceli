@@ -289,12 +289,39 @@ def test_register_over_ssh_pins_the_scanned_host_key(
     assert CLIENT_SECRET not in json.dumps(record)
 
 
-def test_register_needs_a_declared_cluster(homes: Path) -> None:
+def test_a_server_without_a_cluster_only_gets_its_host_keys_pinned(
+    homes: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     path = write_module(homes)
     path.write_text(path.read_text().replace("    cluster=cluster,\n", ""))
-    _applied(homes)
-    result, body = piceli("infra", "register", f"{path}:infra", "edge-1")
+    directory = _applied(homes)
+    kubeconfig = _owner_kubeconfig(homes / "k.yaml", "https://127.0.0.1:6443")
+    result, body = piceli(
+        "infra", "register", f"{path}:infra", "edge-1", "--kubeconfig", str(kubeconfig)
+    )
     assert result.exit_code == 2 and body["reason"] == "infra-no-cluster"
+    # Another server's pinned key stays.
+    (directory / "known_hosts").write_text(f"10.0.0.9 ssh-ed25519 {OTHER_KEY}\n")
+    bin_dir = _fake_ssh(homes, homes / "never-read", HOST_KEY)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    preview, body = piceli("infra", "register", f"{path}:infra", "edge-1")
+    assert preview.exit_code == 3, preview.output
+    assert body["mode"] == "host-keys" and body["cluster"] is None
+    assert body["host_keys"] == [
+        {"type": "ssh-ed25519", "fingerprint": fingerprint(HOST_KEY)}
+    ]
+    done, pinned = piceli(
+        "infra", "register", f"{path}:infra", "edge-1", "--approve", body["digest"]
+    )
+    assert done.exit_code == 0, done.output
+    assert pinned["state"] == "pinned" and pinned["outcome"]["state"] == "pinned"
+    assert (directory / "known_hosts").read_text() == (
+        f"10.0.0.9 ssh-ed25519 {OTHER_KEY}\n127.0.0.1 ssh-ed25519 {HOST_KEY}\n"
+    )
+    assert stat.S_IMODE((directory / "known_hosts").stat().st_mode) == 0o600
+    assert not (homes / "ssh.argv").exists()  # nothing read over SSH
+    record = json.loads((directory / "registrations.json").read_text())
+    assert record["edge-1"]["state"] == "pinned"
 
 
 def test_registration_goes_through_the_multicluster_call_when_there(

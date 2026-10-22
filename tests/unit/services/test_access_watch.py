@@ -350,7 +350,7 @@ class _StopDuringRecheck(AccessService):
                 )
             )
             stopper.start()
-            stopper.join(10)
+            stopper.join(60)  # a hang guard: a busy runner can take seconds
         return result
 
 

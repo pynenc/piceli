@@ -18,6 +18,7 @@ from types import MappingProxyType
 from typing import Any
 
 from piceli.app.app import App
+from piceli.k8s.ops.content_digest import content_digests, strip_roll_markers
 from piceli.k8s.ops.plan import DeploymentComposition
 from piceli.k8s.ops.secret_versions import SecretVersionRef
 
@@ -36,6 +37,16 @@ def load_target(entry: str, base: Path) -> Any:
     target, sep, attribute = entry.rpartition(":")
     if not sep or not target or not attribute:
         raise RenderError(f"target must be module:attr or file.py:attr, got {entry!r}")
+    value: Any = load_module(target, base)
+    for part in attribute.split("."):
+        if not hasattr(value, part):
+            raise RenderError(f"{entry!r}: no attribute {part!r}")
+        value = getattr(value, part)
+    return value
+
+
+def load_module(target: str, base: Path) -> Any:
+    """Import ``module`` or ``path/to/file.py``, as :func:`load_target` does."""
     if target.endswith(".py") or "/" in target:
         path = (base / target).resolve()
         if not path.is_file():
@@ -62,12 +73,7 @@ def load_target(entry: str, base: Path) -> Any:
             module = importlib.import_module(target)
         except ImportError as error:
             raise RenderError(f"cannot import module {target!r}: {error}") from None
-    value: Any = module
-    for part in attribute.split("."):
-        if not hasattr(value, part):
-            raise RenderError(f"{entry!r}: no attribute {part!r}")
-        value = getattr(value, part)
-    return value
+    return module
 
 
 def placeholder_inputs(names: list[str]) -> dict[str, SecretVersionRef]:
@@ -151,6 +157,15 @@ def render_app_target(
         for the App's environments, ``environment-unsupported`` when ``env``
         is given and the target yields no App.
     """
+    composition, app = _render_app_target(target, context, env)
+    # As a release applies it: content digests on every workload (raw
+    # compositions included) and no opt-out marker.
+    return strip_roll_markers(content_digests(composition)), app
+
+
+def _render_app_target(
+    target: Any, context: Any, env: str | None
+) -> tuple[DeploymentComposition, App | None]:
     from piceli.app.environment import EnvironmentInvalid
 
     value = target

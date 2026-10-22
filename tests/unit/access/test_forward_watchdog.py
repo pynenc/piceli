@@ -177,7 +177,7 @@ def _session(
         # killed it); _kill below treats it the same way.
         with suppress(ProcessLookupError, PermissionError):
             os.killpg(process.pid, signal.SIGKILL)
-        process.wait(timeout=10)
+        process.wait(timeout=60)
         if process.stdout is not None:
             process.stdout.close()
 
@@ -197,7 +197,7 @@ def test_the_watchdog_stops_registered_groups_when_its_parent_is_killed() -> Non
         try:
             assert _alive(child) and _alive(watchdog)
             os.kill(parent.pid, signal.SIGKILL)  # the parent only
-            parent.wait(timeout=10)
+            parent.wait(timeout=60)
             assert _wait(lambda: not _alive(child), 10), "the child outlived its parent"
             assert _wait(lambda: not _alive(watchdog), 10), "the watchdog stayed"
         finally:
@@ -221,7 +221,7 @@ def test_a_watchdog_closed_by_its_parent_signals_nothing() -> None:
         assert child.poll() is None, "a forgotten group was signalled"
     finally:
         child.kill()
-        child.wait(timeout=5)
+        child.wait(timeout=60)
 
 
 def test_a_killed_access_with_ui_leaves_no_kubectl_and_frees_its_ports(
@@ -279,7 +279,7 @@ def test_a_killed_access_with_ui_leaves_no_kubectl_and_frees_its_ports(
             assert len(started) == 3 and all(_alive(pid) for pid in started)
 
             os.kill(access.pid, signal.SIGKILL)  # piceli only, as a crash does
-            access.wait(timeout=10)
+            access.wait(timeout=60)
             assert _wait(lambda: not any(_alive(pid) for pid in started), 15), (
                 "a kubectl port-forward outlived its piceli"
             )

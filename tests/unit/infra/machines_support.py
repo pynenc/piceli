@@ -82,3 +82,77 @@ def last_json(text: str) -> dict[str, Any]:
             assert isinstance(value, dict)
             return value
     raise AssertionError(f"no JSON object in {text!r}")
+
+
+def hook(kind: str, address: str, action: str, id_value: str | None = None) -> str:
+    """One line of ``tofu apply -json``: an ``apply_complete`` or ``apply_errored``."""
+    body: dict[str, Any] = {"resource": {"addr": address}, "action": action}
+    if id_value is not None:
+        body.update(id_key="id", id_value=id_value)
+    return json.dumps({"type": kind, "hook": body})
+
+
+def tofu_error(summary: str, detail: str = "") -> str:
+    """One error diagnostic line of ``tofu ... -json``."""
+    return json.dumps(
+        {"type": "diagnostic",
+         "diagnostic": {"severity": "error", "summary": summary, "detail": detail}}
+    )  # fmt: skip
+
+
+class ScriptedTofu:
+    """A ``Tofu`` stand-in: fixed plan and state documents, a scripted apply."""
+
+    version_text = "1.13.1"
+
+    def __init__(
+        self,
+        plan: dict[str, Any],
+        *,
+        apply_lines: list[str] = (),  # type: ignore[assignment]
+        apply_code: int = 0,
+        state: dict[str, Any] | None = None,
+    ) -> None:
+        self.plan, self.state = plan, state or {}
+        self.apply_lines, self.apply_code = list(apply_lines), apply_code
+        self.calls: list[list[str]] = []
+
+    def run(self, args: Any, *, cwd: Path, env: Any, timeout: float = 0) -> Any:
+        from piceli.infra.machines.tofu import TofuResult
+
+        args = list(args)
+        self.calls.append(args)
+        if args[0] == "plan":
+            out = next(a for a in args if a.startswith("-out="))
+            Path(out.removeprefix("-out=")).write_text("plan")
+        if args[0] == "show":
+            document = self.plan if len(args) == 3 else self.state
+            return TofuResult(0, json.dumps(document), "")
+        if args[0] == "apply":
+            return TofuResult(self.apply_code, "\n".join(self.apply_lines), "")
+        return TofuResult(0, "", "")
+
+
+def planned(
+    *changes: tuple[str, str, dict[str, Any] | None], infra: str = "edge"
+) -> dict[str, Any]:
+    """A ``tofu show -json PLAN`` document: (address, action, values) per change.
+
+    A change to an existing resource has ``before`` with the labels of
+    ``infra`` (the ledger must still list it); a delete has no ``after``.
+    """
+    labels = {"piceli.io/managed-by": "piceli", "piceli.io/infra": infra}
+    found = []
+    for address, action, values in changes:
+        actions = ["delete", "create"] if action == "replace" else [action]
+        before = (
+            None
+            if action == "create"
+            else {"input": {"labels": labels}, **(values or {})}
+        )
+        after = None if action == "delete" else values
+        found.append(
+            {"address": address, "mode": "managed", "type": address.split(".")[0],
+             "change": {"actions": actions, "before": before, "after": after}}
+        )  # fmt: skip
+    return {"format_version": "1.2", "resource_changes": found}

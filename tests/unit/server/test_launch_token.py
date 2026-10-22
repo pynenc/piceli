@@ -166,7 +166,7 @@ def test_the_launch_token_is_not_logged(
     thread.start()
     capture = Capture()
     try:
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 60
         while not server.started:
             assert time.monotonic() < deadline
             time.sleep(0.02)

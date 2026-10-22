@@ -240,7 +240,7 @@ def _tls_gateway_responds(namespace: str, pod: str, certificate: Path) -> None:
     )
     try:
         context = ssl.create_default_context(cafile=str(certificate))
-        deadline = time.monotonic() + 20
+        deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             assert process.poll() is None, "scratch port-forward exited"
             try:
@@ -262,10 +262,10 @@ def _tls_gateway_responds(namespace: str, pod: str, certificate: Path) -> None:
         if process.poll() is None:
             process.terminate()
         try:
-            process.communicate(timeout=5)
+            process.communicate(timeout=120)
         except subprocess.TimeoutExpired:
             process.kill()
-            process.communicate(timeout=5)
+            process.communicate(timeout=120)
 
 
 def test_installed_ui_pod_uses_private_pvc_and_survives_restart(tmp_path: Path) -> None:

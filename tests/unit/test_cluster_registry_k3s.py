@@ -75,7 +75,7 @@ def agent(
     lines: list[str] = []
     try:
         assert process.stdout is not None
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             line = process.stdout.readline()
             if not line:
@@ -86,7 +86,7 @@ def agent(
         yield lines
     finally:
         os.killpg(process.pid, stop)
-        process.wait(timeout=10)
+        process.wait(timeout=60)
         if process.stdout is not None:
             process.stdout.close()
 

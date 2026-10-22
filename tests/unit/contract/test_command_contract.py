@@ -19,6 +19,7 @@ import json
 from collections.abc import Callable
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
@@ -753,6 +754,62 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["secrets", "state-key", "edge-state"],
         "infra-prompt-required",
     ),
+    "secrets nix-cache": (
+        lambda p: ["secrets", "nix-cache", "cache-1", "a-key-value"],
+        "infra-credential-refused",
+    ),
+    "secrets s3": (
+        lambda p: ["secrets", "s3", "cache-s3"],
+        "infra-prompt-required",
+    ),
+    "secrets delete": (
+        lambda p: ["secrets", "delete", "../web-1-boot", "--yes"],
+        "infra-credential-invalid",
+    ),
+    "secrets user-data": (
+        lambda p: ["secrets", "user-data", "web-1-boot", "a-key-value"],
+        "infra-credential-refused",
+    ),
+    "dev nix gc": (
+        lambda p: ["dev", "nix", "gc", "--cache", "no_such_module:cache"],
+        "dev-nix-cache-invalid",
+    ),
+    "host module": (
+        lambda p: ["host", "module", "no_such_module:web"],
+        "host-not-found",
+    ),
+    "host status": (
+        lambda p: ["host", "status", "ssh://bad user@host"],
+        "host-invalid",
+    ),
+    "host wait": (
+        lambda p: ["host", "wait", "no_such_module:web", "v1.0.0"],
+        "host-not-found",
+    ),
+    "host pin": (
+        lambda p: ["host", "pin", "no_such_module:web", "v1.0.0"],
+        "host-not-found",
+    ),
+    "host unpin": (
+        lambda p: ["host", "unpin", "ssh://bad user@host"],
+        "host-invalid",
+    ),
+    "host rollback": (
+        lambda p: ["host", "rollback", "no_such_module:web"],
+        "host-not-found",
+    ),
+    "host secrets": (
+        lambda p: ["host", "secrets", "ssh://root@host"],
+        "host-secret-undeclared",
+    ),
+    "secrets age": (
+        lambda p: ["secrets", "age", "web-1-age", "AGE-SECRET-KEY-1X"],
+        "infra-credential-refused",
+    ),
+    "dev nix build": (
+        lambda p: ["dev", "nix", "build", "x", "--cluster", "no_such_module:c"],
+        "cluster-not-found",
+    ),
 }
 
 
@@ -816,3 +873,98 @@ def test_rejection_follows_the_contract(path: str, files: Path) -> None:
     assert f"[{reason}]" in stderr
     for line in stderr.splitlines():
         assert not line.lstrip().startswith(("{", "[")), line  # human text only
+
+
+_PARTIAL_MODULE = """
+from pathlib import Path
+
+from piceli.infra import DnsRecord, Infrastructure, Porkbun, PrimaryIp, Server
+from piceli.testing.infra import FakeProvider
+
+edge = Server("edge-1", provider=FakeProvider(), type="t1", image="img",
+              ipv4=PrimaryIp("edge-1-v4"))
+infra = Infrastructure(
+    "edge", servers=[edge], state_dir=Path(__file__).parent / "state",
+    records=[DnsRecord("example.com", "www", "A", server=edge,
+                       provider=Porkbun(credentials="porkbun"))],
+)
+"""
+
+
+@pytest.mark.parametrize("command", ["apply", "destroy"])
+def test_a_partially_applied_infra_change_fails_with_exit_1(
+    command: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refusal after some changes is a failure that ran (1), not a rejection (2)."""
+    from contextlib import contextmanager
+
+    from piceli.infra.machines import plan as infra_plan
+    from piceli.infra.machines import porkbun
+    from piceli.infra.machines.render import render
+    from tests.unit.infra.machines_support import (
+        ScriptedTofu,
+        hook,
+        planned,
+        tofu_error,
+    )
+
+    (tmp_path / "machines.py").write_text(_PARTIAL_MODULE)
+    (tmp_path / "state").mkdir()
+    ref = f"{tmp_path / 'machines.py'}:infra"
+    action = "delete" if command == "destroy" else "create"
+    server = "terraform_data.server-edge-1"
+    scripted: dict[str, Any] = {}
+
+    @contextmanager
+    def workspace(infra: Any, *, tofu: str | None = None) -> Any:
+        rendered = render(infra)
+        record = next(a for a in rendered.resources if a.startswith("porkbun_"))
+        document = planned(
+            (server, action, {}), (record, action, {"domain": "example.com"})
+        )
+        from piceli.infra.machines.state import write_record
+
+        write_record(tmp_path / "state", infra_plan.INVENTORY,
+                     {"created": [server, record]})  # fmt: skip
+        scripted["tofu"] = ScriptedTofu(document, apply_code=1, apply_lines=[
+            hook("apply_complete", server, action, "srv-1"),
+            hook("apply_errored", record, action),
+            tofu_error("Error DNS Record", "Domain is not opted in to API access."),
+        ])  # fmt: skip
+        scripted["record"] = record
+        yield infra_plan.Workspace(
+            infra,
+            tmp_path / "state",
+            scripted["tofu"],
+            rendered,
+            {},  # type: ignore[arg-type]
+            {"porkbun": "pk1_key:sk1_secret"},
+        )
+
+    monkeypatch.setattr(infra_plan, "workspace", workspace)
+    monkeypatch.setattr(
+        porkbun, "_post", lambda url, body, timeout: (200, b'{"status": "SUCCESS"}')
+    )
+    # The plan (exit 3) gives the hash to approve.
+    status, stdout, _ = _invoke(["infra", command, ref])
+    assert status == 3, stdout
+    approved = json.loads(stdout)["plan_hash"]
+    status, stdout, stderr = _invoke(["infra", command, ref, "--approve", approved])
+    assert status == 1, (stdout, stderr)
+    assert 1 in COMMANDS[f"infra {command}"].exit_codes
+    lines = stdout.splitlines()
+    assert len(lines) == 1, stdout
+    body = json.loads(lines[0])
+    assert body["state"] == "failed"
+    assert body["reason"] == "infra-dns-api-disabled" and body["reason"] in ERRORS
+    assert body["partially_applied"] is True
+    assert body["applied"] == [{"address": server, "action": action, "id": "srv-1"}]
+    assert body["not_applied"] == [
+        {"address": scripted["record"], "action": action, "failed": True}
+    ]
+    assert "applied before the failure" in stderr
+    assert f"{action:8} {server} (id srv-1)" in stderr
+    assert "the next plan shows what remains" in stderr
+    assert "sk1_secret" not in stdout + stderr
+    for line in stderr.splitlines():
+        assert not line.lstrip().startswith(("{", "[")), line

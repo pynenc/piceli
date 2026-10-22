@@ -228,6 +228,8 @@ def run_job(
         else list(profile.toolchain),
         "tools": list(profile.tools),
         **({"toolchains": dict(profile.toolchains)} if profile.toolchains else {}),
+        # 0.24: a docker host mounts its own Nix into the run.
+        **({"nix": True} if profile.nix else {}),
         "artifacts": [],
         # No code from the repository runs until the API server is cut off.
         "isolation_check": True,

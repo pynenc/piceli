@@ -123,3 +123,31 @@ def write_project(root: Path, port: int, base: str) -> Path:
     path = root / "host-build.toml"
     path.write_text(HOST_TOML.replace("@PORT@", str(port)).replace("@BASE@", base))
     return path
+
+
+#: 0.23: a platform-independent step (a browser bundle, say): it writes a
+#: site into the shared target directory and counts its runs there; it sees
+#: no node fact (``LG_PAGE`` uses one, so it is not set for it).
+SHARED_COMMANDS = """shared_commands = [
+  ["sh", "-c", "test \\"$CARGO_TARGET_DIR\\" = \\"$PICELI_SHARED_TARGET_DIR\\" && test -z \\"${LG_PAGE:-}\\" && mkdir -p \\"$CARGO_TARGET_DIR/site\\" && cat src/main.txt > \\"$CARGO_TARGET_DIR/site/app.wasm\\" && echo run >> \\"$CARGO_TARGET_DIR/runs\\""],
+]
+"""
+#: A per-platform command that needs the shared output (it runs after it).
+NEEDS_SHARED = (
+    '  ["sh", "-c", "test -f \\"$PICELI_SHARED_TARGET_DIR/site/app.wasm\\"'
+    ' && test \\"$CARGO_TARGET_DIR\\" != \\"$PICELI_SHARED_TARGET_DIR\\""],\n'
+)
+
+
+def add_shared_commands(path: Path) -> Path:
+    """The project at ``path`` with `SHARED_COMMANDS` and an image reading them."""
+    text = path.read_text()
+    text = text.replace('tools = ["sh"]\n', 'tools = ["sh"]\n' + SHARED_COMMANDS, 1)
+    text = text.replace("\ncommands = [\n", "\ncommands = [\n" + NEEDS_SHARED, 1)
+    text = text.replace(
+        'dirs = { "/var/lib/web"',
+        'shared_files = { "site" = "/srv/site" }\ndirs = { "/var/lib/web"',
+        1,
+    )
+    path.write_text(text)
+    return path

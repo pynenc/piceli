@@ -55,6 +55,8 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli dev cancel`](#cli-dev-cancel) | Cancel a queued or running run (its Job and pod are deleted). | writes | no |
 | [`piceli dev hosts`](#cli-dev-hosts) | Each declared build host: up or down (why), platforms, slots, runs and queue. | reads | no |
 | [`piceli dev logs`](#cli-dev-logs) | A run's output (stdout): live, or the recorded tail of a finished run. | reads | no |
+| [`piceli dev nix build`](#cli-dev-nix-build) | Build a flake output on a Nix build host; with --publish, sign and push it. | none | yes |
+| [`piceli dev nix gc`](#cli-dev-nix-gc) | Remove builds of old commits from a Nix cache: plan, then --approve. | none | yes |
 | [`piceli dev release-host`](#cli-dev-release-host) | Clear a build host's health events: it is no longer quarantined (0.22.0). | none | no |
 | [`piceli dev run`](#cli-dev-run) | Run COMMAND on the builder for a commit (--ref) or a working tree (default: here). | writes | no |
 | [`piceli dev schedule`](#cli-dev-schedule) | Run the queue yourself (a cluster without the GitOps controller, which runs it). | writes | no |
@@ -83,13 +85,20 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli heavy run`](#cli-heavy-run) | Run COMMAND once the lock is free; exit with its exit code. | none | no |
 | [`piceli heavy status`](#cli-heavy-status) | Show who holds the lock and the most recent receipts. | none | no |
 | [`piceli help-json`](#cli-help-json) | Print the whole CLI tree (commands, options, contracts) as JSON. | none | no |
+| [`piceli host module`](#cli-host-module) | Render the NixOS module that installs the host agent (commit it, import it). | none | no |
+| [`piceli host pin`](#cli-host-pin) | Deploy a tag's build (an older one too) and hold it: no newer build until unpin. | none | no |
+| [`piceli host rollback`](#cli-host-rollback) | Switch back to the previous system (in the store) and hold it until unpin. | none | no |
+| [`piceli host secrets`](#cli-host-secrets) | Put the host's age identity where sops-nix reads it: plan, then --approve. | none | yes |
+| [`piceli host status`](#cli-host-status) | Read the host agent's status over SSH (current build, last attempt, checks). | none | no |
+| [`piceli host unpin`](#cli-host-unpin) | Drop a pin or rollback hold: the host follows its declared ref again. | none | no |
+| [`piceli host wait`](#cli-host-wait) | Wait until the host runs REV with its checks passed (exit 1: failed or timeout). | none | no |
 | [`piceli import live`](#cli-import-live) | Generate a typed module from the objects of a live namespace (read-only). | reads | no |
 | [`piceli import yaml`](#cli-import-yaml) | Generate a typed module from a directory of manifests (no cluster). | none | no |
 | [`piceli infra apply`](#cli-infra-apply) | Apply the plan whose hash is --approve (without it: plan, exit 3). | none | yes |
 | [`piceli infra destroy`](#cli-infra-destroy) | Destroy what Piceli created for it, with approval of the destroy plan's hash. | none | yes |
 | [`piceli infra install`](#cli-infra-install) | Run the server's install hook (its rendered command, approved by digest). | none | yes |
 | [`piceli infra plan`](#cli-infra-plan) | Plan the declared machines with OpenTofu; print the changes, estimate and plan hash. | none | no |
-| [`piceli infra register`](#cli-infra-register) | Wait for the server's k3s and register it as its Cluster (approved by digest). | reads | yes |
+| [`piceli infra register`](#cli-infra-register) | Wait for the server's k3s and register it as its Cluster, or pin its SSH host keys (approved by digest). | reads | yes |
 | [`piceli infra status`](#cli-infra-status) | Servers, addresses, installs, cluster registrations and cost (read-only). | none | no |
 | [`piceli inputs record`](#cli-inputs-record) | Capture each declared source (or the ``--only`` ones) and write a lock. | none | no |
 | [`piceli inputs verify`](#cli-inputs-verify) | Recapture the sources and compare them with the lock (exit 1 on drift). | none | no |
@@ -134,10 +143,15 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli restore`](#cli-restore) | Put a restore point back into its claims (plan, then --approve HASH). | writes | yes |
 | [`piceli restore-points`](#cli-restore-points) | List a pipeline's restore points, newest first (read-only, offline). | none | no |
 | [`piceli runs`](#cli-runs) | List the deploy runs of a pipeline, newest first, with their state, release, duration and summary files. Read-only (with shared state it reads the local working copy: run `piceli state pull` first). | none | no |
+| [`piceli secrets age`](#cli-secrets-age) | A host's age identity for sops-nix: generate or import it; print its public key. | none | no |
 | [`piceli secrets cluster`](#cli-secrets-cluster) | Store another cluster's credentials for the GitOps controller (never printed). | writes | no |
+| [`piceli secrets delete`](#cli-secrets-delete) | Delete a stored credential (a spent bootstrap key, an old token); never printed. | none | yes |
 | [`piceli secrets git`](#cli-secrets-git) | Store the Git token the controller and cluster builds use (read from stdin, never printed). | writes | no |
+| [`piceli secrets nix-cache`](#cli-secrets-nix-cache) | A Nix binary cache's signing key: generate or import it; print its public key. | none | no |
 | [`piceli secrets provider`](#cli-secrets-provider) | Store a provider API token (read from stdin, never printed). | none | no |
+| [`piceli secrets s3`](#cli-secrets-s3) | Store a bucket's S3 access keys (an access key id and its secret). | none | no |
 | [`piceli secrets state-key`](#cli-secrets-state-key) | Store the passphrase that encrypts an infrastructure's OpenTofu state. | none | no |
+| [`piceli secrets user-data`](#cli-secrets-user-data) | Store a server's user data (a cloud-config, a script or a bootstrap key). | none | no |
 | [`piceli state export`](#cli-state-export) | Write the release's state to one file (secret material excluded unless asked). | reads | no |
 | [`piceli state import`](#cli-state-import) | Replace the release's state with an export (needs --approve DIGEST). | writes | yes |
 | [`piceli state pull`](#cli-state-pull) | Refresh the local working copy from the shared state (reads the cluster). | reads | no |
@@ -1074,6 +1088,67 @@ A run's output (stdout): live, or the recorded tail of a finished run.
 - **Output contract:** conforms
 - **Notes:** Read-only. The log on stdout; dev-run-unknown for a run that is neither live nor among the last 50 recorded.
 
+(cli-dev-nix-build)=
+### `piceli dev nix build`
+
+Build a flake output on a Nix build host; with --publish, sign and push it.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `ATTR` | text | required |  |
+| `--cluster`, `--dev` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of a piceli.infra.DevBuilds (no cluster needed), or of a Cluster with dev=DevBuilds(...) (or PICELI_DEV_CLUSTER) |
+| `--ref` | text |  | Build this commit (required with --publish) |
+| `--worktree` | path |  | Build this working tree (default: here) |
+| `--repo` | path | `.` | The repository with --ref (default: here) |
+| `--name` | text |  | The manifest's name (default: HOST of nixosConfigurations.HOST, HOST-image with --image) |
+| `--profile` | text |  | A Nix profile (default: the first nix=True) |
+| `--host` | text |  | A docker or native build host (default: the first) |
+| `--image` | boolean | `False` | The output is a disk image: copy its file back with its sha256 |
+| `--publish` | text |  | MODULE:ATTR of a piceli.infra.NixCache: sign and push the closure, upload the manifest (needs --approve) |
+| `--branch` | text |  | With --publish: also point refs/heads/BRANCH at this build (default: --ref when it names a branch) |
+| `--approve` | text |  | The publish plan's digest |
+| `--artifacts-dir` | path | `piceli-dev-artifacts` | Where an image lands (RUN/) |
+| `--queue-timeout` | integer | `3600` | Seconds to wait for a slot |
+| `--quiet` | boolean | `False` | Do not stream the build's log |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.DevBuilds, or a Cluster with dev=), MODULE:ATTR (piceli.infra.NixCache, --publish), the local Git repository, credentials (signing key, S3 keys; --publish after approval)
+- **Writes:** --artifacts-dir RUN/ and NAME.image.json (with --image), the build host's Nix store, the binary cache and piceli/NAME/REV.json (--publish)
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Without --publish it is a development run (no approval; covered like dev run). With --publish it prints the plan (commit, output, host, cache, key) and exits 3; --approve DIGEST builds, then a separate step on the same host receives the signing key and S3 keys on stdin only (never the build), pushes with nix copy and the client uploads the manifest. Prints the store path, the image's sha256 and the public key, never a secret. Exit 1: the build failed, no output (dev-nix-no-output), dev-nix-publish-failed, dev-nix-manifest-failed.
+
+(cli-dev-nix-gc)=
+### `piceli dev nix gc`
+
+Remove builds of old commits from a Nix cache: plan, then --approve.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--cache` | text | required | MODULE:ATTR of the piceli.infra.NixCache |
+| `--repo` | path | `.` | The repository whose tags and main count |
+| `--keep-tags` | integer | `5` | Keep the builds of the newest N tags |
+| `--main` | text | `main` | The branch whose current commit stays |
+| `--grace` | integer | `3600` | Seconds: younger objects stay (a publish in progress) |
+| `--approve` | text |  | The gc plan's digest |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.NixCache), the local Git repository (tags, main), the cache's objects (write credentials)
+- **Writes:** the binary cache (deleted manifests, narinfos, NAR files)
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Without --approve prints the keys it would delete and the plan digest (exit 3; 0 and state clean when nothing goes). A path a kept manifest's closure reaches is never deleted; objects younger than --grace stay. --approve with another digest is refused (dev-nix-plan-changed); a failed delete exits 1 (dev-nix-gc-failed).
+
 (cli-dev-release-host)=
 ### `piceli dev release-host`
 
@@ -1803,6 +1878,166 @@ No options.
 - **Exit codes:** `0` success
 - **Output contract:** conforms
 
+(cli-host-module)=
+### `piceli host module`
+
+Render the NixOS module that installs the host agent (commit it, import it).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `REF` | text | required |  |
+| `--output` | path |  | Write the module to this file (default: print it on stdout) |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.NixHost)
+- **Writes:** --output FILE (else the module on stdout)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Never contacts the host or the cache. The module holds no secret (paths of root-only files only); commit it and import it from the host's configuration. With --output prints one JSON object (path, sha256).
+
+(cli-host-pin)=
+### `piceli host pin`
+
+Deploy a tag's build (an older one too) and hold it: no newer build until unpin.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `TAG` | text | required |  |
+| `--infra` | text |  | MODULE (or MODULE:ATTR of its Infrastructure): the NixHosts it declares by name, its servers' applied addresses and pinned host keys |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.NixHost) or an SSH target, --infra MODULE[:ATTR] (address, pinned host keys, host names)
+- **Writes:** the host's system and /var/lib/piceli-host (ssh, as root)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. No approval digest: it only goes to a build that is signed, published and verified like every deploy, with checks and a rollback on failure. Runs piceli-host-agent pin TAG over SSH. Exit 1: the build failed its switch or checks and the host is back on its previous system; 2: refused before any change (host-pin-not-found, host-signature-invalid, host-busy). Reported to the OTLP collector as piceli.host.pin.
+
+(cli-host-rollback)=
+### `piceli host rollback`
+
+Switch back to the previous system (in the store) and hold it until unpin.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--infra` | text |  | MODULE (or MODULE:ATTR of its Infrastructure): the NixHosts it declares by name, its servers' applied addresses and pinned host keys |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.NixHost) or an SSH target
+- **Writes:** the host's system and /var/lib/piceli-host (ssh, as root)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. No approval digest: the previous system was verified when it was deployed. Runs the checks and switches forward again when one fails (exit 1). The hold keeps the next poll from deploying what was rolled away from. host-rollback-unavailable when no previous system is recorded or in the store. Reported as piceli.host.rollback.
+
+(cli-host-secrets)=
+### `piceli host secrets`
+
+Put the host's age identity where sops-nix reads it: plan, then --approve.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--infra` | text |  | MODULE (or MODULE:ATTR of its Infrastructure): the NixHosts it declares by name, its servers' applied addresses and pinned host keys |
+| `--replace` | boolean | `False` | Replace a different key the host has (what it decrypts with it changes) |
+| `--approve` | text |  | The plan's digest |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.NixHost with age_identity=), $PICELI_CREDENTIALS_DIR/NAME.json (age-identity), the host's key file, by fingerprint only (ssh)
+- **Writes:** NixHost(age_key_file=) on the host, 0600 root (ssh stdin, atomic rename)
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** 0.24.0. The plan lists host, path, mode, owner, public key and whether the host has the same, a different or no key (exit 3 with the digest; 0 when it has the same). A different key is refused without --replace (host-secret-exists). The key travels on ssh's stdin, never in an argument, log or state. After writing, the host re-runs switch-to-configuration switch so sops-nix decrypts.
+
+(cli-host-status)=
+### `piceli host status`
+
+Read the host agent's status over SSH (current build, last attempt, checks).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--infra` | text |  | MODULE (or MODULE:ATTR of its Infrastructure): the NixHosts it declares by name, its servers' applied addresses and pinned host keys |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.NixHost), its name with --infra, or an SSH target, --infra MODULE[:ATTR] (declared hosts, applied address, pinned host keys), the host's /var/lib/piceli-host/status.json (ssh)
+- **Writes:** nothing (read-only)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Read-only; no cluster (works with every cluster down). ssh runs with BatchMode and strict host key checking (host-unreachable, host-status-missing).
+
+(cli-host-unpin)=
+### `piceli host unpin`
+
+Drop a pin or rollback hold: the host follows its declared ref again.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--infra` | text |  | MODULE (or MODULE:ATTR of its Infrastructure): the NixHosts it declares by name, its servers' applied addresses and pinned host keys |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.NixHost) or an SSH target
+- **Writes:** /var/lib/piceli-host/state.json on the host (ssh, as root)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Changes no system itself; the poll it starts deploys the newest build of the followed ref. Reported as piceli.host.unpin.
+
+(cli-host-wait)=
+### `piceli host wait`
+
+Wait until the host runs REV with its checks passed (exit 1: failed or timeout).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `REV` | text | required |  |
+| `--infra` | text |  | MODULE (or MODULE:ATTR of its Infrastructure): the NixHosts it declares by name, its servers' applied addresses and pinned host keys |
+| `--timeout` | integer | `1800` | Seconds to wait |
+| `--interval` | integer | `10` | Seconds between reads |
+| `--published-after` | text |  | Judge only attempts of a publication at or after this published_at (from dev nix build --publish --json): an earlier failure of the same commit is not reported |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.NixHost) or an SSH target, the host's status file (ssh, every --interval)
+- **Writes:** nothing (read-only)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Read-only; no cluster. Exit 0: the host runs REV and its checks passed; 1: the attempt was refused or failed (host-deploy-failed), rolled back (host-rolled-back), or host-wait-timeout. The JSON carries the attempt's stage times.
+
 (cli-import-live)=
 ### `piceli import live`
 
@@ -1877,7 +2112,7 @@ Apply the plan whose hash is --approve (without it: plan, exit 3).
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Without --approve it plans (exit 3). A hash that is not the fresh plan's is refused (infra-plan-changed). A failed tofu apply exits 1 (infra-apply-failed); plan again to continue. One command at a time per state (infra-state-locked).
+- **Notes:** Without --approve it plans (exit 3). A hash that is not the fresh plan's is refused (infra-plan-changed). A failed tofu apply exits 1 (infra-apply-failed); one that changed something first exits 1 whatever its code, with partially_applied, applied (address, action, id) and not_applied; plan again to continue. One command at a time per state (infra-state-locked).
 
 (cli-infra-destroy)=
 ### `piceli infra destroy`
@@ -1899,7 +2134,7 @@ Destroy what Piceli created for it, with approval of the destroy plan's hash.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Without --approve prints the destroy plan and its hash (exit 3). Only resources in Piceli's ownership ledger that carry piceli.io/managed-by=piceli and piceli.io/infra=<name> may be deleted; anything else refuses the whole plan (infra-foreign-resource). DNS zones are never deleted (Piceli manages record sets only). Credential profiles of registered clusters are left in place.
+- **Notes:** Without --approve prints the destroy plan and its hash (exit 3). Only resources in Piceli's ownership ledger that carry piceli.io/managed-by=piceli and piceli.io/infra=<name> may be deleted; anything else refuses the whole plan (infra-foreign-resource). DNS zones are never deleted (Piceli manages record sets only). Credential profiles of registered clusters are left in place. A failure after some deletions exits 1 with partially_applied, as for apply.
 
 (cli-infra-install)=
 ### `piceli infra install`
@@ -1935,19 +2170,19 @@ Plan the declared machines with OpenTofu; print the changes, estimate and plan h
 
 **Contract**
 
-- **Reads:** MODULE:ATTR (piceli.infra.Infrastructure), tofu binary, credentials (provider token, state passphrase), provider API (plan refresh, prices)
+- **Reads:** MODULE:ATTR (piceli.infra.Infrastructure), tofu binary, credentials (provider token, state passphrase), provider API (plan refresh, prices, Porkbun API access per domain)
 - **Writes:** state directory (configuration, lock file, providers)
 - **Cluster:** none
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Never changes a resource. Exit 3 with the plan and approve_command (piceli infra apply ... --approve HASH); 0 and state unchanged when nothing changes. Refuses a plan that would change or delete a resource Piceli did not create (infra-foreign-resource). Tokens and the state passphrase reach tofu through its environment only; its output is redacted.
+- **Notes:** Never changes a resource. Exit 3 with the plan and approve_command (piceli infra apply ... --approve HASH); 0 and state unchanged when nothing changes. Refuses a plan that would change or delete a resource Piceli did not create (infra-foreign-resource). A plan that changes Porkbun records checks API access for each domain (infra-dns-api-disabled; infra-dns-check-failed when it cannot) and records it in checks. Tokens and the state passphrase reach tofu through its environment only; its output is redacted.
 
 (cli-infra-register)=
 ### `piceli infra register`
 
-Wait for the server's k3s and register it as its Cluster (approved by digest).
+Wait for the server's k3s and register it as its Cluster, or pin its SSH host keys (approved by digest).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -3088,6 +3323,29 @@ List the deploy runs of a pipeline, newest first, with their state, release, dur
 - **Output contract:** conforms
 - **Notes:** Read-only; newest first. With shared state it reads the local working copy (piceli state pull first). summary.json follows docs/schemas/piceli-run-summary-v1.schema.json.
 
+(cli-secrets-age)=
+### `piceli secrets age`
+
+A host's age identity for sops-nix: generate or import it; print its public key.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--generate` | boolean | `False` | Generate a new identity |
+| `--prompt` | boolean | `False` | Read an existing identity (AGE-SECRET-KEY-1...) from stdin |
+| `--replace` | boolean | `False` | Replace an existing identity (what was encrypted to the old one needs re-encrypting) |
+
+**Contract**
+
+- **Reads:** stdin (--prompt), $PICELI_CREDENTIALS_DIR/NAME.json
+- **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600; --generate, --prompt)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Prints the public key (age1...) for .sops.yaml, never the identity. Without --generate or --prompt it only reads. Refuses to replace an identity without --replace (infra-credential-exists).
+
 (cli-secrets-cluster)=
 ### `piceli secrets cluster`
 
@@ -3116,6 +3374,28 @@ Store another cluster's credentials for the GitOps controller (never printed).
 - **Output contract:** conforms
 - **Notes:** One context, certificates and token inlined, no exec plugin (cluster-credentials-unsupported); the kubeconfig's server must be Cluster(api=) (cluster-api-mismatch); --server sets the address the controller uses. Writes the Secret on the cluster with Controller(...) (or --home) without a plan; prints names only, never a value. A token argument is refused (secrets-token-refused).
 
+(cli-secrets-delete)=
+### `piceli secrets delete`
+
+Delete a stored credential (a spent bootstrap key, an old token); never printed.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--kind` | text |  | Delete it only if it is this kind: provider, state-key, nix-cache, s3, age or user-data |
+| `--yes` | boolean | `False` | Delete without asking (owner only) |
+
+**Contract**
+
+- **Reads:** $PICELI_CREDENTIALS_DIR/NAME.json (its kind, never the value)
+- **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (removed)
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Never prints the value. Without --yes it asks for the name on a terminal; otherwise it exits 3 (approval-required, with the command to run) and deletes nothing. --kind (provider, state-key, nix-cache, s3, age, user-data) refuses another kind (infra-credential-invalid); a missing one is infra-credential-missing.
+
 (cli-secrets-git)=
 ### `piceli secrets git`
 
@@ -3141,6 +3421,30 @@ Store the Git token the controller and cluster builds use (read from stdin, neve
 - **Output contract:** conforms
 - **Notes:** The token is read from stdin only (typed without echo, or piped); a token argument or PICELI_GIT_TOKEN is refused (secrets-token-refused) without echoing it. Creates or updates the Secret without a plan; prints its name and key names, never a value. Needs piceli cluster init first (cluster-not-initialized).
 
+(cli-secrets-nix-cache)=
+### `piceli secrets nix-cache`
+
+A Nix binary cache's signing key: generate or import it; print its public key.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--generate` | boolean | `False` | Generate a new key pair |
+| `--prompt` | boolean | `False` | Read an existing secret key (NAME:base64) from stdin |
+| `--key-name` | text |  | The key's name in signatures (default: NAME) |
+| `--replace` | boolean | `False` | Replace an existing key (hosts that trust the old one refuse new builds) |
+
+**Contract**
+
+- **Reads:** stdin (--prompt), $PICELI_CREDENTIALS_DIR/NAME.json
+- **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600; --generate, --prompt)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Prints the public key (NAME:base64), never the secret key. Without --generate or --prompt it only reads. Refuses to replace a key without --replace (infra-credential-exists): hosts that trust the old key refuse what a new one signs.
+
 (cli-secrets-provider)=
 ### `piceli secrets provider`
 
@@ -3161,6 +3465,27 @@ Store a provider API token (read from stdin, never printed).
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** The token is read from stdin only (typed without echo, or piped); an argument or HCLOUD_TOKEN in the environment is refused (infra-credential-refused) without echoing it. Prints the name, never the value.
+
+(cli-secrets-s3)=
+### `piceli secrets s3`
+
+Store a bucket's S3 access keys (an access key id and its secret).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--prompt` | boolean | `False` | Read the access key id, then the secret, from stdin |
+
+**Contract**
+
+- **Reads:** stdin (--prompt)
+- **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Two lines on stdin (typed without echo, or piped); an argument is refused (infra-credential-refused) without echoing it. Prints the name, never a value.
 
 (cli-secrets-state-key)=
 ### `piceli secrets state-key`
@@ -3184,6 +3509,28 @@ Store the passphrase that encrypts an infrastructure's OpenTofu state.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Never printed; back the file up, the state cannot be read without it. Refuses to replace an existing key without --replace (infra-credential-exists).
+
+(cli-secrets-user-data)=
+### `piceli secrets user-data`
+
+Store a server's user data (a cloud-config, a script or a bootstrap key).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--prompt` | boolean | `False` | Read it from stdin (typed: one line without echo; piped: until EOF) |
+| `--file` | path |  | Read it from this file (a cloud-config, a script) |
+
+**Contract**
+
+- **Reads:** stdin (--prompt), PATH (--file)
+- **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Prints the name, size and a short digest (the one the plan shows), never the value; an argument is refused (infra-credential-refused) without echoing it. Used only by a plan that creates the server (Server(user_data=UserData(NAME))).
 
 (cli-state-export)=
 ### `piceli state export`

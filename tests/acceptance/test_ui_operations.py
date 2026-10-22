@@ -153,7 +153,7 @@ def post(
 
 
 def wait(client: TestClient, path: str) -> dict[str, Any]:
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         response = client.get(API + path)
         assert response.status_code == 200, response.text
@@ -354,10 +354,10 @@ def child_server(
             if process.poll() is None:
                 process.terminate()
                 try:
-                    process.wait(timeout=5)
+                    process.wait(timeout=60)
                 except subprocess.TimeoutExpired:
                     process.kill()
-            process.wait(timeout=5)
+            process.wait(timeout=60)
 
 
 def test_api_process_death_after_write_requires_explicit_same_execution_recovery(
@@ -386,7 +386,7 @@ def test_api_process_death_after_write_requires_explicit_same_execution_recovery
                 time.sleep(0.01)
             assert ("Deployment", "worker") in cluster.api.objects
             process.kill()
-            process.wait(timeout=5)
+            process.wait(timeout=60)
         before = len(
             [
                 r

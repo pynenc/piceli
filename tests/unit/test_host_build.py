@@ -410,7 +410,7 @@ POISON = (
 def test_a_corrupted_cached_crate_is_cleared_and_the_step_runs_once_more(
     project: Path, tmp_path: Path
 ) -> None:
-    """0.19 (IH item 10): a release build failed in 1.45 s on a corrupt
+    """0.19: a release build failed in 1.45 s on a corrupt
     cached proc-macro; it is cleared and the step retried once."""
     text = project.read_text()
     project.write_text(text.replace("commands = [\n", POISON, 1))

@@ -7,8 +7,10 @@ descriptor per layer with the tar member that holds it.
 
 - **OCI image layout** (``oci-layout`` + ``index.json``; Docker ≥ 25 writes
   this too): the archive's own manifest is pushed byte for byte, so its
-  digest is preserved. An index is followed to the one runnable platform
-  manifest whose blobs are in the archive; attestation manifests are ignored.
+  digest is preserved. An index (Docker's containerd image store) is followed
+  to the runnable platform manifests whose blobs are in the archive;
+  attestation manifests are ignored, and the approved config digest (or the
+  requested platform) picks one of them.
 - **Classic** ``docker save`` (``manifest.json`` only): there is no manifest,
   so a canonical OCI manifest is synthesized (config
   ``application/vnd.oci.image.config.v1+json``, layers
@@ -237,8 +239,14 @@ def scan_image_stream(
     *,
     max_bytes: int = 16 * 1024**3,
     cancel: threading.Event | None = None,
+    approved_digest: str | None = None,
+    platform: str | None = None,
 ) -> PushPlan:
-    """Validate an image tar read once from ``source`` and plan its push."""
+    """Validate an image tar read once from ``source`` and plan its push.
+
+    ``approved_digest`` (else ``platform``) picks the image of an archive
+    that holds several (:func:`choose_image`).
+    """
     counter = _Counter(source, max_bytes, cancel)
     buffered = io.BufferedReader(counter, _BLOCK)
     metadata: dict[str, bytes] = {}
@@ -276,7 +284,9 @@ def scan_image_stream(
         pass
     stream_sha = "sha256:" + counter.hash.hexdigest()
     if "oci-layout" in metadata:
-        return _plan_oci(metadata, members, stream_sha, counter.count)
+        return _plan_oci(
+            metadata, members, stream_sha, counter.count, approved_digest, platform
+        )
     if "manifest.json" in metadata:
         return _plan_docker(metadata, members, stream_sha, counter.count)
     raise ValueError("unrecognized image archive format")
@@ -347,11 +357,63 @@ def _select_manifest(
     return [(digest, body, str(media))]
 
 
+def matches_platform(config: Mapping[str, Any], platform: str) -> bool:
+    """Whether an image config is for ``platform`` (``os/arch[/variant]``).
+
+    A variant is compared only when ``platform`` names one; ``arm64/v8`` also
+    matches an ``arm64`` config without a variant.
+    """
+    parts = platform.split("/")
+    if len(parts) not in (2, 3):
+        return False
+    if config.get("os") != parts[0] or config.get("architecture") != parts[1]:
+        return False
+    if len(parts) == 3:
+        variant = config.get("variant")
+        default = parts[1] == "arm64" and parts[2] == "v8" and variant is None
+        return variant == parts[2] or default
+    return True
+
+
+def choose_image[T](
+    candidates: list[T],
+    config_digest: Callable[[T], str],
+    config_body: Callable[[str], bytes],
+    *,
+    approved_digest: str | None = None,
+    platform: str | None = None,
+) -> T:
+    """The one runnable image of an archive: the approved one, else the platform's.
+
+    An archive from Docker's containerd image store holds an index: one
+    manifest per platform it has (attestation manifests are already left
+    out). The approved config digest picks its manifest; before there is an
+    approval, ``platform`` does. Without either the archive must hold exactly
+    one image. When the approval matches none of several images the first is
+    returned, so the caller's digest check rejects it.
+    """
+    if approved_digest is not None:
+        for item in candidates:
+            if config_digest(item) == approved_digest:
+                return item
+    if platform is not None:
+        candidates = [
+            item
+            for item in candidates
+            if matches_platform(_json(config_body(config_digest(item))), platform)
+        ]
+    if len(candidates) == 1 or (approved_digest is not None and candidates):
+        return candidates[0]
+    raise ValueError("expected exactly one runnable platform image")
+
+
 def _plan_oci(
     metadata: Mapping[str, bytes],
     members: Mapping[str, _Member],
     stream_sha: str,
     total: int,
+    approved_digest: str | None = None,
+    platform: str | None = None,
 ) -> PushPlan:
     if _json(metadata.get("oci-layout")).get("imageLayoutVersion") != "1.0.0":
         raise ValueError("unsupported OCI layout")
@@ -366,10 +428,13 @@ def _plan_oci(
             raise ValueError("image metadata blob too large")
         return member.body
 
-    candidates = _select_manifest(manifests[0], fetch)
-    if len(candidates) != 1:
-        raise ValueError("expected exactly one runnable platform image")
-    manifest_digest, manifest_bytes, media = candidates[0]
+    manifest_digest, manifest_bytes, media = choose_image(
+        _select_manifest(manifests[0], fetch),
+        lambda item: manifest_config_digest(item[1]),
+        fetch,
+        approved_digest=approved_digest,
+        platform=platform,
+    )
     manifest = _json(manifest_bytes)
     if manifest.get("schemaVersion") != 2:
         raise ValueError("invalid image manifest")

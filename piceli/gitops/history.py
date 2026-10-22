@@ -152,7 +152,15 @@ def _builds(value: Any) -> dict[str, dict[str, Any]]:
     return found
 
 
-_TIMINGS = ("commands_seconds", "assemble_seconds", "push_seconds")
+_TIMINGS = (
+    "commands_seconds",
+    "assemble_seconds",
+    "push_seconds",
+    # 0.23.0: a build Job's whole time, its wait to start, its source fetch.
+    "job_seconds",
+    "start_seconds",
+    "fetch_seconds",
+)
 
 
 # ------------------------------------------------------------------ events

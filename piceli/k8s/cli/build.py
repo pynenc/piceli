@@ -47,6 +47,16 @@ def _selector(values: list[str] | None) -> dict[str, str] | None:
     return result
 
 
+def _with_fetch(receipt: dict[str, Any]) -> dict[str, Any]:
+    """The build Job's source fetch time (0.23.0; its script measures it)."""
+    import os
+
+    value = os.environ.get("PICELI_BUILD_FETCH_SECONDS")
+    if value and value.isdigit():
+        receipt["fetch_seconds"] = float(value)
+    return receipt
+
+
 @app.command("job")
 def job(
     target: Annotated[
@@ -275,7 +285,7 @@ def job_run(
         except PipelineError as error:
             _say_tail(error)
             reject(error.code, str(error), exit_code=EXIT_FAILED)
-        sys.stdout.write("\n" + encode_receipt(receipt) + "\n")
+        sys.stdout.write("\n" + encode_receipt(_with_fetch(receipt)) + "\n")
         sys.stdout.flush()
         return
     if sources is not None:
@@ -305,7 +315,7 @@ def job_run(
         except PipelineError as error:
             _say_tail(error)
             reject(error.code, str(error), exit_code=EXIT_FAILED)
-        sys.stdout.write("\n" + encode_receipt(receipt) + "\n")
+        sys.stdout.write("\n" + encode_receipt(_with_fetch(receipt)) + "\n")
         sys.stdout.flush()
         return
     if source is None or commit is None or not spec:
@@ -336,7 +346,7 @@ def job_run(
         reject(error.code, str(error))
     except PipelineError as error:
         reject(error.code, str(error), exit_code=EXIT_FAILED)
-    sys.stdout.write("\n" + encode_receipt(receipt) + "\n")
+    sys.stdout.write("\n" + encode_receipt(_with_fetch(receipt)) + "\n")
     sys.stdout.flush()
 
 

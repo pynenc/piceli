@@ -5,11 +5,14 @@ A :class:`Provider` turns :class:`~piceli.infra.machines.model.Server`,
 :class:`~piceli.infra.machines.model.Firewall` and
 :class:`~piceli.infra.machines.model.DnsRecord` into OpenTofu resources (the
 JSON configuration syntax), names its pinned OpenTofu provider (version and
-lock-file hashes) and the environment variable its token goes into. Adding a
-provider (OVH, Infomaniak) is one subclass; nothing else changes.
+lock-file hashes) and the environment variables its credential goes into.
+Adding a provider is one subclass; nothing else changes. A provider that
+also uploads images or holds buckets says so (``supports_images``,
+``supports_buckets``) and renders them.
 
 Rendering is pure: no network, no files, no time. Only :meth:`Provider.prices`
-may contact the provider's API, and only when a command asks for prices.
+(when a command asks for prices) and :meth:`Provider.plan_check` (after
+``tofu plan``) may contact the provider's API.
 
 Importing this module is side-effect free.
 """
@@ -17,12 +20,20 @@ Importing this module is side-effect free.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from piceli.infra.machines.model import DnsRecord, Firewall, PrimaryIp, Server
+    from piceli.infra.machines.model import (
+        Bucket,
+        DnsRecord,
+        Firewall,
+        Image,
+        InfraError,
+        PrimaryIp,
+        Server,
+    )
 
 __all__ = ["Pin", "Prices", "Provider", "Resource"]
 
@@ -94,6 +105,20 @@ class Provider(ABC):
     name: str = ""
     credentials: str | None
     location: str | None
+    #: Whether a ``Server(image=Image(...))`` can be uploaded to this provider.
+    supports_images: bool = False
+    #: Whether ``Bucket(provider=...)`` can be created at this provider.
+    supports_buckets: bool = False
+    #: Whether this provider serves ``DnsRecord`` s.
+    supports_dns: bool = True
+    #: Whether ``Server(provider=...)`` can be created here (a DNS-only
+    #: provider holds none).
+    supports_servers: bool = True
+    #: Whether ``Server(user_data=UserData(...))`` is passed at creation.
+    supports_user_data: bool = False
+    #: The TTL of a ``DnsRecord`` that gives none, and the shortest accepted.
+    default_ttl: int = 300
+    min_ttl: int = 60
 
     # ------------------------------------------------------------ pinning
     def pin(self) -> Pin | None:
@@ -103,6 +128,16 @@ class Provider(ABC):
     def token_env(self) -> str | None:
         """The environment variable the OpenTofu provider reads its token from."""
         return None
+
+    def credential_env(self, value: str) -> dict[str, str]:
+        """The environment OpenTofu gets from the stored credential ``value``.
+
+        Default: the value in :meth:`token_env`. A provider whose credential
+        has several parts (an id and a secret) splits it here; a malformed
+        value is refused without echoing it (``infra-credential-invalid``).
+        """
+        variable = self.token_env()
+        return {variable: value} if variable is not None else {}
 
     def provider_block(self) -> dict[str, Any] | None:
         """The ``provider "<local name>"`` body (never the token)."""
@@ -150,14 +185,55 @@ class Provider(ABC):
         """A public key resource named ``name`` at the provider (``None``: none needed)."""
         return None
 
+    def render_image(self, image: Image, labels: Mapping[str, str]) -> Resource:
+        """The uploaded image (only when :attr:`supports_images`)."""
+        raise NotImplementedError(f"{self.name} does not upload images")
+
+    def render_bucket(self, bucket: Bucket, labels: Mapping[str, str]) -> Resource:
+        """The bucket (only when :attr:`supports_buckets`)."""
+        raise NotImplementedError(f"{self.name} has no buckets")
+
+    def render_user_data(self, server: Resource, reference: str) -> Resource:
+        """``server`` with its user data set to ``reference`` (a sensitive variable).
+
+        Only when :attr:`supports_user_data`. The user data is used at
+        creation only: the resource ignores later changes to it, so a plan
+        that does not create the server needs no value.
+        """
+        raise NotImplementedError(f"{self.name} takes no user data")
+
+    def data_sources(self) -> list[Resource]:
+        """Read-only lookups the resources refer to (``data.<type>.<name>``)."""
+        return []
+
     @abstractmethod
     def render_record(
         self, record: DnsRecord, values: list[str], labels: Mapping[str, str]
     ) -> Resource: ...
 
+    def render_records(
+        self, record: DnsRecord, values: list[str], labels: Mapping[str, str]
+    ) -> list[Resource]:
+        """The record's resources (default: one record set, :meth:`render_record`)."""
+        return [self.render_record(record, values, labels)]
+
     @abstractmethod
     def address(self, server: Resource, family: str) -> str:
         """A reference to the server's ``ipv4`` or ``ipv6`` address."""
+
+    def record_address(
+        self,
+        server: Server,
+        resource: Resource,
+        family: str,
+        ips: Mapping[str, Resource],
+    ) -> str:
+        """The reference a DNS record (at any provider) answers with for ``server``.
+
+        Default :meth:`address`; a provider whose fixed address outlives the
+        server (``ips``: the server's rendered ``PrimaryIp`` s) can point at it.
+        """
+        return self.address(resource, family)
 
     @abstractmethod
     def server_id(self, server: Resource) -> str:
@@ -171,6 +247,38 @@ class Provider(ABC):
     @abstractmethod
     def labels_of(self, values: Mapping[str, Any]) -> Mapping[str, str]:
         """The labels of a resource as OpenTofu's state or plan shows it."""
+
+    def resource_labels(
+        self, type_: str, values: Mapping[str, Any]
+    ) -> Mapping[str, str]:
+        """The labels of a resource of OpenTofu type ``type_`` (default :meth:`labels_of`)."""
+        return self.labels_of(values)
+
+    def ledger_owned(self, type_: str) -> bool:
+        """Whether resources of ``type_`` carry no labels (the ledger alone owns them)."""
+        return False
+
+    def known_error(self, diagnostics: Sequence[str]) -> InfraError | None:
+        """A refusal OpenTofu reported, as its registered code (``None``: not known)."""
+        return None
+
+    def plan_check(
+        self,
+        document: Mapping[str, Any],
+        credential: str | None,
+        *,
+        ledger: Collection[str] | None = None,
+    ) -> dict[str, Any] | list[dict[str, Any]] | None:
+        """Check what the plan needs that OpenTofu cannot see, before approval.
+
+        ``document`` is ``tofu show -json`` of the plan; ``credential`` the
+        provider's stored value; ``ledger`` the addresses Piceli created
+        (``None``: every resource in the state). Raise :class:`InfraError`
+        to fail the plan; return ``{"check": NAME, "ran": bool, ...}`` (or
+        a list of them) for the plan's ``checks`` (never a secret), or
+        ``None`` when there is nothing to check.
+        """
+        return None
 
     # ------------------------------------------------------------ prices
     def prices(self, token: str | None) -> Prices | None:

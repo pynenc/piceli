@@ -15,6 +15,8 @@ spec:
       app.kubernetes.io/name: api
   template:
     metadata:
+      annotations:
+        piceli.io/secrets-digest: sha256:81750d442ec555ee134970ccb8fb2e78a8a280b41af783f6bccfdddd7d3b378f
       labels:
         app.kubernetes.io/name: api
         app.kubernetes.io/part-of: shop
@@ -71,6 +73,9 @@ spec:
     type: Recreate
   template:
     metadata:
+      annotations:
+        piceli.io/configmaps-digest: sha256:d9d70461e24dda88f64b746e1e1552dc8a5a8ab3a1a31b87ff4de865ad74fa1c
+        piceli.io/secrets-digest: sha256:ad5a543d44b1be4d2cecab4cf1cd412fc86bea90b2b474c25bce70bb2bb04850
       labels:
         app.kubernetes.io/name: cache
         app.kubernetes.io/part-of: shop

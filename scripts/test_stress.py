@@ -20,7 +20,7 @@ import sys
 
 FAILED = re.compile(r"^(?:FAILED|ERROR) (\S+)", re.M)
 # --tb=line: one "path:line: Error: message" per failure.
-WHY = re.compile(r"^(/\S+:\d+: .*)$", re.M)
+WHY = re.compile(r"^(\S+\.py:\d+: .*)$", re.M)
 
 
 def main() -> int:

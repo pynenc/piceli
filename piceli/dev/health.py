@@ -230,10 +230,12 @@ class FileHealth:
 
     def record(self, item: HealthEvent) -> None:
         self._change(
-            lambda found: [old for old in found if item.at - old.at <= KEEP_SECONDS][
-                -(MAX_EVENTS - 1) :
-            ]
-            + [item]
+            lambda found: (
+                [old for old in found if item.at - old.at <= KEEP_SECONDS][
+                    -(MAX_EVENTS - 1) :
+                ]
+                + [item]
+            )
         )
 
     def clear(self) -> int:

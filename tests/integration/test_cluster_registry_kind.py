@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from kind_support import kubectl, wait_registry_removed
+from kind_support import config_digest, kubectl, wait_registry_removed
 from typer.testing import CliRunner
 
 from piceli import App, Pipeline, Registry, Target
@@ -133,13 +133,7 @@ def _image_id() -> str:
         capture_output=True,
         timeout=600,
     )
-    return subprocess.run(
-        ["docker", "image", "inspect", "--format", "{{.Id}}", SOURCE_IMAGE],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    ).stdout.strip()
+    return config_digest(SOURCE_IMAGE)
 
 
 def test_every_node_pulls_from_the_in_cluster_registry(
@@ -175,7 +169,9 @@ def test_every_node_pulls_from_the_in_cluster_registry(
         runner.pipeline = pipeline
         route = runner._route()
         assert route.forward == "service/piceli-registry"
-        receipt = Backend().registry_deliver(route, _image_id(), "e2e/busybox")
+        receipt = Backend().registry_deliver(
+            route, _image_id(), "e2e/busybox", local_id=SOURCE_IMAGE
+        )
         assert receipt["state"] == "succeeded", receipt.get("reason")
         pull_ref = receipt["pull_ref"]
         assert pull_ref.startswith(f"{HOST}/e2e/busybox@sha256:")

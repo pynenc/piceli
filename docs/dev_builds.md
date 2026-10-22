@@ -173,7 +173,7 @@ Once the machine is fixed (or a memory test found nothing), clear its
 events:
 
 ```sh
-piceli dev release-host mini --cluster infra.py:k_lab
+piceli dev release-host mini --cluster infra.py:lab
 ```
 
 The events live **with the host**, so they hold with the cluster down and
@@ -357,8 +357,8 @@ blamed crates' artifacts (deps, fingerprints, build script outputs,
 incremental state), runs the command once more, and reports it:
 
 ```json
-"cache": {"lineage": "ih-rust-1a2b3c4d5e/0", "warm": true,
-          "repaired": {"kind": "link", "crates": ["ags"], "entries": 3,
+"cache": {"lineage": "shop-rust-1a2b3c4d5e/0", "warm": true,
+          "repaired": {"kind": "link", "crates": ["canvas"], "entries": 3,
                        "first_error": ["error: linking with `cc` failed: exit status: 1", "…"]}}
 ```
 
@@ -367,9 +367,9 @@ the damage is recognised but no crate is named, `cache.suspect` says so.
 To clear by hand:
 
 ```sh
-piceli dev cache clear --cluster infra.py:k_lab                    # every free lineage
-piceli dev cache clear --cluster infra.py:k_lab --lineage ih       # every lineage of a root source
-piceli dev cache clear --cluster infra.py:k_lab --lineage ih-rust-1a2b3c4d5e/0 --crate ags
+piceli dev cache clear --cluster infra.py:lab                      # every free lineage
+piceli dev cache clear --cluster infra.py:lab --lineage shop       # every lineage of a root source
+piceli dev cache clear --cluster infra.py:lab --lineage shop-rust-1a2b3c4d5e/0 --crate canvas
 ```
 
 It runs a short Job on the builder (same user and claim as a run, no
@@ -575,6 +575,113 @@ used, so only what the merged branches changed recompiles; `--priority
 round` puts it ahead of every agent's run, and `round.json` is the report:
 its `tests`, `durations` and `log_tail`.
 
+## Nix builds and a signed binary cache (0.24.0)
+
+`piceli dev nix build ATTR` builds a flake output of your source (a NixOS
+system, a disk image) as a development run on a build host with Nix, and
+with `--publish` pushes it, signed, to a binary cache that hosts substitute
+from. Declare a Nix profile and a host that has Nix:
+
+```python
+from piceli.infra import Bucket, BuildHost, DevBuilds, DevProfile, Infomaniak, NixCache
+
+dev = DevBuilds(
+    node=None,
+    image="ghcr.io/pynenc/piceli-builder@sha256:<digest>",
+    hosts=[BuildHost.docker("nix-1", context="ssh://builder@nix-1.example.net")],
+    profiles=[DevProfile.for_nix(timeout="2h")],
+)
+cache = NixCache(
+    "my-cache-1:<base64 public key>",
+    bucket=Bucket("nix-cache", Infomaniak(credentials="infomaniak")),
+    write_credentials="cache-s3-write",  # put and delete: builds, gc
+)
+```
+
+- **Where it runs.** On a **docker** host (a NixOS machine reached with the
+  container CLI's own `ssh://`, nothing else installed), a
+  `DevProfile(nix=True)` run mounts the host's `/nix` read-only (the store
+  and the daemon's socket) and sets `NIX_REMOTE=daemon`: the run image needs
+  only `python3`, evaluation runs in the container, the builds in the host
+  daemon's sandbox, and the store (the cache that makes the next build
+  fast) is the host's own. A **native** host uses its own `nix`, and its
+  run's out-link keeps the lineage's last build from garbage collection.
+  Cluster nodes do not run Nix builds (`dev-nix-host-unsupported`).
+- **Keys.** `piceli secrets nix-cache my-cache-1 --generate` stores the
+  secret key (`0600`, never printed) and prints the public key
+  `my-cache-1:<base64>` for `NixCache(public_key=)` and the hosts'
+  `trusted-public-keys` (`--prompt` imports a key from `nix key
+  generate-secret`). `piceli secrets s3 cache-s3-write --prompt` stores
+  S3 keys that may put and delete objects (two lines on stdin): only
+  `--publish` and `gc` use them. Hosts substitute with separate read-only
+  keys that live in sops-nix on the host ({doc}`nix_hosts`), never in
+  Piceli; the build side never reads them.
+
+`--cluster` (or `--dev`, or `PICELI_DEV_CLUSTER`) names that `DevBuilds`
+itself, or a `Cluster` that declares it as `dev=`: Nix builds need no
+cluster.
+
+```sh
+# A build: the store path, and with --image the image file and its sha256
+piceli dev nix build nixosConfigurations.web-1.config.system.build.openstackImage \
+  --cluster infra.py:dev --image --name web-1-image --json
+# Publish a commit: the plan and its digest first (exit 3), then approve it
+piceli dev nix build nixosConfigurations.web-1.config.system.build.toplevel \
+  --ref v1.4.0 --publish infra.py:cache
+piceli dev nix build ... --approve sha256:<digest>
+```
+
+The approved command builds the commit as any run: isolated, with no key
+and no cloud credential. Then, **on the same host**, a separate short step
+that runs no project code receives the secret key and the S3 keys on its
+stdin, writes the key to a `0600` file in a private temporary directory
+(removed on every exit), and runs `nix copy --to 's3://BUCKET?endpoint=...&
+secret-key=FILE' PATH`: each uploaded path's narinfo is signed by the key,
+so the host's store is never changed and its daemon need not trust the
+user. Last, Piceli signs and uploads the **build manifest**
+`piceli/NAME/COMMIT.json` (`schema: piceli.nix-build.v1`: `commit`,
+`tag`, `attribute`, `store_path`, `system`, `nar_hash`, `nar_size`,
+`closure_size` from `nix path-info -S`, `built_at`, `host`, `image`,
+`signed_by`, and `signature`: the cache key's Ed25519 signature over the
+canonical JSON of the rest). The result
+(`piceli.dev-nix-build.v1`) carries the store path, `image.file`,
+`image.sha256` and `image.build`, the cache URL, the public key and the
+manifest; never a secret. With `--image`, the build also writes
+`ARTIFACTS_DIR/NAME.image.json` (`piceli.nix-image.v1`: the image's path
+relative to it, `sha256`, `format`, `bytes`, `store_path`, `commit`), which
+`Image.from_build("my-image", "piceli-dev-artifacts/web-1-image.image.json")`
+reads: nobody copies a checksum by hand (`infra-image-build-invalid` when
+it is missing or malformed).
+
+**Ref pointers.** After the manifest, publishing writes a signed pointer for
+the tag at the commit and for the branch `--ref` names (or `--branch NAME`):
+`piceli/NAME/refs/tags/TAG.json` and `piceli/NAME/refs/heads/BRANCH.json`
+(`schema: piceli.nix-ref.v1`: `ref`, `commit`, `manifest`, the manifest's
+`manifest_sha256`, `store_path`, `system`, `published_at` and the
+signature). `published_at` only grows, even when the publishing clock is
+behind. The plan lists them. A host resolves its ref from them with read
+access to the cache alone, no Git: see {doc}`nix_hosts`.
+
+A host that follows a tag reads the manifest of the tag's commit and
+trusts it only when `piceli.dev.nix_verify.verify_manifest(body,
+public_key)` holds, and the store path's narinfo in the cache verifies with
+the same key (`verify_narinfo`) with the manifest's `NarHash`: an attacker
+with write access to the bucket can neither point a commit at another
+closure nor forge one. `piceli.dev.nix_verify` is standard library only
+(Ed25519 as in RFC 8032): a host needs neither a crypto package nor `nix`
+to check.
+
+**Retention.** `piceli dev nix gc --cache infra.py:cache` keeps the
+manifests of the newest five tags (`--keep-tags`) and of the current
+`main` (`--main`), every store path their closures reach (a kept closure
+that shares a path with an old build keeps it), and every object younger
+than `--grace` (an hour: a publish in progress); it lists the manifests,
+narinfos and NAR files it would delete with a digest (exit 3) and deletes
+them only with `--approve <digest>`, manifests first. Branch pointers stay
+and keep the build they name; tag pointers of tags it does not keep go
+first, then their manifests, so a host never finds a pointer whose build is
+gone.
+
 ## Failure codes
 
 | Code | Meaning | What to do |
@@ -600,3 +707,4 @@ its `tests`, `durations` and `log_tail`.
 | `dev-toolchain-checksum` | A profile's toolchain download does not match its published sha256 | Run again; check the network path |
 | `dev-run-unknown` | No such run queued, running or recorded | `piceli dev status` |
 | `dev-not-enabled` | No `DevBuilds` installed on the cluster | Ask the owner to declare it and run `cluster init` |
+| `dev-nix-*` (0.24.0) | A Nix build or publish was refused or failed (`dev-nix-invalid`, `-host-unsupported`, `-cache-invalid`, `-key-invalid`, `-key-mismatch`, `-plan-changed`, `-no-output`, `-publish-failed`, `-manifest-failed`, `-gc-failed`) | `piceli explain CODE` |

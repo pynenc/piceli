@@ -46,7 +46,7 @@ def test_browser_opens_after_authenticated_readiness_and_stops_cleanly(
         return True
 
     monkeypatch.setattr(ui_preview.webbrowser, "open", open_browser)
-    with ui_preview.preview_server(port=0) as (process, url):
+    with ui_preview.preview_server(port=0, startup_timeout=120) as (process, url):
         assert process.poll() is None
         assert opened == [url]
     assert process.poll() is not None

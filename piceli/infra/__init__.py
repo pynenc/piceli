@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from piceli._lazy import lazy_exports
 from piceli.dev.model import BuildHost, DevBuilds, DevProfile
+from piceli.dev.nix import NixCache
+from piceli.hosts.model import Branch, HostCheck, HostReport, NixHost, Tag
 from piceli.pipeline.errors import PipelineError
 from piceli.pipeline.model import Registry
 
@@ -35,6 +37,8 @@ def _slug(text: str) -> str:
 
 
 __all__ = [
+    "Branch",
+    "Bucket",
     "BuildHost",
     "Cluster",
     "Component",
@@ -46,17 +50,27 @@ __all__ = [
     "Firewall",
     "Hetzner",
     "Hook",
+    "HostCheck",
+    "HostReport",
     "HttpState",
+    "Image",
+    "Infomaniak",
     "Infrastructure",
     "LocalState",
+    "NixCache",
+    "NixHost",
     "Node",
+    "OpenStack",
     "Otlp",
+    "Porkbun",
     "PrimaryIp",
     "Rule",
     "Server",
     "Source",
     "Ssh",
+    "Tag",
     "Ui",
+    "UserData",
     "register_cluster",
 ]
 
@@ -378,17 +392,23 @@ class Component:
 # Machines provisioned with OpenTofu (``piceli infra``); after Cluster, which
 # a Server may name.
 from piceli.infra.machines import (  # noqa: E402
+    Bucket,
     DnsRecord,
     Firewall,
     Hetzner,
     Hook,
     HttpState,
+    Image,
+    Infomaniak,
     Infrastructure,
     LocalState,
+    OpenStack,
+    Porkbun,
     PrimaryIp,
     Rule,
     Server,
     Ssh,
+    UserData,
 )
 
 # Loaded on first use (piceli/_lazy.py): importing the facade stays cheap and

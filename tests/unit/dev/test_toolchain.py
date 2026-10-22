@@ -25,9 +25,9 @@ components = ["rustfmt", "clippy"]
 
 def test_the_nearest_pin_from_the_run_directory_up_counts(tmp_path: Path) -> None:
     tree = tmp_path / "tree"
-    (tree / "shop" / "crates" / "poet").mkdir(parents=True)
+    (tree / "shop" / "crates" / "app").mkdir(parents=True)
     (tree / "shop" / "rust-toolchain.toml").write_text(PIN)
-    found = rust_toolchain(tree, "shop/crates/poet")
+    found = rust_toolchain(tree, "shop/crates/app")
     assert found == {
         "file": "shop/rust-toolchain.toml",
         "channel": "1.97.0",
@@ -35,10 +35,10 @@ def test_the_nearest_pin_from_the_run_directory_up_counts(tmp_path: Path) -> Non
         "components": ["clippy", "rustfmt"],
         "profile": "minimal",
     }
-    (tree / "shop" / "crates" / "poet" / "rust-toolchain").write_text(
+    (tree / "shop" / "crates" / "app" / "rust-toolchain").write_text(
         "nightly-2026-10-01\n"
     )
-    assert rust_toolchain(tree, "shop/crates/poet")["channel"] == "nightly-2026-10-01"
+    assert rust_toolchain(tree, "shop/crates/app")["channel"] == "nightly-2026-10-01"
     assert rust_toolchain(tree, ".") is None  # above the pin: none
 
 

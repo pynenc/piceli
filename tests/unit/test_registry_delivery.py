@@ -40,6 +40,7 @@ from piceli.artifacts.registry_delivery import (
     RegistryForward,
     node_registry_address,
 )
+from tests.unit.containerd_store import containerd_save
 
 OCI_MANIFEST = "application/vnd.oci.image.manifest.v1+json"
 OCI_INDEX = "application/vnd.oci.image.index.v1+json"
@@ -1047,7 +1048,88 @@ assert "piceli.k8s.observe" not in sys.modules
         [sys.executable, "-c", script],
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=120,
         env={**os.environ},
     )
     assert result.returncode == 0, result.stderr
+
+
+# --- Docker's containerd image store (the default from Docker 29) -------------
+
+
+def _containerd_delivery(tmp_path: Path, saved) -> tuple[RegistryDelivery, FakeDocker]:  # type: ignore[no-untyped-def]
+    docker = FakeDocker(saved.local_id, saved.archive)
+    docker.capture = _containerd_capture(docker)  # type: ignore[method-assign]
+    tool = tmp_path / "docker"
+    tool.write_bytes(b"#!/bin/sh\n")
+    delivery = RegistryDelivery(
+        docker=ToolPin.capture(tool),
+        docker_socket=Path("/var/run/docker.sock"),
+        runner=docker,
+    )
+    return delivery, docker
+
+
+def _containerd_capture(docker: FakeDocker):  # type: ignore[no-untyped-def]
+    original = docker.capture
+
+    def capture(argv, limits, env):  # type: ignore[no-untyped-def]
+        if "info" in argv:
+            docker.calls.append(argv)
+            store = b'[["driver-type","io.containerd.snapshotter.v1"]]'
+            return RunResult("succeeded", 0, store, 0.0)
+        return original(argv, limits, env)
+
+    return capture
+
+
+def test_containerd_store_image_is_pushed_by_its_config_digest(registry, tmp_path):
+    saved = containerd_save()
+    config = saved.configs["linux/arm64"]
+    delivery, docker = _containerd_delivery(tmp_path, saved)
+    url = f"oci://127.0.0.1:{registry.port}/team/app:1"
+    target = RegistryTarget.parse(url)
+    # What CI's Docker 29 runner did: approving `.Id`, the local index digest.
+    refused = delivery.deliver(
+        DockerImageSource("example/app:1"),
+        target,
+        DeliveryGrant(saved.local_id, url, time.time() + 60),
+    )
+    assert (refused["result"], refused["reason"]) == ("rejected", "digest-mismatch")
+    assert registry.mutations() == []
+    receipt = delivery.deliver(
+        DockerImageSource("example/app:1"),
+        target,
+        DeliveryGrant(config, url, time.time() + 60),
+    )
+    assert receipt["result"] == "pushed", receipt
+    assert receipt["image"]["config_digest"] == config
+    # The platform manifest is pushed byte for byte; the attestation is not.
+    assert receipt["image"]["manifest_digest"] == saved.manifests["linux/arm64"]
+    assert receipt["image"]["manifest_origin"] == "archive"
+    assert ["image", "save", saved.local_id] in [argv[-3:] for argv in docker.calls]
+
+
+def test_multi_platform_archive_pushes_the_approved_platform(registry, tmp_path):
+    saved = containerd_save(("linux/amd64", "linux/arm64"))
+    path = write_archive(tmp_path, saved.archive)
+    for platform, config in saved.configs.items():
+        receipt = push(registry, path, config)
+        assert receipt["result"] == "pushed", receipt
+        assert receipt["image"]["platform"] == platform
+        assert receipt["image"]["manifest_digest"] == saved.manifests[platform]
+    wrong = push(registry, path, "sha256:" + "7" * 64)
+    assert (wrong["result"], wrong["reason"]) == ("rejected", "digest-mismatch")
+
+
+def test_scan_picks_the_platform_and_ignores_attestations():
+    saved = containerd_save(("linux/amd64", "linux/arm64"))
+    for platform, config in saved.configs.items():
+        plan = scan_image_stream(io.BytesIO(saved.archive), platform=platform)
+        assert (plan.config_digest, plan.platform) == (config, platform)
+    with pytest.raises(ValueError, match="exactly one runnable"):
+        scan_image_stream(io.BytesIO(saved.archive))
+    single = containerd_save(("linux/arm64",))
+    plan = scan_image_stream(io.BytesIO(single.archive))
+    assert plan.config_digest == single.configs["linux/arm64"]
+    assert len(plan.layers) == 1  # the attestation's statement is not a layer

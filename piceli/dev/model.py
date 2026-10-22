@@ -89,6 +89,11 @@ class DevProfile:
         "wasm-bindgen": "Cargo.lock"}``, each a path relative to the run's
         tree root or a version (Rust follows the source's own
         ``rust-toolchain.toml``).
+    :param nix: 0.24: runs use the build host's own Nix: a docker host
+        mounts its ``/nix`` read-only into the run (the store and the
+        daemon's socket; builds happen in the host daemon's sandbox) and
+        sets ``NIX_REMOTE=daemon``; a native host uses its ``nix``. See
+        :meth:`for_nix`.
     """
 
     name: str
@@ -101,10 +106,21 @@ class DevProfile:
     memory: str | None = None
     timeout: str | None = None
     toolchains: Mapping[str, str] = field(default_factory=dict)
+    nix: bool = False
+
+    @classmethod
+    def for_nix(cls, name: str = "nix", **options: Any) -> DevProfile:
+        """A profile for ``piceli dev nix build``: the host's Nix, keyed by
+        ``nix --version`` (0.24.0)."""
+        options.setdefault("tools", ["nix"])
+        options.setdefault("toolchain", ["nix", "--version"])
+        return cls(name, nix=True, **options)
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _LABEL.fullmatch(self.name):
             raise _invalid(f"profile name {self.name!r} is not a DNS label")
+        if not isinstance(self.nix, bool):
+            raise _invalid(f"profile {self.name}: nix is True or False")
         if self.toolchains:
             from piceli.dev.toolchains import ToolchainError, check_declared
 
@@ -158,6 +174,7 @@ class DevProfile:
             "timeout": self.timeout,
             # 0.22: only when declared, so other configs are unchanged.
             **({"toolchains": dict(self.toolchains)} if self.toolchains else {}),
+            **({"nix": True} if self.nix else {}),
         }
 
 
@@ -461,6 +478,7 @@ class DevBuilds:
             memory=found.memory or self.run_memory,
             timeout=found.timeout or self.timeout,
             toolchains=found.toolchains,
+            nix=found.nix,
         )
 
     def host(self, name: str | None) -> BuildHost | None:
@@ -498,6 +516,7 @@ class DevBuilds:
                 memory=item.get("memory"),
                 timeout=item.get("timeout"),
                 toolchains=item.get("toolchains") or {},
+                nix=bool(item.get("nix", False)),
             )
             for item in value.get("profiles") or ()
         ]

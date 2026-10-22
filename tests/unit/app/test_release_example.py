@@ -6,6 +6,7 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
+from piceli.k8s.ops.content_digest import content_digests
 from tests.unit.app import dict_release_composition
 from tests.unit.app.conftest import canonical, make_context
 
@@ -30,7 +31,8 @@ def test_typed_example_is_at_most_60_lines():
 
 def test_typed_example_renders_byte_identical_intents(release_ctx):
     typed = _example().build(release_ctx)
-    legacy = dict_release_composition.build(release_ctx)
+    # The release engine adds the same content digests to a raw composition.
+    legacy = content_digests(dict_release_composition.build(release_ctx))
     assert canonical(typed) == canonical(legacy)
     for a, b in zip(
         [r for c in typed.components for r in c.resources],
@@ -46,5 +48,5 @@ def test_typed_example_matches_with_defaults():
         secrets=["api-token", "web-tls.crt", "web-tls.key"],
     )
     assert canonical(_example().build(ctx)) == canonical(
-        dict_release_composition.build(ctx)
+        content_digests(dict_release_composition.build(ctx))
     )

@@ -47,11 +47,11 @@ def _stop(process: subprocess.Popen[str]) -> None:
     with suppress(ProcessLookupError):
         os.killpg(process.pid, signal.SIGTERM)
     try:
-        process.wait(timeout=5)
+        process.wait(timeout=60)
     except subprocess.TimeoutExpired:
         with suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
-        process.wait(timeout=5)
+        process.wait(timeout=60)
 
 
 def _terminate(signum: int, _frame: object) -> None:
@@ -113,7 +113,7 @@ def main() -> None:
                 browser.stdin.write("\n")
                 browser.stdin.flush()
                 browser.stdin.close()
-                browser.wait(timeout=10)
+                browser.wait(timeout=60)
             finally:
                 _stop(browser)
         finally:

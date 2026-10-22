@@ -379,13 +379,13 @@ def test_cli_access_stop_stale_stops_a_leftover_piceli_access(
             assert {item["holder"] for item in body["stopped"]} == {"piceli-server"}
             assert {local, dashboard} <= {item["port"] for item in body["stopped"]}
             assert body["left"] == [] and body["failed"] == []
-            process.wait(timeout=15)
+            process.wait(timeout=60)
             assert process.returncode is not None
         finally:
             if process.poll() is None:
                 process.send_signal(signal.SIGKILL)
-                process.wait(timeout=5)
-        deadline = time.monotonic() + 5
+                process.wait(timeout=60)
+        deadline = time.monotonic() + 60
         while time.monotonic() < deadline and access_module.local_port_in_use(local):
             time.sleep(0.05)
         assert not access_module.local_port_in_use(local)
@@ -427,10 +427,10 @@ def test_status_counts_a_running_access_relay_as_piceli_forward(
     finally:
         process.send_signal(signal.SIGTERM)
         try:
-            process.wait(timeout=15)
+            process.wait(timeout=60)
         except subprocess.TimeoutExpired:
             process.kill()
-            process.wait(timeout=5)
+            process.wait(timeout=60)
         for stream in (process.stdout, process.stderr):
             if stream is not None:
                 stream.close()

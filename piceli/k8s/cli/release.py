@@ -340,7 +340,13 @@ def _describe_plan(
         _say(f"  adopt {entry}: not needed (absent or already managed)")
     for entry in report["authorized"].get("replace_not_needed", ()):
         _say(f"  replace {entry}: not needed (absent, or managed and unchanged)")
+    adopted = {item["secret"]: item["from"] for item in result.secret_adoptions}
     for name, origin in result.secrets.items():
+        if name in adopted:
+            # Read back from the cluster: the state had no record of it.
+            origin += (
+                " from Secret " + ", ".join(adopted[name]) + " (kept, not rotated)"
+            )
         _say(f"  secret {name}: {origin}")
     checks = report.get("checks") or {}
     if checks.get("names"):

@@ -31,6 +31,7 @@ import dataclasses
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import re
 import tempfile
@@ -60,6 +61,13 @@ from piceli.checks import (
     run_checks,
 )
 from piceli.k8s.ops.bounds import timestamp
+from piceli.k8s.ops.content_digest import (
+    carry_live_secret_digests,
+    content_digests,
+    has_secret_digests,
+    strip_roll_markers,
+    version_token,
+)
 from piceli.k8s.ops.diagnosis import compact
 from piceli.k8s.ops.discovery import (
     RELEASE_CLUSTER_KINDS,
@@ -95,6 +103,7 @@ from piceli.k8s.ops.plan import (
     PrivateEvidence,
     ResourceIntent,
     ResourceRef,
+    SecretAdoption,
     autoscaled_replicas,
     build_plan,
     declared_union,
@@ -132,6 +141,7 @@ from piceli.k8s.release_secret_spec import (
     SecretError,
     check_rotation,
     consumed_outputs,
+    outputs,
 )
 from piceli.k8s.release_secrets import (
     ImportSources,
@@ -149,9 +159,12 @@ from piceli.k8s.release_spec import (
     ReleaseSpecError,
     parse_adopt_entry,
 )
+from piceli.k8s.secret_adoption import LiveSecrets
 
 if TYPE_CHECKING:
     from piceli.k8s.secret_sources import Fetched
+
+logger = logging.getLogger(__name__)
 
 POLICY_REVISION = "piceli.release-cli/v1"
 _HASH = re.compile(r"[0-9a-f]{64}")
@@ -299,6 +312,7 @@ def _plan_authorization(
     replace: Sequence[Mapping[str, str]] = (),
     previous: Sequence[ResourceIntent] = (),
     policy: ApprovalPolicy | Mapping[str, Any] | None = None,
+    secret_adoptions: Sequence[Mapping[str, Any]] = (),
 ) -> PlanAuthorization:
     if isinstance(policy, Mapping):
         policy = ApprovalPolicy.from_identity(policy)
@@ -311,7 +325,26 @@ def _plan_authorization(
         tuple(ResourceRef(**item) for item in replace),
         tuple(previous),
         approval_policy=policy,
+        secret_adoptions=tuple(
+            SecretAdoption(
+                str(item["generator"]),
+                ResourceRef(**item["resource"]),
+                str(item["uid"]),
+            )
+            for item in secret_adoptions
+        ),
     )
+
+
+def _adoption_report(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Per adopted generator, the live Secrets its values were read from."""
+    found: dict[str, list[str]] = {}
+    for item in plan.get("secret_adoptions", ()):
+        found.setdefault(item["generator"], []).append(item["resource"]["name"])
+    return [
+        {"secret": name, "from": sorted(secrets)}
+        for name, secrets in sorted(found.items())
+    ]
 
 
 def _policy_record(policy: ApprovalPolicy | None) -> dict[str, Any]:
@@ -987,6 +1020,11 @@ class PlanResult:
     autoscaled: list[dict[str, Any]] = field(default_factory=list)
 
     @property
+    def secret_adoptions(self) -> list[dict[str, Any]]:
+        """Generated values read back from live Secrets (bound to the hash)."""
+        return _adoption_report(self.plan)
+
+    @property
     def plan_hash(self) -> str:
         return str(self.plan["plan_hash"])
 
@@ -1008,6 +1046,7 @@ class PlanResult:
             "source": self.source,
             "images": self.images,
             "secrets": self.secrets,
+            "secret_adoptions": self.secret_adoptions,
             "summary": self.counts,
             "actions": _compact_actions(self.plan),
             "drift": self.drift,
@@ -1231,7 +1270,11 @@ class ReleaseRunner:
                     "the composition function must return an App or a DeploymentComposition",
                     code="invalid-composition",
                 )
-            return scoped_composition(composition, self.spec.model.target.namespace)
+            scoped = scoped_composition(composition, self.spec.model.target.namespace)
+            # Offline tokens (version ids); a plan replaces them with keyed
+            # fingerprints of the stored values (see ``_plan_create``). The
+            # opt-out markers are instructions, never applied.
+            return strip_roll_markers(content_digests(scoped))
 
         return factory
 
@@ -1387,6 +1430,79 @@ class ReleaseRunner:
         )
         return artifact, [item.to_dict() for item in unavailable]
 
+    @staticmethod
+    def _carry_secret_digests(
+        composition: DeploymentComposition, artifact: DiscoveryArtifact
+    ) -> DeploymentComposition:
+        """A preview without secret values keeps the live secret digests.
+
+        See :func:`~piceli.k8s.ops.content_digest.carry_live_secret_digests`.
+        """
+        snapshot = ObservedSnapshot.from_discovery(artifact)
+        return carry_live_secret_digests(
+            composition,
+            {item.intent.ref: item.intent.manifest for item in snapshot.resources},
+        )
+
+    def _recapture_dry_runs(
+        self,
+        binding: ProviderBinding,
+        artifact: DiscoveryArtifact,
+        composition: DeploymentComposition,
+        store: SecretVersionStore,
+        values: Mapping[str, Any],
+        unavailable: list[dict[str, Any]],
+    ) -> tuple[DiscoveryArtifact, ObservedSnapshot, list[dict[str, Any]]]:
+        """Dry runs of the final pod templates, once the values are known.
+
+        The placeholder build (observed before any value is read, so a
+        refused plan reads none) carries offline tokens in
+        ``piceli.io/secrets-digest``; the release carries keyed fingerprints
+        of the values (see ``session_factory`` in :meth:`_plan_create`). The
+        workloads whose template differs are dry-run again with the final
+        digests, so their evidence is for exactly the manifest that is
+        planned and applied (a stale one is ignored by the planner, which
+        then compares literally and reports server defaults as changes).
+        """
+        by_ref = {ref: name for name, ref in self._placeholders().items()}
+
+        def token(reference: SecretVersionRef) -> str:
+            name = by_ref.get(reference)
+            if name is None or name not in values:
+                return version_token(reference)
+            return store.fingerprint_value(values[name])
+
+        final = content_digests(composition, token, refresh=True)
+        before = {
+            resource.ref: resource
+            for component in composition.components
+            for resource in component.resources
+        }
+        changed = {
+            resource.ref
+            for component in final.components
+            for resource in component.resources
+            if before.get(resource.ref) != resource
+        }
+        if changed:
+            artifact, again = capture_server_dry_runs(
+                binding.provider,
+                artifact,
+                final,
+                deadline=time.monotonic() + self.spec.model.discovery.max_seconds,
+                exclude=lambda resource: resource.ref not in changed,
+            )
+            unavailable = sorted(
+                [
+                    item
+                    for item in unavailable
+                    if ResourceRef(**item["resource"]) not in changed
+                ]
+                + [item.to_dict() for item in again],
+                key=lambda item: tuple(item["resource"].values()),
+            )
+        return artifact, ObservedSnapshot.from_discovery(artifact), unavailable
+
     def _observe(
         self,
         binding: ProviderBinding,
@@ -1419,12 +1535,15 @@ class ReleaseRunner:
         binding: ProviderBinding,
         rotate: Sequence[str],
         external: Mapping[str, Fetched] | None = None,
+        live: LiveSecrets | None = None,
     ) -> Materialized:
         """Carry values over from earlier releases unless rotated or reconfigured.
 
         Called only after the plan was validated; imports read their source
         here (a live Secret through the release's own provider). External
         sources were read before the release was named (``external``).
+        ``live`` adopts the values of generators no release records from
+        Secrets an earlier release of this owner wrote.
         """
         records = sorted(
             catalog.records(),
@@ -1443,11 +1562,14 @@ class ReleaseRunner:
                 if recorded != digest:
                     continue
                 refs = self._stored_refs(record, sidecar, store)
-                if all(item in refs for item in wanted):
+                # An adopted CA has no key: never stored, listed as unavailable.
+                unavailable = set(sidecar.get("secret_unavailable", ()))
+                if all(item in refs or item in unavailable for item in wanted):
                     return (
                         {
                             item: store.resolve(binding.target, refs[item])
                             for item in wanted
+                            if item in refs
                         },
                         record.name,
                     )
@@ -1462,6 +1584,29 @@ class ReleaseRunner:
             carry=carry,
             sources=ImportSources(self.spec.resolve, read_secret),
             external=external,
+            adopt=live,
+        )
+
+    def _live_secrets(
+        self,
+        catalog: ReleaseCatalog,
+        composition: DeploymentComposition,
+        snapshot: ObservedSnapshot,
+    ) -> LiveSecrets:
+        """Generated values an earlier release of this owner left live."""
+        settings = self.spec.model.release
+        recorded: set[str] = set()
+        for record in catalog.records():
+            sidecar = self._sidecar(record.name)
+            recorded |= set(sidecar.get("secret_parts", {}))
+            recorded |= set(sidecar.get("secrets", {}))
+        return LiveSecrets(
+            composition,
+            snapshot,
+            self._placeholders(),
+            owner=settings.owner,
+            field_manager=settings.field_manager,
+            recorded=recorded,
         )
 
     def _external_sources(self, *, create: bool) -> dict[str, Fetched]:
@@ -1686,6 +1831,10 @@ class ReleaseRunner:
             kinds = self._kinds(composition)
             if settings.prune:
                 kinds |= self._prune_kinds(records.values())
+            if existing is None and has_secret_digests(composition):
+                composition = self._carry_secret_digests(
+                    composition, self._discover(binding, set(kinds), composition)
+                )
             artifact, unavailable = self._observe(binding, composition, kinds)
             snapshot = ObservedSnapshot.from_discovery(artifact)
             inherited = list(settings.inherited_owners)
@@ -1762,6 +1911,7 @@ class ReleaseRunner:
             if settings.prune:
                 kinds |= self._prune_kinds(catalog.records())
             artifact = self._discover(binding, kinds, composition)
+            composition = self._carry_secret_digests(composition, artifact)
             skipped = sorted(
                 {
                     (resource.ref.kind, resource.ref.name)
@@ -1795,10 +1945,18 @@ class ReleaseRunner:
                     policy=settings.approval_policy,
                 ),
             )
+            adoptions = self._live_secrets(catalog, composition, snapshot).candidates(
+                spec.secrets
+            )
         finally:
             binding.close()
         summary = plan.summary()
         return {
+            # Generators whose values the real plan would read back from
+            # live Secrets (no value is read here).
+            "secret_adoptions": [
+                {"secret": name, "from": secrets} for name, secrets in adoptions.items()
+            ],
             "summary": _summary(summary),
             "actions": _compact_actions(summary),
             "kept_orphaned": kept_orphaned(summary),
@@ -1896,8 +2054,31 @@ class ReleaseRunner:
         # first: a refused plan must not generate, import or store any secret.
         preview = build_plan(composition, snapshot, plan_authorization)
         grant(preview, snapshot)
-        secrets = self._private_inputs(catalog, store, binding, rotate, external)
+        live = self._live_secrets(catalog, composition, snapshot)
+        secrets = self._private_inputs(catalog, store, binding, rotate, external, live)
         origin = secrets.origin
+        adoptions = live.evidence()
+        for generator in sorted(live.adopted):
+            logger.warning(
+                "secret %s: no release in the state records it; adopted its "
+                "values from live Secret(s) %s written by an earlier release "
+                "of owner %s (nothing rotated)",
+                generator,
+                ", ".join(
+                    sorted({source.resource.name for source in live.adopted[generator]})
+                ),
+                settings.owner,
+            )
+        if adoptions:
+            plan_authorization = dataclasses.replace(
+                plan_authorization, secret_adoptions=adoptions
+            )
+        keyless = sorted(
+            item.name
+            for generator, spec in self.spec.model.secrets.items()
+            for item in outputs(generator, spec)
+            if item.internal and item.name not in secrets.values
+        )
         placeholders = self._placeholders()
         bound_refs = {
             item.reference
@@ -1907,6 +2088,9 @@ class ReleaseRunner:
         }
         bound = {n for n, ref in placeholders.items() if ref in bound_refs}
         values = {n: v for n, v in secrets.values.items() if n in bound}
+        artifact, snapshot, unavailable = self._recapture_dry_runs(
+            binding, artifact, composition, store, values, unavailable
+        )
         session_id = uuid.uuid4().hex
         internal: dict[str, SecretVersionRef] = {}
         try:
@@ -1918,7 +2102,14 @@ class ReleaseRunner:
                 refs: Mapping[str, SecretVersionRef],
             ) -> DeploymentComposition:
                 exposed = {n: r for n, r in internal.items() if n in placeholders}
-                return factory({**exposed, **refs})
+                # Pod templates carry keyed fingerprints of the values their
+                # Secrets hold: a changed value rolls the workload, a value
+                # carried over to this release does not.
+                return content_digests(
+                    factory({**exposed, **refs}),
+                    lambda ref: store.fingerprint(binding.target, ref),
+                    refresh=True,
+                )
 
             workflow = ReleaseWorkflow(
                 catalog,
@@ -1969,6 +2160,14 @@ class ReleaseRunner:
                     "secret_parts": secrets.parts,
                     "secret_meta": secrets.meta,
                     "secret_origin": origin,
+                    # Adopted values (bound to the plan hash) and the internal
+                    # outputs an adoption could not recover (a CA key).
+                    **(
+                        {"secret_adoptions": [item.summary() for item in adoptions]}
+                        if adoptions
+                        else {}
+                    ),
+                    **({"secret_unavailable": keyless} if keyless else {}),
                     "prune": settings.prune,
                     # The plan authorization, so the session reopens exactly.
                     "adopt": adopt,
@@ -2280,6 +2479,7 @@ class ReleaseRunner:
                     catalog, sidecar.get("previous_releases", ())
                 ),
                 policy=sidecar.get("approval_policy"),
+                secret_adoptions=sidecar.get("secret_adoptions", ()),
             ),
             grant,
             journal,

@@ -5,6 +5,11 @@ secrets) and ``.terraform.lock.hcl`` (the pinned providers' hashes, so
 ``tofu init -lockfile=readonly`` verifies every download). Same declaration,
 same bytes: the plan hash starts from them.
 
+A server's :class:`~piceli.infra.machines.model.UserData` is a sensitive
+variable ``user_data_<server>`` (default ``null``): the value reaches
+OpenTofu only through ``TF_VAR_user_data_<server>`` in its environment, when
+a plan creates the server (:mod:`piceli.infra.machines.plan`).
+
 Every resource is labelled ``piceli.io/managed-by=piceli``,
 ``piceli.io/infra=<name>`` and ``piceli.io/resource=<kind>-<name>``; destroy
 only touches resources that carry them (:mod:`piceli.infra.machines.plan`).
@@ -16,7 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from piceli.infra.machines.model import (
@@ -28,7 +33,7 @@ from piceli.infra.machines.model import (
 )
 from piceli.infra.machines.provider import Resource
 
-__all__ = ["MIN_TOFU", "Rendered", "labels", "render"]
+__all__ = ["MIN_TOFU", "Rendered", "labels", "render", "user_data_variable"]
 
 #: The oldest OpenTofu Piceli runs (state encryption, early evaluation).
 MIN_TOFU = (1, 8, 0)
@@ -36,6 +41,11 @@ LOCK_HEADER = (
     "# This file is maintained by Piceli (piceli infra): the pinned providers.\n"
     "# Manual edits are replaced on the next plan.\n"
 )
+
+
+def user_data_variable(server: str) -> str:
+    """The OpenTofu variable holding a server's user data (``user_data_web_1``)."""
+    return "user_data_" + server.replace("-", "_")
 
 
 def labels(
@@ -58,6 +68,8 @@ class Rendered:
     lock: str
     #: OpenTofu address -> (provider name, kind, declared name) of every resource.
     resources: dict[str, tuple[str, str, str]]
+    #: Server address -> (its server name, its user data's secret name).
+    user_data: dict[str, tuple[str, str]] = field(default_factory=dict)
 
     @property
     def config_text(self) -> str:
@@ -85,6 +97,13 @@ def render(infra: Infrastructure) -> Rendered:
         resources.append(resource)
         return resource
 
+    for image, provider in infra.images():
+        add(
+            provider.render_image(image, labels(infra, "image", image.name)),
+            provider.name,
+            "image",
+            image.name,
+        )
     firewalls: dict[str, Resource] = {}
     for firewall in infra.firewalls():
         users = [s for s in infra.servers if s.firewall == firewall]
@@ -96,6 +115,10 @@ def render(infra: Infrastructure) -> Rendered:
             firewalls.setdefault(firewall.name, item)
     keys: dict[tuple[str, str], Resource] = {}
     outputs: dict[str, Any] = {}
+    #: Server name -> (its resource, its rendered PrimaryIps).
+    hosts: dict[str, tuple[Resource, dict[str, Resource]]] = {}
+    variables: dict[str, Any] = {}
+    user_data: dict[str, tuple[str, str]] = {}
     for server in infra.servers:
         provider = server.provider
         ips: dict[str, Resource] = {}
@@ -121,22 +144,29 @@ def render(infra: Infrastructure) -> Rendered:
                     )
             if found is not None:
                 server_keys.append(found)
-        resource = add(
-            provider.render_server(
-                server,
-                ips=ips,
-                firewall=(
-                    firewalls.get(server.firewall.name)
-                    if isinstance(server.firewall, Firewall)
-                    else None
-                ),
-                labels=labels(infra, "server", server.name, dict(server.labels)),
-                ssh_keys=server_keys,
+        made = provider.render_server(
+            server,
+            ips=ips,
+            firewall=(
+                firewalls.get(server.firewall.name)
+                if isinstance(server.firewall, Firewall)
+                else None
             ),
-            provider.name,
-            "server",
-            server.name,
+            labels=labels(infra, "server", server.name, dict(server.labels)),
+            ssh_keys=server_keys,
         )
+        if server.user_data is not None:
+            variable = user_data_variable(server.name)
+            variables[variable] = {
+                "type": "string",
+                "default": None,
+                "sensitive": True,
+                "description": f"user data of {server.name} (creation only)",
+            }
+            made = provider.render_user_data(made, f"${{var.{variable}}}")
+            user_data[made.address] = (server.name, server.user_data.secret)
+        resource = add(made, provider.name, "server", server.name)
+        hosts[server.name] = (resource, ips)
         value: dict[str, Any] = {"id": provider.server_id(resource)}
         for family in ("ipv4", "ipv6"):
             if getattr(server, family) is not False:
@@ -145,35 +175,33 @@ def render(infra: Infrastructure) -> Rendered:
         if status is not None:
             value["status"] = status
         outputs[f"server-{server.name}"] = {"value": value}
-    servers = {
-        address: resource
-        for resource in resources
-        for address in [resource.address]
-        if owners[address][1] == "server"
-    }
     for record in infra.records:
         assert record.provider is not None
         if record.servers:
+            # Through each server's own provider: a reference into this
+            # configuration, also when the record is at another provider.
             family = "ipv4" if record.type == "A" else "ipv6"
             values = sorted(
-                record.provider.address(
-                    next(r for a, r in servers.items() if owners[a][2] == item.name),
-                    family,
+                item.provider.record_address(
+                    item, hosts[item.name][0], family, hosts[item.name][1]
                 )
                 for item in record.servers
             )
         else:
             assert isinstance(record.value, tuple)
             values = list(record.value)
+        for made in record.provider.render_records(
+            record,
+            values,
+            labels(infra, "record", record.resource_name.removeprefix("record-")),
+        ):
+            add(made, record.provider.name, "record", record.key)
+    for bucket in infra.buckets:
         add(
-            record.provider.render_record(
-                record,
-                values,
-                labels(infra, "record", record.resource_name.removeprefix("record-")),
-            ),
-            record.provider.name,
-            "record",
-            record.key,
+            bucket.provider.render_bucket(bucket, labels(infra, "bucket", bucket.name)),
+            bucket.provider.name,
+            "bucket",
+            bucket.name,
         )
     body: dict[str, dict[str, Any]] = {}
     for resource in resources:
@@ -194,6 +222,8 @@ def render(infra: Infrastructure) -> Rendered:
     if backend is not None:
         terraform["backend"] = backend
     config: dict[str, Any] = {"terraform": terraform}
+    if variables:
+        config["variable"] = variables
     providers = {
         pin.local_name: block
         for provider in infra.providers()
@@ -203,6 +233,12 @@ def render(infra: Infrastructure) -> Rendered:
     }
     if providers:
         config["provider"] = providers
+    data: dict[str, dict[str, Any]] = {}
+    for provider in infra.providers():
+        for lookup in provider.data_sources():
+            data.setdefault(lookup.type, {})[lookup.name] = dict(lookup.body)
+    if data:
+        config["data"] = data
     if body:
         config["resource"] = body
     if outputs:
@@ -210,4 +246,4 @@ def render(infra: Infrastructure) -> Rendered:
     lock = LOCK_HEADER + "".join(
         "\n" + pin.lock_block() for pin in sorted(pins, key=lambda p: p.source)
     )
-    return Rendered(config, lock, owners)
+    return Rendered(config, lock, owners, user_data)

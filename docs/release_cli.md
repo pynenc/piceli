@@ -265,7 +265,7 @@ For node import, name the image by its content tag, which
 
 ```bash
 ID=$(docker image inspect --format '{{.Id}}' app/api:dev)   # classic store: the config digest
-piceli artifacts deliver --image "$ID" --approve-digest "$ID" \
+piceli artifacts deliver --image app/api:dev --approve-digest "$ID" \
   --ref "app/api:sha256-${ID:7:12}" \
   --to 'ssh://ops@node-1.example?runtime=k3s-containerd' --receipt api.node.json
 ```
@@ -379,6 +379,11 @@ token = ResourceIntent.from_manifest(
 Rotating under the same name fails at apply with
 `retained-content-precondition-failed` and writes nothing to that Secret. The
 old Secret stays until you delete it.
+
+A new, empty state directory does not rotate anything: the plan adopts the
+generated values from the Secrets an earlier release of the same owner wrote
+(origin `adopted`, listed under `secret_adoptions` and bound to the plan
+hash). See "When the state starts empty" in {doc}`secrets`.
 
 ## Plan and approval
 

@@ -409,3 +409,56 @@ def test_hetzner_rendering_plans_with_the_pinned_provider(homes: Path) -> None:
         "monthly_net"
     ] == pytest.approx(4.29)
     assert ("GET", "/v1/pricing", True) in api.requests
+
+
+FAILING_RECORD = """
+from pathlib import Path
+
+from piceli.infra import DnsRecord, Infrastructure, PrimaryIp, Server
+from piceli.infra.machines.provider import Resource
+from piceli.testing.infra import FakeProvider
+
+
+class Failing(FakeProvider):
+    def render_record(self, record, values, labels):
+        found = super().render_record(record, values, labels)
+        fails = {"provisioner": [{"local-exec": {"command": "false"}}]}
+        return Resource(found.type, found.name, {**found.body, **fails})
+
+
+fake = Failing(addresses={"edge-1": "127.0.0.1"})
+edge_1 = Server("edge-1", provider=fake, type="t1", image="img",
+                ipv4=PrimaryIp("edge-1-v4"))
+infra = Infrastructure(
+    "edge", servers=[edge_1],
+    records=[DnsRecord("example.com", "www", "A", server=edge_1)],
+    state_dir=Path(__file__).parent / "state",
+)
+"""
+
+
+def test_a_partial_apply_exits_1_with_what_was_applied(homes: Path) -> None:
+    """Real OpenTofu: the record's provisioner fails after the server was created."""
+    credentials.save_credential("edge-state", "state-key", PASSPHRASE)
+    (homes / "failing.py").write_text(FAILING_RECORD)
+    module = f"{homes / 'failing.py'}:infra"
+    result, plan = piceli("infra", "plan", module)
+    assert result.exit_code == 3, result.output
+    result, failed = piceli("infra", "apply", module, "--approve", plan["plan_hash"])
+    assert result.exit_code == 1, result.output
+    assert failed["state"] == "failed" and failed["reason"] == "infra-apply-failed"
+    assert failed["partially_applied"] is True
+    record = "terraform_data.record-example-com-www-a"
+    assert sorted(item["address"] for item in failed["applied"]) == [
+        "terraform_data.ip-edge-1-v4",
+        "terraform_data.server-edge-1",
+    ]
+    assert all(item["action"] == "create" and item["id"] for item in failed["applied"])
+    assert failed["not_applied"] == [
+        {"address": record, "action": "create", "failed": True}
+    ]
+    assert "the next plan shows what remains" in result.stderr
+    # The state kept what was applied: the next plan is only the record.
+    result, again = piceli("infra", "plan", module)
+    assert result.exit_code == 3, result.output
+    assert [c["address"] for c in again["changes"]] == [record]

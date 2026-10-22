@@ -462,7 +462,9 @@ def run_spec_build(
     for the first platform. ``timings`` (0.17.0): ``commands_seconds`` (the
     spec's commands, shared by every image), ``assemble_seconds`` and
     ``push_seconds``; ``commands``: each command's ``index``, ``tool``,
-    ``seconds`` and ``state``.
+    ``seconds`` and ``state``. ``build.shared_commands`` (0.23) run once,
+    with the first platform; their steps are ``shared_commands`` (same keys)
+    and their time counts in the first platform's ``commands_seconds``.
     """
     import time
 
@@ -476,6 +478,7 @@ def run_spec_build(
     results: dict[str, Any] = {}
     per_platform: dict[str, dict[str, str]] = {}
     commands: list[dict[str, Any]] = []
+    shared: list[dict[str, Any]] = []
     installed: dict[str, str] = {}
     declared = NodeFacts.from_dict(request.facts) if request.facts else None
     for platform in platforms:
@@ -492,7 +495,14 @@ def run_spec_build(
             grant = HostBuildGrant(plan.plan_hash, time.time() + 7200)
             directory = out / platform.replace("/", "-") / spec.name
             say(f"[build] {spec.name} for {platform}")
-            receipt = spec.run(grant, directory, inputs=inputs, progress=say).to_dict()
+            receipt = spec.run(
+                grant,
+                directory,
+                inputs=inputs,
+                progress=say,
+                # The shared commands run with the first platform only.
+                shared=platform == platforms[0],
+            ).to_dict()
         except BuildSpecError as error:
             from piceli.infra.builders import build_failed
 
@@ -514,6 +524,18 @@ def run_spec_build(
             for item in steps
             if str(item.get("kind")).startswith("command-")
         ]
+        ran_shared: list[dict[str, Any]] = [
+            {
+                "index": int(str(item["kind"]).partition("-")[2]),
+                "tool": str(item.get("tool")),
+                "seconds": float(item.get("seconds") or 0),
+                "state": str(item.get("state")),
+            }
+            for item in steps
+            if str(item.get("kind")).startswith("shared-")
+        ]
+        if not shared:
+            shared = ran_shared
         assembled = {
             str(item["kind"])[len("image-") :]: float(item.get("seconds") or 0)
             for item in steps
@@ -544,7 +566,8 @@ def run_spec_build(
                     "key": wanted["key"],
                     "timings": {
                         "commands_seconds": round(
-                            sum(float(item["seconds"]) for item in ran), 3
+                            sum(float(item["seconds"]) for item in (*ran_shared, *ran)),
+                            3,
                         ),
                         "assemble_seconds": assembled.get(name, 0.0),
                         "push_seconds": round(time.monotonic() - began, 3),
@@ -563,6 +586,8 @@ def run_spec_build(
                 platforms=dict(sorted(digests.items())),
             )
     built: dict[str, Any] = {"images": results, "commands": commands}
+    if shared:
+        built["shared_commands"] = shared
     if installed:
         built["toolchains"] = dict(sorted(installed.items()))
     return built

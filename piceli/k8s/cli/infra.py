@@ -5,15 +5,18 @@
   changes, the monthly estimate and the plan hash (exit 3; 0 when nothing
   changes). ``infra apply MODULE:ATTR --approve HASH`` plans again and
   applies only that plan; ``infra destroy`` the same for a destroy plan,
-  which never touches what Piceli did not create.
+  which never touches what Piceli did not create. An apply that fails after
+  changing something exits 1 with ``partially_applied`` and what it applied.
 - ``infra status MODULE:ATTR`` shows servers, addresses, installs, cluster
   registrations and cost from the state directory's records (read-only).
 - ``infra install MODULE:ATTR SERVER`` runs the server's install hook after
   approval of its rendered command; ``infra register MODULE:ATTR SERVER``
-  waits for its k3s and makes it a cluster Piceli deploys to.
+  waits for its k3s and makes it a cluster Piceli deploys to, or, for a
+  server without ``cluster=``, pins its SSH host keys only.
 - ``secrets provider NAME --prompt`` stores a provider API token,
-  ``secrets state-key NAME --generate|--prompt`` a state passphrase: read
-  from stdin only, never printed.
+  ``secrets state-key NAME --generate|--prompt`` a state passphrase,
+  ``secrets user-data NAME --prompt|--file PATH`` a server's user data: read
+  from stdin or a file only, never printed.
 
 Machine output is one JSON object on stdout; human text on stderr.
 
@@ -69,15 +72,40 @@ JsonOption = Annotated[
 #: Failures that ran (exit 1) rather than refusals (exit 2).
 FAILED = {"infra-apply-failed", "infra-install-failed", "infra-k3s-not-ready"}
 #: Variables a token is never read from.
-TOKEN_ENVS = ("HCLOUD_TOKEN", "PICELI_PROVIDER_TOKEN", "PICELI_STATE_KEY")
+TOKEN_ENVS = (
+    "HCLOUD_TOKEN",
+    "OS_APPLICATION_CREDENTIAL_SECRET",
+    "PORKBUN_API_KEY",
+    "PORKBUN_SECRET_API_KEY",
+    "PICELI_PROVIDER_TOKEN",
+    "PICELI_STATE_KEY",
+)
 
 
 def _refuse(error: InfraError) -> NoReturn:
     for line in error.details:
         say(f"  tofu: {line}")
-    if error.code in FAILED:
-        fail(error.code, str(error))
-    reject(error.code, str(error))
+    for item in error.fields.get("conflicts") or ():
+        record = item["record"]
+        say(f"  conflict: {record['type']} {record['name']} {record['content']}: "
+            f"{item['why']}")  # fmt: skip
+    if error.code in FAILED or error.fields.get("partially_applied"):
+        # Something changed: a failure that ran, whatever refused it.
+        fail(error.code, str(error), **error.fields)
+    reject(error.code, str(error), **error.fields)
+
+
+def _say_partial(error: InfraError, command: str) -> None:
+    say("applied before the failure:")
+    for item in error.fields.get("applied") or ():
+        found = f" (id {item['id']})" if item.get("id") else ""
+        say(f"  {item['action']:8} {item['address']}{found}")
+    if error.fields.get("not_applied"):
+        say("not applied:")
+    for item in error.fields.get("not_applied") or ():
+        failed = " (failed)" if item.get("failed") else ""
+        say(f"  {item['action']:8} {item['address']}{failed}")
+    say(f"the next plan shows what remains: {command}")
 
 
 @contextmanager
@@ -127,6 +155,24 @@ def _say_plan(result: InfraPlan) -> None:
             "  refused: these resources were not created by Piceli: "
             + ", ".join(result.foreign)
         )
+    for item in result.user_data:
+        say(
+            f"  user data of {item['server']}: secret {item['secret']} "
+            f"({item['digest']}), passed at creation only"
+        )
+    for check in result.checks:
+        if not check.get("ran"):
+            say(f"  not checked {check['check']}: {check.get('why')}")
+        elif "domains" in check:
+            say(f"  checked {check['check']}: " + ", ".join(sorted(check["domains"])))
+        else:
+            say(f"  checked {check['check']}")
+        for warning in check.get("warnings") or ():
+            record = warning.get("record") or {}
+            say(
+                f"    warning: {record.get('type')} {record.get('name')} "
+                f"{record.get('content')}: {warning.get('why')}"
+            )
     if result.estimate is not None:
         estimate = result.estimate
         note = "" if estimate["complete"] else " (some prices unknown)"
@@ -143,6 +189,7 @@ def _command(head: str, ref: str, tofu: str | None) -> str:
 def _plan_or_apply(
     ref: str, approve: str | None, tofu: str | None, *, destroy: bool
 ) -> None:
+    from piceli.infra.machines.model import InfraError
     from piceli.infra.machines.plan import apply, plan, workspace
 
     infra = load_infra(ref)
@@ -172,7 +219,12 @@ def _plan_or_apply(
                 }
             )
             raise typer.Exit(EXIT_APPROVAL)
-        done, inventory = apply(ws, approve, destroy=destroy, say=say)
+        try:
+            done, inventory = apply(ws, approve, destroy=destroy, say=say)
+        except InfraError as error:
+            if error.fields.get("partially_applied"):
+                _say_partial(error, command)
+            raise
         _say_plan(done)
         state = "destroyed" if destroy else "applied"
         say(f"{state}: {len(done.changes)} change(s)")
@@ -339,7 +391,7 @@ def register_command(
         ),
     ] = "https",
 ) -> None:
-    """Wait for the server's k3s and register it as its Cluster (approved by digest)."""
+    """Wait for the server's k3s and register it as its Cluster, or pin its SSH host keys (approved by digest)."""
     from piceli.infra.machines.register import preview_register, run_register
     from piceli.infra.machines.state import locked, state_dir
 
@@ -353,9 +405,12 @@ def register_command(
                 infra, directory, server, kubeconfig=kubeconfig, context=context
             )
             body = preview.to_dict()
-            say(
-                f"register {server} as cluster {preview.cluster} ({preview.api}), profile {preview.profile}"
-            )
+            if preview.cluster is None:
+                say(f"pin the SSH host keys of {server} ({preview.address})")
+            else:
+                say(
+                    f"register {server} as cluster {preview.cluster} ({preview.api}), profile {preview.profile}"
+                )
             if preview.source == "ssh":
                 for key in body["host_keys"]:
                     say(f"  host key {key['type']} {key['fingerprint']}")
@@ -393,6 +448,10 @@ def register_command(
                 infra, directory, preview, kubeconfig=kubeconfig, context=context,
                 wait=max(0, wait), transport=transport, say=say,
             )  # fmt: skip
+    if preview.cluster is None:
+        say(f"pinned: piceli host reads {server} with these keys (--infra {ref})")
+        emit_json({**body, "state": "pinned", "outcome": outcome})
+        return
     say(
         f"registered: cluster {outcome['cluster']} through profile {outcome['profile']}"
     )
@@ -503,6 +562,115 @@ def state_key_secret(
     emit_json({"state": "stored", "name": name, "kind": "state-key", "path": str(path)})
 
 
+def user_data_secret(
+    context: typer.Context,
+    name: NameArgument,
+    prompt: Annotated[
+        bool,
+        typer.Option(
+            "--prompt",
+            help="Read it from stdin (typed: one line without echo; piped: until EOF)",
+        ),
+    ] = False,
+    file: Annotated[
+        Path | None,
+        typer.Option(
+            "--file", help="Read it from this file (a cloud-config, a script)"
+        ),
+    ] = None,
+) -> None:
+    """Store a server's user data (a cloud-config, a script or a bootstrap key)."""
+    from piceli.infra.machines.credentials import save_credential
+    from piceli.infra.machines.plan import user_data_digest
+
+    _no_secret_arguments(context)
+    if prompt == (file is not None):
+        reject("infra-prompt-required", "pass exactly one of --prompt or --file PATH")
+    with _guard():
+        if file is not None:
+            try:
+                value = file.read_text()
+            except (OSError, UnicodeDecodeError):
+                reject("infra-credential-invalid", "the --file is not readable text")
+        elif sys.stdin is not None and not sys.stdin.isatty():
+            value = sys.stdin.read()
+        else:
+            value = _read_secret("User data (not echoed): ")
+        path = save_credential(name, "user-data", value)
+        digest, size = user_data_digest(value), len(value.encode())
+        del value
+    say(f"stored credential {name} (user-data, {size} bytes, {digest}); not printed")
+    emit_json(
+        {"state": "stored", "name": name, "kind": "user-data", "digest": digest,
+         "bytes": size, "path": str(path)}
+    )  # fmt: skip
+
+
+def _interactive() -> bool:
+    return bool(sys.stdin is not None and sys.stdin.isatty() and sys.stderr.isatty())
+
+
+def delete_secret(
+    name: NameArgument,
+    kind: Annotated[
+        str | None,
+        typer.Option(
+            "--kind",
+            help="Delete it only if it is this kind: provider, state-key, "
+            "nix-cache, s3, age or user-data",
+            show_default=False,
+        ),
+    ] = None,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Delete without asking (owner only)")
+    ] = False,
+) -> None:
+    """Delete a stored credential (a spent bootstrap key, an old token); never printed."""
+    from piceli.infra.machines.credentials import (
+        delete_credential,
+        kind_of,
+        require_kind,
+        stored_kind,
+    )
+
+    with _guard():
+        wanted = kind_of(kind) if kind is not None else None
+        path, found = stored_kind(name)
+        require_kind(name, found, wanted)
+        what = f"{name} ({found or 'damaged'})"
+        if not yes:
+            if _interactive():
+                answer = typer.prompt(
+                    f"Type the credential name ({name}) to delete {path}",
+                    default="",
+                    err=True,
+                )
+            else:
+                answer = None
+            if answer != name:
+                command = " ".join(
+                    ["piceli secrets delete", name,
+                     *(["--kind", kind] if kind is not None else
+                       ["--kind", _option_of(found)] if found else []),
+                     "--yes"]
+                )  # fmt: skip
+                say(f"not deleted: {what}; to delete it: {command}")
+                emit_json(
+                    {"state": "approval-required", "name": name, "kind": found,
+                     "path": str(path), "approve_command": command}
+                )  # fmt: skip
+                raise typer.Exit(EXIT_APPROVAL)
+        path, found = delete_credential(name, wanted)
+    say(f"deleted credential {what}; the value was not printed")
+    emit_json({"state": "deleted", "name": name, "kind": found, "path": str(path)})
+
+
+def _option_of(kind: str) -> str:
+    from piceli.infra.machines.credentials import KIND_OPTIONS
+
+    return next((o for o, k in KIND_OPTIONS.items() if k == kind), kind)
+
+
 def register(root: typer.Typer) -> None:
     from piceli.k8s.cli.cluster import secrets_app
 
@@ -513,3 +681,5 @@ def register(root: typer.Typer) -> None:
     }
     secrets_app.command("provider", context_settings=settings)(provider_secret)
     secrets_app.command("state-key", context_settings=settings)(state_key_secret)
+    secrets_app.command("user-data", context_settings=settings)(user_data_secret)
+    secrets_app.command("delete")(delete_secret)

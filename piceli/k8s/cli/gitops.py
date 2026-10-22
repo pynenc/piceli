@@ -2059,7 +2059,12 @@ def _loop(
             say(f"poll failed ({type(error).__name__}); retrying in {wait:.0f}s")
         else:
             failures = 0
-            wait = max(1.0, controller.config.poll_seconds - (clock() - started))
+            wait = controller.config.poll_seconds - (clock() - started)
+            # 0.23.0: wake for a step due before the next poll (host_wait).
+            due = getattr(controller, "next_due", lambda: None)()
+            if due is not None:
+                wait = min(wait, due - clock())
+            wait = max(1.0, wait)
         # Sleep in short steps so SIGTERM stops the pod promptly.
         while wait > 0 and not stopped():
             step = min(wait, 1.0) if handle_signals else wait

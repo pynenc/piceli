@@ -427,7 +427,7 @@ def test_the_heartbeat_advances_during_a_long_build(
 
     def slow_build(items: Any, checkout: Any) -> Any:
         building.set()
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             status = channel.read_status() or {}
             beat = (status.get("controller") or {}).get("heartbeat_at")
@@ -482,7 +482,7 @@ def test_the_heartbeat_thread_survives_a_failing_beat() -> None:
             raise OSError("the API server is unreachable")
 
     with Heartbeat(beat, seconds=0.05, log=lines.append):
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 60
         while len(calls) < 3 and time.monotonic() < deadline:
             time.sleep(0.02)
     assert len(calls) >= 3

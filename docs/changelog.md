@@ -4,6 +4,257 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.24.0
+
+A machine without a cluster: 0.24.0 creates NixOS hosts on OpenStack
+clouds, points DNS at them, publishes signed Nix builds to your own binary
+cache and lets each host follow your release tags on its own, with checks
+and rollback.
+
+- **A single NixOS host, end to end.** `docs/single_nixos_host.md` takes one
+  host from nothing to its first release with one tested declaration (an
+  Infomaniak server from an uploaded image on a persistent port, a security
+  group, a key pair, a bucket as the Nix cache, two Porkbun records, a
+  `NixHost` following `v*` tags), then compares a single host with a
+  Kubernetes environment.
+- **OpenStack machines, with an Infomaniak preset.** `OpenStack(...)` and
+  `Infomaniak(...)` in `piceli.infra` render servers, a persistent public
+  port per `PrimaryIp` (a replaced server keeps its addresses without a
+  floating IP; `protect=True` is `prevent_destroy`), security groups with
+  inbound rules, key pairs, uploaded `Image`s (sha256 verified before the
+  upload: `infra-image-checksum`, `infra-image-unavailable`) and `Bucket`s
+  for the pinned `terraform-provider-openstack/openstack` 3.4.0. The
+  application credential reaches OpenTofu only in its environment;
+  ownership marks and `infra-foreign-resource` work as for Hetzner; prices
+  are a declared table. `Infrastructure(buckets=)` is new; Hetzner
+  declarations render and hash as before.
+- **Secret user data, at creation only.** `Server(user_data=UserData(NAME))`
+  (new in `piceli.infra`; OpenStack servers) gives a server a stored secret
+  as its user data: a cloud-config, a script or a bootstrap key, stored
+  with `piceli secrets user-data NAME --file PATH` (or `--prompt`; `0600`,
+  never printed). It renders as a sensitive OpenTofu variable passed only
+  through `TF_VAR_*`, redacted from every output (also JSON-escaped), with
+  `lifecycle.ignore_changes = ["user_data"]`. Only a plan that creates or
+  replaces the server loads it; the plan shows the secret's name and a
+  short digest (`user_data`), which the plan hash covers. Later plans never
+  need it and never replace the server for it. A creating plan without it
+  fails with the new code `infra-user-data-missing`. The provider keeps
+  only its SHA-1 in the state. The single-host guide now bootstraps the
+  host onto a tailnet with a one-hour, single-use key and opens no public
+  port 22.
+- **`piceli secrets delete NAME [--kind KIND] [--yes]`** removes a stored
+  credential, such as the spent bootstrap key of a server's user data.
+  `--kind` (`provider`, `state-key`, `nix-cache`, `s3`, `age`,
+  `user-data`) refuses a credential of another kind
+  (`infra-credential-invalid`). Without `--yes` it asks for the name on a
+  terminal, otherwise it exits 3 with the command to run and deletes
+  nothing. It prints the name, kind and path (`{"state": "deleted", ...}`),
+  never the value. The single-host guide uses it to discard the spent key.
+- **OpenStack flavors are an allow-list.** `OpenStack(flavors=[...])` is
+  required and `Infomaniak(flavors=)` defaults to its smallest,
+  `a1-ram2-disk20-perf1`, like `Hetzner(server_types=)`: a server with
+  another flavor is refused when it is declared (`infra-invalid`).
+- **DNS records at Porkbun, for servers anywhere.** `Porkbun(credentials=)`
+  in `piceli.infra` renders `DnsRecord(..., provider=Porkbun(...))` for the
+  pinned `marcfrederick/porkbun` 1.3.3 OpenTofu provider (API v3; one
+  record per answer). A record's servers may now be at another provider
+  than the record: each answer is a reference through the server's own
+  provider (an OpenStack server on a port answers with the port's address),
+  so records follow a replaced server and no address is written down. The
+  key pair is stored as `APIKEY:SECRETKEY` and reaches OpenTofu only as
+  `PORKBUN_API_KEY`/`PORKBUN_SECRET_API_KEY` (redacted, refused in the
+  environment of `piceli secrets provider`). Records carry no labels, so the
+  ledger alone owns them (`infra-foreign-resource` otherwise). New code
+  `infra-dns-api-disabled` for a domain without API access. `DnsRecord(ttl=)`
+  now defaults to the provider's (300 s; Porkbun's minimum and default
+  600 s).
+- **Porkbun API access is checked at plan time.** A plan that changes
+  records at Porkbun asks Porkbun's API once per domain; a domain without
+  API access fails the plan (`infra-dns-api-disabled`) instead of the
+  apply, and a check that cannot run fails it too (new code
+  `infra-dns-check-failed`). The plan JSON's new `checks` says whether it
+  ran; it is not part of the plan hash.
+- **DNS records in the way fail the plan, not the apply.** The plan-time
+  Porkbun check now also reads each zone's records. A record Piceli did not
+  create (not in its ledger) where the plan creates one fails the plan with
+  the new code `infra-dns-record-conflict`: a CNAME or ALIAS at the same
+  name (a parking ALIAS at the apex), any record at a name where Piceli
+  creates a CNAME, or a record of the same name and type (for TXT, the
+  same content). Its `conflicts` lists each record (type, name, content)
+  and the fix: remove or change it at the registrar; Piceli never touches
+  it. A wildcard does not answer explicit names, so it is a warning in the
+  plan's new `porkbun-record-conflicts` check, as is a TXT record with
+  other content beside Piceli's. `Provider.plan_check` now receives the
+  ledger and may return several checks.
+- **A partially applied change exits 1.** `piceli infra apply` and
+  `destroy` that fail after changing something exit 1 (also for a refusal
+  such as `infra-dns-api-disabled`, which exited 2), with
+  `partially_applied`, `applied` (address, action, the provider's id) and
+  `not_applied`; stderr says what was applied and that the next plan shows
+  what remains. **Upgrade note:** a script that took exit 2 from `apply`
+  as "nothing changed" must now read `partially_applied`.
+- **Nix builds on build hosts, a signed binary cache and build
+  manifests.** `piceli dev nix build ATTR` builds a flake output (a NixOS
+  system; with `--image`, a disk image copied back with its sha256) as a
+  development run with `DevProfile.for_nix()`: a docker host mounts its own
+  `/nix` read-only and builds through its daemon, a native host uses its
+  `nix`. `--publish MODULE:ATTR` names a `NixCache(bucket=|url=,
+  public_key=)` (new in `piceli.infra`); it plans (exit 3) and runs only
+  with `--approve DIGEST`; the build stays isolated, and a separate step on
+  the same host receives the signing key and S3 keys on stdin only, signs
+  each path as `nix copy` uploads it, and Piceli uploads a manifest
+  `piceli/NAME/COMMIT.json` (`piceli.nix-build.v1`: commit, tag, flake
+  attribute, store path, system, closure size, build time) signed with the
+  cache key; `piceli.dev.nix_verify` checks it and the narinfo with the
+  standard library only. A cache's `write_credentials` (builds, gc) never
+  reach a host; hosts read with read-only keys kept in sops-nix. `piceli
+  dev nix gc` keeps the last 5 tags, the current main and their closures
+  and deletes the rest after approval. New `piceli secrets nix-cache NAME --generate`
+  (prints the public key only) and `piceli secrets s3 NAME --prompt`; new
+  codes `dev-nix-*`.
+- **Nix host releases.** `NixHost(name, server=, flake=, follow=Tag("v*") |
+  Branch("main"), cache=, checks=[HostCheck.unit|http|command], report=
+  HostReport(endpoint))` in `piceli.infra`. `piceli host module MODULE:ATTR`
+  renders a self-contained NixOS module (a standard-library agent, its
+  verifier, the configuration without secrets, a systemd service and timer)
+  that you commit and import. On each poll the agent resolves the ref from
+  signed pointers, verifies the pointer, the manifest and the narinfo with
+  the cache key, fetches the system with `nix copy` (never builds: no
+  builders, `max-jobs 0`), switches, runs the checks, and rolls back and
+  marks the build bad when one fails. It refuses replayed pointers and
+  older versions. It reports over OTLP/HTTP logs (a collector that is down
+  never blocks a deploy) and writes `/var/lib/piceli-host/status.json`.
+  `piceli host status` and `piceli host wait HOST REV` read it over SSH,
+  with no cluster. `dev nix build --publish` now also writes signed ref
+  pointers `piceli/NAME/refs/{tags,heads}/REF.json` (`--branch`), and
+  `dev nix gc` keeps what they name. `host wait` judges only the newest
+  publication of the rev the host has seen (a commit published again is
+  retried, and its earlier failure is not reported meanwhile);
+  `--published-after` pins one before the host has polled. New codes
+  `host-*`; see `docs/nix_hosts.md`.
+- **A Nix host keeps 5 systems, not every one.** `NixHost(generations=5)`
+  (at least 2: a rollback needs the previous one). After a deploy whose
+  checks passed, the agent deletes the system profile's older generations
+  (`nix-env --delete-generations +N`; never the current, the previous or a
+  held system, which it then names generation by generation) and collects
+  the store (`nix-store --gc`), each within a time limit. A failure is
+  reported (new code `host-prune-failed`) and never fails the deploy. The
+  status, each attempt and the OTLP event `piceli.host.prune` say what was
+  deleted, kept and freed; `piceli host status` prints it. The rendered
+  module sets the boot menu's `configurationLimit` (GRUB and systemd-boot)
+  to the same number with `lib.mkDefault`.
+- **Pin, unpin and roll back a Nix host.** `piceli host pin HOST TAG`
+  deploys a published tag's build (verified like any deploy, an older
+  version too, checked and rolled back on failure) and holds it;
+  `piceli host rollback HOST` switches to the previous system, already in
+  the store, runs the checks and holds it, so the next poll does not deploy
+  what was rolled away from; `piceli host unpin HOST` drops the hold and
+  starts a poll. They run the agent once over SSH (the module now puts a
+  `piceli-host-agent` command on the host's PATH), need no approval digest,
+  print `piceli.host-control.v1` with `--json` and report
+  `piceli.host.pin`, `piceli.host.unpin` and `piceli.host.rollback` over
+  OTLP. A hold lives in `/var/lib/piceli-host/state.json` across reboots;
+  `host status` shows it and `host wait` for another build exits 1 with
+  `host-pinned`. New codes `host-pinned`, `host-pin-not-found`,
+  `host-rollback-unavailable`, `host-busy`, `host-control-unsupported`.
+- **A host's secrets live in sops-nix; Piceli provisions its age key.**
+  `piceli secrets age NAME --generate` (or `--prompt`) stores an age X25519
+  identity (`0600`, never printed) and prints its `age1...` public key for
+  `.sops.yaml`. `NixHost(age_identity=NAME, age_key_file=
+  "/var/lib/sops-nix/key.txt")` and `piceli host secrets MODULE:ATTR` put
+  it on the host after approval of a plan that shows the path, mode, owner,
+  public key and whether the host has the same, another or no key (compared
+  by fingerprint); the key travels on ssh's stdin, is renamed into place
+  atomically, another key is replaced only with `--replace`, and the host
+  re-runs its activation so sops-nix decrypts. The cache's read-only keys
+  and the OTLP headers are sops-nix secrets: `read_credentials_file=`
+  defaults to `/run/secrets/piceli/cache.env` for an `s3://` cache, and
+  the agent accepts sops-nix's `0400` root files (it refuses files that
+  root does not own). `NixCache(read_credentials=)` is removed: Piceli no
+  longer keeps keys that only hosts use. New codes `host-secret-*`.
+- **Nix builds need no cluster.** `piceli dev nix build --cluster` (now
+  also `--dev`) takes a bare `DevBuilds`, as well as a `Cluster` with
+  `dev=`.
+- **No hand-copied image checksum.** `dev nix build --image` writes
+  `ARTIFACTS_DIR/NAME.image.json` (`piceli.nix-image.v1`: the image's path,
+  sha256, format, size, store path and commit), and
+  `Image.from_build(NAME, PATH)` reads it (new code
+  `infra-image-build-invalid`).
+- **Host keys without a cluster.** `piceli infra register INFRA SERVER` for
+  a server without `cluster=` pins its SSH host keys only, after the same
+  preview and approval of their fingerprints (`mode: host-keys`, state
+  `pinned`). The state's `known_hosts` now keeps the other servers' keys
+  when one is registered.
+- **Hosts by name.** `piceli host status|wait|pin|unpin|rollback|secrets
+  NAME --infra MODULE` finds the `NixHost` the module declares by its name,
+  and reads it with the host keys pinned in the infrastructure's state;
+  `--infra` takes a module or `MODULE:ATTR`.
+- **Docker's containerd image store.** Docker 29 stores images in
+  containerd by default (Docker Desktop offers it as an option). There the
+  image ID (`docker image inspect --format '{{.Id}}'`) is the digest of the
+  image's index, not of its config, so every delivery of a Docker build was
+  refused with `digest-mismatch`. A build now reads the config digest from
+  `docker image save` (the manifest for the built platform; attestation
+  manifests are ignored) and records it as `image_id`, the identity
+  deliveries approve and nodes report; the engine's own ID is the new
+  `local_id`, used for the smoke check, presence checks and `docker image
+  save`. A delivery of an archive that holds several platforms takes the
+  image whose config was approved, and the node is given only that image.
+  The classic store is unchanged. To approve an image by hand, read its
+  config digest as {doc}`node_delivery` shows.
+- **Local import and run with the containerd image store.**
+  `DockerLocalImporter` records the engine's own ID of the loaded image as
+  `local_id` when it is not the config digest, and `LocalRunGrant(local_id=)`
+  lets `DockerLocalRunner` inspect and run the image by it; the runner checks
+  that the saved image's config is the granted `image_id`. Before, a loaded
+  image could not be found by its config digest in the containerd store.
+
+## Version 0.23.0
+
+- **Workloads roll when their configuration changes.** Every Deployment,
+  StatefulSet and DaemonSet that reads a ConfigMap or Secret of its release
+  (volume, projected volume, `envFrom`, `env.valueFrom`) carries
+  `piceli.io/configmaps-digest` and/or `piceli.io/secrets-digest` on its pod
+  template: a changed value rolls the pods; an unchanged or carried-over
+  value changes nothing. Secret values are reduced to an HMAC-SHA256 under a
+  random key kept in the private secret store and are never exposed. Jobs
+  and CronJobs are not annotated. `roll_on_change=False` on
+  `app.deployment`, `stateful_set` and `daemon_set` (or
+  `piceli.io/roll-on-change: "false"` on a raw workload) opts out;
+  `piceli import` sets it for imported workloads that read configuration.
+  **Upgrade note:** the first release after upgrading rolls every workload
+  that reads a ConfigMap or Secret of its release once. A new release's plan
+  dry-runs the final pod templates of Secret consumers, so an unrelated
+  change leaves them a no-op. A Secret or ConfigMap declared without content
+  (adopted metadata only) adds no digest.
+- **Generated Secrets survive an empty state.** When the state has no
+  record of a `random`, `tls-self-signed` or `tls-ca` generator but a live
+  Secret the app declares carries this release's owner annotation and field
+  manager, the plan adopts its values instead of generating new ones
+  (origin `adopted`, `secret_adoptions` in the plan JSON, bound with the
+  Secret's UID into the plan hash). Nothing is rotated, deleted or written.
+  This fixes a GitOps controller with a new state volume failing with
+  `retained-content-precondition-failed`. New codes
+  `secret-adoption-invalid` and `secret-adoption-incomplete`. Secrets
+  without the app's marks are refused as before.
+- **Steps shared by every platform run once.** `build.shared_commands` (a
+  wasm32 browser bundle, generated assets) run once in a multi-platform
+  build into `<cache>/target/shared` (`$PICELI_SHARED_TARGET_DIR`); images
+  copy their outputs with `shared_files`. Node facts are refused in them.
+  Specs without them keep their spec digest and plan hash.
+- **`host_wait` is the real wait.** A waiting step looked again only a
+  whole poll after it ended, and the run loop slept a whole poll:
+  `host_wait="20s"` with a 1-minute poll waited 121-122 s. Now the fallback
+  starts when `host_wait` ends.
+- **Cluster build Jobs keep their source checkouts** on the cache claim:
+  incremental fetches, and unchanged files keep their times, so cargo
+  rebuilds only what changed. Each Job's time is broken down per image (the
+  whole Job, the wait to start, the source fetch, commands, assembly, push)
+  in the controller's log and history.
+- **Reliable tests.** Process waits in tests are hang guards of at least
+  30 s, and a test keeps them so; an end-to-end test builds a commit while a
+  newer one arrives and checks the newer one is deployed.
+
 ## Version 0.22.0
 
 - **The toolchain follows the source, for builds too.** A host build spec
@@ -344,8 +595,8 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   shared by every image of the Job), `assemble_seconds` and `push_seconds`;
   the deployment history keeps them under `builds.<image>.timings` with
   `shared_with` (the other images of the same Job), and the controller logs
-  one line per image (`built poet in 812.4s (commands 790.1s, shared with
-  kabuki, shibuya; assembly 14.2s, push 8.1s)`). Images whose inputs did not
+  one line per image (`built api in 812.4s (commands 790.1s, shared with
+  web, worker; assembly 14.2s, push 8.1s)`). Images whose inputs did not
   change are still not built (each image's change key covers only the
   contexts it lists).
 - **A persistent cargo cache for the build Job.** `CARGO_HOME` is on the
