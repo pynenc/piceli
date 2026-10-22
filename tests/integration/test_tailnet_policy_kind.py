@@ -132,7 +132,7 @@ def _wait_reachable(namespace: str, url: str, expected: bool) -> bool:
     return False
 
 
-def test_the_operator_namespace_reaches_pods_behind_an_ih_style_policy(
+def test_the_operator_namespace_reaches_pods_behind_a_shop_style_policy(
     namespaces: dict[str, str],
 ) -> None:
     app, operator, other = (
