@@ -62,6 +62,23 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   rest after approval. New `piceli secrets nix-cache NAME --generate`
   (prints the public key only) and `piceli secrets s3 NAME --prompt`; new
   codes `dev-nix-*`.
+- **Nix host releases.** `NixHost(name, server=, flake=, follow=Tag("v*") |
+  Branch("main"), cache=, checks=[HostCheck.unit|http|command], report=
+  HostReport(endpoint))` in `piceli.infra`. `piceli host module MODULE:ATTR`
+  renders a self-contained NixOS module (a standard-library agent, its
+  verifier, the configuration without secrets, a systemd service and timer)
+  that you commit and import. On each poll the agent resolves the ref from
+  signed pointers, verifies the pointer, the manifest and the narinfo with
+  the cache key, fetches the system with `nix copy` (never builds: no
+  builders, `max-jobs 0`), switches, runs the checks, and rolls back and
+  marks the build bad when one fails. It refuses replayed pointers and
+  older versions. It reports over OTLP/HTTP logs (a collector that is down
+  never blocks a deploy) and writes `/var/lib/piceli-host/status.json`.
+  `piceli host status` and `piceli host wait HOST REV` read it over SSH,
+  with no cluster. `dev nix build --publish` now also writes signed ref
+  pointers `piceli/NAME/refs/{tags,heads}/REF.json` (`--branch`), and
+  `dev nix gc` keeps what they name. New codes `host-*`; see
+  `docs/nix_hosts.md`.
 
 ## Version 0.23.0
 

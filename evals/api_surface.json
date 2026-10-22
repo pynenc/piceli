@@ -4471,6 +4471,64 @@
    },
    "pydantic": true
   },
+  "HostCheck": {
+   "attrs": [
+    "command",
+    "describe",
+    "http",
+    "kind",
+    "name",
+    "target",
+    "timeout",
+    "unit"
+   ],
+   "init": [
+    "kind",
+    "name",
+    "target",
+    "timeout"
+   ],
+   "methods": {
+    "command": [
+     "name",
+     "timeout"
+    ],
+    "describe": [
+     "index"
+    ],
+    "http": [
+     "name",
+     "timeout",
+     "url"
+    ],
+    "unit": [
+     "name",
+     "timeout",
+     "unit"
+    ]
+   },
+   "returns": {
+    "command": "HostCheck",
+    "http": "HostCheck",
+    "unit": "HostCheck"
+   }
+  },
+  "HostReport": {
+   "attrs": [
+    "describe",
+    "endpoint",
+    "headers_file",
+    "insecure"
+   ],
+   "init": [
+    "endpoint",
+    "headers_file",
+    "insecure"
+   ],
+   "methods": {
+    "describe": []
+   }
+  },
   "HttpCheck": {
    "attrs": [
     "body_contains",
@@ -5872,6 +5930,49 @@
      "commit",
      "name"
     ]
+   }
+  },
+  "NixHost": {
+   "attr_types": {
+    "checks": "HostCheck",
+    "follow": "Tag",
+    "report": "HostReport"
+   },
+   "attrs": [
+    "attribute",
+    "build",
+    "cache",
+    "checks",
+    "flake",
+    "follow",
+    "history",
+    "name",
+    "poll_seconds",
+    "read_credentials_file",
+    "report",
+    "server",
+    "ssh_target"
+   ],
+   "init": [
+    "build",
+    "cache",
+    "checks",
+    "flake",
+    "follow",
+    "history",
+    "name",
+    "poll_seconds",
+    "read_credentials_file",
+    "report",
+    "server"
+   ],
+   "methods": {
+    "ssh_target": [
+     "address"
+    ]
+   },
+   "returns": {
+    "ssh_target": "SshTarget"
    }
   },
   "Node": {
@@ -9507,6 +9608,27 @@
    ],
    "methods": {}
   },
+  "SshTarget": {
+   "attrs": [
+    "address",
+    "parse",
+    "port",
+    "user"
+   ],
+   "init": [
+    "address",
+    "port",
+    "user"
+   ],
+   "methods": {
+    "parse": [
+     "text"
+    ]
+   },
+   "returns": {
+    "parse": "SshTarget"
+   }
+  },
   "Stack": {
    "attrs": [
     "components",
@@ -10434,6 +10556,7 @@
      "gitops",
      "heavy",
      "help-json",
+     "host",
      "import",
      "infra",
      "inputs",
@@ -11058,6 +11181,7 @@
     "flags": [
      "--approve",
      "--artifacts-dir",
+     "--branch",
      "--cluster",
      "--host",
      "--image",
@@ -11511,6 +11635,47 @@
    "help-json": {
     "arguments": [],
     "flags": [],
+    "subcommands": []
+   },
+   "host": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "module",
+     "status",
+     "wait"
+    ]
+   },
+   "host module": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--output"
+    ],
+    "subcommands": []
+   },
+   "host status": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--infra",
+     "--json"
+    ],
+    "subcommands": []
+   },
+   "host wait": {
+    "arguments": [
+     "target",
+     "rev"
+    ],
+    "flags": [
+     "--infra",
+     "--interval",
+     "--json",
+     "--timeout"
+    ],
     "subcommands": []
    },
    "import": {
@@ -12909,12 +13074,35 @@
    "heavy-command-empty",
    "heavy-command-missing",
    "heavy-lock-timeout",
+   "host-address-unknown",
+   "host-build-bad",
    "host-build-invalid",
+   "host-cache-unreachable",
+   "host-check-failed",
+   "host-check-invalid",
+   "host-credentials-exposed",
+   "host-credentials-missing",
+   "host-deploy-failed",
+   "host-invalid",
+   "host-manifest-mismatch",
+   "host-narinfo-mismatch",
+   "host-not-found",
    "host-output-missing",
+   "host-pointer-replayed",
+   "host-realise-failed",
+   "host-report-failed",
+   "host-rollback-failed",
+   "host-rolled-back",
+   "host-signature-invalid",
+   "host-status-missing",
+   "host-switch-failed",
+   "host-system-mismatch",
    "host-tool-missing",
    "host-toolchain-checksum",
    "host-toolchain-failed",
    "host-toolchain-invalid",
+   "host-unreachable",
+   "host-wait-timeout",
    "identity-mismatch",
    "image-declared-twice",
    "image-digest-mismatch",
@@ -13587,6 +13775,7 @@
    "errors": {},
    "gcp": {},
    "gitops": {},
+   "hosts": {},
    "importing": {},
    "infra": {},
    "integrity": {},
@@ -14128,6 +14317,9 @@
    }
   },
   "piceli.infra": {
+   "Branch": {
+    "class": "Branch"
+   },
    "Bucket": {
     "class": "Bucket"
    },
@@ -14164,6 +14356,12 @@
    "Hook": {
     "class": "Hook"
    },
+   "HostCheck": {
+    "class": "HostCheck"
+   },
+   "HostReport": {
+    "class": "HostReport"
+   },
    "HttpState": {
     "class": "HttpState"
    },
@@ -14181,6 +14379,9 @@
    },
    "NixCache": {
     "class": "NixCache"
+   },
+   "NixHost": {
+    "class": "NixHost"
    },
    "Node": {
     "class": "Node"
@@ -14208,6 +14409,9 @@
    },
    "Ssh": {
     "class": "Ssh"
+   },
+   "Tag": {
+    "class": "Tag"
    },
    "Ui": {
     "class": "Ui"
@@ -15059,6 +15263,11 @@
   "piceli.gitops.state",
   "piceli.gitops.token_expiry",
   "piceli.gitops.wait",
+  "piceli.hosts",
+  "piceli.hosts.agent",
+  "piceli.hosts.model",
+  "piceli.hosts.module",
+  "piceli.hosts.remote",
   "piceli.importing",
   "piceli.importing.clean",
   "piceli.importing.codegen",
@@ -15116,6 +15325,7 @@
   "piceli.k8s.cli.env_stop",
   "piceli.k8s.cli.gitops",
   "piceli.k8s.cli.heavy",
+  "piceli.k8s.cli.host",
   "piceli.k8s.cli.importing",
   "piceli.k8s.cli.infra",
   "piceli.k8s.cli.inputs",

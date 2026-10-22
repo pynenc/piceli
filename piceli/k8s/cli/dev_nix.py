@@ -183,6 +183,14 @@ def build(
             "closure, upload the manifest (needs --approve)",
         ),
     ] = None,
+    branch: Annotated[
+        str | None,
+        typer.Option(
+            "--branch",
+            help="With --publish: also point refs/heads/BRANCH at this build "
+            "(default: --ref when it names a branch)",
+        ),
+    ] = None,
     approve: Annotated[
         str | None,
         typer.Option("--approve", help="The publish plan's digest"),
@@ -204,6 +212,7 @@ def build(
     from piceli.dev.model import DevError
     from piceli.dev.nix import (
         RESULT_SCHEMA,
+        branch_of,
         build_argv,
         check_name,
         default_name,
@@ -212,6 +221,7 @@ def build(
         installable,
         plan_digest,
         publish_plan,
+        ref_name_ok,
         store_path_of,
         tag_of,
     )
@@ -232,6 +242,10 @@ def build(
         root_dir = toplevel(repo if ref is not None else (worktree or Path(".")))
         rev = resolve(root_dir, ref) if ref is not None else None
         tag = tag_of(root_dir, ref, rev) if rev is not None else None
+        if branch is None and ref is not None:
+            branch = branch_of(root_dir, ref)
+        elif branch is not None and not ref_name_ok(branch):
+            raise DevError("dev-nix-invalid", "--branch is a branch name")
         label = name or default_name(target, image)
         if label is not None:
             check_name(label)
@@ -255,6 +269,7 @@ def build(
             plan = publish_plan(
                 target=target, name=label, commit=rev, tag=tag, host=chosen.name,
                 profile=chosen_profile.name, image=image, cache=cache,
+                branch=branch,
             )  # fmt: skip
         except DevError as error:
             reject(error.code, str(error))
@@ -265,8 +280,12 @@ def build(
                 command += f" --name {name}"
             if image:
                 command += " --image"
+            if plan["branch"] is not None:
+                command += f" --branch {plan['branch']}"
             say(f"publish {target} at {rev[:12]} to {cache.store_url}")
             say(f"  signed by {cache.key_name}; manifest {plan['manifest']}")
+            for key in plan["pointers"]:
+                say(f"  pointer {key}")
             say("approve with:")
             say(f"  {command} --approve {digest}")
             emit_json(
@@ -378,6 +397,7 @@ def _publish(
         run_publisher,
         sign_manifest,
         upload_manifest,
+        upload_pointers,
     )
 
     say(f"publishing {store_path} to {cache.store_url} (on {chosen.name})")
@@ -404,9 +424,14 @@ def _publish(
             secret,
         )  # fmt: skip
         url = upload_manifest(cache, signed, s3_keys=s3_keys)
+        pointers = upload_pointers(
+            cache, signed, plan.get("pointers") or [], secret, s3_keys=s3_keys
+        )
     except DevError as error:
         fail(error.code, str(error))
     say(f"published; manifest {url}")
+    for body in pointers:
+        say(f"  {body['ref']} -> {str(body['commit'])[:12]} ({body['published_at']})")
     return {
         "cache": cache.store_url,
         "public_key": cache.public_key,
@@ -420,6 +445,9 @@ def _publish(
         "manifest": plan["manifest"],
         "manifest_url": url,
         "manifest_body": signed,
+        "pointers": [
+            {k: body[k] for k in ("ref", "commit", "published_at")} for body in pointers
+        ],
     }
 
 

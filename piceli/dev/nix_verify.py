@@ -1,12 +1,14 @@
 """Verify Nix cache signatures and Piceli build manifests, standard library only (0.24.0).
 
 A host that switches to a prebuilt system checks, before it trusts a store
-path, that the build manifest and the path's ``.narinfo`` are signed by the
-cache's public key (``NAME:base64`` of an Ed25519 key, Nix's format). This
-module needs nothing but the standard library (Ed25519 verification as in
-RFC 8032, section 6), so it runs on a host without third-party packages and
-without calling ``nix``; signing (:mod:`piceli.dev.nix`) needs
-``cryptography``.
+path, that the ref pointer, the build manifest and the path's ``.narinfo``
+are signed by the cache's public key (``NAME:base64`` of an Ed25519 key,
+Nix's format). This module needs nothing but the standard library (Ed25519
+verification as in RFC 8032, section 6), so it runs on a host without
+third-party packages and without calling ``nix``; signing
+(:mod:`piceli.dev.nix`) needs ``cryptography``. The host agent
+(:mod:`piceli.hosts.agent`) carries a copy of this file, and also reads a
+private bucket with :func:`sigv4_headers`.
 
 Importing this module is side-effect free.
 """
@@ -14,13 +16,18 @@ Importing this module is side-effect free.
 from __future__ import annotations
 
 import base64
+import datetime as _dt
 import hashlib
+import hmac
 import json
 import re
+import urllib.parse
 from collections.abc import Mapping
 from typing import Any
 
 MANIFEST_SCHEMA = "piceli.nix-build.v1"
+#: A signed pointer from a Git ref to a build manifest (0.24.0).
+POINTER_SCHEMA = "piceli.nix-ref.v1"
 _KEY_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,62}")
 
 # ------------------------------------------------------------------ Ed25519
@@ -129,16 +136,60 @@ def canonical(value: Mapping[str, Any]) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
 
-def verify_manifest(body: Mapping[str, Any], public: str) -> bool:
-    """Whether ``body`` is a ``piceli.nix-build.v1`` manifest signed by ``public``
-    (the signature covers every other field)."""
+def verify_signed(body: Mapping[str, Any], public: str, schema: str) -> bool:
+    """Whether ``body`` has ``schema`` and ``public``'s signature over every
+    other field (canonical JSON)."""
     unsigned = {k: v for k, v in body.items() if k != "signature"}
     return (
-        body.get("schema") == MANIFEST_SCHEMA
+        body.get("schema") == schema
         and body.get("signed_by") == str(public).strip().partition(":")[0]
         and isinstance(body.get("signature"), str)
         and verify(public, canonical(unsigned), str(body["signature"]))
     )
+
+
+def verify_manifest(body: Mapping[str, Any], public: str) -> bool:
+    """Whether ``body`` is a ``piceli.nix-build.v1`` manifest signed by ``public``
+    (the signature covers every other field)."""
+    return verify_signed(body, public, MANIFEST_SCHEMA)
+
+
+def verify_pointer(body: Mapping[str, Any], public: str) -> bool:
+    """Whether ``body`` is a ``piceli.nix-ref.v1`` ref pointer signed by ``public``."""
+    return verify_signed(body, public, POINTER_SCHEMA)
+
+
+def manifest_digest(body: Mapping[str, Any]) -> str:
+    """``sha256:HEX`` of a signed manifest's canonical JSON (a pointer names it)."""
+    return "sha256:" + hashlib.sha256(canonical(body)).hexdigest()
+
+
+_NIX32 = "0123456789abcdfghijklmnpqrsvwxyz"
+
+
+def nix32(raw: bytes) -> str:
+    """Nix's base-32 encoding (the ``NarHash`` of a ``.narinfo``)."""
+    size = (len(raw) * 8 + 4) // 5
+    out = []
+    for n in range(size - 1, -1, -1):
+        i, j = divmod(n * 5, 8)
+        c = raw[i] >> j
+        if i + 1 < len(raw):
+            c |= raw[i + 1] << (8 - j)
+        out.append(_NIX32[c & 0x1F])
+    return "".join(out)
+
+
+def nar_hash(text: str) -> str:
+    """``sha256:<nix32>`` as a ``.narinfo`` writes it, from that form or the
+    SRI form (``sha256-<base64>``) newer ``nix path-info --json`` prints."""
+    algo, sep, body = str(text).partition("-")
+    if sep and algo == "sha256" and ":" not in text:
+        try:
+            return f"sha256:{nix32(base64.b64decode(body, validate=True))}"
+        except ValueError:
+            return str(text)
+    return str(text)
 
 
 def narinfo_fields(text: str) -> dict[str, str]:
@@ -166,3 +217,67 @@ def verify_narinfo(text: str, public: str, store_dir: str = "/nix/store") -> boo
         for line in text.splitlines()
         if line.startswith("Sig: ")
     )
+
+
+# ------------------------------------------------------------------ S3
+
+
+def _quote(text: str) -> str:
+    return urllib.parse.quote(text, safe="-_.~")
+
+
+def sigv4_headers(
+    method: str,
+    url: str,
+    body: bytes,
+    *,
+    region: str,
+    access_key: str,
+    secret_key: str,
+    now: _dt.datetime,
+    content_type: str | None = None,
+) -> dict[str, str]:
+    """AWS Signature Version 4 headers of one S3 request (path-style)."""
+    parts = urllib.parse.urlsplit(url)
+    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+    day = amz_date[:8]
+    payload = hashlib.sha256(body).hexdigest()
+    headers = {
+        **({"content-type": content_type} if content_type else {}),
+        "host": parts.netloc,
+        "x-amz-content-sha256": payload,
+        "x-amz-date": amz_date,
+    }
+    signed = ";".join(sorted(headers))
+    query = "&".join(
+        f"{_quote(k)}={_quote(v)}"
+        for k, v in sorted(urllib.parse.parse_qsl(parts.query, keep_blank_values=True))
+    )
+    request = "\n".join(
+        [
+            method,
+            urllib.parse.quote(urllib.parse.unquote(parts.path) or "/", safe="/-_.~"),
+            query,
+            "".join(f"{k}:{headers[k]}\n" for k in sorted(headers)),
+            signed,
+            payload,
+        ]
+    )
+    scope = f"{day}/{region}/s3/aws4_request"
+    to_sign = "\n".join(
+        [
+            "AWS4-HMAC-SHA256",
+            amz_date,
+            scope,
+            hashlib.sha256(request.encode()).hexdigest(),
+        ]
+    )
+    key = f"AWS4{secret_key}".encode()
+    for part in (day, region, "s3", "aws4_request"):
+        key = hmac.new(key, part.encode(), hashlib.sha256).digest()
+    signature = hmac.new(key, to_sign.encode(), hashlib.sha256).hexdigest()
+    headers["authorization"] = (
+        f"AWS4-HMAC-SHA256 Credential={access_key}/{scope}, "
+        f"SignedHeaders={signed}, Signature={signature}"
+    )
+    return headers

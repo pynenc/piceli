@@ -267,8 +267,8 @@ def test_verification_is_standard_library_ed25519() -> None:
         if isinstance(node, (ast.Import, ast.ImportFrom))
         for alias in node.names
     }
-    assert imported <= {"__future__", "base64", "hashlib", "json", "re",
-                        "collections", "typing"}  # fmt: skip
+    assert imported <= {"__future__", "base64", "datetime", "hashlib", "hmac",
+                        "json", "re", "urllib", "collections", "typing"}  # fmt: skip
     # RFC 8032, section 7.1, test 1.
     public = bytes.fromhex(
         "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"

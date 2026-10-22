@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from piceli._lazy import lazy_exports
 from piceli.dev.model import BuildHost, DevBuilds, DevProfile
 from piceli.dev.nix import NixCache
+from piceli.hosts.model import Branch, HostCheck, HostReport, NixHost, Tag
 from piceli.pipeline.errors import PipelineError
 from piceli.pipeline.model import Registry
 
@@ -36,6 +37,7 @@ def _slug(text: str) -> str:
 
 
 __all__ = [
+    "Branch",
     "Bucket",
     "BuildHost",
     "Cluster",
@@ -48,12 +50,15 @@ __all__ = [
     "Firewall",
     "Hetzner",
     "Hook",
+    "HostCheck",
+    "HostReport",
     "HttpState",
     "Image",
     "Infomaniak",
     "Infrastructure",
     "LocalState",
     "NixCache",
+    "NixHost",
     "Node",
     "OpenStack",
     "Otlp",
@@ -63,6 +68,7 @@ __all__ = [
     "Server",
     "Source",
     "Ssh",
+    "Tag",
     "Ui",
     "register_cluster",
 ]

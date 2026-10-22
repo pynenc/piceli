@@ -14,6 +14,12 @@ signed, to a :class:`NixCache` and uploads a signed **build manifest**:
      "built_at": "2026-10-22T10:00:00Z", "host": "nix-1", "image": null,
      "signed_by": "cache-1", "signature": "cache-1:<base64 ed25519 signature>"}
 
+Next to it, publishing writes a signed **ref pointer** for the tag and the
+branch it built, ``piceli/<name>/refs/tags/<tag>.json`` and
+``piceli/<name>/refs/heads/<branch>.json`` (``piceli.nix-ref.v1``: the
+commit, the manifest's key and sha256, and a ``published_at`` that only
+grows), so a host resolves a ref with read access to the cache alone.
+
 A host that follows a Git tag finds the store path of a commit there
 without evaluating anything, and trusts it only after
 :func:`~piceli.dev.nix_verify.verify_manifest` (the manifest's signature,
@@ -36,7 +42,6 @@ from __future__ import annotations
 import base64
 import datetime as _dt
 import hashlib
-import hmac
 import json
 import re
 import urllib.parse
@@ -49,24 +54,33 @@ from piceli.dev.model import DevError
 from piceli.dev.nix_publish import FEATURES
 from piceli.dev.nix_verify import (
     MANIFEST_SCHEMA,
+    POINTER_SCHEMA,
     canonical,
+    manifest_digest,
+    nar_hash,
     narinfo_fields,
+    nix32,
+    sigv4_headers,
     verify,
     verify_manifest,
     verify_narinfo,
+    verify_pointer,
 )
 
 __all__ = [
     "MANIFEST_SCHEMA",
+    "POINTER_SCHEMA",
     "NixCache",
     "canonical",
     "generate_key",
     "narinfo_fields",
+    "nix32",
     "public_key",
     "sign",
     "verify",
     "verify_manifest",
     "verify_narinfo",
+    "verify_pointer",
 ]
 PLAN_SCHEMA = "piceli.nix-publish-plan.v1"
 RESULT_SCHEMA = "piceli.dev-nix-build.v1"
@@ -78,6 +92,7 @@ S3_ENDPOINTS = {"infomaniak": "s3.pub1.infomaniak.cloud"}
 _KEY_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,62}")
 _ATTR = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.+-]{0,511}")
 _LABEL = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
+_REF = re.compile(r"[A-Za-z0-9_+-][A-Za-z0-9._+/-]{0,199}")
 _REV = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 _STORE_PATH = re.compile(r"/nix/store/[0-9a-df-np-sv-z]{32}-[A-Za-z0-9+._?=-]+")
 _HOST = re.compile(r"[A-Za-z0-9.-]+(?::[0-9]{1,5})?")
@@ -320,6 +335,16 @@ def manifest_key(name: str, commit: str) -> str:
     return f"piceli/{name}/{commit}.json"
 
 
+def pointer_key(name: str, kind: str, ref: str) -> str:
+    """``piceli/NAME/refs/tags/REF.json`` (``kind="tag"``) or ``.../refs/heads/REF.json``."""
+    return f"piceli/{name}/refs/{'tags' if kind == 'tag' else 'heads'}/{ref}.json"
+
+
+def ref_name_ok(ref: str) -> bool:
+    """Whether a tag or branch name can be a pointer's key (no ``..``, no ``//``)."""
+    return bool(_REF.fullmatch(ref)) and ".." not in ref and "//" not in ref
+
+
 # ------------------------------------------------------------------ build
 
 
@@ -408,10 +433,19 @@ def publish_plan(
     profile: str,
     image: bool,
     cache: NixCache,
+    branch: str | None = None,
 ) -> dict[str, Any]:
-    """What ``--publish`` will do; its digest is what the owner approves."""
+    """What ``--publish`` will do; its digest is what the owner approves.
+
+    ``pointers``: the ref pointers it writes (the tag at the commit, the
+    branch ``--ref`` or ``--branch`` names), skipped for an image."""
     if not _REV.fullmatch(commit):
         raise DevError("dev-nix-invalid", "--publish builds a commit (--ref)")
+    pointers = [
+        pointer_key(name, kind, ref)
+        for kind, ref in (("tag", tag), ("branch", branch))
+        if ref is not None and ref_name_ok(ref) and not image
+    ]
     return {
         "schema": PLAN_SCHEMA,
         "attribute": target,
@@ -423,6 +457,8 @@ def publish_plan(
         "image": image,
         "cache": cache.describe(),
         "manifest": manifest_key(name, commit),
+        "branch": branch,
+        "pointers": pointers,
     }
 
 
@@ -431,34 +467,6 @@ def plan_digest(plan: Mapping[str, Any]) -> str:
 
 
 # ------------------------------------------------------------------ manifest
-
-
-_NIX32 = "0123456789abcdfghijklmnpqrsvwxyz"
-
-
-def nix32(raw: bytes) -> str:
-    """Nix's base-32 encoding (the ``NarHash`` of a ``.narinfo``)."""
-    size = (len(raw) * 8 + 4) // 5
-    out = []
-    for n in range(size - 1, -1, -1):
-        i, j = divmod(n * 5, 8)
-        c = raw[i] >> j
-        if i + 1 < len(raw):
-            c |= raw[i + 1] << (8 - j)
-        out.append(_NIX32[c & 0x1F])
-    return "".join(out)
-
-
-def nar_hash(text: str) -> str:
-    """``sha256:<nix32>`` as a ``.narinfo`` writes it, from that form or the
-    SRI form (``sha256-<base64>``) newer ``nix path-info --json`` prints."""
-    algo, sep, body = str(text).partition("-")
-    if sep and algo == "sha256" and ":" not in text:
-        try:
-            return f"sha256:{nix32(base64.b64decode(body, validate=True))}"
-        except ValueError:
-            return str(text)
-    return str(text)
 
 
 def manifest(
@@ -499,74 +507,55 @@ def manifest(
 
 def sign_manifest(body: Mapping[str, Any], secret: str) -> dict[str, Any]:
     """``body`` with ``signature``: the cache key's Ed25519 signature over the
-    canonical JSON of every other field (:func:`verify_manifest` checks it,
-    standard library only)."""
+    canonical JSON of every other field (:func:`verify_manifest` and
+    :func:`verify_pointer` check it, standard library only)."""
     unsigned = {k: v for k, v in body.items() if k != "signature"}
     return {**unsigned, "signature": sign(secret, canonical(unsigned))}
+
+
+def _stamp(moment: _dt.datetime) -> str:
+    return moment.astimezone(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def pointer(
+    signed: Mapping[str, Any],
+    key: str,
+    *,
+    previous: Mapping[str, Any] | None = None,
+    now: _dt.datetime | None = None,
+) -> dict[str, Any]:
+    """The pointer ``key`` (:func:`pointer_key`) to the signed manifest
+    ``signed``, unsigned. ``published_at`` (UTC, microseconds, compared as
+    text) is later than ``previous``'s, even when this clock is behind:
+    hosts refuse a pointer older than one they have seen."""
+    moment = now or _dt.datetime.now(_dt.UTC)
+    stamp = _stamp(moment)
+    before = str((previous or {}).get("published_at") or "")
+    if before >= stamp:
+        try:
+            last = _dt.datetime.strptime(before, "%Y-%m-%dT%H:%M:%S.%fZ")
+            stamp = _stamp(last.replace(tzinfo=_dt.UTC) + _dt.timedelta(microseconds=1))
+        except ValueError:
+            pass
+    ref = key.split("/refs/", 1)[1][: -len(".json")]
+    return {
+        "schema": POINTER_SCHEMA,
+        "name": signed["name"],
+        "ref": f"refs/{ref}",
+        "commit": signed["commit"],
+        "manifest": manifest_key(str(signed["name"]), str(signed["commit"])),
+        "manifest_sha256": manifest_digest(signed),
+        "store_path": signed["store_path"],
+        "system": signed.get("system"),
+        "published_at": stamp,
+        "signed_by": signed["signed_by"],
+    }
 
 
 # ------------------------------------------------------------------ cache objects
 
 
-def _quote(text: str) -> str:
-    return urllib.parse.quote(text, safe="-_.~")
-
-
-def _sigv4(
-    method: str,
-    url: str,
-    body: bytes,
-    *,
-    region: str,
-    access_key: str,
-    secret_key: str,
-    now: _dt.datetime,
-    content_type: str | None = None,
-) -> dict[str, str]:
-    """AWS Signature Version 4 headers of one S3 request (path-style)."""
-    parts = urllib.parse.urlsplit(url)
-    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
-    day = amz_date[:8]
-    payload = hashlib.sha256(body).hexdigest()
-    headers = {
-        **({"content-type": content_type} if content_type else {}),
-        "host": parts.netloc,
-        "x-amz-content-sha256": payload,
-        "x-amz-date": amz_date,
-    }
-    signed = ";".join(sorted(headers))
-    query = "&".join(
-        f"{_quote(k)}={_quote(v)}"
-        for k, v in sorted(urllib.parse.parse_qsl(parts.query, keep_blank_values=True))
-    )
-    request = "\n".join(
-        [
-            method,
-            urllib.parse.quote(urllib.parse.unquote(parts.path) or "/", safe="/-_.~"),
-            query,
-            "".join(f"{k}:{headers[k]}\n" for k in sorted(headers)),
-            signed,
-            payload,
-        ]
-    )
-    scope = f"{day}/{region}/s3/aws4_request"
-    to_sign = "\n".join(
-        [
-            "AWS4-HMAC-SHA256",
-            amz_date,
-            scope,
-            hashlib.sha256(request.encode()).hexdigest(),
-        ]
-    )
-    key = f"AWS4{secret_key}".encode()
-    for part in (day, region, "s3", "aws4_request"):
-        key = hmac.new(key, part.encode(), hashlib.sha256).digest()
-    signature = hmac.new(key, to_sign.encode(), hashlib.sha256).hexdigest()
-    headers["authorization"] = (
-        f"AWS4-HMAC-SHA256 Credential={access_key}/{scope}, "
-        f"SignedHeaders={signed}, Signature={signature}"
-    )
-    return headers
+_sigv4 = sigv4_headers
 
 
 Opener = Callable[[Any], Any]
@@ -739,6 +728,35 @@ def upload_manifest(
     return objects.put(manifest_key(str(body["name"]), str(body["commit"])), data)
 
 
+def upload_pointers(
+    cache: NixCache,
+    signed: Mapping[str, Any],
+    keys: Sequence[str],
+    secret: str,
+    *,
+    s3_keys: tuple[str, str] | None,
+    opener: Opener | None = None,
+    now: _dt.datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Sign and put each ref pointer, after its manifest (a host never finds
+    a pointer to a manifest that is not there yet)."""
+    objects = CacheObjects(cache, s3_keys, opener=opener)
+    written = []
+    for key in keys:
+        try:
+            old = json.loads(objects.get(key) or b"{}")
+        except (ValueError, DevError):
+            old = {}
+        body = sign_manifest(
+            pointer(signed, key, previous=old if isinstance(old, dict) else None,
+                    now=now),
+            secret,
+        )  # fmt: skip
+        objects.put(key, json.dumps(body, sort_keys=True, indent=2).encode() + b"\n")
+        written.append(body)
+    return written
+
+
 # ------------------------------------------------------------------ git
 
 
@@ -757,6 +775,17 @@ def tag_of(repo: Path, ref: str | None, commit: str) -> str | None:
         return ref
     tags = sorted(_git(repo, "tag", "--points-at", commit).split())
     return tags[0] if tags else None
+
+
+def branch_of(repo: Path, ref: str) -> str | None:
+    """The branch ``--ref`` names (``main``, ``origin/main``), else ``None``."""
+    if not ref_name_ok(ref):
+        return None
+    if _git(repo, "rev-parse", "--verify", "-q", f"refs/heads/{ref}"):
+        return ref
+    if "/" in ref and _git(repo, "rev-parse", "--verify", "-q", f"refs/remotes/{ref}"):
+        return ref.split("/", 1)[1]
+    return None
 
 
 def kept_commits(repo: Path, keep_tags: int, main: str) -> dict[str, list[str]]:
@@ -783,6 +812,7 @@ def kept_commits(repo: Path, keep_tags: int, main: str) -> dict[str, list[str]]:
 
 GC_SCHEMA = "piceli.nix-gc-plan.v1"
 _MANIFEST_KEY = re.compile(r"piceli/([a-z0-9-]{1,63})/([0-9a-f]{40,64})\.json")
+_POINTER_KEY = re.compile(r"piceli/([a-z0-9-]{1,63})/refs/(tags|heads)/(.+)\.json")
 
 
 def gc_plan(
@@ -794,10 +824,12 @@ def gc_plan(
     grace_seconds: float,
     now: float,
 ) -> dict[str, Any]:
-    """What ``piceli dev nix gc`` would delete: manifests of other commits,
-    then the ``.narinfo`` (and ``.ls``) of every path no kept manifest's
-    closure reaches, then NAR files no kept ``.narinfo`` names. Objects
-    younger than ``grace_seconds`` stay (a publish in progress)."""
+    """What ``piceli dev nix gc`` would delete: tag pointers of tags not
+    kept, manifests of other commits that no remaining pointer names, then
+    the ``.narinfo`` (and ``.ls``) of every path no kept manifest's closure
+    reaches, then NAR files no kept ``.narinfo`` names. Branch pointers stay
+    (each names the branch's current build). Objects younger than
+    ``grace_seconds`` stay (a publish in progress)."""
     listed = objects.list()
     young = {key for key, stamp in listed if now - stamp < grace_seconds}
     manifests: dict[str, tuple[str, str]] = {}
@@ -805,8 +837,32 @@ def gc_plan(
         match = _MANIFEST_KEY.fullmatch(key)
         if match:
             manifests[key] = (match.group(1), match.group(2))
+    kept_refs = {ref for refs in kept.values() for ref in refs}
+    named: set[str] = set()
+    drop_pointers: list[str] = []
+    for key, _ in listed:
+        match = _POINTER_KEY.fullmatch(key)
+        if not match:
+            continue
+        try:
+            body = json.loads(objects.get(key) or b"{}")
+        except ValueError:
+            body = {}
+        commit = body.get("commit") if isinstance(body, dict) else None
+        if (
+            match.group(2) == "heads"
+            or match.group(3) in kept_refs
+            or commit in kept
+            or key in young
+        ):
+            if isinstance(body, dict) and isinstance(body.get("manifest"), str):
+                named.add(body["manifest"])
+        else:
+            drop_pointers.append(key)
     keep_manifests = sorted(
-        key for key, (_, commit) in manifests.items() if commit in kept or key in young
+        key
+        for key, (_, commit) in manifests.items()
+        if commit in kept or key in young or key in named
     )
     roots: list[str] = []
     for key in keep_manifests:
@@ -838,7 +894,8 @@ def gc_plan(
         for ref in fields.get("References", "").split():
             pending.append(ref.split("-", 1)[0])
     delete = sorted(
-        [key for key in manifests if key not in keep_manifests]
+        drop_pointers
+        + [key for key in manifests if key not in keep_manifests]
         + [
             key
             for part, key in narinfos.items()
@@ -877,16 +934,17 @@ def gc_plan(
 
 
 def gc_apply(objects: CacheObjects, plan: Mapping[str, Any]) -> int:
-    """Delete the plan's objects: manifests first, NAR files last (a host
-    never finds a manifest whose paths are gone)."""
-    order = {"piceli/": 0, "nar/": 2}
-    keys = sorted(
-        plan["delete"],
-        key=lambda key: (
-            next((v for k, v in order.items() if key.startswith(k)), 1),
-            key,
-        ),
-    )
+    """Delete the plan's objects: pointers first, then manifests, NAR files
+    last (a host never finds a pointer or manifest whose paths are gone)."""
+
+    def rank(key: str) -> int:
+        if _POINTER_KEY.fullmatch(key):
+            return 0
+        if key.startswith("piceli/"):
+            return 1
+        return 3 if key.startswith("nar/") else 2
+
+    keys = sorted(plan["delete"], key=lambda key: (rank(key), key))
     for key in keys:
         objects.delete(key)
     return len(keys)

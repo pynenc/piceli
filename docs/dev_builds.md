@@ -645,6 +645,15 @@ canonical JSON of the rest). The result
 `image.sha256` (for `Image(file=..., sha256=...)`), the cache URL, the
 public key and the manifest; never a secret.
 
+**Ref pointers.** After the manifest, publishing writes a signed pointer for
+the tag at the commit and for the branch `--ref` names (or `--branch NAME`):
+`piceli/NAME/refs/tags/TAG.json` and `piceli/NAME/refs/heads/BRANCH.json`
+(`schema: piceli.nix-ref.v1`: `ref`, `commit`, `manifest`, the manifest's
+`manifest_sha256`, `store_path`, `system`, `published_at` and the
+signature). `published_at` only grows, even when the publishing clock is
+behind. The plan lists them. A host resolves its ref from them with read
+access to the cache alone, no Git: see {doc}`nix_hosts`.
+
 A host that follows a tag reads the manifest of the tag's commit and
 trusts it only when `piceli.dev.nix_verify.verify_manifest(body,
 public_key)` holds, and the store path's narinfo in the cache verifies with
@@ -660,7 +669,10 @@ manifests of the newest five tags (`--keep-tags`) and of the current
 that shares a path with an old build keeps it), and every object younger
 than `--grace` (an hour: a publish in progress); it lists the manifests,
 narinfos and NAR files it would delete with a digest (exit 3) and deletes
-them only with `--approve <digest>`, manifests first.
+them only with `--approve <digest>`, manifests first. Branch pointers stay
+and keep the build they name; tag pointers of tags it does not keep go
+first, then their manifests, so a host never finds a pointer whose build is
+gone.
 
 ## Failure codes
 

@@ -1288,6 +1288,46 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             exit_codes=(0,),
             notes="Read-only; never contacts a cluster.",
         ),
+        "host module": _C(
+            "Render the NixOS module that installs a NixHost's agent (the agent, "
+            "its configuration, a systemd service and timer).",
+            reads=("MODULE:ATTR (piceli.infra.NixHost)",),
+            writes=("--output FILE (else the module on stdout)",),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.24.0. Never contacts the host or the cache. The module holds "
+            "no secret (paths of root-only files only); commit it and import it "
+            "from the host's configuration. With --output prints one JSON object "
+            "(path, sha256).",
+        ),
+        "host status": _C(
+            "Read a Nix host agent's status over SSH: the current and previous "
+            "builds, the last attempt with its stages, checks and rollback.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.NixHost) or an SSH target",
+                "--infra MODULE:ATTR (the server's applied address)",
+                "the host's /var/lib/piceli-host/status.json (ssh)",
+            ),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.24.0. Read-only; no cluster (works with every cluster down). "
+            "ssh runs with BatchMode and strict host key checking "
+            "(host-unreachable, host-status-missing).",
+        ),
+        "host wait": _C(
+            "Wait until a Nix host runs a commit or tag with its checks passed.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.NixHost) or an SSH target",
+                "the host's status file (ssh, every --interval)",
+            ),
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.24.0. Read-only; no cluster. Exit 0: the host runs REV and its "
+            "checks passed; 1: the attempt was refused or failed "
+            "(host-deploy-failed), rolled back (host-rolled-back), or "
+            "host-wait-timeout. The JSON carries the attempt's stage times.",
+        ),
         "gitops enable": _C(
             "Plan and, with --approve HASH, install the GitOps controller that "
             "deploys branches from Git (one environment per branch).",

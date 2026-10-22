@@ -766,6 +766,18 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["dev", "nix", "gc", "--cache", "no_such_module:cache"],
         "dev-nix-cache-invalid",
     ),
+    "host module": (
+        lambda p: ["host", "module", "no_such_module:web"],
+        "host-not-found",
+    ),
+    "host status": (
+        lambda p: ["host", "status", "ssh://bad user@host"],
+        "host-invalid",
+    ),
+    "host wait": (
+        lambda p: ["host", "wait", "no_such_module:web", "v1.0.0"],
+        "host-not-found",
+    ),
     "dev nix build": (
         lambda p: ["dev", "nix", "build", "x", "--cluster", "no_such_module:c"],
         "cluster-not-found",

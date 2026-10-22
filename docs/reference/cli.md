@@ -85,6 +85,9 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli heavy run`](#cli-heavy-run) | Run COMMAND once the lock is free; exit with its exit code. | none | no |
 | [`piceli heavy status`](#cli-heavy-status) | Show who holds the lock and the most recent receipts. | none | no |
 | [`piceli help-json`](#cli-help-json) | Print the whole CLI tree (commands, options, contracts) as JSON. | none | no |
+| [`piceli host module`](#cli-host-module) | Render the NixOS module that installs the host agent (commit it, import it). | none | no |
+| [`piceli host status`](#cli-host-status) | Read the host agent's status over SSH (current build, last attempt, checks). | none | no |
+| [`piceli host wait`](#cli-host-wait) | Wait until the host runs REV with its checks passed (exit 1: failed or timeout). | none | no |
 | [`piceli import live`](#cli-import-live) | Generate a typed module from the objects of a live namespace (read-only). | reads | no |
 | [`piceli import yaml`](#cli-import-yaml) | Generate a typed module from a directory of manifests (no cluster). | none | no |
 | [`piceli infra apply`](#cli-infra-apply) | Apply the plan whose hash is --approve (without it: plan, exit 3). | none | yes |
@@ -1095,6 +1098,7 @@ Build a flake output on a Nix build host; with --publish, sign and push it.
 | `--host` | text |  | A docker or native build host (default: the first) |
 | `--image` | boolean | `False` | The output is a disk image: copy its file back with its sha256 |
 | `--publish` | text |  | MODULE:ATTR of a piceli.infra.NixCache: sign and push the closure, upload the manifest (needs --approve) |
+| `--branch` | text |  | With --publish: also point refs/heads/BRANCH at this build (default: --ref when it names a branch) |
 | `--approve` | text |  | The publish plan's digest |
 | `--artifacts-dir` | path | `piceli-dev-artifacts` | Where an image lands (RUN/) |
 | `--queue-timeout` | integer | `3600` | Seconds to wait for a slot |
@@ -1866,6 +1870,74 @@ No options.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success
 - **Output contract:** conforms
+
+(cli-host-module)=
+### `piceli host module`
+
+Render the NixOS module that installs the host agent (commit it, import it).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `REF` | text | required |  |
+| `--output` | path |  | Write the module to this file (default: print it on stdout) |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.NixHost)
+- **Writes:** --output FILE (else the module on stdout)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Never contacts the host or the cache. The module holds no secret (paths of root-only files only); commit it and import it from the host's configuration. With --output prints one JSON object (path, sha256).
+
+(cli-host-status)=
+### `piceli host status`
+
+Read the host agent's status over SSH (current build, last attempt, checks).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--infra` | text |  | MODULE:ATTR of the Infrastructure whose applied state has the server's address (when its Ssh has no address=) |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.NixHost) or an SSH target, --infra MODULE:ATTR (the server's applied address), the host's /var/lib/piceli-host/status.json (ssh)
+- **Writes:** nothing (read-only)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Read-only; no cluster (works with every cluster down). ssh runs with BatchMode and strict host key checking (host-unreachable, host-status-missing).
+
+(cli-host-wait)=
+### `piceli host wait`
+
+Wait until the host runs REV with its checks passed (exit 1: failed or timeout).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `REV` | text | required |  |
+| `--infra` | text |  | MODULE:ATTR of the Infrastructure whose applied state has the server's address (when its Ssh has no address=) |
+| `--timeout` | integer | `1800` | Seconds to wait |
+| `--interval` | integer | `10` | Seconds between reads |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.NixHost) or an SSH target, the host's status file (ssh, every --interval)
+- **Writes:** nothing (read-only)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Read-only; no cluster. Exit 0: the host runs REV and its checks passed; 1: the attempt was refused or failed (host-deploy-failed), rolled back (host-rolled-back), or host-wait-timeout. The JSON carries the attempt's stage times.
 
 (cli-import-live)=
 ### `piceli import live`

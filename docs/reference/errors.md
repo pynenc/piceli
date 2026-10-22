@@ -327,12 +327,35 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`heavy-command-empty`](#error-heavy-command-empty) | maintenance | no |
 | [`heavy-command-missing`](#error-heavy-command-missing) | maintenance | no |
 | [`heavy-lock-timeout`](#error-heavy-lock-timeout) | maintenance | yes |
+| [`host-address-unknown`](#error-host-address-unknown) | hosts | no |
+| [`host-build-bad`](#error-host-build-bad) | hosts | no |
 | [`host-build-invalid`](#error-host-build-invalid) | host-build | no |
+| [`host-cache-unreachable`](#error-host-cache-unreachable) | hosts | yes |
+| [`host-check-failed`](#error-host-check-failed) | hosts | no |
+| [`host-check-invalid`](#error-host-check-invalid) | hosts | no |
+| [`host-credentials-exposed`](#error-host-credentials-exposed) | hosts | yes |
+| [`host-credentials-missing`](#error-host-credentials-missing) | hosts | yes |
+| [`host-deploy-failed`](#error-host-deploy-failed) | hosts | no |
+| [`host-invalid`](#error-host-invalid) | hosts | no |
+| [`host-manifest-mismatch`](#error-host-manifest-mismatch) | hosts | no |
+| [`host-narinfo-mismatch`](#error-host-narinfo-mismatch) | hosts | no |
+| [`host-not-found`](#error-host-not-found) | hosts | no |
 | [`host-output-missing`](#error-host-output-missing) | host-build | no |
+| [`host-pointer-replayed`](#error-host-pointer-replayed) | hosts | no |
+| [`host-realise-failed`](#error-host-realise-failed) | hosts | yes |
+| [`host-report-failed`](#error-host-report-failed) | hosts | yes |
+| [`host-rollback-failed`](#error-host-rollback-failed) | hosts | no |
+| [`host-rolled-back`](#error-host-rolled-back) | hosts | no |
+| [`host-signature-invalid`](#error-host-signature-invalid) | hosts | no |
+| [`host-status-missing`](#error-host-status-missing) | hosts | yes |
+| [`host-switch-failed`](#error-host-switch-failed) | hosts | no |
+| [`host-system-mismatch`](#error-host-system-mismatch) | hosts | no |
 | [`host-tool-missing`](#error-host-tool-missing) | host-build | no |
 | [`host-toolchain-checksum`](#error-host-toolchain-checksum) | host-build | yes |
 | [`host-toolchain-failed`](#error-host-toolchain-failed) | host-build | yes |
 | [`host-toolchain-invalid`](#error-host-toolchain-invalid) | host-build | no |
+| [`host-unreachable`](#error-host-unreachable) | hosts | yes |
+| [`host-wait-timeout`](#error-host-wait-timeout) | hosts | yes |
 | [`identity-mismatch`](#error-identity-mismatch) | kubernetes | no |
 | [`image-declared-twice`](#error-image-declared-twice) | images | no |
 | [`image-digest-mismatch`](#error-image-digest-mismatch) | images | no |
@@ -6434,3 +6457,190 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Install OpenTofu 1.8 or later and pass it with `--tofu PATH`.
 - **Retry-safe:** no
+
+
+## Nix host releases (`piceli.infra.NixHost`, the host agent, `piceli host …`)
+
+(error-host-address-unknown)=
+### `host-address-unknown`
+
+**Host address unknown.** The host's `Server` has no `Ssh(address=)`, and no `--infra` names the infrastructure whose applied state has its address.
+
+- **Fix:** Pass `--infra MODULE:ATTR`, declare `Ssh(address=)`, or give an SSH target.
+- **Retry-safe:** no
+
+(error-host-build-bad)=
+### `host-build-bad`
+
+**Build marked bad.** The build failed on this host before (a refusal, a failed switch or check); the agent skips it until a newer pointer for it.
+
+- **Fix:** Publish a fixed build, or publish the same commit again to retry it.
+- **Retry-safe:** no
+
+(error-host-cache-unreachable)=
+### `host-cache-unreachable`
+
+**Nix cache not reachable.** Reading the cache (a pointer, a listing, a manifest or a narinfo) failed or the object is missing (network, endpoint, read credentials, or a gc that ran meanwhile).
+
+- **Fix:** The agent tries again at its next poll; check the cache's endpoint and the read-only credentials file.
+- **Retry-safe:** yes
+
+(error-host-check-failed)=
+### `host-check-failed`
+
+**Host check failed.** A check did not pass before its timeout after the switch; the agent switched back to the previous system.
+
+- **Fix:** Read the check in `piceli host status --json`, fix the service and publish a new build.
+- **Retry-safe:** no
+
+(error-host-check-invalid)=
+### `host-check-invalid`
+
+**Host check refused.** A `HostCheck` is `HostCheck.unit(NAME)`, `HostCheck.http(URL)` (http(s), no credentials) or `HostCheck.command(ARG, ...)`, with a timeout of 1 to 3600 s and a unique DNS-label name.
+
+- **Fix:** Fix the check.
+- **Retry-safe:** no
+
+(error-host-credentials-exposed)=
+### `host-credentials-exposed`
+
+**Host credentials file readable by others.** A credentials or headers file on the host is readable by its group or others; the agent does not use it.
+
+- **Fix:** `chmod 600` the file (owned by root).
+- **Retry-safe:** yes
+
+(error-host-credentials-missing)=
+### `host-credentials-missing`
+
+**Host credentials file missing.** The cache's read-only credentials file (`AWS_ACCESS_KEY_ID=`, `AWS_SECRET_ACCESS_KEY=`), or the report's headers file, is absent or incomplete on the host.
+
+- **Fix:** Put the read-only keys (never the write keys) into the file, `0600` root, as `docs/nix_hosts.md` shows.
+- **Retry-safe:** yes
+
+(error-host-deploy-failed)=
+### `host-deploy-failed`
+
+**Host refused or failed the build.** The host agent's last attempt at this build was refused (signature, manifest, system) or failed before the switch; the host still runs its previous system.
+
+- **Fix:** Read the attempt's stages and reason with `piceli host status --json` and `piceli explain` of that reason.
+- **Retry-safe:** no
+
+(error-host-invalid)=
+### `host-invalid`
+
+**Nix host declaration refused.** `NixHost` needs a DNS-label name, a `Server` or an `ssh://user@host` target, `flake=` as `.#NAME` or `.#ATTR`, `follow=Tag(...)` or `Branch(...)`, a `NixCache` (an `s3://` or `file://` one to follow tags), and absolute paths for its files; or `HostReport` got an endpoint that is not http(s), or plain `http://` to another machine without `insecure=True`.
+
+- **Fix:** Fix the declaration; `piceli explain host-invalid` and `docs/nix_hosts.md` list each field.
+- **Retry-safe:** no
+
+(error-host-manifest-mismatch)=
+### `host-manifest-mismatch`
+
+**Build manifest does not match.** The manifest's sha256 is not the pointer's, or it names another build, commit, store path or flake attribute than the host's `NixHost(flake=)`.
+
+- **Fix:** Publish the host's attribute under its build name (`piceli dev nix build .#nixosConfigurations.NAME.config.system.build.toplevel --name NAME --publish ...`).
+- **Retry-safe:** no
+
+(error-host-narinfo-mismatch)=
+### `host-narinfo-mismatch`
+
+**Narinfo does not match the manifest.** The store path's narinfo (or the realised path) has another `StorePath` or `NarHash` than the signed manifest.
+
+- **Fix:** Publish the build again; if it repeats, the cache holds a corrupt or replaced object.
+- **Retry-safe:** no
+
+(error-host-not-found)=
+### `host-not-found`
+
+**Not a Nix host.** The `MODULE:ATTR` given to `piceli host` did not load, or is not a `piceli.infra.NixHost`.
+
+- **Fix:** Point at the `NixHost` (`hosts.py:web`), or give an SSH target (`ssh://root@host`).
+- **Retry-safe:** no
+
+(error-host-pointer-replayed)=
+### `host-pointer-replayed`
+
+**Old ref pointer refused.** The ref pointer's `published_at` is older than one the agent already saw for that ref: an old, validly signed pointer was put back.
+
+- **Fix:** Publish the build again (a new pointer is newer); check who can write to the cache.
+- **Retry-safe:** no
+
+(error-host-realise-failed)=
+### `host-realise-failed`
+
+**Fetching the build failed.** `nix copy --from` the cache failed: the network, the read credentials, or a path missing from the cache. The host never builds.
+
+- **Fix:** The agent tries again at its next poll; check the cache and that the whole closure was published.
+- **Retry-safe:** yes
+
+(error-host-report-failed)=
+### `host-report-failed`
+
+**Report endpoint not reached.** The OTLP endpoint did not accept the agent's events within 2 s; they wait in a bounded queue for the next run and the deploy goes on.
+
+- **Fix:** Check the endpoint and its headers file; nothing else is needed.
+- **Retry-safe:** yes
+
+(error-host-rollback-failed)=
+### `host-rollback-failed`
+
+**Rollback failed.** Switching back to the previous system failed after a failed switch or check; the host may run a mix of both.
+
+- **Fix:** Log in, run `/nix/var/nix/profiles/system/bin/switch-to-configuration switch` or boot the previous generation.
+- **Retry-safe:** no
+
+(error-host-rolled-back)=
+### `host-rolled-back`
+
+**Host rolled the build back.** The build was switched to, but the switch or a check failed and the agent switched back to the previous system; the build is marked bad and not tried again until a newer pointer.
+
+- **Fix:** Read the failed check in `piceli host status --json`, fix it, publish a new build (or publish the same commit again to retry it).
+- **Retry-safe:** no
+
+(error-host-signature-invalid)=
+### `host-signature-invalid`
+
+**Build signature refused.** A ref pointer, build manifest or narinfo is not signed by the cache's public key the host trusts; nothing was realised.
+
+- **Fix:** Publish with the key whose public key the `NixCache` declares; if nobody did, someone wrote to the cache: rotate its write keys.
+- **Retry-safe:** no
+
+(error-host-status-missing)=
+### `host-status-missing`
+
+**Host agent status missing.** The host answered but has no readable `/var/lib/piceli-host/status.json`: the agent's module is not imported yet, or it has not run once.
+
+- **Fix:** Render the module with `piceli host module`, import it, rebuild the host once; the agent writes its status at its first run (a minute after boot).
+- **Retry-safe:** yes
+
+(error-host-switch-failed)=
+### `host-switch-failed`
+
+**Switch failed.** `nix-env --set` or `switch-to-configuration switch` of the new system failed; the agent switched back.
+
+- **Fix:** Read the host's journal (`journalctl -u piceli-host-agent`), fix the configuration and publish a new build.
+- **Retry-safe:** no
+
+(error-host-system-mismatch)=
+### `host-system-mismatch`
+
+**Build is for another system.** The manifest's system (`x86_64-linux`, `aarch64-linux`) is not the host's.
+
+- **Fix:** Build the host's configuration for its own system.
+- **Retry-safe:** no
+
+(error-host-unreachable)=
+### `host-unreachable`
+
+**Host not reachable over SSH.** `ssh` failed: no route, a closed port, an unknown or changed host key (only known keys are accepted), or a refused login; or `ssh` is not installed.
+
+- **Fix:** Check that `ssh USER@HOST` works without a prompt (its host key in `~/.ssh/known_hosts`, or pinned by `piceli infra register`), then run the command again.
+- **Retry-safe:** yes
+
+(error-host-wait-timeout)=
+### `host-wait-timeout`
+
+**Host did not reach the build in time.** `piceli host wait` saw neither the build running with its checks passed nor a failed attempt before `--timeout`: the build may not be published yet, or the agent has not polled.
+
+- **Fix:** Check `piceli host status`, that the build was published (`piceli dev nix build --publish`) and its pointer names the ref the host follows; wait longer.
+- **Retry-safe:** yes

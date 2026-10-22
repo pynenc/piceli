@@ -227,6 +227,7 @@ state
 maintenance
 heavy_work
 dev_builds
+nix_hosts
 restore_points
 typed_apps
 crds
