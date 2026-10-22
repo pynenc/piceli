@@ -171,6 +171,12 @@ and rollback.
   image whose config was approved, and the node is given only that image.
   The classic store is unchanged. To approve an image by hand, read its
   config digest as {doc}`node_delivery` shows.
+- **Local import and run with the containerd image store.**
+  `DockerLocalImporter` records the engine's own ID of the loaded image as
+  `local_id` when it is not the config digest, and `LocalRunGrant(local_id=)`
+  lets `DockerLocalRunner` inspect and run the image by it; the runner checks
+  that the saved image's config is the granted `image_id`. Before, a loaded
+  image could not be found by its config digest in the containerd store.
 
 ## Version 0.23.0
 

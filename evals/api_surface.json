@@ -3375,7 +3375,8 @@
     "inspect_image": [
      "expected_platform",
      "image_id",
-     "limits"
+     "limits",
+     "local_id"
     ],
     "run_image": [
      "arguments",
@@ -5684,12 +5685,14 @@
    "attrs": [
     "expires_at",
     "image_id",
+    "local_id",
     "platform",
     "socket"
    ],
    "init": [
     "expires_at",
     "image_id",
+    "local_id",
     "platform",
     "socket"
    ],

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import stat
 import tarfile
 import threading
@@ -19,8 +20,16 @@ from piceli.artifacts.oci import (
     unpack_oci_archive,
 )
 from piceli.artifacts.plan import canonical, validate_digest
-from piceli.artifacts.process import ProcessLimits, ToolPin, run_process
+from piceli.artifacts.process import ProcessLimits, ToolPin, _run_process
 from piceli.tempfiles import temporary_directory
+
+_LOADED = re.compile(rb"^Loaded image ID: (sha256:[a-f0-9]{64})$", re.MULTILINE)
+
+
+def _loaded_id(stdout: bytes) -> str | None:
+    """The engine's ID of the one image ``docker image load`` reports."""
+    found = _LOADED.findall(stdout)
+    return found[0].decode() if len(found) == 1 else None
 
 
 @dataclass(frozen=True)
@@ -101,7 +110,7 @@ class DockerLocalImporter:
             )
             if checked != receipt:
                 raise ValueError("OCI source changed during import preparation")
-            result = run_process(
+            result, stdout, _ = _run_process(
                 [
                     str(self.tool.path),
                     "--host",
@@ -117,9 +126,18 @@ class DockerLocalImporter:
                 expires_at=grant.expires_at,
             )
         self.tool.verify()
+        local_id = _loaded_id(stdout) if result["state"] == "succeeded" else None
         return {
             "manifest_digest": receipt.manifest_digest,
             "image_id": receipt.config_digest,
+            # Added in 0.24.0: with Docker's containerd image store (the
+            # default from Docker 29) the engine names the loaded image by a
+            # manifest digest it writes itself; inspect and run it by this.
+            **(
+                {"local_id": local_id}
+                if local_id is not None and local_id != receipt.config_digest
+                else {}
+            ),
             "platform": receipt.platform,
             "pushed": False,
             "imported": result["state"] == "succeeded",
