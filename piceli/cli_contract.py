@@ -1787,7 +1787,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
                 "MODULE:ATTR (piceli.infra.Infrastructure)",
                 "tofu binary",
                 "credentials (provider token, state passphrase)",
-                "provider API (plan refresh, prices)",
+                "provider API (plan refresh, prices, Porkbun API access per domain)",
             ),
             writes=("state directory (configuration, lock file, providers)",),
             contract="conforms",
@@ -1795,8 +1795,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             notes="Never changes a resource. Exit 3 with the plan and approve_command "
             "(piceli infra apply ... --approve HASH); 0 and state unchanged when "
             "nothing changes. Refuses a plan that would change or delete a resource "
-            "Piceli did not create (infra-foreign-resource). Tokens and the state "
-            "passphrase reach tofu through its environment only; its output is redacted.",
+            "Piceli did not create (infra-foreign-resource). A plan that changes "
+            "Porkbun records checks API access for each domain (infra-dns-api-disabled; "
+            "infra-dns-check-failed when it cannot) and records it in checks. Tokens and "
+            "the state passphrase reach tofu through its environment only; its output "
+            "is redacted.",
         ),
         "infra apply": _C(
             "Apply a declared Infrastructure: plan again and apply that plan only "
@@ -1818,8 +1821,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             exit_codes=(0, 1, 2, 3),
             notes="Without --approve it plans (exit 3). A hash that is not the fresh "
             "plan's is refused (infra-plan-changed). A failed tofu apply exits 1 "
-            "(infra-apply-failed); plan again to continue. One command at a time "
-            "per state (infra-state-locked).",
+            "(infra-apply-failed); one that changed something first exits 1 whatever "
+            "its code, with partially_applied, applied (address, action, id) and "
+            "not_applied; plan again to continue. One command at a time per state "
+            "(infra-state-locked).",
         ),
         "infra destroy": _C(
             "Destroy what Piceli created for a declared Infrastructure, with "
@@ -1839,7 +1844,8 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "piceli.io/managed-by=piceli and piceli.io/infra=<name> may be deleted; "
             "anything else refuses the whole plan (infra-foreign-resource). DNS zones "
             "are never deleted (Piceli manages record sets only). Credential "
-            "profiles of registered clusters are left in place.",
+            "profiles of registered clusters are left in place. A failure after "
+            "some deletions exits 1 with partially_applied, as for apply.",
         ),
         "infra status": _C(
             "Show a declared Infrastructure's servers (state, addresses, install, "

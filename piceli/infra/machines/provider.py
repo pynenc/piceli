@@ -11,7 +11,8 @@ also uploads images or holds buckets says so (``supports_images``,
 ``supports_buckets``) and renders them.
 
 Rendering is pure: no network, no files, no time. Only :meth:`Provider.prices`
-may contact the provider's API, and only when a command asks for prices.
+(when a command asks for prices) and :meth:`Provider.plan_check` (after
+``tofu plan``) may contact the provider's API.
 
 Importing this module is side-effect free.
 """
@@ -248,6 +249,18 @@ class Provider(ABC):
 
     def known_error(self, diagnostics: Sequence[str]) -> InfraError | None:
         """A refusal OpenTofu reported, as its registered code (``None``: not known)."""
+        return None
+
+    def plan_check(
+        self, document: Mapping[str, Any], credential: str | None
+    ) -> dict[str, Any] | None:
+        """Check what the plan needs that OpenTofu cannot see, before approval.
+
+        ``document`` is ``tofu show -json`` of the plan; ``credential`` the
+        provider's stored value. Raise :class:`InfraError` to fail the plan;
+        return ``{"check": NAME, "ran": bool, ...}`` for the plan's
+        ``checks`` (never a secret), or ``None`` when there is nothing to check.
+        """
         return None
 
     # ------------------------------------------------------------ prices

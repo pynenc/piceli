@@ -72,11 +72,19 @@ RESOURCE_LABEL = "piceli.io/resource"
 class InfraError(ValueError):
     """A machine declaration or ``piceli infra`` command refused, with a code."""
 
-    def __init__(self, code: str, message: str, details: Sequence[str] = ()) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        details: Sequence[str] = (),
+        fields: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         #: Redacted diagnostics (OpenTofu's errors) for stderr, never stdout.
         self.details = list(details)
+        #: Machine fields for stdout (a partial apply: what was applied).
+        self.fields = dict(fields or {})
 
 
 def _invalid(message: str) -> InfraError:

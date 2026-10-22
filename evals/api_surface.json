@@ -4294,6 +4294,7 @@
     "min_ttl",
     "name",
     "pin",
+    "plan_check",
     "poll_interval",
     "prices",
     "provider_block",
@@ -4346,6 +4347,10 @@
      "type_"
     ],
     "pin": [],
+    "plan_check": [
+     "credential",
+     "document"
+    ],
     "prices": [
      "token"
     ],
@@ -4844,6 +4849,7 @@
     "min_ttl",
     "name",
     "pin",
+    "plan_check",
     "preset",
     "prices",
     "prices_monthly",
@@ -4900,6 +4906,10 @@
      "type_"
     ],
     "pin": [],
+    "plan_check": [
+     "credential",
+     "document"
+    ],
     "prices": [
      "token"
     ],
@@ -4986,6 +4996,7 @@
    "init": [
     "code",
     "details",
+    "fields",
     "message"
    ],
    "methods": {
@@ -6323,6 +6334,7 @@
     "min_ttl",
     "name",
     "pin",
+    "plan_check",
     "preset",
     "prices",
     "prices_monthly",
@@ -6379,6 +6391,10 @@
      "type_"
     ],
     "pin": [],
+    "plan_check": [
+     "credential",
+     "document"
+    ],
     "prices": [
      "token"
     ],
@@ -7169,6 +7185,7 @@
     "min_ttl",
     "name",
     "pin",
+    "plan_check",
     "prices",
     "provider_block",
     "record_address",
@@ -7216,6 +7233,10 @@
      "type_"
     ],
     "pin": [],
+    "plan_check": [
+     "credential",
+     "document"
+    ],
     "prices": [
      "token"
     ],
@@ -12921,6 +12942,7 @@
    "infra-credential-refused",
    "infra-credential-unsafe",
    "infra-dns-api-disabled",
+   "infra-dns-check-failed",
    "infra-foreign-resource",
    "infra-image-checksum",
    "infra-image-unavailable",

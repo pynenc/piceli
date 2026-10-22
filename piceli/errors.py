@@ -5353,7 +5353,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "infra-apply-failed",
         "OpenTofu apply failed",
-        "`tofu apply` of the approved plan exited with an error; part of the plan may have been applied. The state and `piceli infra status` show what exists.",
+        "`tofu apply` of the approved plan exited with an error. When part of it was applied, the output has `partially_applied` and lists what was applied (address, action, the provider's id) and what was not; the next plan shows what remains.",
         "Read the `tofu:` lines on stderr, fix the cause, then plan again (`piceli infra plan MODULE:ATTR`) and approve the new hash.",
         False,
         "infra",
@@ -5361,9 +5361,17 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "infra-dns-api-disabled",
         "DNS provider API access is off for the domain",
-        "The DNS provider refused a record because API access is not turned on for its domain (Porkbun turns it on per domain). Records of other domains in the same apply may have been changed; the state shows what exists.",
+        "API access is not turned on for a record's domain (Porkbun turns it on per domain). A plan checks it for each domain it changes; an apply that meets it after changing something exits 1 with `partially_applied` and what it applied.",
         "Turn API access on for the domain in the provider's console (Porkbun: Domain Management → Details → API Access), then plan again and approve the new hash.",
         False,
+        "infra",
+    ),
+    _E(
+        "infra-dns-check-failed",
+        "DNS provider API access could not be confirmed",
+        "The plan changes records at a DNS provider whose API access it checks before approval (Porkbun: per domain), and the check could not confirm it: no key pair was loaded, the API did not answer in time, or it refused the request (a wrong key pair, a domain not in the account). The plan does not pass a check it did not run. Nothing was applied.",
+        "Check the network and the key pair (`piceli secrets provider NAME --prompt`; a domain in that account), then plan again.",
+        True,
         "infra",
     ),
     _E(

@@ -5,7 +5,8 @@
   changes, the monthly estimate and the plan hash (exit 3; 0 when nothing
   changes). ``infra apply MODULE:ATTR --approve HASH`` plans again and
   applies only that plan; ``infra destroy`` the same for a destroy plan,
-  which never touches what Piceli did not create.
+  which never touches what Piceli did not create. An apply that fails after
+  changing something exits 1 with ``partially_applied`` and what it applied.
 - ``infra status MODULE:ATTR`` shows servers, addresses, installs, cluster
   registrations and cost from the state directory's records (read-only).
 - ``infra install MODULE:ATTR SERVER`` runs the server's install hook after
@@ -82,9 +83,23 @@ TOKEN_ENVS = (
 def _refuse(error: InfraError) -> NoReturn:
     for line in error.details:
         say(f"  tofu: {line}")
-    if error.code in FAILED:
-        fail(error.code, str(error))
-    reject(error.code, str(error))
+    if error.code in FAILED or error.fields.get("partially_applied"):
+        # Something changed: a failure that ran, whatever refused it.
+        fail(error.code, str(error), **error.fields)
+    reject(error.code, str(error), **error.fields)
+
+
+def _say_partial(error: InfraError, command: str) -> None:
+    say("applied before the failure:")
+    for item in error.fields.get("applied") or ():
+        found = f" (id {item['id']})" if item.get("id") else ""
+        say(f"  {item['action']:8} {item['address']}{found}")
+    if error.fields.get("not_applied"):
+        say("not applied:")
+    for item in error.fields.get("not_applied") or ():
+        failed = " (failed)" if item.get("failed") else ""
+        say(f"  {item['action']:8} {item['address']}{failed}")
+    say(f"the next plan shows what remains: {command}")
 
 
 @contextmanager
@@ -134,6 +149,11 @@ def _say_plan(result: InfraPlan) -> None:
             "  refused: these resources were not created by Piceli: "
             + ", ".join(result.foreign)
         )
+    for check in result.checks:
+        if check.get("ran"):
+            say(f"  checked {check['check']}: " + ", ".join(sorted(check["domains"])))
+        else:
+            say(f"  not checked {check['check']}: {check.get('why')}")
     if result.estimate is not None:
         estimate = result.estimate
         note = "" if estimate["complete"] else " (some prices unknown)"
@@ -150,6 +170,7 @@ def _command(head: str, ref: str, tofu: str | None) -> str:
 def _plan_or_apply(
     ref: str, approve: str | None, tofu: str | None, *, destroy: bool
 ) -> None:
+    from piceli.infra.machines.model import InfraError
     from piceli.infra.machines.plan import apply, plan, workspace
 
     infra = load_infra(ref)
@@ -179,7 +200,12 @@ def _plan_or_apply(
                 }
             )
             raise typer.Exit(EXIT_APPROVAL)
-        done, inventory = apply(ws, approve, destroy=destroy, say=say)
+        try:
+            done, inventory = apply(ws, approve, destroy=destroy, say=say)
+        except InfraError as error:
+            if error.fields.get("partially_applied"):
+                _say_partial(error, command)
+            raise
         _say_plan(done)
         state = "destroyed" if destroy else "applied"
         say(f"{state}: {len(done.changes)} change(s)")

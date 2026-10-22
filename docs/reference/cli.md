@@ -1941,7 +1941,7 @@ Apply the plan whose hash is --approve (without it: plan, exit 3).
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Without --approve it plans (exit 3). A hash that is not the fresh plan's is refused (infra-plan-changed). A failed tofu apply exits 1 (infra-apply-failed); plan again to continue. One command at a time per state (infra-state-locked).
+- **Notes:** Without --approve it plans (exit 3). A hash that is not the fresh plan's is refused (infra-plan-changed). A failed tofu apply exits 1 (infra-apply-failed); one that changed something first exits 1 whatever its code, with partially_applied, applied (address, action, id) and not_applied; plan again to continue. One command at a time per state (infra-state-locked).
 
 (cli-infra-destroy)=
 ### `piceli infra destroy`
@@ -1963,7 +1963,7 @@ Destroy what Piceli created for it, with approval of the destroy plan's hash.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Without --approve prints the destroy plan and its hash (exit 3). Only resources in Piceli's ownership ledger that carry piceli.io/managed-by=piceli and piceli.io/infra=<name> may be deleted; anything else refuses the whole plan (infra-foreign-resource). DNS zones are never deleted (Piceli manages record sets only). Credential profiles of registered clusters are left in place.
+- **Notes:** Without --approve prints the destroy plan and its hash (exit 3). Only resources in Piceli's ownership ledger that carry piceli.io/managed-by=piceli and piceli.io/infra=<name> may be deleted; anything else refuses the whole plan (infra-foreign-resource). DNS zones are never deleted (Piceli manages record sets only). Credential profiles of registered clusters are left in place. A failure after some deletions exits 1 with partially_applied, as for apply.
 
 (cli-infra-install)=
 ### `piceli infra install`
@@ -1999,14 +1999,14 @@ Plan the declared machines with OpenTofu; print the changes, estimate and plan h
 
 **Contract**
 
-- **Reads:** MODULE:ATTR (piceli.infra.Infrastructure), tofu binary, credentials (provider token, state passphrase), provider API (plan refresh, prices)
+- **Reads:** MODULE:ATTR (piceli.infra.Infrastructure), tofu binary, credentials (provider token, state passphrase), provider API (plan refresh, prices, Porkbun API access per domain)
 - **Writes:** state directory (configuration, lock file, providers)
 - **Cluster:** none
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Never changes a resource. Exit 3 with the plan and approve_command (piceli infra apply ... --approve HASH); 0 and state unchanged when nothing changes. Refuses a plan that would change or delete a resource Piceli did not create (infra-foreign-resource). Tokens and the state passphrase reach tofu through its environment only; its output is redacted.
+- **Notes:** Never changes a resource. Exit 3 with the plan and approve_command (piceli infra apply ... --approve HASH); 0 and state unchanged when nothing changes. Refuses a plan that would change or delete a resource Piceli did not create (infra-foreign-resource). A plan that changes Porkbun records checks API access for each domain (infra-dns-api-disabled; infra-dns-check-failed when it cannot) and records it in checks. Tokens and the state passphrase reach tofu through its environment only; its output is redacted.
 
 (cli-infra-register)=
 ### `piceli infra register`

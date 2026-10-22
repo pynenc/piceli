@@ -213,8 +213,16 @@ infra = Infrastructure("web", servers=[host], records=[
   provider porkbun --prompt`. OpenTofu gets it only as `PORKBUN_API_KEY`
   and `PORKBUN_SECRET_API_KEY`; both are redacted from its output.
 - **API access per domain.** Turn it on for each domain (Domain Management
-  → Details → API Access). A record of a domain without it is refused with
-  `infra-dns-api-disabled`.
+  → Details → API Access). A plan that changes records at Porkbun asks its
+  API (`POST /dns/retrieve/DOMAIN`, the stored key pair in the request body
+  only) once per domain, so an approved plan does not fail later for this:
+  a domain without API access fails the plan with `infra-dns-api-disabled`.
+  When the check cannot run (no key pair, no answer within 15 s, another
+  refusal such as a wrong key pair) the plan fails with
+  `infra-dns-check-failed` rather than pass a check it did not run. The
+  plan JSON's `checks` says whether it ran and for which domains
+  (`{"check": "porkbun-api-access", "ran": true, "domains": {"example.com":
+  "enabled"}}`); the check is not part of the plan hash.
 - **Ownership.** Porkbun records carry no labels (the OpenTofu provider
   cannot set their notes), so the ledger alone marks what Piceli created; a
   destroy or update of any other record is `infra-foreign-resource`. Porkbun
@@ -232,6 +240,13 @@ show -json FILE`, and prints the changes (create, update, replace, delete),
 the monthly estimate and the plan hash: `sha256` of the configuration and
 lock file, the operation and the plan JSON without its timestamp. Exit 3
 (0 when nothing changes).
+
+An apply (or destroy) that fails after changing something exits 1, whatever
+refused it, with `"partially_applied": true`, `applied` (address, action and
+the provider's id where OpenTofu reports one) and `not_applied` (`failed`
+for the change that errored); stderr lists the same. The state keeps what
+was applied: plan again, and the next plan shows what remains. A failure
+before anything changed keeps its code and exit status.
 
 `piceli infra apply --approve HASH` plans again and applies that plan file
 only when its hash is the approved one (`infra-plan-changed` otherwise):
@@ -341,7 +356,7 @@ the command line with their approvals.
 | Command | Does | Exit |
 | --- | --- | --- |
 | `piceli infra plan REF` | Plan; print changes, estimate, hash | 3 changes, 0 none, 2 refused |
-| `piceli infra apply REF --approve HASH` | Re-plan, apply the approved plan | 0, 1 `infra-apply-failed`, 2, 3 without `--approve` |
+| `piceli infra apply REF --approve HASH` | Re-plan, apply the approved plan | 0, 1 `infra-apply-failed` or partially applied, 2, 3 without `--approve` |
 | `piceli infra destroy REF [--approve HASH]` | The same for a destroy plan | 0, 1, 2, 3 |
 | `piceli infra status REF [--json]` | Read-only status | 0, 2 |
 | `piceli infra install REF SERVER [--approve DIGEST]` | Run the install hook | 0, 1 `infra-install-failed`, 2, 3 |

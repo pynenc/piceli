@@ -31,6 +31,18 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `infra-dns-api-disabled` for a domain without API access. `DnsRecord(ttl=)`
   now defaults to the provider's (300 s; Porkbun's minimum and default
   600 s).
+- **Porkbun API access is checked at plan time.** A plan that changes
+  records at Porkbun asks Porkbun's API once per domain; a domain without
+  API access fails the plan (`infra-dns-api-disabled`) instead of the
+  apply, and a check that cannot run fails it too (new code
+  `infra-dns-check-failed`). The plan JSON's new `checks` says whether it
+  ran; it is not part of the plan hash.
+- **A partially applied change exits 1.** `piceli infra apply` and
+  `destroy` that fail after changing something exit 1 (also for a refusal
+  such as `infra-dns-api-disabled`, which exited 2), with
+  `partially_applied`, `applied` (address, action, the provider's id) and
+  `not_applied`; stderr says what was applied and that the next plan shows
+  what remains.
 - **Nix builds on build hosts, a signed binary cache and build
   manifests.** `piceli dev nix build ATTR` builds a flake output (a NixOS
   system; with `--image`, a disk image copied back with its sha256) as a

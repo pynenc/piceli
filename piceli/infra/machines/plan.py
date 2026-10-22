@@ -20,6 +20,16 @@ delete a resource that is not in the ledger, or whose labels are not
 carries no labels (``Provider.ledger_owned``: Porkbun records) is owned by
 the ledger alone.
 
+Checks: after ``tofu plan``, each provider may check what the plan needs and
+OpenTofu cannot see (:meth:`Provider.plan_check`: Porkbun's API access for
+each domain the plan changes). A check that fails fails the plan; whether
+each one ran is in the plan's ``checks``, outside the hash.
+
+Partial applies: ``tofu apply -json`` prints an ``apply_complete`` line per
+finished change. When the apply fails after one of them, the error carries
+``partially_applied``, what was applied (address, action, the provider's id)
+and what was not; the next plan shows what remains.
+
 Importing this module is side-effect free.
 """
 
@@ -224,6 +234,7 @@ class InfraPlan:
     estimate: dict[str, Any] | None
     tofu: str
     file: Path | None = None
+    checks: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -237,6 +248,7 @@ class InfraPlan:
             "foreign": list(self.foreign),
             "estimate": self.estimate,
             "tofu": self.tofu,
+            "checks": [dict(check) for check in self.checks],
         }
 
 
@@ -402,6 +414,12 @@ def plan(
                 "infra-tofu-failed", "tofu show -json did not print a plan"
             ) from None
         changes, foreign = changes_of(ws, document)
+        checks = tuple(
+            check
+            for provider in ws.infra.providers()
+            if (check := provider.plan_check(document, ws.tokens.get(provider.name)))
+            is not None
+        )
         result = InfraPlan(
             ws.infra.name,
             operation,
@@ -411,6 +429,7 @@ def plan(
             foreign,
             estimate(ws) if prices and not destroy else None,
             ws.tofu.version_text,
+            checks=checks,
         )
         if keep is not None:
             target = keep / "plan.tfplan"
@@ -467,13 +486,74 @@ def apply(
             )
         finally:
             unstage_images(ws.directory)
-        inventory = refresh_inventory(ws, prices=fresh.estimate)
-        if result.code != 0:
-            diagnostics = result.diagnostics()
-            raise _known(ws, diagnostics) or InfraError(
-                "infra-apply-failed", "tofu apply failed", diagnostics
-            )
-        return fresh, inventory
+        if result.code == 0:
+            return fresh, refresh_inventory(ws, prices=fresh.estimate)
+        diagnostics = result.diagnostics()
+        error = _known(ws, diagnostics) or InfraError(
+            "infra-apply-failed", "tofu apply failed", diagnostics
+        )
+        error.fields.update(progress(result, fresh.changes))
+        try:
+            refresh_inventory(ws, prices=fresh.estimate)
+        except InfraError:
+            if not error.fields:
+                raise
+        raise error
+
+
+def progress(result: TofuResult, changes: tuple[Change, ...]) -> dict[str, Any]:
+    """What a failed apply changed (``apply_complete`` lines); ``{}`` if nothing.
+
+    ``applied``: address, action and the provider's id where OpenTofu
+    reports one; ``not_applied``: the plan's other changes (``failed`` for
+    the ones OpenTofu reported as errored). A replacement is applied when
+    both its halves finished.
+    """
+    done: dict[str, list[str]] = {}
+    ids: dict[str, str] = {}
+    errored: set[str] = set()
+    for line in result.stdout.splitlines():
+        try:
+            item = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(item, dict) or not isinstance(item.get("hook"), dict):
+            continue
+        hook = item["hook"]
+        address = (hook.get("resource") or {}).get("addr")
+        action = hook.get("action")
+        if not isinstance(address, str) or action in (None, "read", "noop"):
+            continue
+        if item.get("type") == "apply_errored":
+            errored.add(address)
+        elif item.get("type") == "apply_complete":
+            done.setdefault(address, []).append(str(action))
+            if hook.get("id_value"):
+                ids[address] = str(hook["id_value"])
+    if not done:
+        return {}
+    applied: list[dict[str, Any]] = []
+    for address, actions in sorted(done.items()):
+        entry: dict[str, Any] = {"address": address, "action": _finished(actions)}
+        if address in ids:
+            entry["id"] = ids[address]
+        applied.append(entry)
+    not_applied: list[dict[str, Any]] = []
+    for change in changes:
+        finished = _finished(done.get(change.address, []))
+        if finished == change.action or (finished and change.action != "replace"):
+            continue
+        entry = {"address": change.address, "action": change.action}
+        if change.address in errored:
+            entry["failed"] = True
+        not_applied.append(entry)
+    return {"partially_applied": True, "applied": applied, "not_applied": not_applied}
+
+
+def _finished(actions: list[str]) -> str:
+    if "replace" in actions or {"create", "delete"} <= set(actions):
+        return "replace"
+    return actions[-1] if actions else ""
 
 
 def refresh_inventory(

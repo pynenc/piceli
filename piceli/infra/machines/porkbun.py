@@ -20,14 +20,27 @@ refuses a second record with the same name, type and content, so Piceli
 never adopts a record it did not create. Each domain needs API access turned
 on in Porkbun's console; a refusal for that is ``infra-dns-api-disabled``.
 
+Plan-time check: a plan that changes records at Porkbun asks Porkbun's API
+(``POST /dns/retrieve/DOMAIN``) once per domain whether it answers for that
+key pair, so an approved plan does not fail at apply for a domain without
+API access. A domain without it fails the plan (``infra-dns-api-disabled``);
+a check that cannot run (no key pair, no answer, another refusal) fails it
+too (``infra-dns-check-failed``): the plan never passes a check it did not
+run. The key pair goes only into the request body, never into a message,
+the plan or the state. The plan's ``checks`` record whether it ran.
+
 Importing this module is side-effect free.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import re
-from collections.abc import Mapping, Sequence
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, NoReturn
 
@@ -40,7 +53,7 @@ from piceli.infra.machines.model import (
 )
 from piceli.infra.machines.provider import Pin, Provider, Resource
 
-__all__ = ["PORKBUN_PIN", "Porkbun"]
+__all__ = ["PORKBUN_PIN", "Porkbun", "api_access"]
 
 #: marcfrederick/porkbun, as ``tofu providers lock`` locked it for every
 #: platform the registry publishes (refresh: see the docs).
@@ -81,11 +94,95 @@ PORKBUN_PIN = Pin(
 KEY_ENV = "PORKBUN_API_KEY"
 SECRET_ENV = "PORKBUN_SECRET_API_KEY"
 RECORD_TYPE = "porkbun_dns_record"
+#: Porkbun's API v3 (the OpenTofu provider's too).
+API = "https://api.porkbun.com/api/json/v3"
+#: Seconds to wait for each domain's answer.
+CHECK_TIMEOUT = 15.0
+CHECK = "porkbun-api-access"
 #: Porkbun's answer for a domain without API access (its code, or its message).
 _API_DISABLED = re.compile(
     r"API_ACCESS_DISABLED|opted in to API access|API access (?:is )?(?:disabled|not enabled)",
     re.IGNORECASE,
 )
+
+
+def _post(url: str, body: bytes, timeout: float) -> tuple[int, bytes]:
+    """POST JSON ``body`` to ``url``: the status and up to 1 MiB of the answer."""
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json", "User-Agent": "piceli"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return int(response.status), response.read(1 << 20)
+    except urllib.error.HTTPError as error:
+        with error:
+            return int(error.code), error.read(1 << 20)
+
+
+def _key_pair(credential: str | None) -> tuple[str, str]:
+    key, separator, secret = (credential or "").partition(":")
+    if not separator or not key or not secret:
+        raise InfraError(
+            "infra-dns-check-failed",
+            "no Porkbun key pair (APIKEY:SECRETKEY) was loaded, so the plan "
+            "cannot confirm API access for its domains",
+        )
+    return key, secret
+
+
+def api_access(
+    domains: Iterable[str],
+    credential: str | None,
+    *,
+    post: Any = None,
+    timeout: float = CHECK_TIMEOUT,
+) -> dict[str, str]:
+    """``{domain: "enabled"}`` once Porkbun answers for each domain with this key pair.
+
+    Raises ``infra-dns-api-disabled`` for a domain without API access and
+    ``infra-dns-check-failed`` when the check cannot confirm it. Neither
+    error carries the key pair or Porkbun's own message.
+    """
+    key, secret = _key_pair(credential)
+    send = post or _post
+    body = json.dumps({"apikey": key, "secretapikey": secret}).encode()
+    found: dict[str, str] = {}
+    for domain in sorted(set(domains)):
+        url = f"{API}/dns/retrieve/{urllib.parse.quote(domain, safe='')}"
+        try:
+            status, raw = send(url, body, timeout)
+        except (OSError, ValueError):  # URLError, timeouts, refused connections
+            raise _unconfirmed(domain, "Porkbun's API did not answer") from None
+        try:
+            answer = json.loads(raw)
+        except ValueError:
+            answer = None
+        if not isinstance(answer, dict):
+            raise _unconfirmed(domain, f"Porkbun's API answered HTTP {status}")
+        if answer.get("status") == "SUCCESS" and status == 200:
+            found[domain] = "enabled"
+            continue
+        if _API_DISABLED.search(str(answer.get("message") or "")):
+            raise InfraError(
+                "infra-dns-api-disabled",
+                f"Porkbun API access is off for {domain}; turn it on (Domain "
+                "Management → Details → API Access), then plan again",
+            )
+        raise _unconfirmed(
+            domain,
+            f"Porkbun refused the request (HTTP {status}): check the key pair "
+            "and that the domain is in its account",
+        )
+    return found
+
+
+def _unconfirmed(domain: str, why: str) -> InfraError:
+    return InfraError(
+        "infra-dns-check-failed", f"could not confirm API access for {domain}: {why}"
+    )
 
 
 @dataclass(frozen=True)
@@ -147,6 +244,31 @@ class Porkbun(Provider):
                 diagnostics,
             )
         return None
+
+    def plan_check(
+        self, document: Mapping[str, Any], credential: str | None
+    ) -> dict[str, Any] | None:
+        """API access of each domain whose records the plan changes."""
+        domains: set[str] = set()
+        for item in document.get("resource_changes") or ():
+            if not isinstance(item, dict) or item.get("type") != RECORD_TYPE:
+                continue
+            change = item.get("change") or {}
+            actions = tuple(change.get("actions") or ())
+            if not actions or actions in (("no-op",), ("read",)):
+                continue
+            for side in ("after", "before"):
+                domain = (change.get(side) or {}).get("domain")
+                if isinstance(domain, str) and domain:
+                    domains.add(domain)
+        if not domains:
+            return {
+                "check": CHECK,
+                "ran": False,
+                "why": "no record changes at Porkbun",
+                "domains": {},
+            }
+        return {"check": CHECK, "ran": True, "domains": api_access(domains, credential)}
 
     # ------------------------------------------------------------ rendering
     def _no_servers(self) -> NoReturn:

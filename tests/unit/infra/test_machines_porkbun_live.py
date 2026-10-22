@@ -2,7 +2,7 @@
 
 Skipped unless ``PICELI_PORKBUN_LIVE=1``. It creates one TXT record under
 ``piceli-live`` in the test domain and always destroys it (``finally``),
-also when an assertion fails. DNS at the registrar is free. Environment:
+also when an assertion fails; the plan checks the domain's API access. DNS at the registrar is free. Environment:
 
 - ``PICELI_PORKBUN_DOMAIN``: a domain at Porkbun with API access on;
 - ``PICELI_PORKBUN_API_KEY`` and ``PICELI_PORKBUN_SECRET_KEY`` (stored in
@@ -51,6 +51,10 @@ def test_apply_and_destroy_a_txt_record(homes: Path) -> None:
         with workspace(infra) as ws:
             planned = plan(ws)
             assert [c.kind for c in planned.changes] == ["record"]
+            # The plan asked Porkbun whether the domain has API access.
+            (check,) = planned.to_dict()["checks"]
+            assert check == {"check": "porkbun-api-access", "ran": True,
+                             "domains": {_env("DOMAIN"): "enabled"}}  # fmt: skip
             _, inventory = apply(ws, planned.plan_hash)
         assert [r["kind"] for r in inventory["resources"]] == ["record"]
         for path in (homes / "state").rglob("*"):
