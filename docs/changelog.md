@@ -112,6 +112,17 @@ and rollback.
   retried, and its earlier failure is not reported meanwhile);
   `--published-after` pins one before the host has polled. New codes
   `host-*`; see `docs/nix_hosts.md`.
+- **A Nix host keeps 5 systems, not every one.** `NixHost(generations=5)`
+  (at least 2: a rollback needs the previous one). After a deploy whose
+  checks passed, the agent deletes the system profile's older generations
+  (`nix-env --delete-generations +N`; never the current, the previous or a
+  held system, which it then names generation by generation) and collects
+  the store (`nix-store --gc`), each within a time limit. A failure is
+  reported (new code `host-prune-failed`) and never fails the deploy. The
+  status, each attempt and the OTLP event `piceli.host.prune` say what was
+  deleted, kept and freed; `piceli host status` prints it. The rendered
+  module sets the boot menu's `configurationLimit` (GRUB and systemd-boot)
+  to the same number with `lib.mkDefault`.
 - **Pin, unpin and roll back a Nix host.** `piceli host pin HOST TAG`
   deploys a published tag's build (verified like any deploy, an older
   version too, checked and rolled back on failure) and holds it;

@@ -18,7 +18,12 @@ JSON, and runs it as a systemd oneshot on a timer. Each run:
    ``switch-to-configuration switch``;
 5. **checks**: each until it passes or its timeout;
 6. on a failed switch or check, **rollback** to the previous system, and
-   mark the build bad: it is not tried again until a newer pointer.
+   mark the build bad: it is not tried again until a newer pointer;
+7. after a deploy that passed its checks, **prune**: delete the system
+   profile's generations beyond ``generations`` (``nix-env
+   --delete-generations``; never the current, the previous or a held
+   system), then collect the store (``nix-store --gc``). A failure there
+   is reported (``host-prune-failed``) and never fails the deploy.
 
 ``piceli host pin``, ``unpin`` and ``rollback`` run it once over SSH as
 ``piceli-host-agent pin TAG`` (and so on), under the same lock as a poll: a
@@ -69,6 +74,7 @@ FEATURES = ("--extra-experimental-features", "nix-command flakes")
 DEFAULT_TOOLS = {
     "nix": "/run/current-system/sw/bin/nix",
     "nix_env": "/run/current-system/sw/bin/nix-env",
+    "nix_store": "/run/current-system/sw/bin/nix-store",
     "systemctl": "/run/current-system/sw/bin/systemctl",
 }
 PROFILE = "/nix/var/nix/profiles/system"
@@ -80,6 +86,12 @@ LOCK_WAIT = 600
 ACTIONS = ("poll", "pin", "unpin", "rollback")
 _TAG = re.compile(r"[A-Za-z0-9_+-][A-Za-z0-9._+-]{0,199}")
 SWITCH_SECONDS = 1800
+#: System generations kept (``NixHost(generations=)``), and the time limits
+#: of deleting the others and of the store's garbage collection.
+GENERATIONS = 5
+DELETE_SECONDS = 600
+GC_SECONDS = 3600
+_FREED = re.compile(r"(\d+) store paths deleted, ([0-9.]+ [KMGT]?i?B) freed")
 QUEUE_MAX = 500
 OTLP_TIMEOUT = 2.0
 _STORE_PATH = re.compile(r"/nix/store/([0-9a-df-np-sv-z]{32})-[A-Za-z0-9+._?=-]+")
@@ -481,7 +493,10 @@ class Agent:
             return 127
         return int(done.returncode)
 
-    def _output(self, argv: list[str], timeout: float) -> tuple[int, str]:
+    def _output(
+        self, argv: list[str], timeout: float, *, stderr: bool = False
+    ) -> tuple[int, str]:
+        """Exit code and stdout (and stderr after it with ``stderr=True``)."""
         try:
             done = self.runner(
                 argv,
@@ -492,7 +507,8 @@ class Agent:
             )
         except (OSError, subprocess.TimeoutExpired):
             return 1, ""
-        return int(done.returncode), (done.stdout or b"").decode("utf-8", "replace")
+        out = (done.stdout or b"") + ((done.stderr or b"") if stderr else b"")
+        return int(done.returncode), out.decode("utf-8", "replace")
 
     def running(self) -> str | None:
         try:
@@ -966,6 +982,7 @@ class Agent:
             ],
             "checks": [],
             "rollback": None,
+            "prune": None,
         }
         started = self.monotonic()
         trace = attempt["trace_id"]
@@ -1039,11 +1056,128 @@ class Agent:
                 "piceli.seconds": attempt["seconds"],
             },
         )  # fmt: skip
+        if attempt["state"] == "deployed":
+            attempt["prune"] = self.status["prune"] = self.prune(trace)
         self.status["previous"] = self.state.get("previous")
         self.status["last_attempt"] = attempt
         history = [attempt, *self.status.get("history", [])]
         self.status["history"] = history[: int(self.config.get("history") or 20)]
         return attempt
+
+    # ---------------------------------------------------------- prune
+
+    def generations(self) -> tuple[dict[int, str], int | None]:
+        """The system profile's generations (number -> store path) and the
+        current one (``None`` when the profile is not a generation link)."""
+        folder, base = os.path.split(self.profile)
+        link = re.compile(re.escape(base) + r"-([0-9]+)-link")
+        found: dict[int, str] = {}
+        try:
+            names = os.listdir(folder or ".")
+        except OSError:
+            return {}, None
+        for name in names:
+            match = link.fullmatch(name)
+            if match is None:
+                continue
+            try:
+                found[int(match.group(1))] = os.readlink(os.path.join(folder, name))
+            except OSError:
+                continue
+        try:
+            match = link.fullmatch(os.path.basename(os.readlink(self.profile)))
+        except OSError:
+            match = None
+        current = int(match.group(1)) if match else None
+        return found, current if current in found else None
+
+    def _plan_prune(
+        self, keep: int
+    ) -> tuple[list[int], list[int], list[int], int | None, str | None]:
+        """``(delete, kept, protected, current, argument)``: what ``nix-env
+        --delete-generations +KEEP`` would delete, minus the newest
+        generation of each protected system (current, previous, held) it
+        would take; ``argument`` is ``+KEEP`` when nothing had to be
+        spared, else ``None`` (the numbers are named)."""
+        found, current = self.generations()
+        if current is None:
+            return [], sorted(found), [], None, None
+        ordered = sorted(found, reverse=True)
+        # Nix keeps the generations newer than the current one, the
+        # current one and KEEP - 1 older ones.
+        newest = set(ordered[: ordered.index(current) + keep])
+        systems = {
+            str(entry.get("store_path"))
+            for entry in (self.state.get(k) for k in ("current", "previous", "hold"))
+            if isinstance(entry, dict) and entry.get("store_path")
+        }
+        covered = {found[n] for n in newest}
+        protected = sorted(
+            max(n for n in ordered if found[n] == path)
+            for path in systems - covered
+            if path in found.values()
+        )
+        kept = newest | set(protected)
+        delete = sorted(n for n in ordered if n not in kept)
+        return (
+            delete,
+            sorted(kept),
+            protected,
+            current,
+            (None if protected else f"+{keep}"),
+        )
+
+    def prune(self, trace: str) -> dict[str, Any]:
+        """Delete the generations beyond ``generations`` and collect the
+        store; a failure is in the record (``host-prune-failed``), never
+        raised."""
+        started = self.monotonic()
+        keep = max(2, int(self.config.get("generations") or GENERATIONS))
+        delete, kept, protected, current, argument = self._plan_prune(keep)
+        record: dict[str, Any] = {
+            "state": "done", "reason": None, "keep": keep, "current": current,
+            "deleted": [], "kept": kept, "protected": protected, "gc": None,
+        }  # fmt: skip
+        if current is None:
+            record.update(state="skipped", reason="host-prune-failed", kept=[])
+        elif delete:
+            spec = [argument] if argument else [str(n) for n in delete]
+            argv = [self.tools["nix_env"], "-p", self.profile,
+                    "--delete-generations", *spec]  # fmt: skip
+            if self._run(argv, DELETE_SECONDS) == 0:
+                record["deleted"] = delete
+            else:
+                record.update(state="failed", reason="host-prune-failed")
+                record["kept"] = sorted(set(kept) | set(delete))
+        gc_started = self.monotonic()
+        code, text = self._output(
+            [self.tools["nix_store"], "--gc"], GC_SECONDS, stderr=True
+        )
+        freed = _FREED.search(text) if code == 0 else None
+        record["gc"] = {
+            "state": "done" if code == 0 else "failed",
+            "reason": None if code == 0 else "host-prune-failed",
+            "paths": int(freed.group(1)) if freed else None,
+            "freed": freed.group(2) if freed else None,
+            "seconds": round(self.monotonic() - gc_started, 3),
+        }
+        if code != 0:
+            record.update(state="failed", reason="host-prune-failed")
+        record["seconds"] = round(self.monotonic() - started, 3)
+        self.reporter.event(
+            "piceli.host.prune",
+            f"prune {record['state']}: {len(record['deleted'])} generations deleted",
+            trace, error=record["state"] == "failed", **{
+                "piceli.state": record["state"], "piceli.reason": record["reason"],
+                "piceli.keep": keep, "piceli.deleted": len(record["deleted"]),
+                "piceli.generations_deleted": ",".join(map(str, record["deleted"])),
+                "piceli.gc": record["gc"]["state"],
+                "piceli.gc_paths": record["gc"]["paths"],
+                "piceli.gc_freed": record["gc"]["freed"],
+                "piceli.seconds": record["seconds"],
+            },
+        )  # fmt: skip
+        return record
 
     def _rollback(self, attempt: dict[str, Any], previous: str) -> dict[str, Any]:
         started = self.monotonic()

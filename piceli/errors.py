@@ -6028,6 +6028,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "hosts",
     ),
     _E(
+        "host-prune-failed",
+        "Old systems not pruned",
+        "After a deploy that passed its checks, deleting the system generations beyond `NixHost(generations=)` (`nix-env --delete-generations`) or collecting the store (`nix-store --gc`) failed or timed out. The deploy stands; the host keeps more systems and the disk fills sooner.",
+        "Read `prune` in `piceli host status --json` and the host's journal (`journalctl -u piceli-host-agent`); the next deploy tries again.",
+        True,
+        "hosts",
+    ),
+    _E(
         "host-pinned",
         "Host is pinned",
         "The host holds a build (`piceli host pin`, or `piceli host rollback`) and deploys no other until `piceli host unpin`; `piceli host wait` stops instead of timing out.",

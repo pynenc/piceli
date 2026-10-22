@@ -226,6 +226,14 @@ def _say_status(status: dict[str, Any]) -> None:
             say(f"    check {check.get('name')}: {check.get('state')}")
         if attempt.get("rollback"):
             say(f"    rolled back: {attempt['rollback'].get('state')}")
+    prune = status.get("prune")
+    if isinstance(prune, dict):
+        gc = prune.get("gc") or {}
+        freed = f", {gc['freed']} freed" if gc.get("freed") else ""
+        say(f"  last prune: {prune.get('state')} {prune.get('reason') or ''}".rstrip()
+            + f" (kept {len(prune.get('kept') or ())} of {prune.get('keep')} "
+            f"generations, deleted {len(prune.get('deleted') or ())}; "
+            f"gc {gc.get('state')}{freed})")  # fmt: skip
 
 
 @host_app.command("status")

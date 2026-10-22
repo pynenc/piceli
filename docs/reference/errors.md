@@ -346,6 +346,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`host-pin-not-found`](#error-host-pin-not-found) | hosts | no |
 | [`host-pinned`](#error-host-pinned) | hosts | no |
 | [`host-pointer-replayed`](#error-host-pointer-replayed) | hosts | no |
+| [`host-prune-failed`](#error-host-prune-failed) | hosts | yes |
 | [`host-realise-failed`](#error-host-realise-failed) | hosts | yes |
 | [`host-report-failed`](#error-host-report-failed) | hosts | yes |
 | [`host-rollback-failed`](#error-host-rollback-failed) | hosts | no |
@@ -6624,6 +6625,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Publish the build again (a new pointer is newer); check who can write to the cache.
 - **Retry-safe:** no
+
+(error-host-prune-failed)=
+### `host-prune-failed`
+
+**Old systems not pruned.** After a deploy that passed its checks, deleting the system generations beyond `NixHost(generations=)` (`nix-env --delete-generations`) or collecting the store (`nix-store --gc`) failed or timed out. The deploy stands; the host keeps more systems and the disk fills sooner.
+
+- **Fix:** Read `prune` in `piceli host status --json` and the host's journal (`journalctl -u piceli-host-agent`); the next deploy tries again.
+- **Retry-safe:** yes
 
 (error-host-realise-failed)=
 ### `host-realise-failed`

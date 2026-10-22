@@ -104,16 +104,67 @@ class FakeHost:
         self.current = current
         self.calls: list[list[str]] = []
         self.envs: list[Mapping[str, str]] = []
+        self.timeouts: list[float | None] = []
         self.unit_active = unit_active
         self.fail_switch: set[str] = set()
         self.fail_copy = False
+        self.fail_delete = False
+        self.fail_gc: int | Exception = 0
+
+    # The system profile, as ``nix-env -p PROFILE`` keeps it: numbered
+    # ``PROFILE-N-link`` generations and ``PROFILE`` -> the current one.
+    @staticmethod
+    def generations(profile: Path) -> dict[int, str]:
+        found = {}
+        for link in profile.parent.glob(f"{profile.name}-*-link"):
+            number = link.name[len(profile.name) + 1 : -len("-link")]
+            if number.isdigit():
+                found[int(number)] = os.readlink(link)
+        return found
+
+    @staticmethod
+    def add_generation(profile: Path, path: str) -> int:
+        number = max(FakeHost.generations(profile), default=0) + 1
+        (profile.parent / f"{profile.name}-{number}-link").symlink_to(path)
+        if profile.is_symlink():
+            profile.unlink()
+        profile.symlink_to(f"{profile.name}-{number}-link")
+        return number
+
+    def _profile(self, argv: list[str]) -> int:
+        profile = Path(argv[argv.index("-p") + 1])
+        if "--set" in argv:
+            self.add_generation(profile, argv[-1])
+            return 0
+        if self.fail_delete:
+            return 1
+        found = sorted(self.generations(profile), reverse=True)
+        current = int(os.readlink(profile).split("-")[-2])
+        spec = argv[argv.index("--delete-generations") + 1 :]
+        if spec[0].startswith("+"):  # nix's deleteGenerationsGreaterThan
+            rest = found[found.index(current) :]
+            drop = set(rest[int(spec[0][1:]) :])
+        else:
+            drop = {int(n) for n in spec}
+        assert current not in drop
+        for number in drop:
+            (profile.parent / f"{profile.name}-{number}-link").unlink()
+        return 0
 
     def __call__(self, argv: Sequence[str], **kwargs: Any) -> Any:
         argv = list(argv)
         self.calls.append(argv)
         self.envs.append(kwargs.get("env") or {})
+        self.timeouts.append(kwargs.get("timeout"))
         out, code = b"", 0
-        if argv[0] == "fake-nix" and "copy" in argv:
+        if argv[0] == "fake-nix-env":
+            code = self._profile(argv)
+        elif argv[0] == "fake-nix-store" and "--gc" in argv:
+            if isinstance(self.fail_gc, Exception):
+                raise self.fail_gc
+            code = self.fail_gc
+            out = b"" if code else b"12 store paths deleted, 345.60 MiB freed\n"
+        elif argv[0] == "fake-nix" and "copy" in argv:
             code = 1 if self.fail_copy else 0
         elif argv[0] == "fake-nix" and "path-info" in argv:
             path = argv[-1]
@@ -169,7 +220,7 @@ def make_agent(
         "current_system": str(fake.current),
         "system": SYSTEM,
         "tools": {"nix": "fake-nix", "nix_env": "fake-nix-env",
-                  "systemctl": "fake-systemctl"},
+                  "nix_store": "fake-nix-store", "systemctl": "fake-systemctl"},
     }  # fmt: skip
     clock = clock or Clock()
     return Agent(

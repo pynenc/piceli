@@ -53,6 +53,7 @@ web = NixHost(
 | `build=` | The manifests' name, `--name` of the publish (`NAME` of `.#NAME`, else the host's name) |
 | `read_credentials_file=` | The host's file with the cache's read-only S3 keys, a sops-nix secret (`/run/secrets/piceli/cache.env` for an `s3://` cache, none otherwise) |
 | `poll_seconds=`, `history=` | How often the agent polls (300) and how many attempts the status keeps (20) |
+| `generations=` | How many system generations the host keeps (5, at least 2: a rollback needs the previous one); see [Old systems](#old-systems) |
 | `age_identity=`, `age_key_file=` | The local credential with the host's age identity, and where `piceli host secrets` puts it (`/var/lib/sops-nix/key.txt`, sops-nix's `sops.age.keyFile`) |
 
 `Tag("v*")` follows the highest semantic version among the matching tags (an
@@ -195,14 +196,60 @@ The JSON of the three commands (`piceli.host-control.v1`): `action`,
 `reason`), `hold`, `current`, `attempt` (its `trigger`, stages, checks and
 rollback; `null` when nothing switched), `host` and `target`.
 
+## Old systems
+
+Every switch adds a generation to the system profile, and each one keeps
+its whole closure in the store: a 20 GB disk fills with old systems. After
+a deploy (a poll, a pin or a rollback) whose checks passed, the agent:
+
+1. deletes the system profile's generations beyond `generations=` (5) with
+   `nix-env -p /nix/var/nix/profiles/system --delete-generations +5`. It
+   never deletes the current system, the previous one (what `piceli host
+   rollback` goes back to) or a held one: when one of them is older than
+   the newest five, the agent names the generations it deletes instead of
+   `+5` and keeps the newest generation of that system;
+2. collects the store (`nix-store --gc`; never `-d`, which deletes every
+   old generation), so the space is freed.
+
+Each step has a time limit (10 minutes, one hour for the collection). A
+failure or a timeout is reported, `host-prune-failed`, and never fails the
+deploy: the next one tries again. A deploy that failed or rolled back
+prunes nothing.
+
+The rendered module sets the boot menu's limit to the same number with
+`lib.mkDefault` (`boot.loader.grub.configurationLimit` and
+`boot.loader.systemd-boot.configurationLimit`), so your configuration can
+still set another. The agent's attempt history (`history=`, 20) is separate:
+it is a list in the status file, not systems on disk.
+
+`prune` in the status and in each attempt:
+
+```json
+{"state": "done", "reason": null, "keep": 5, "current": 7,
+ "deleted": [1, 2], "kept": [3, 4, 5, 6, 7], "protected": [],
+ "gc": {"state": "done", "reason": null, "paths": 12, "freed": "345.60 MiB",
+        "seconds": 41.2},
+ "seconds": 41.9}
+```
+
+`state` is `done`, `failed` (with `reason: host-prune-failed`; `deleted`
+is empty when the deletion failed, `gc.state` says whether the collection
+did) or `skipped` (the profile is not a generation link). `protected`
+lists generations kept beyond `keep` because they hold the previous or a
+held system. `gc.paths` and `gc.freed` come from `nix-store`'s summary
+(`null` when it printed none). The OTLP event is `piceli.host.prune`, with
+the state, the number of generations deleted, which ones, and what the
+collection freed.
+
 ## Status and wait
 
 The agent writes `/var/lib/piceli-host/status.json` (`0644`, no secret,
 `schema: piceli.nix-host-status.v1`). It holds `current` and `previous`
 (store path, commit, tag, ref, `published_at`, `since`), `poll` (the last
 poll's state and reason), `last_attempt` (its stages with `seconds`, the
-check results, the `rollback`), `history` (the newest attempts), the
-ignored tags, the `hold` (or `null`) and the report's state.
+check results, the `rollback`, the `prune`), `history` (the newest
+attempts), `prune` (the last one), the ignored tags, the `hold` (or `null`)
+and the report's state.
 
 ```sh
 piceli host status hosts.py:web --infra infra.py:edge --json

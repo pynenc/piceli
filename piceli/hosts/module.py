@@ -62,6 +62,7 @@ let
     tools = {{
       nix = "${{config.nix.package}}/bin/nix";
       nix_env = "${{config.nix.package}}/bin/nix-env";
+      nix_store = "${{config.nix.package}}/bin/nix-store";
       systemctl = "${{config.systemd.package}}/bin/systemctl";
     }};
   }}));
@@ -79,6 +80,9 @@ let
 in
 {{
   environment.systemPackages = [ command ];
+  # The agent keeps {host.generations} system generations; the boot menu lists as many.
+  boot.loader.grub.configurationLimit = lib.mkDefault {host.generations};
+  boot.loader.systemd-boot.configurationLimit = lib.mkDefault {host.generations};
   systemd.services.piceli-host-agent = {{
     description = "Piceli host agent: follow {following} of {host.build}";
     wants = [ "network-online.target" ];

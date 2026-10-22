@@ -494,6 +494,21 @@ def test_host_status_shows_a_hold(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "rolled back to" in done.stderr and "unpin" in done.stderr
 
 
+def test_host_status_shows_the_last_prune(monkeypatch: pytest.MonkeyPatch) -> None:
+    prune = {"state": "done", "reason": None, "keep": 5, "current": 7,
+             "deleted": [1, 2], "kept": [3, 4, 5, 6, 7], "protected": [],
+             "gc": {"state": "done", "reason": None, "paths": 12,
+                    "freed": "345.60 MiB", "seconds": 1.0}, "seconds": 1.5}  # fmt: skip
+    run = _cli(monkeypatch, [_status(prune=prune)])
+    done = run("host", "status", "web-1.example.net", "--json")
+    assert done.exit_code == 0
+    assert json.loads(done.stdout)["prune"] == prune
+    assert (
+        "last prune: done (kept 5 of 5 generations, deleted 2; gc done, "
+        "345.60 MiB freed)" in done.stderr
+    )
+
+
 # ------------------------------------------------------------------ secrets
 
 

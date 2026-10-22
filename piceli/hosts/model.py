@@ -55,6 +55,8 @@ CACHE_ENV = "/run/secrets/piceli/cache.env"
 POLL_SECONDS = 300
 CHECK_TIMEOUT = 60
 HISTORY = 20
+#: System generations kept on the host (a rollback needs the previous one).
+GENERATIONS = 5
 _LABEL = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
 _PATTERN = re.compile(r"[A-Za-z0-9._+*?\[\]/-]{1,100}")
 _BRANCH = re.compile(r"[A-Za-z0-9_+-][A-Za-z0-9._+/-]{0,199}")
@@ -303,6 +305,11 @@ class NixHost:
         for an ``s3://`` cache, none for a ``file://`` or ``https://`` one.
     :param poll_seconds: How often the agent looks for a new build.
     :param history: How many attempts the status keeps.
+    :param generations: How many system generations the host keeps (at
+        least 2: a rollback needs the previous one). After a deploy that
+        passed its checks the agent deletes older ones (never the current,
+        the previous or a held system) and collects the store; the boot
+        menu's limit follows (``lib.mkDefault``).
     :param age_identity: The local credential with the host's age identity
         (``piceli secrets age NAME --generate``) that ``piceli host secrets``
         puts on the host for sops-nix; ``None``: the host gets its key
@@ -321,6 +328,7 @@ class NixHost:
     read_credentials_file: str | None = None
     poll_seconds: int = POLL_SECONDS
     history: int = HISTORY
+    generations: int = GENERATIONS
     age_identity: str | None = None
     age_key_file: str = AGE_KEY_FILE
     attribute: str = field(init=False, default="")
@@ -378,8 +386,13 @@ class NixHost:
         for value, low, high, what in (
             (self.poll_seconds, 30, 86400, "poll_seconds"),
             (self.history, 1, 1000, "history"),
+            (self.generations, 2, 1000, "generations"),
         ):
-            if not isinstance(value, int) or not low <= value <= high:
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or not low <= value <= high
+            ):
                 raise _invalid(f"NixHost({what}=) is {low} to {high}")
         if self.age_identity is not None:
             from piceli.profiles import ProfileError, check_name
@@ -442,5 +455,6 @@ def agent_config(host: NixHost) -> dict[str, Any]:
         "report": host.report.describe() if host.report is not None else None,
         "poll_seconds": host.poll_seconds,
         "history": host.history,
+        "generations": host.generations,
         "state_dir": STATE_DIR,
     }
