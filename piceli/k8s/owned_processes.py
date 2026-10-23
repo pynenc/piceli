@@ -55,6 +55,8 @@ def process_identity(pid: int, *, proc: Path = Path("/proc")) -> str | None:
         fields = stat.rsplit(")", 1)[-1].split()
         if len(fields) < 20 or fields[0] in {"Z", "X"}:
             return None  # a zombie has exited: only its parent has not waited yet
+        if not command:
+            return None  # exiting: it has released its memory, cmdline reads empty
         raw = fields[19].encode() + b"\0" + command
     else:
         ps = shutil.which("ps")
@@ -271,7 +273,44 @@ def _terminate(entry: _Entry, timeout: float) -> bool:
         send(signum)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if process_identity(entry.pid) != entry.identity:
+            if _gone(entry):
                 return True
             time.sleep(0.05)
-    return process_identity(entry.pid) != entry.identity
+    return _gone(entry)
+
+
+def _gone(entry: _Entry) -> bool:
+    """Whether the recorded process has exited, confirmed rather than inferred.
+
+    A fingerprint that no longer matches is not proof on its own: an exiting
+    process reads as unknown for a moment (its command line is released before
+    it becomes a zombie), and a read can fail while it still runs. It is gone
+    when its pid no longer exists, when it is a zombie, or when another process
+    holds the pid on two reads in a row.
+    """
+    seen = process_identity(entry.pid)
+    if seen == entry.identity:
+        return False
+    if seen is None:
+        return not _exists(entry.pid)
+    time.sleep(0.05)
+    again = process_identity(entry.pid)
+    return again is not None and again != entry.identity
+
+
+def _exists(pid: int) -> bool:
+    """Whether ``pid`` names a process that has not exited (a zombie has)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    stat = Path("/proc") / str(pid) / "stat"
+    if sys.platform.startswith("linux"):
+        try:
+            state = stat.read_text().rsplit(")", 1)[-1].split()[0]
+        except (OSError, IndexError):
+            return False
+        return state not in {"Z", "X"}
+    return True
