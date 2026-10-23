@@ -82,6 +82,28 @@ test('targets', async ({ page }) => {
   await pause(page, 1000);
 });
 
+test('trains', async ({ page }) => {
+  await page.goto('/trains');
+  await expect(page.getByRole('heading', { name: 'Trains', exact: true })).toBeVisible();
+  const running = page.getByRole('region', { name: 'Running shop' });
+  const log = running.getByLabel('Log of cargo-test');
+  await expect(log).toContainText('test api::search::case_');
+  const before = await log.textContent();
+  await pause(page, 2500);
+  await expect(log).not.toHaveText(before ?? '');
+  await shot(page, 'trains');
+  await page.getByRole('region', { name: 'Step trends' }).scrollIntoViewIfNeeded();
+  await expect(page.getByRole('region', { name: 'Step trends' }).getByText('Slower')).toBeVisible();
+  await pause(page, 1500);
+  await page.getByRole('region', { name: 'Flaky tests' }).scrollIntoViewIfNeeded();
+  await page.getByText('Last first failure').click();
+  await pause(page, 1200);
+  await page.getByRole('region', { name: 'Deployed by train' }).scrollIntoViewIfNeeded();
+  await expect(page.getByRole('region', { name: 'Deployed by train' }).getByText(/matched by pinned/)).toBeVisible();
+  await pause(page, 1500);
+  await shot(page, 'trains-deployed');
+});
+
 test('compact-source-inventory', async ({ page }) => {
   await page.goto('/composition/sources');
   const product = page.getByRole('region', { name: 'Source product', exact: true });

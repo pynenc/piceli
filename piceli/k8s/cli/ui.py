@@ -127,6 +127,28 @@ def serve(
             help="Also show the machines of a piceli.infra.Infrastructure MODULE:ATTR (read-only)",
         ),
     ] = None,
+    trains: Annotated[
+        bool,
+        typer.Option(
+            "--trains",
+            help="Also show the local merge trains (piceli trains; read-only)",
+        ),
+    ] = False,
+    train_state_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--train-state-dir",
+            help="Train state root for --trains (default $XDG_STATE_HOME/piceli/train)",
+        ),
+    ] = None,
+    train_composition: Annotated[
+        str | None,
+        typer.Option(
+            "--train-composition",
+            help="With --trains: also show which run produced what each "
+            "environment and NixHost of this composition MODULE runs",
+        ),
+    ] = None,
 ) -> None:
     """Register an existing definition or inventory scope and serve the bundled UI.
 
@@ -138,6 +160,11 @@ def serve(
         from piceli.services.machines import MachinesControl
 
         machines_control = MachinesControl(load_infra(infra), infra)
+    trains_control = None
+    if trains or train_state_dir is not None or train_composition is not None:
+        from piceli.services.trains import TrainsControl
+
+        trains_control = TrainsControl(train_state_dir, composition=train_composition)
     if profile is not None:
         if kubeconfig is not None or context is not None:
             reject("profile-conflict")
@@ -379,6 +406,7 @@ def serve(
             active_profile=profile,
             profile_switch=switch_session,
             machines_control=machines_control,
+            trains_control=trains_control,
         )
         from piceli.k8s.ui_state import remove_launch_token, write_launch_token
         from piceli.server.security import uvicorn_log_config

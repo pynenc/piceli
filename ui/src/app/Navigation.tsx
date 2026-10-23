@@ -73,6 +73,7 @@ export function Navigation({ capabilities }: { capabilities?: Capabilities }) {
   const delivery: Item[] = [
     ...(history ? [{ to: '/delivery', label: 'Deployment history', icon: 'history' as const, badge: <Count value={summary.approvals} tone="warning" label="approvals waiting" />, children: composition ? [{ to: '/delivery', label: 'History' }, { to: '/composition/overview?view=attention', label: 'Approvals' }] : [] }] : []),
     ...(allowed('pipeline') ? [{ to: '/pipeline', label: 'Pipeline', icon: 'pipeline' as const }] : []),
+    ...(allowed('trains') ? [{ to: '/trains', label: 'Trains', icon: 'pipeline' as const }] : []),
     ...(allowed('cluster_build') ? [{ to: '/cluster-build', label: 'Cluster build', icon: 'build' as const, badge: <Count value={summary.failed_builds} tone="danger" label="failed builds" /> }] : []),
   ];
   const operations: Item[] = [

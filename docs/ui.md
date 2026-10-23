@@ -81,6 +81,17 @@ cost, and the DNS records. It reads what the last `piceli infra` commands
 recorded; it never runs OpenTofu or reads a credential. Plans and applies
 stay on the command line (see {doc}`infrastructure`).
 
+`piceli ui serve … --trains` adds **Trains** to the Delivery group (from
+0.26.0): the local merge trains, as `piceli trains` shows them, built by
+the same functions. The run in progress shows its branches, the steps done
+and the running step with its host, elapsed time and the tail of its log,
+refreshed every two seconds; then recent runs, step durations (median and
+last), flaky tests with their last first failure, and, with
+`--train-composition MODULE`, which run produced what each environment and
+NixHost runs (read as `piceli targets` reads them, at most once a minute).
+`--train-state-dir DIR` reads another state root. It runs nothing and
+takes no lock (see {doc}`train`).
+
 ```{image} _static/ui/navigation-badges.webp
 :alt: Navigation with approval, environment and registry counts and an Environments sub-menu listing each environment
 :width: 720px

@@ -5995,6 +5995,46 @@
         },
         "summary": "Release Remote Access"
       }
+    },
+    "/api/v1/trains": {
+      "get": {
+        "operationId": "trains_api_v1_trains_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Trains Api V1 Trains Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Trains"
+      }
+    },
+    "/api/v1/trains/deployed": {
+      "get": {
+        "operationId": "trains_deployed_api_v1_trains_deployed_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Trains Deployed Api V1 Trains Deployed Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Trains Deployed"
+      }
     }
   }
 }

@@ -95,6 +95,7 @@ if TYPE_CHECKING:
     from piceli.services.operations import OperationService
     from piceli.services.pipeline_control import PipelineControl
     from piceli.services.remote_access import RemoteAccessService
+    from piceli.services.trains import TrainsControl
 
 
 def _error(code: str, status: int) -> JSONResponse:
@@ -199,6 +200,7 @@ def create_app(
     profile_switch: Callable[[str], None] | None = None,
     profile_scopes: ProfileScopes | None = None,
     machines_control: MachinesControl | None = None,
+    trains_control: TrainsControl | None = None,
 ) -> FastAPI:
     """Create a local app. The caller owns the server's loopback listener.
 
@@ -211,6 +213,9 @@ def create_app(
     if cluster_security is not None and machines_control is not None:
         # Machines are the UI owner's local view (state directory, laptop).
         raise ValueError("the machines view requires the local launch session")
+    if cluster_security is not None and trains_control is not None:
+        # Trains are the UI owner's local view (their state directory).
+        raise ValueError("the trains view requires the local launch session")
     if cluster_security is not None:
         from piceli.services.cluster_evaluation import KubernetesJobEvaluator
 
@@ -556,6 +561,15 @@ def create_app(
                     }
                 }
             )
+        if trains_control is not None:
+            result = result.model_copy(
+                update={
+                    "actions": {
+                        **result.actions,
+                        "trains": Capability(allowed=True, reason=None),
+                    }
+                }
+            )
         if (
             environment_control is None
             and pipeline_control is None
@@ -797,6 +811,21 @@ def create_app(
             return machines_control.status()
         except (OSError, ValueError):
             raise QueryError("ui-observation-unavailable", 503) from None
+
+    @app.get(f"{api}/trains")
+    def trains() -> dict[str, Any]:
+        if trains_control is None:
+            raise QueryError("ui-operation-unavailable", 409)
+        try:
+            return trains_control.status()
+        except (OSError, ValueError):
+            raise QueryError("ui-observation-unavailable", 503) from None
+
+    @app.get(f"{api}/trains/deployed")
+    def trains_deployed() -> dict[str, Any]:
+        if trains_control is None:
+            raise QueryError("ui-operation-unavailable", 409)
+        return trains_control.deployed()
 
     @app.get(f"{api}/composition/targets")
     def composition_targets() -> dict[str, Any]:
