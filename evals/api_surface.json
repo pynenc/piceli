@@ -6528,6 +6528,7 @@
    "attrs": [
     "auto_approve",
     "builder",
+    "credentials",
     "gate",
     "host",
     "inputs",
@@ -6538,6 +6539,7 @@
    "init": [
     "auto_approve",
     "builder",
+    "credentials",
     "gate",
     "host",
     "inputs",
@@ -9082,6 +9084,7 @@
     "auto_approve",
     "build",
     "builder",
+    "credentials",
     "from_dict",
     "gate",
     "inputs",
@@ -9101,6 +9104,7 @@
     "auto_approve",
     "build",
     "builder",
+    "credentials",
     "gate",
     "inputs",
     "key_unset",
@@ -11971,6 +11975,7 @@
     "arguments": [],
     "flags": [
      "--allow-exec",
+     "--check",
      "--cluster",
      "--exec-sha256",
      "--host",
@@ -13614,6 +13619,7 @@
      "cluster",
      "delete",
      "git",
+     "git-ssh-key",
      "git-token",
      "nix-cache",
      "provider",
@@ -13693,6 +13699,17 @@
      "--prompt",
      "--transport",
      "--username"
+    ],
+    "subcommands": []
+   },
+   "secrets git-ssh-key": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--file",
+     "--host",
+     "--known-hosts"
     ],
     "subcommands": []
    },

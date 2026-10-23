@@ -61,6 +61,7 @@ def _world(
     *,
     auto: bool = False,
     infra: str = INFRA,
+    credentials_dir: Path | None = None,
 ) -> dict[str, Any]:
     from piceli.infra.machines.credentials import save_credential
 
@@ -81,7 +82,9 @@ def _world(
     controller = CompositionController(
         config,
         state_dir=state,
-        sources=SourceSet(composition.sources, state / "sources"),
+        sources=SourceSet(
+            composition.sources, state / "sources", credentials_dir=credentials_dir
+        ),
         ports=FakePorts(),
         channel=channel,
         clock=lambda: clock["now"],
@@ -108,7 +111,7 @@ def _worker(
     caches: list[Any] | None = None,
     host: str = "mini",
     said: list[str] | None = None,
-    fetch: Callable[..., Any] | None | str = "fake",
+    fetch: Callable[..., Any] | str | None = "fake",
 ) -> tuple[BuilderServe, list[dict[str, Any]]]:
     """``builder serve`` on ``host`` with a publisher whose Nix steps are fakes."""
     seen: list[dict[str, Any]] = []
@@ -907,3 +910,88 @@ def _host_of(world: dict[str, Any]) -> Any:
     cache = NixCache(PUBLIC, url=f"file://{world['cache']}")
     return NixHost("web-1", server="ssh://root@web-1.example.org", flake=".#web-1",
                    follow=Tag("web-v*"), cache=cache)  # fmt: skip
+
+
+GIT_TOKEN = "ghs_" + "c0ntr0ll3r" * 3
+
+
+def test_a_controller_release_seals_its_git_token_to_the_claiming_host_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import piceli.dev.nix_inputs as nix_inputs
+
+    secret = tmp_path / "git-secret"
+    secret.mkdir()
+    (secret / "username").write_text("x-access-token")
+    (secret / "password").write_text(GIT_TOKEN)
+    monkeypatch.setattr(nix_inputs, "git_hosts", lambda _sources: ["github.com"])
+    infra = INFRA.replace(
+        "auto_approve=AUTO)",
+        'auto_approve=AUTO, inputs={"app": "unused"}, credentials="controller")',
+    )
+    world = _world(tmp_path, monkeypatch, auto=True, infra=infra,
+                   credentials_dir=secret)  # fmt: skip
+    controller = world["controller"]
+    controller.poll_once()
+    world["repo"].commit({"flake.lock": FLAKE_LOCK})
+    world["repo"].tag("web-v1.1.0")
+    record = _release(controller.poll_once())
+    plan = record["plan"]
+    assert plan["credentials"] == "controller" and plan["git_hosts"] == ["github.com"]
+    assert plan["inputs"][0]["credential"] == "controller"
+    (wanted,) = controller.poll_once()["controller"]["builds_wanted"]
+
+    # A claim without a key to seal to is refused; nothing is sealed.
+    proof = Publisher([_cache(world)], build=lambda *_a: STORE,
+                      push=lambda *_a: {}, host="mini").proof(wanted, "mini")  # fmt: skip
+    world["channel"].add_request(*build_claim_request(wanted["id"], "mini", proof))
+    status = controller.poll_once()
+    assert status["rejected_requests"][-1]["reason"] == "gitops-request-invalid"
+
+    seen: list[Any] = []
+
+    def fetch(pairs: Any, say: Any, controller: Any = None) -> dict[str, Any]:
+        seen.append(controller)
+        return {"state": "fetched", "inputs": []}
+
+    worker, _ = _worker(world, tmp_path, fetch=fetch)
+    assert worker.once() is not None
+    done = _release(controller.poll_once())
+    assert done["state"] == "published", done.get("failure")
+    assert seen == [{"hosts": ["github.com"], "username": "x-access-token",
+                     "token": GIT_TOKEN}]  # fmt: skip
+    assert worker._openers == {} and worker._sealed == {}  # forgotten
+    # The token is in no status, history, request or state file.
+    for path in world["state"].rglob("*"):
+        if path.is_file():
+            assert GIT_TOKEN.encode() not in path.read_bytes(), path
+
+
+def test_the_sealed_token_opens_only_with_the_claims_key_and_build() -> None:
+    from piceli.dev import nix_inputs
+
+    private, public = nix_inputs.new_recipient()
+    other, _ = nix_inputs.new_recipient()
+    aad = nix_inputs.seal_aad("b-1", "mini")
+    sealed = nix_inputs.seal(public, {"token": GIT_TOKEN}, aad)
+    assert GIT_TOKEN not in json.dumps(sealed)
+    assert nix_inputs.unseal(private, sealed, aad) == {"token": GIT_TOKEN}
+    for key, extra in ((other, aad), (private, nix_inputs.seal_aad("b-1", "evil"))):
+        with pytest.raises(ValueError):
+            nix_inputs.unseal(key, sealed, extra)
+
+
+def test_builder_check_lists_each_release_and_its_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.dev import nix_inputs
+
+    world = _inputs_world(tmp_path, monkeypatch)
+    status = world["controller"].poll_once()
+    (found,) = nix_inputs.host_check(status, "mini")
+    assert found["credentials"] == "host" and found["planned"]
+    assert found["inputs"] == [{"input": "app", "url": f"git+{APP}",
+                                "credential": "app-token", "state": "missing"}]  # fmt: skip
+    nix_inputs.save_git_token("app-token", "github.com", "git", "tok-" + "q" * 20)
+    assert nix_inputs.host_check(status, "mini")[0]["inputs"][0]["state"] == "present"
+    assert nix_inputs.host_check(status, "other") == []

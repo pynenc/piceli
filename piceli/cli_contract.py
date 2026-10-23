@@ -1925,7 +1925,14 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "the machine running Piceli. A host declared runs=False implies "
             "--publish-only and is refused without --publish or with "
             "--no-publish-only (dev-host-publish-only); without --host it is "
-            "never the default.",
+            "never the default. 0.26.0: before each publish the host fetches the "
+            "plan's private flake inputs into its own store (its own git-token or "
+            'git-ssh-key, or for credentials="controller" the controller\'s '
+            "token sealed to the claim's one-time key), else build-failed with "
+            "infra-nix-input-unreachable before any build; at start it warns per "
+            "release of an input it holds no credential for, and --check claims "
+            "nothing and prints piceli.builder-check.v1 (each release's mode, "
+            "inputs and credential states; exit 1 when one is missing).",
         ),
         "dev hosts": _C(
             "Show each declared build host: up or down (and why), its platforms, "
@@ -2301,6 +2308,18 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "token; an argument is refused (infra-credential-refused) without "
             "echoing it. It reaches another build host with `piceli secrets "
             "backup --only NAME` and `piceli secrets restore`.",
+        ),
+        "secrets git-ssh-key": _C(
+            "Store a read-only deploy key a build host fetches private git+ssh "
+            "flake inputs with as a local credential.",
+            reads=("--file PATH", "--known-hosts PATH"),
+            writes=("$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)",),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.26.0. The key, its host (--host; used for no other) and, "
+            "optionally, that host's known_hosts lines. Used before the build by "
+            "the build host's fetch step, never inside the build. Prints the "
+            "name and the host, never the key.",
         ),
         "secrets user-data": _C(
             "Store a server's user data (a cloud-config, a script or a bootstrap "

@@ -1125,6 +1125,64 @@ def git_token_secret(
                "host": host.lower().split(":", 1)[0], "replaced": replaced})  # fmt: skip
 
 
+def git_ssh_key_secret(
+    context: typer.Context,
+    name: Annotated[
+        str, typer.Argument(help="Credential name (NixRelease(inputs=) names it; git)")
+    ],
+    host: Annotated[
+        str,
+        typer.Option("--host", help="The Git host it is for (github.com); no other"),
+    ],
+    file: Annotated[
+        Path | None,
+        typer.Option("--file", help="The deploy key: an OpenSSH private key file"),
+    ] = None,
+    known_hosts: Annotated[
+        Path | None,
+        typer.Option(
+            "--known-hosts",
+            help="That host's known_hosts lines (ssh-keyscan HOST); without it "
+            "the host's key is taken on first use, each time",
+        ),
+    ] = None,
+) -> None:
+    """Store a read-only deploy key a build host fetches private git+ssh flake inputs with.
+
+    0.26.0. The build host fetches each private git+ssh input of a Nix build
+    with it before the build (GIT_SSH_COMMAND with the key in a 0600 file of
+    a temporary directory), never inside the build. Prints the name and the
+    host, never the key. Running it again replaces it.
+    """
+    from piceli.dev.nix_inputs import SSH_KIND, save_git_ssh_key
+    from piceli.infra.machines.credentials import credential_present
+    from piceli.infra.machines.model import InfraError
+    from piceli.k8s.cli.infra import _guard, _no_secret_arguments
+
+    _no_secret_arguments(context)
+    if file is None:
+        reject("infra-prompt-required", "pass --file PATH: the deploy key's file")
+    with _guard():
+        replaced = credential_present(name)
+        try:
+            key = file.expanduser().read_text()
+            pinned = known_hosts.expanduser().read_text() if known_hosts else None
+            save_git_ssh_key(name, host, key, pinned)
+        except OSError:
+            reject(
+                "infra-credential-invalid", "the key or known_hosts file is unreadable"
+            )
+        except InfraError as error:
+            reject(error.code, str(error))
+        del key
+    say(
+        f"stored credential {name} ({SSH_KIND}) for {host.lower()}; the key was not printed"
+    )
+    emit_json({"state": "stored", "name": name, "kind": SSH_KIND,
+               "host": host.lower().split(":", 1)[0],
+               "known_hosts": known_hosts is not None, "replaced": replaced})  # fmt: skip
+
+
 def register(dev_app: typer.Typer) -> None:
     from piceli.k8s.cli.cluster import secrets_app
 
@@ -1136,3 +1194,4 @@ def register(dev_app: typer.Typer) -> None:
     secrets_app.command("nix-cache", context_settings=settings)(nix_cache_secret)
     secrets_app.command("s3", context_settings=settings)(s3_secret)
     secrets_app.command("git-token", context_settings=settings)(git_token_secret)
+    secrets_app.command("git-ssh-key", context_settings=settings)(git_ssh_key_secret)

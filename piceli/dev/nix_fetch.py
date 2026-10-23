@@ -23,6 +23,10 @@ ever reaches the input it was given for:
 - ``access-token`` (``github:``, ``gitlab:``, ``sourcehut:``): the token
   reaches ``nix`` as ``access-tokens = HOST=TOKEN`` in its child's
   ``NIX_CONFIG`` only;
+- ``ssh-key`` (a ``git+ssh`` input and a deploy key): ``GIT_SSH_COMMAND``
+  with the key in a ``0600`` file there, ``IdentitiesOnly``, and the host's
+  known_hosts lines when stored (else its key is taken on first use, in a
+  temporary file);
 - ``none``: the host's own access (a public input, or its own Git
   credential helpers and SSH agent on a native host).
 
@@ -61,7 +65,7 @@ FEATURES = ("--extra-experimental-features", "nix-command flakes")
 FETCH_SECONDS = 1800
 #: The locked input types it fetches.
 TYPES = ("git", "github", "gitlab", "sourcehut", "tarball", "file", "hg")
-MODES = ("askpass", "access-token", "none")
+MODES = ("askpass", "access-token", "ssh-key", "none")
 #: Lines of a failed fetch's output kept (masked) for its reason.
 TAIL_LINES = 20
 _ASKPASS = """#!/bin/sh
@@ -151,6 +155,18 @@ def input_env(
             GIT_CONFIG_KEY_0="credential.helper",
             GIT_CONFIG_VALUE_0="",
         )
+    elif mode == "ssh-key":
+        own = os.path.join(scratch, f"credential-{item['index']}")
+        os.mkdir(own, 0o700)
+        key, known = os.path.join(own, "id"), os.path.join(own, "known_hosts")
+        _private_file(key, str(item.get("key") or "").rstrip("\n") + "\n")
+        pinned = str(item.get("known_hosts") or "")
+        _private_file(known, pinned)
+        check = "yes" if pinned.strip() else "accept-new"
+        env["GIT_SSH_COMMAND"] = (
+            f"ssh -i {key} -o IdentitiesOnly=yes -o BatchMode=yes "
+            f"-o UserKnownHostsFile={known} -o StrictHostKeyChecking={check}"
+        )
     elif mode == "access-token":
         line = f"access-tokens = {item.get('host')}={item.get('token')}"
         env["NIX_CONFIG"] = "\n".join(
@@ -180,7 +196,7 @@ def fetch(
 ) -> dict[str, Any]:
     """Fetch every input of ``request`` in order; the result (never a secret)."""
     items = [item for item in request.get("inputs") or () if isinstance(item, dict)]
-    secrets = [str(item.get("token") or "") for item in items]
+    secrets = [str(item.get(k) or "") for item in items for k in ("token", "key")]
     nix = find_nix(environ)
     if nix is None:
         return {"state": "failed", "reason": "dev-tool-missing", "inputs": []}

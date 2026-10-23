@@ -204,9 +204,25 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   refuses before any build with the new code `infra-nix-input-unreachable`,
   naming the input, its URL and the credential tried. The release's stages
   gain `inputs`. See {doc}`nix_hosts`.
-- **`piceli secrets git-token NAME --host HOST --prompt`** stores that token
-  (with its host, used for no other, and `--username`); it reaches a build
-  host with `piceli secrets backup --only NAME` and `restore`.
+- **Two ways to give that fetch a credential:**
+  `NixRelease(credentials="host")` (default) uses the build host's own
+  read-only credential; `credentials="controller"` uses the composition's
+  Git Secret (`piceli secrets git`), which the controller seals per build
+  to a one-time X25519 key the build host claimed it with (bound to the
+  build and the host; the claim's cache-key proof covers that key), only
+  for inputs on the hosts of the composition's sources (the plan's
+  `git_hosts`). The claim of a controller release without a key is refused.
+- **`piceli secrets git-token NAME --host HOST --prompt`** stores a token
+  (with its host, used for no other, and `--username`), **`piceli secrets
+  git-ssh-key NAME --host HOST --file KEY [--known-hosts FILE]`** a
+  read-only deploy key; either reaches a build host with `piceli secrets
+  backup --only NAME` and `restore`.
+- **`builder serve` checks them:** at start it warns per release of an
+  input whose credential the host lacks, and `builder serve --check`
+  claims nothing and prints `piceli.builder-check.v1` (each release's mode,
+  inputs and credential states; exit 1 when one is missing). `piceli
+  secrets status MODULE` lists each NixRelease's mode and credentials
+  (`nix_inputs`).
 - **`piceli dev nix build --input NAME[=CREDENTIAL]`** adds private inputs
   to a hand-run build; with `--publish`, the composition's `NixRelease` of
   the output adds its own, and the plan lists them.

@@ -149,6 +149,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli secrets cluster`](#cli-secrets-cluster) | Store another cluster's credentials for the GitOps controller (never printed). | writes | no |
 | [`piceli secrets delete`](#cli-secrets-delete) | Delete a stored credential (a spent bootstrap key, an old token); never printed. | none | yes |
 | [`piceli secrets git`](#cli-secrets-git) | Store the Git token the controller and cluster builds use (read from stdin, never printed). | writes | no |
+| [`piceli secrets git-ssh-key`](#cli-secrets-git-ssh-key) | Store a read-only deploy key a build host fetches private git+ssh flake inputs with. | none | no |
 | [`piceli secrets git-token`](#cli-secrets-git-token) | Store a Git token a build host fetches private flake inputs with (never printed). | none | no |
 | [`piceli secrets nix-cache`](#cli-secrets-nix-cache) | A Nix binary cache's signing key: generate or import it; print its public key. | none | no |
 | [`piceli secrets provider`](#cli-secrets-provider) | Store a provider's API credential, part by part (never printed). | none | no |
@@ -678,6 +679,7 @@ Take the builds the controller publishes, build and deliver them, answer it.
 | `--image` | text |  | The builder image (default: the host's, else DevBuilds(image=)); the same Piceli version as the controller |
 | `--namespace` | text | `piceli-system` | The controller's namespace |
 | `--once` | boolean | `False` | Build at most one wanted build, then exit |
+| `--check` | boolean | `False` | Claim nothing: list the NixReleases this host publishes, how each fetches its private flake inputs (credentials host or controller) and whether this host holds each credential, then exit (1 when one is missing) |
 | `--poll` | float | `15.0` | Seconds between looks when idle |
 | `--state-dir` | path |  | Where Git mirrors live (default ~/.cache/piceli/builder) |
 | `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
@@ -694,7 +696,7 @@ Take the builds the controller publishes, build and deliver them, answer it.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.21.0. Runs until Ctrl-C (--once: one build). The builder image must be the controller's Piceli version. 0.22.0: each delivered image's provenance is pushed as an OCI referrer when the registry takes it; a build showing a machine-health signature records a health event on the host, and a quarantined host claims nothing (quarantined in --once --json). 0.25.0: --publish MODULE:ATTR (repeatable) also takes the nix-publish builds of the NixReleases that name this host as builder, only for those caches; every key is read at start (infra-credential-missing, dev-nix-key-mismatch refuse it) and never leaves the host: a claim carries the cache key's signature over it. A native host with --publish only publishes. The publish itself was approved by the release's policy or gitops approve of its plan digest. 0.25.0: --publish-only (needs --publish, else dev-nix-invalid) claims only those publishes on any kind of host, never an image build (said once), and needs no cluster registry: a remote publisher is a docker host with an SSH context to itself, since a native host is the machine running Piceli. A host declared runs=False implies --publish-only and is refused without --publish or with --no-publish-only (dev-host-publish-only); without --host it is never the default.
+- **Notes:** 0.21.0. Runs until Ctrl-C (--once: one build). The builder image must be the controller's Piceli version. 0.22.0: each delivered image's provenance is pushed as an OCI referrer when the registry takes it; a build showing a machine-health signature records a health event on the host, and a quarantined host claims nothing (quarantined in --once --json). 0.25.0: --publish MODULE:ATTR (repeatable) also takes the nix-publish builds of the NixReleases that name this host as builder, only for those caches; every key is read at start (infra-credential-missing, dev-nix-key-mismatch refuse it) and never leaves the host: a claim carries the cache key's signature over it. A native host with --publish only publishes. The publish itself was approved by the release's policy or gitops approve of its plan digest. 0.25.0: --publish-only (needs --publish, else dev-nix-invalid) claims only those publishes on any kind of host, never an image build (said once), and needs no cluster registry: a remote publisher is a docker host with an SSH context to itself, since a native host is the machine running Piceli. A host declared runs=False implies --publish-only and is refused without --publish or with --no-publish-only (dev-host-publish-only); without --host it is never the default. 0.26.0: before each publish the host fetches the plan's private flake inputs into its own store (its own git-token or git-ssh-key, or for credentials="controller" the controller's token sealed to the claim's one-time key), else build-failed with infra-nix-input-unreachable before any build; at start it warns per release of an input it holds no credential for, and --check claims nothing and prints piceli.builder-check.v1 (each release's mode, inputs and credential states; exit 1 when one is missing).
 
 (cli-bundle)=
 ### `piceli bundle`
@@ -3501,6 +3503,29 @@ Store the Git token the controller and cluster builds use (read from stdin, neve
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** The token is read from stdin only (typed without echo, or piped); a token argument or PICELI_GIT_TOKEN is refused (secrets-token-refused) without echoing it. Creates or updates the Secret without a plan; prints its name and key names, never a value. Needs piceli cluster init first (cluster-not-initialized).
+
+(cli-secrets-git-ssh-key)=
+### `piceli secrets git-ssh-key`
+
+Store a read-only deploy key a build host fetches private git+ssh flake inputs with.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--host` | text | required | The Git host it is for (github.com); no other |
+| `--file` | path |  | The deploy key: an OpenSSH private key file |
+| `--known-hosts` | path |  | That host's known_hosts lines (ssh-keyscan HOST); without it the host's key is taken on first use, each time |
+
+**Contract**
+
+- **Reads:** --file PATH, --known-hosts PATH
+- **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. The key, its host (--host; used for no other) and, optionally, that host's known_hosts lines. Used before the build by the build host's fetch step, never inside the build. Prints the name and the host, never the key.
 
 (cli-secrets-git-token)=
 ### `piceli secrets git-token`

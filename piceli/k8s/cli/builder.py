@@ -71,6 +71,16 @@ def serve(
     once: Annotated[
         bool, typer.Option("--once", help="Build at most one wanted build, then exit")
     ] = False,
+    check: Annotated[
+        bool,
+        typer.Option(
+            "--check",
+            help="Claim nothing: list the NixReleases this host publishes, how "
+            "each fetches its private flake inputs (credentials host or "
+            "controller) and whether this host holds each credential, then exit "
+            "(1 when one is missing)",
+        ),
+    ] = False,
     poll: Annotated[
         float, typer.Option("--poll", min=5, help="Seconds between looks when idle")
     ] = 15.0,
@@ -160,7 +170,7 @@ def serve(
         reject("cluster-build-invalid", "name the builder image with --image")
     cli = ContainerCli(chosen) if chosen.kind == "docker" else None
     try:
-        if images and cli is not None:
+        if images and cli is not None and not check:
             cli.platform()
             ensure_image(cli, str(builder_image), say)
             prepare_cache(cli, str(builder_image))
@@ -220,10 +230,31 @@ def serve(
         return backend.registry_attach(route, repository, digest, body)
 
     with connect(declared, transport, allow_exec, exec_sha256) as api, _cluster_guard():
+        channel = ConfigMapChannel(api.client, namespace)
+        if check or publisher is not None:
+            from piceli.dev.nix_inputs import host_check
+
+            try:
+                releases = host_check(channel.read_status() or {}, chosen.name)
+            except Exception:  # a warning never stops the host from starting
+                if check:
+                    raise
+                releases = []
+            missing = _say_inputs(releases, chosen.name, quiet=not check)
+            if check:
+                emit_json(
+                    {
+                        "schema": "piceli.builder-check.v1",
+                        "host": chosen.name,
+                        "releases": releases,
+                        "complete": not missing,
+                    }
+                )
+                raise typer.Exit(1 if missing else 0)
         worker = BuilderServe(
             host=chosen.name,
             image=str(builder_image or ""),
-            channel=ConfigMapChannel(api.client, namespace),
+            channel=channel,
             container=docker_container(cli, str(builder_image))
             if cli is not None
             else _no_container,
@@ -263,6 +294,40 @@ def serve(
             worker.serve(poll=poll)
         except KeyboardInterrupt:
             say("builder: stopped")
+
+
+def _say_inputs(releases: list[Any], host: str, *, quiet: bool) -> bool:
+    """Say, per release, the private inputs this host has no credential for
+    (0.26.0; with ``quiet`` only those); whether one is missing."""
+    missing = False
+    for release in releases:
+        lacking = [
+            i for i in release["inputs"] if i["state"] in ("missing", "unusable")
+        ]
+        missing = missing or bool(lacking)
+        for item in lacking:
+            say(
+                f"builder: warning: nix release {release['release']} fetches input "
+                f"{item['input']} {item['url']} with credential {item['credential']}, "
+                f"which {host} does not hold ({item['state']}): piceli secrets "
+                f"git-token {item['credential']} --host HOST --prompt, or restore it"
+            )
+        if not quiet and not lacking:
+            inputs = ", ".join(
+                f"{i['input']} ({i['credential']}: {i['state']})"
+                for i in release["inputs"]
+            )
+            say(
+                f"builder: nix release {release['release']} (credentials "
+                f"{release['credentials']}): "
+                + (
+                    inputs
+                    or (
+                        "no private inputs" if release["planned"] else "not planned yet"
+                    )
+                )
+            )
+    return missing
 
 
 def _no_container(*_args: Any) -> int:  # a native host builds no image

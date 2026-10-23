@@ -44,7 +44,8 @@ _SCHEMA = "piceli.credential.v1"
 #: age X25519 identity for sops-nix (``piceli secrets age``); ``user-data``:
 #: a server's user data at creation (``piceli secrets user-data``); 0.26:
 #: ``git-token``: a Git host's token a build host fetches private flake
-#: inputs with (``piceli secrets git-token``).
+#: inputs with (``piceli secrets git-token``); ``git-ssh-key``: a deploy key
+#: for the same (``piceli secrets git-ssh-key``).
 KINDS = (
     "provider-token",
     "state-key",
@@ -53,6 +54,7 @@ KINDS = (
     "age-identity",
     "user-data",
     "git-token",
+    "git-ssh-key",
 )
 _SET_UP = {
     "provider-token": "piceli secrets provider {} --prompt",
@@ -62,6 +64,7 @@ _SET_UP = {
     "age-identity": "piceli secrets age {} --generate",
     "user-data": "piceli secrets user-data {} --file PATH",
     "git-token": "piceli secrets git-token {} --host HOST --prompt",
+    "git-ssh-key": "piceli secrets git-ssh-key {} --host HOST --file PATH",
 }
 #: ``piceli secrets delete --kind``: the ``piceli secrets`` command's name of
 #: each kind (a stored kind's own name is accepted too).
@@ -73,6 +76,7 @@ KIND_OPTIONS = {
     "age": "age-identity",
     "user-data": "user-data",
     "git-token": "git-token",
+    "git-ssh-key": "git-ssh-key",
 }
 #: Nova takes at most 65535 bytes of base64: 49149 bytes of user data.
 MAX_USER_DATA = 49149

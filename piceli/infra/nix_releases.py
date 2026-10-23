@@ -140,6 +140,13 @@ class NixRelease:
         :class:`~piceli.infra.Source` of the composition are fetched first
         anyway, with the credential named here or ``git``
         (:mod:`piceli.dev.nix_inputs`).
+    :param credentials: 0.26.0: whose Git credential fetches those inputs:
+        ``"host"`` (default), the build host's own (``piceli secrets
+        git-token`` or ``git-ssh-key`` there, named by ``inputs=``, else
+        ``git``); ``"controller"``, the composition's (``piceli secrets
+        git``), which the controller seals for the one build to the key the
+        claiming host claimed it with, and which is used only for inputs on
+        the hosts of the composition's sources.
     """
 
     host: Any
@@ -148,6 +155,7 @@ class NixRelease:
     auto_approve: bool = False
     gate: Any = None
     inputs: Any = None
+    credentials: str = "host"
 
     def __post_init__(self) -> None:
         from piceli.hosts.model import NixHost, Tag
@@ -180,6 +188,12 @@ class NixRelease:
         except ValueError as error:
             raise _invalid(str(error)) from None
         object.__setattr__(self, "inputs", tuple(mapped.items()))
+        from piceli.dev.nix_inputs import MODES
+
+        if self.credentials not in MODES:
+            raise _invalid(
+                f"NixRelease {self.host.name}: credentials= is 'host' or 'controller'"
+            )
         declared = getattr(self.host, "gate", None)
         if self.gate is None and declared is not None:
             object.__setattr__(self, "gate", declared)
@@ -221,6 +235,7 @@ class NixRelease:
             gate=self.gate,
             key_unset=unset,
             inputs=self.inputs,
+            credentials=self.credentials,
         )
 
 
@@ -245,11 +260,14 @@ class ReleaseTarget:
     key_unset: str | None = None
     #: 0.26.0: the declared private inputs, ``((input, credential), ...)``.
     inputs: tuple[tuple[str, str], ...] = ()
+    #: 0.26.0: ``host`` or ``controller`` (whose Git credential).
+    credentials: str = "host"
 
     def to_dict(self) -> dict[str, Any]:
         gate = {"gate": self.gate.to_dict()} if self.gate is not None else {}
         # 0.26.0, only when declared: other configs (and hashes) unchanged.
         gate |= {"inputs": dict(self.inputs)} if self.inputs else {}
+        gate |= {"credentials": self.credentials} if self.credentials != "host" else {}
         return gate | {
             "name": self.name,
             "build": self.build,
@@ -294,7 +312,10 @@ class ReleaseTarget:
                 gate=Promotion.from_dict(value["gate"]) if value.get("gate") else None,
                 key_unset=None if public else unset,
                 inputs=tuple(check_declared(value.get("inputs")).items()),
+                credentials=str(value.get("credentials") or "host"),
             )
+            if target.credentials not in ("host", "controller"):
+                raise ValueError("credentials is host or controller")
         except (KeyError, TypeError, ValueError, HostError, DevError) as error:
             raise _invalid(f"a nix release is invalid: {error}") from None
         for label in (target.name, target.build, target.builder):
@@ -329,6 +350,7 @@ def release_plan(
     tag: str,
     pinned: Mapping[str, Any] | None = None,
     inputs: Sequence[Mapping[str, str]] = (),
+    hosts: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """What publishing ``tag`` does; its digest (:func:`digest`) is what the
     owner approves and what the build host publishes, nothing else.
@@ -339,6 +361,8 @@ def release_plan(
 
     extra: dict[str, Any] = {"pinned": dict(pinned)} if pinned is not None else {}
     extra |= {"inputs": [dict(item) for item in inputs]} if inputs else {}
+    if inputs and hosts is not None:  # 0.26.0: the controller's credential
+        extra |= {"credentials": "controller", "git_hosts": list(hosts)}
     return extra | {
         "schema": PLAN_SCHEMA,
         "release": target.name,
@@ -387,14 +411,21 @@ def check_plan(plan: Any) -> dict[str, Any]:
 
     check_pinned(plan.get("pinned"))
     check_entries(plan.get("inputs"))
+    if plan.get("credentials", "host") not in ("host", "controller") or not all(
+        isinstance(host, str) for host in plan.get("git_hosts") or ()
+    ):
+        raise ValueError("the plan's credentials field is malformed")
     return dict(plan)
 
 
-def claim_message(build: str, host: str) -> bytes:
-    """What a build host signs with the cache key to claim a publish."""
+def claim_message(build: str, host: str, recipient: str | None = None) -> bytes:
+    """What a build host signs with the cache key to claim a publish
+    (0.26.0: with the one-claim key the controller seals a credential to,
+    for a ``controller`` release)."""
     from piceli.dev.nix_verify import canonical
 
-    return canonical({"schema": CLAIM_SCHEMA, "id": build, "host": host})
+    body = {"schema": CLAIM_SCHEMA, "id": build, "host": host}
+    return canonical(body | ({"recipient": recipient} if recipient else {}))
 
 
 # ---------------------------------------------------------------- controller
@@ -557,7 +588,14 @@ class Releases:
                 self._refuse(target, record, latest, trigger, error)
                 return
         self._drop_wanted(record)
-        plan = release_plan(target, commit, tag, pinned, self._inputs(target, commit))
+        inputs = self._inputs(target, commit)
+        hosts = None
+        if target.credentials == "controller":
+            from piceli.dev.nix_inputs import CONTROLLER, git_hosts
+
+            hosts = git_hosts(self._sources)
+            inputs = [item | {"credential": CONTROLLER} for item in inputs]
+        plan = release_plan(target, commit, tag, pinned, inputs, hosts)
         approved = record.get("approved_digest")
         for key in ("failure", "claimed", "published_now", "approval", "stages",
                     "refusal"):  # fmt: skip
@@ -773,15 +811,57 @@ class Releases:
                 f"nix release {entry.get('release')} is built by "
                 f"{entry.get('builder')}, not {host}",
             )
-        public = str((entry.get("plan") or {}).get("cache", {}).get("public_key"))
+        plan = entry.get("plan") or {}
+        public = str(plan.get("cache", {}).get("public_key"))
         proof = body.get("proof")
+        recipient = body.get("recipient")
+        if plan.get("credentials") == "controller" and not isinstance(recipient, str):
+            raise GitOpsError(
+                "gitops-request-invalid",
+                f"nix release {entry.get('release')} takes the controller's Git "
+                "credential: the claim names no key to seal it to",
+            )
         if not isinstance(proof, str) or not verify(
-            public, claim_message(str(entry["id"]), host), proof
+            public,
+            claim_message(
+                str(entry["id"]),
+                host,
+                recipient if isinstance(recipient, str) else None,
+            ),
+            proof,
         ):
             raise GitOpsError(
                 "gitops-request-invalid",
                 f"build host {host} shows no proof it holds the cache's signing key",
             )
+
+    def seal(
+        self,
+        entry: dict[str, Any],
+        body: Mapping[str, Any],
+        credential: Mapping[str, str] | None,
+    ) -> None:
+        """For a ``controller`` release (0.26.0): the composition's Git
+        credential sealed to the key of the accepted claim, for that build and
+        host only (``sealed`` of the wanted publish; the build host opens it
+        with the private key it never sends). Without an HTTPS token the
+        entry says so and the build host fetches with its own access."""
+        from piceli.dev.nix_inputs import seal, seal_aad
+
+        entry.pop("sealed", None)
+        if (entry.get("plan") or {}).get("credentials") != "controller":
+            return
+        if credential is None:
+            entry["sealed"] = {
+                "error": "the controller holds no HTTPS Git token (piceli secrets git)"
+            }
+            return
+        host = str(body.get("host") or "")
+        entry["sealed"] = seal(
+            str(body["recipient"]),
+            {"username": credential["username"], "token": credential["token"]},
+            seal_aad(str(entry["id"]), host),
+        )
 
     def published(self, body: Mapping[str, Any]) -> None:
         """A build host's ``nix-published`` answer: the manifest signed by the
@@ -1026,11 +1106,13 @@ class Publisher:
             None,
         )
 
-    def proof(self, entry: Mapping[str, Any], host: str) -> str:
+    def proof(
+        self, entry: Mapping[str, Any], host: str, recipient: str | None = None
+    ) -> str:
         from piceli.dev.nix import sign
 
         secret = cache_keys(self.cache_for(entry))[0]
-        return sign(secret, claim_message(str(entry["id"]), host))
+        return sign(secret, claim_message(str(entry["id"]), host, recipient))
 
     def publish(
         self,
@@ -1038,9 +1120,13 @@ class Publisher:
         checkout: Path,
         say: Callable[[str], None],
         stage: Callable[[str], Any],
+        *,
+        controller: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build and publish the plan of ``entry`` from ``checkout`` (the
-        commit, the tag checked); the ``nix-published`` fields."""
+        commit, the tag checked); the ``nix-published`` fields.
+        ``controller``: 0.26.0, the Git credential the controller sealed for
+        this build (a ``credentials="controller"`` release)."""
         from piceli.dev.model import DevError
         from piceli.dev.nix import publish_closure
 
@@ -1048,7 +1134,7 @@ class Publisher:
         cache = self.cache_for(entry)
         if cache is None:
             raise DevError("dev-nix-cache-invalid", "no key for the plan's cache")
-        self.fetch_inputs(plan, checkout, say, stage)
+        self.fetch_inputs(plan, checkout, say, stage, controller=controller)
         with stage("build"):
             store_path = self.build(checkout, plan["attribute"], say)
         with stage("publish"):
@@ -1066,6 +1152,8 @@ class Publisher:
         checkout: Path,
         say: Callable[[str], None],
         stage: Callable[[str], Any],
+        *,
+        controller: Mapping[str, Any] | None = None,
     ) -> None:
         """Fetch the plan's private inputs on this host, before any build
         (0.26.0): each one as ``flake.lock`` of the checkout locks it.
@@ -1087,7 +1175,7 @@ class Publisher:
                     f"{first['input']} {first['url']}: this build host fetches no "
                     "flake inputs (Publisher(fetch=))",
                 )
-            self.fetch(pairs, say)
+            self.fetch(pairs, say, **({"controller": controller} if controller else {}))
 
 
 def cache_keys(cache: Any) -> tuple[str, tuple[str, str] | None]:

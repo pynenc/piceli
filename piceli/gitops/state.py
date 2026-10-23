@@ -312,17 +312,21 @@ def _build_id(value: str) -> str:
 
 
 def build_claim_request(
-    build: str, host: str, proof: str | None = None
+    build: str, host: str, proof: str | None = None, recipient: str | None = None
 ) -> tuple[str, dict[str, Any]]:
     """A build host takes the wanted build ``build`` (``piceli builder serve``).
 
     ``proof`` (0.25.0, a ``nix-publish``): the cache key's signature over
-    the claim (:func:`piceli.infra.nix_releases.claim_message`), never a key."""
+    the claim (:func:`piceli.infra.nix_releases.claim_message`), never a key.
+    ``recipient`` (0.26.0): the one-claim public key the controller seals
+    its Git credential to, for a ``credentials="controller"`` release."""
     if proof is None:
         return request("build-claim", id=_build_id(build), host=str(host)[:64])
+    extra = {"recipient": str(recipient)[:64]} if recipient else {}
     return request(
-        "build-claim", id=_build_id(build), host=str(host)[:64], proof=str(proof)[:200]
-    )
+        "build-claim", id=_build_id(build), host=str(host)[:64],
+        proof=str(proof)[:200], **extra,
+    )  # fmt: skip
 
 
 def nix_published_request(

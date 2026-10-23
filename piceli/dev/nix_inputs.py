@@ -342,6 +342,70 @@ def load_git_token(name: str) -> dict[str, str]:
     }
 
 
+SSH_KIND = "git-ssh-key"
+
+
+def save_git_ssh_key(
+    name: str, host: str, key: str, known_hosts: str | None = None
+) -> Any:
+    """Store a deploy key (an OpenSSH private key) for ``host`` under
+    ``name``; ``known_hosts``: that host's known_hosts lines (else its key is
+    taken on first use, in a temporary file, every time)."""
+    import base64
+
+    from piceli.infra.machines.credentials import _write
+    from piceli.infra.machines.model import InfraError
+
+    if not _HOST.fullmatch(host.lower()):
+        raise InfraError("infra-credential-invalid", "--host is a host name")
+    if "PRIVATE KEY-----" not in key or len(key) > 16384:
+        raise InfraError(
+            "infra-credential-invalid", "the file is not an OpenSSH private key"
+        )
+    body: dict[str, object] = {
+        "schema": "piceli.credential.v1",
+        "kind": SSH_KIND,
+        "value": base64.b64encode(key.encode()).decode(),
+        "host": host.lower().split(":", 1)[0],
+    }
+    if known_hosts:
+        body["known_hosts"] = known_hosts
+    return _write(name, body)
+
+
+def load_git_credential(name: str) -> dict[str, Any]:
+    """A Git credential of this machine by name: a ``git-token`` (``kind``
+    ``token``) or a ``git-ssh-key`` (``kind`` ``ssh-key``), with its host.
+
+    :raises InfraError: missing, unsafe or another kind."""
+    import base64
+
+    from piceli.infra.machines.credentials import _path, load_credential, stored_kind
+
+    _, kind = stored_kind(name)
+    if kind == SSH_KIND:
+        value = load_credential(name, SSH_KIND)
+        body = json.loads(_path(name).read_text())
+        return {
+            "kind": "ssh-key",
+            "host": str(body.get("host") or ""),
+            "key": base64.b64decode(value).decode(),
+            "known_hosts": str(body.get("known_hosts") or ""),
+        }
+    return {"kind": "token", **load_git_token(name)}
+
+
+def credential_state(name: str) -> str:
+    """``present``, ``missing`` or ``unusable`` (never the value)."""
+    from piceli.infra.machines.model import InfraError
+
+    try:
+        load_git_credential(name)
+    except InfraError as error:
+        return "missing" if error.code == "infra-credential-missing" else "unusable"
+    return "present"
+
+
 def _https(locked: Mapping[str, Any], host: str) -> str | None:
     """The HTTPS URL of a ``git+ssh`` (or scp-like, ``git://``) input."""
     url = str(locked.get("url") or "")
@@ -359,63 +423,96 @@ def _https(locked: Mapping[str, Any], host: str) -> str | None:
 def plan_fetch(
     pairs: Sequence[tuple[Mapping[str, str], Mapping[str, Any]]],
     *,
-    load: Callable[[str], dict[str, str]] = load_git_token,
+    load: Callable[[str], dict[str, Any]] | None = None,
+    controller: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
-    """The fetcher's request (with the tokens: only for its stdin) and what
+    """The fetcher's request (with the secrets: only for its stdin) and what
     each input tried (no secret): ``input``, ``url``, ``credential`` and
-    ``tried`` (how it is fetched, said in a failure)."""
+    ``tried`` (how it is fetched, said in a failure).
+
+    ``load``: a credential of this host by name (:func:`load_git_credential`);
+    ``controller``: the credential the controller sealed for this build
+    (``{"hosts", "username", "token"}``), for inputs named
+    :data:`CONTROLLER`, only on its hosts."""
     from piceli.infra.machines.model import InfraError
 
+    load = load or load_git_credential
     items: list[dict[str, Any]] = []
     tried: list[dict[str, str]] = []
     cache: dict[str, Any] = {}
     for entry, locked in pairs:
         name = entry["credential"]
         if name not in cache:
-            try:
-                cache[name] = load(name)
-            except InfraError as error:
-                cache[name] = error
+            if name == CONTROLLER:
+                cache[name] = (
+                    {"kind": "token", **dict(controller)}
+                    if controller is not None
+                    else "the controller sent no credential for this build"
+                )
+            else:
+                try:
+                    found = dict(load(name))
+                    found.setdefault("kind", "token")
+                    found.setdefault("hosts", [found.get("host")])
+                    cache[name] = found
+                except InfraError as error:
+                    cache[name] = (
+                        f"credential {name} is not stored on this host"
+                        if error.code == "infra-credential-missing"
+                        else f"credential {name} is unusable ({error.code})"
+                    )
         credential = cache[name]
         place = location(locked)
         kind = str(locked.get("type"))
+        url = str(locked.get("url") or "")
         item: dict[str, Any] = {"name": entry["input"], "locked": dict(locked),
                                 "mode": "none"}  # fmt: skip
-        if isinstance(credential, InfraError):
+        label = (
+            "the controller's credential"
+            if name == CONTROLLER
+            else (f"credential {name}")
+        )
+        if isinstance(credential, str):
+            how = f"{credential}, so the host's own access"
+        elif place is None or place[0] not in credential["hosts"]:
             how = (
-                f"credential {name} is not stored on this host"
-                if credential.code == "infra-credential-missing"
-                else f"credential {name} is unusable ({credential.code})"
-            ) + ", so the host's own access"
-        elif place is None or place[0] != credential["host"]:
-            how = (
-                f"credential {name} is for {credential['host']}, not "
+                f"{label} is for {', '.join(map(str, credential['hosts']))}, not "
                 f"{(place[0] or 'a local path') if place else 'this input'}, so "
                 "the host's own access"
             )
+        elif credential["kind"] == "ssh-key":
+            if kind == "git" and not url.startswith(("https://", "http://")):
+                item.update(
+                    mode="ssh-key",
+                    host=place[0],
+                    key=credential["key"],
+                    known_hosts=credential.get("known_hosts") or "",
+                )
+                how = f"{label} (a deploy key over SSH)"
+            else:
+                how = f"{label} is an SSH key; it applies to no {kind} input over HTTPS"
         elif kind in FORGES:
             token = credential["token"]
             if kind == "gitlab" and ":" not in token:
                 token = f"PAT:{token}"
             item.update(mode="access-token", host=place[0], token=token)
-            how = f"credential {name}"
+            how = label
         elif kind == "git":
-            url = str(locked.get("url") or "")
             rewritten = not url.startswith(("https://", "http://"))
             https = _https(locked, place[0]) if rewritten else url
             if https is None:
-                how = f"credential {name} applies to no {url.split(':', 1)[0]} URL"
+                how = f"{label} applies to no {url.split(':', 1)[0]} URL"
             else:
                 item["locked"]["url"] = https
                 item.update(
                     mode="askpass",
                     host=place[0],
-                    username=credential["username"],
+                    username=credential.get("username") or "git",
                     token=credential["token"],
                 )
-                how = f"credential {name}" + (" over HTTPS" if rewritten else "")
+                how = label + (" over HTTPS" if rewritten else "")
         else:
-            how = f"credential {name} applies to no {kind} input"
+            how = f"{label} applies to no {kind} input"
         items.append(item)
         tried.append({"input": entry["input"], "url": entry["url"],
                       "credential": name, "tried": how})  # fmt: skip
@@ -476,7 +573,7 @@ def run_fetcher(
     from piceli.dev.nix_fetch import FETCH_SECONDS, RESULT_MARKER, mask
 
     items = list(request.get("inputs") or ())
-    secrets = [str(item.get("token") or "") for item in items]
+    secrets = [str(item.get(k) or "") for item in items for k in ("token", "key")]
     try:
         done = (runner or subprocess.run)(
             argv,
@@ -522,8 +619,9 @@ def fetch_inputs(host: Any, image: str) -> Callable[..., dict[str, Any]]:
     def run(
         pairs: Sequence[tuple[Mapping[str, str], Mapping[str, Any]]],
         say: Callable[[str], None],
+        controller: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        request, tried = plan_fetch(pairs)
+        request, tried = plan_fetch(pairs, controller=controller)
         for item in tried:
             say(f"input {item['input']} {item['url']} ({item['tried']})")
         outcome = run_fetcher(fetcher_argv(host, image), request, tried, say=say)
@@ -531,3 +629,173 @@ def fetch_inputs(host: Any, image: str) -> Callable[..., dict[str, Any]]:
         return outcome
 
     return run
+
+
+# ---------------------------------------------------------------- per job
+
+#: ``NixRelease(credentials=)``: whose Git credential fetches the inputs.
+MODES = ("host", "controller")
+#: The credential name of every input a ``controller`` release covers.
+CONTROLLER = "controller"
+SEAL_SCHEMA = "piceli.sealed-git-credential.v1"
+
+
+def new_recipient() -> tuple[bytes, str]:
+    """A one-claim X25519 key pair of a build host: the private key (kept in
+    memory for that build only) and the public key it claims with."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import x25519
+
+    private = x25519.X25519PrivateKey.generate()
+    raw = private.private_bytes(
+        serialization.Encoding.Raw,
+        serialization.PrivateFormat.Raw,
+        serialization.NoEncryption(),
+    )
+    public = private.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
+    import base64
+
+    return raw, base64.b64encode(public).decode()
+
+
+def _key(shared: bytes, aad: bytes) -> bytes:
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    return HKDF(
+        algorithm=hashes.SHA256(), length=32, salt=None, info=SEAL_SCHEMA.encode() + aad
+    ).derive(shared)
+
+
+def seal(recipient: str, payload: Mapping[str, Any], aad: bytes) -> dict[str, str]:
+    """``payload`` encrypted to ``recipient`` (X25519, HKDF-SHA256,
+    ChaCha20-Poly1305; ``aad``: the build and the host it is for)."""
+    import base64
+    import os
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import x25519
+    from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+
+    peer = x25519.X25519PublicKey.from_public_bytes(base64.b64decode(recipient))
+    mine = x25519.X25519PrivateKey.generate()
+    nonce = os.urandom(12)
+    body = ChaCha20Poly1305(_key(mine.exchange(peer), aad)).encrypt(
+        nonce, json.dumps(dict(payload), sort_keys=True).encode(), aad
+    )
+    sender = mine.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
+    return {
+        "schema": SEAL_SCHEMA,
+        "sender": base64.b64encode(sender).decode(),
+        "nonce": base64.b64encode(nonce).decode(),
+        "box": base64.b64encode(body).decode(),
+    }
+
+
+def unseal(private: bytes, sealed: Mapping[str, Any], aad: bytes) -> dict[str, Any]:
+    """The payload of :func:`seal`. :raises ValueError: not for this key or
+    this build, or tampered with."""
+    import base64
+
+    from cryptography.exceptions import InvalidTag
+    from cryptography.hazmat.primitives.asymmetric import x25519
+    from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+
+    try:
+        if sealed.get("schema") != SEAL_SCHEMA:
+            raise ValueError("not a sealed credential")
+        mine = x25519.X25519PrivateKey.from_private_bytes(private)
+        peer = x25519.X25519PublicKey.from_public_bytes(
+            base64.b64decode(str(sealed["sender"]))
+        )
+        text = ChaCha20Poly1305(_key(mine.exchange(peer), aad)).decrypt(
+            base64.b64decode(str(sealed["nonce"])),
+            base64.b64decode(str(sealed["box"])),
+            aad,
+        )
+        found = json.loads(text)
+    except (KeyError, TypeError, ValueError, InvalidTag):
+        raise ValueError("the sealed credential does not open here") from None
+    if not isinstance(found, dict):
+        raise ValueError("the sealed credential does not open here")
+    return found
+
+
+def seal_aad(build: str, host: str) -> bytes:
+    return f"{build}\n{host}".encode()
+
+
+def git_hosts(sources: Iterable[tuple[str, str]]) -> list[str]:
+    """The hosts of the composition's sources: where the controller's Git
+    credential is sent from a ``controller`` release (and nowhere else)."""
+    return sorted(
+        {
+            place[0]
+            for _key_, url in sources
+            if (place := url_location(url)) is not None and place[0]
+        }
+    )
+
+
+def read_controller_credential(directory: Any) -> dict[str, str] | None:
+    """The username and HTTPS token of the controller's mounted Git Secret
+    (``piceli secrets git``), ``None`` when it holds none."""
+    from pathlib import Path
+
+    if directory is None:
+        return None
+    root = Path(directory)
+    token_file, user_file = root / "password", root / "username"
+    if not token_file.is_file():
+        return None
+    token = token_file.read_text().strip()
+    user = user_file.read_text().strip() if user_file.is_file() else "git"
+    return {"username": user or "git", "token": token} if token else None
+
+
+def host_check(
+    status: Mapping[str, Any],
+    host: str,
+    state: Callable[[str], str] = credential_state,
+) -> list[dict[str, Any]]:
+    """What a build host needs for the NixReleases it publishes (``builder
+    serve --check``): each release's credential mode and, per private input
+    of its last plan, the credential and whether this host holds it
+    (``present``, ``missing``, ``unusable``; ``per-build`` for the
+    controller's). Never a value."""
+    found = []
+    releases = status.get("nix_releases") or {}
+    for name, record in sorted(releases.items()):
+        if not isinstance(record, Mapping) or record.get("builder") != host:
+            continue
+        plan = record.get("plan") or {}
+        mode = str(plan.get("credentials") or "host")
+        inputs = []
+        for item in plan.get("inputs") or ():
+            if not isinstance(item, Mapping):
+                continue
+            credential = str(item.get("credential") or "")
+            inputs.append(
+                {
+                    "input": item.get("input"),
+                    "url": item.get("url"),
+                    "credential": credential,
+                    "state": "per-build"
+                    if credential == CONTROLLER
+                    else state(credential),
+                }
+            )
+        found.append(
+            {
+                "release": name,
+                "credentials": mode,
+                "tag": record.get("tag"),
+                "planned": bool(plan),
+                "inputs": inputs,
+            }
+        )
+    return found

@@ -117,14 +117,13 @@ releases).
 ### Private flake inputs: fetched on the build host first
 
 A flake whose `flake.lock` pins a private input (`app =
-git+ssh://git@github.com/org/app`) builds on a build host that holds no Git
-credential of its own (0.26.0). Before the build, the build host fetches
-each private input into its own Nix store with a Git token from **its own**
-Piceli secrets; the build then finds every one of them in the store by its
-`narHash` and fetches nothing. The token never reaches the build run, the
-image, the build log, the cache, the manifest or the published closure, and
-the controller never sends one: its plan names the inputs and the
-credential names only.
+git+ssh://git@github.com/org/app`) builds on a build host whose build run
+holds no Git credential (0.26.0). Before the build, a short fetch step on
+the build host fetches each private input into the host's Nix store; the
+build then finds every one of them there by its `narHash` and fetches
+nothing. The credential reaches only that fetch step: never the build run,
+the image, an argument, the build log, the cache, the receipt, the manifest
+or the published closure.
 
 Which inputs are fetched first:
 
@@ -137,41 +136,71 @@ Which inputs are fetched first:
   "lib-token"})`: the input's name in `flake.lock` and the credential that
   reads it.
 
-Each one uses the credential named in `inputs=`, else `git`. Other inputs
-are public: the build fetches them as before. The plan (and so the
-approval) lists them:
+Other inputs are public: the build fetches them as before. The plan (and so
+the approval) lists the inputs and the credential of each:
 
 ```json
 "inputs": [{"input": "app", "url": "git+ssh://git@github.com/org/app",
             "credential": "git", "why": "gate"}]
 ```
 
-On the build host, store the token and say which host it is for (it is
-used for no other):
+#### Two ways to give the fetch a credential
+
+`NixRelease(..., credentials="host")` (the default) or
+`credentials="controller"`:
+
+| | `credentials="host"` (default) | `credentials="controller"` |
+| --- | --- | --- |
+| Whose credential | The build host's own, read-only, in its Piceli secrets | The composition's Git Secret (`piceli secrets git`), the one the controller clones with |
+| Which | A fine-grained read-only token (`git-token`: `git+https` through `GIT_ASKPASS`, `git+ssh` of its host over HTTPS, `github:`/`gitlab:` as Nix's `access-tokens`) or a deploy key (`git-ssh-key`: `git+ssh`) | Its HTTPS token, for the inputs on the hosts of the composition's `Source`s only (the plan's `git_hosts`) |
+| Named by | `inputs={"app": "NAME"}`, else `git` | always the controller's |
+| Travels | Once, when you set the host up (`secrets backup --only` / `restore`, like the cache key) | Per build: the controller seals it to a one-time X25519 key the host claimed that build with (HKDF-SHA256, ChaCha20-Poly1305, bound to the build and the host); the host opens it in memory and forgets the key |
+| Checked | At `builder serve` start (a warning per release and input it lacks), and `builder serve --check` | `piceli cluster status` shows the Git Secret |
+| Risk | A build host's own read-only credential lives on it | The composition's token (often wider than read-only) reaches the host for each build; the sealed copy sits in the controller's status until the build answers. A short-lived token per job (a GitHub App installation token) is not minted yet |
+
+Prefer `host` with a read-only token or deploy key per repository;
+`controller` saves setting a credential on each build host.
+
+**Owner's steps, `credentials="host"`.** On the build host (or on your
+machine, then carried over):
 
 ```sh
-piceli secrets git-token git --host github.com --prompt   # type the token
+# A fine-grained token with Contents: read, for that host only:
+piceli secrets git-token git --host github.com --prompt
+# Or a read-only deploy key, with the host's key pinned:
+ssh-keyscan github.com > github.known_hosts
+piceli secrets git-ssh-key git --host github.com --file deploy_key \
+  --known-hosts github.known_hosts
+# Made elsewhere: carry it as the cache's keys go.
+piceli secrets backup --only git --to git.age --recipient <the build host's age1...>
+piceli secrets restore git.age                        # on the build host
+piceli builder serve --cluster infra.py:cluster --host mini \
+  --publish infra.py:cache --check                     # every credential present?
 ```
 
-Made on the owner's machine instead, it travels as the cache's keys do:
-`piceli secrets backup --only git --to git.age --recipient <the build
-host's age1...>`, then `piceli secrets restore git.age` there. A token that
-reads the repositories is enough (GitHub: a fine-grained token with
-*Contents: read*).
+**Owner's steps, `credentials="controller"`.** Store the composition's
+token once (`piceli secrets git --cluster infra.py:cluster --prompt`, as
+for its sources), declare `NixRelease(..., credentials="controller")`, and
+run `builder serve` on the build host as before: nothing is stored there.
 
-How each input is fetched, by a short step on the build host (a native
-host's Python, or a `docker run --rm -i` of the run image with the host's
-`/nix`, as the publisher; the token on its stdin only):
+`piceli secrets status MODULE` lists, per `NixRelease`, its mode and the
+credentials it names (`nix_inputs`), and whether this machine holds them.
 
-- `git+https`: Git asks a `GIT_ASKPASS` script reading two `0600` files in
-  a temporary directory; credential helpers are off for that fetch, so none
-  stores the token;
-- `git+ssh` of the token's host: fetched from the same repository over
-  HTTPS (the store path is the same: Nix checks the `narHash`);
+How each input is fetched, by the fetch step (a native host's Python, or a
+`docker run --rm -i` of the run image with the host's `/nix`, as the
+publisher; the credential on its stdin only, written to `0600` files in a
+`0700` temporary directory removed on every exit):
+
+- `git+https`: Git asks a `GIT_ASKPASS` script reading those files;
+  credential helpers are off for that fetch, so none stores the token;
+- `git+ssh` with a token of its host: fetched from the same repository over
+  HTTPS (the store path is the same: Nix checks the `narHash`); with a
+  deploy key: `GIT_SSH_COMMAND` with the key, `IdentitiesOnly`, and the
+  pinned known_hosts (else the host key is taken on first use, each time);
 - `github:`, `gitlab:`, `sourcehut:`: Nix's `access-tokens` for that host,
   in the step's `NIX_CONFIG` only;
-- without a stored credential: the host's own access (a public input, or a
-  native host's own credential helpers and SSH agent).
+- without a credential: the host's own access (a public input, or a native
+  host's own credential helpers and SSH agent).
 
 Nix's fetcher cache lives in the temporary directory too, so no clone of
 the private repository stays on the host. On a docker host the run image
@@ -184,9 +213,10 @@ infra-nix-input-unreachable: app git+ssh://git@github.com/org/app (credential gi
 ```
 
 A hand-run publish (`piceli dev nix build --publish`) covers the same
-inputs when its composition has the `NixRelease` (`--composition`, or the
-`--publish` module), and `--input NAME[=CREDENTIAL]` adds others (see
-{doc}`dev_builds`). The release's stages show the step as `inputs`.
+inputs with this machine's credentials when its composition has the
+`NixRelease` (`--composition`, or the `--publish` module), and `--input
+NAME[=CREDENTIAL]` adds others (see {doc}`dev_builds`). The release's
+stages show the step as `inputs`.
 
 ## Install the agent
 

@@ -382,3 +382,90 @@ def test_the_fetcher_runs_where_the_publisher_runs() -> None:
     assert argv[argv.index("run") : argv.index("run") + 3] == ["run", "--rm", "-i"]
     assert "/nix:/nix:ro" in argv and "NIX_REMOTE=daemon" in argv
     assert "--cap-drop" in argv and os.path.basename(argv[0]) == "docker"
+
+
+# ------------------------------------------------------------------ both modes
+
+KEY = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjE=\n-----END OPENSSH PRIVATE KEY-----\n"
+
+
+def test_the_controllers_credential_goes_only_to_the_composition_hosts() -> None:
+    entries = [
+        item | {"credential": nix_inputs.CONTROLLER}
+        for item in nix_inputs.covered(LOCK, gate="app", declared={"shared": "x"})
+    ]
+    pairs = nix_inputs.resolve(entries, LOCK)
+    controller = {"hosts": ["github.com"], "username": "u", "token": TOKEN}
+    request, tried = nix_inputs.plan_fetch(pairs, controller=controller)
+    app, shared = request["inputs"]
+    assert app["mode"] == "askpass" and app["token"] == TOKEN
+    assert shared["mode"] == "none" and "token" not in shared
+    assert tried[0]["tried"] == "the controller's credential over HTTPS"
+    assert tried[1]["tried"].startswith(
+        "the controller's credential is for github.com, not gitlab.example.org"
+    )
+    request, tried = nix_inputs.plan_fetch(pairs[:1])
+    assert request["inputs"][0]["mode"] == "none"
+    assert tried[0]["tried"].startswith("the controller sent no credential")
+
+
+def test_a_deploy_key_fetches_git_ssh_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PICELI_CREDENTIALS_DIR", str(tmp_path / "credentials"))
+    nix_inputs.save_git_ssh_key("git", "github.com", KEY, "github.com ssh-ed25519 AAAA")
+    assert nix_inputs.credential_state("git") == "present"
+    assert nix_inputs.credential_state("other") == "missing"
+    pairs = nix_inputs.resolve(nix_inputs.covered(LOCK, gate="app"), LOCK)
+    request, tried = nix_inputs.plan_fetch(pairs)
+    (item,) = request["inputs"]
+    assert item["mode"] == "ssh-key" and item["key"] == KEY
+    assert item["locked"]["url"] == APP_SSH["url"]  # stays SSH
+    assert tried[0]["tried"] == "credential git (a deploy key over SSH)"
+    env = nix_fetch.input_env({**item, "index": 0}, str(tmp_path), {})
+    command = env["GIT_SSH_COMMAND"]
+    key_file = command.split("-i ", 1)[1].split()[0]
+    assert stat.S_IMODE(Path(key_file).stat().st_mode) == 0o600
+    assert "StrictHostKeyChecking=yes" in command and KEY not in command
+
+
+def test_secrets_git_ssh_key_stores_a_key_file_and_prints_none_of_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from piceli.k8s.cli import app
+
+    monkeypatch.setenv("PICELI_CREDENTIALS_DIR", str(tmp_path / "credentials"))
+    key = tmp_path / "deploy"
+    key.write_text(KEY)
+    done = CliRunner().invoke(app, ["secrets", "git-ssh-key", "git", "--host",
+                                    "github.com", "--file", str(key)])  # fmt: skip
+    assert done.exit_code == 0, done.output
+    assert "b3BlbnNzaC1rZXktdjE" not in done.output
+    assert nix_inputs.load_git_credential("git")["key"] == KEY
+
+
+def test_secrets_status_says_each_releases_mode_and_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.infra import NixCache, NixHost, NixRelease, Source, Tag
+    from piceli.infra.machines.secrets_status import nix_inputs as rows
+
+    monkeypatch.setenv("PICELI_CREDENTIALS_DIR", str(tmp_path / "credentials"))
+    nix_inputs.save_git_token("lib-token", "github.com", "git", TOKEN)
+    cache = NixCache("cache-1:" + "A" * 43 + "=", url="file:///tmp/c")
+    host = NixHost("web-1", server="ssh://root@web-1.example.org", flake=".#web-1",
+                   follow=Tag("web-v*"), cache=cache)  # fmt: skip
+    source = Source("https://github.com/org/hosts", name="hosts")
+    own = NixRelease(host, source=source, builder="mini", inputs={"lib": "lib-token"})
+    sealed = NixRelease(host, source=source, builder="mini", credentials="controller")
+    first, second = rows([own, sealed])
+    assert first["credentials"] == "host"
+    assert first["here"] == {"git": "missing", "lib-token": "present"}
+    assert "builder serve --host mini --check" in first["where"]
+    assert second["credentials"] == "controller" and "here" not in second
+    from piceli.infra import CompositionError
+
+    with pytest.raises(CompositionError):
+        NixRelease(host, source=source, builder="mini", credentials="cluster")

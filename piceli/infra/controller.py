@@ -1616,6 +1616,8 @@ class CompositionController:
                     if publish is not None:  # 0.25.0: proves the cache's key
                         self.nix.check_claim(publish, body)
                     remote_builds.claim(self.state, body, self.clock())
+                    if publish is not None:  # 0.26.0: credentials="controller"
+                        self.nix.seal(publish, body, self._git_credential())
                 elif kind == "built":
                     self._delivered(body)
                 elif kind == "prebuilt":
@@ -4037,6 +4039,14 @@ class CompositionController:
             )
             | ({"requested_at": str(at)[:32]} if at else {}),
         )
+
+    def _git_credential(self) -> dict[str, str] | None:
+        """The HTTPS token of the mounted Git Secret, for a NixRelease with
+        ``credentials="controller"`` (0.26.0); never logged."""
+        from piceli.dev.nix_inputs import read_controller_credential
+
+        remote = next(iter(self.sources.remotes.values()), None)
+        return read_controller_credential(getattr(remote, "credentials_dir", None))
 
     def _flake_lock(self, target: Any, commit: str) -> bytes | None:
         """The ``flake.lock`` of a NixRelease's commit, from the source's

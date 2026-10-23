@@ -610,7 +610,46 @@ def report(
         "complete": not any(i.blocking for i in items),
         "backup": backup_state(),
         "warnings": _warnings(decls, items),
+        **({"nix_inputs": found} if (found := nix_inputs(decls)) else {}),
     }
+
+
+def nix_inputs(decls: Iterable[Any]) -> list[dict[str, Any]]:
+    """0.26.0: how each NixRelease fetches its private flake inputs: its
+    mode (``host``: the build host's own credential; ``controller``: the
+    composition's Git Secret, sealed per build), the credentials it names,
+    whether this machine holds each (the build host itself says with
+    ``piceli builder serve --check``), never a value."""
+    from piceli.dev.nix_inputs import DEFAULT_CREDENTIAL, credential_state
+    from piceli.infra.nix_releases import NixRelease
+
+    found = []
+    for item in decls:
+        if not isinstance(item, NixRelease):
+            continue
+        declared = dict(item.inputs)
+        gate = item.gate.input if item.gate is not None else None
+        row: dict[str, Any] = {
+            "release": item.host.name,
+            "builder": item.builder,
+            "credentials": item.credentials,
+            "gate_input": gate,
+            "declared": declared,
+        }
+        if item.credentials == "controller":
+            row["where"] = (
+                "the composition's Git Secret (piceli secrets git), sealed by the "
+                "controller for each build; piceli cluster status shows it"
+            )
+        else:
+            names = sorted({DEFAULT_CREDENTIAL, *declared.values()})
+            row["where"] = (
+                f"in the Piceli secrets of build host {item.builder}: piceli "
+                f"builder serve --host {item.builder} --check says which it holds"
+            )
+            row["here"] = {name: credential_state(name) for name in names}
+        found.append(row)
+    return found
 
 
 def items_of(document: Mapping[str, Any]) -> list[Item]:
@@ -667,6 +706,14 @@ def table(document: Mapping[str, Any]) -> list[str]:
         if row.get("detail"):
             text += f" [{row['detail']}]"
         lines.append(f"  {row['name'].ljust(width)}  {text}")
+    for row in document.get("nix_inputs") or ():
+        lines.append("")
+        lines.append(
+            f"flake inputs of {row['release']}: credentials {row['credentials']}; "
+            + row["where"]
+        )
+        for name, state in (row.get("here") or {}).items():
+            lines.append(f"  {name}: {state} on this machine")
     backup = document["backup"]
     said = {
         "empty": "nothing stored yet",
