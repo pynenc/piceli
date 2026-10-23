@@ -135,6 +135,27 @@ def semver(tag: str) -> tuple[Any, ...] | None:
     return (*core, 0, parts)
 
 
+_GLOB = re.compile(r"[*?\[]")
+
+
+def tag_prefix(pattern: str) -> str:
+    """The literal prefix of a ``Tag`` pattern: what comes before its first
+    wildcard (``*``, ``?``, ``[``), without the version digits and dots it
+    may pin (``web-v1.*`` is ``web-v``). ``v*`` is ``v``, ``*`` is ``""``."""
+    return _GLOB.split(pattern, 1)[0].rstrip("0123456789.")
+
+
+def tag_version(pattern: str, tag: str) -> tuple[Any, ...] | None:
+    """The sort key of ``tag`` under ``pattern``: the tag matches the glob and
+    what follows the pattern's :func:`tag_prefix` is a semantic version
+    (:func:`semver`); ``None`` otherwise. ``Tag("v*")`` never matches
+    ``web-v1.2.3``, and ``Tag("web-*")`` never takes ``web-api-1.2.3``."""
+    if not fnmatch.fnmatchcase(tag, pattern):
+        return None
+    prefix = tag_prefix(pattern)
+    return semver(tag[len(prefix) :]) if tag.startswith(prefix) else None
+
+
 def read_env_file(path: str) -> dict[str, str]:
     """``KEY=VALUE`` lines of a root-only file (``host-credentials-exposed``
     when others may read it, ``host-credentials-missing`` when absent)."""
@@ -541,9 +562,10 @@ class Agent:
                 if not found.endswith(".json"):
                     continue
                 tag = found[len(prefix) : -len(".json")]
-                if not fnmatch.fnmatchcase(tag, str(follow["pattern"])):
+                pattern = str(follow["pattern"])
+                if not fnmatch.fnmatchcase(tag, pattern):
                     continue
-                order = semver(tag)
+                order = tag_version(pattern, tag)
                 if order is None or (order[3] == 0 and not follow.get("prereleases")):
                     ignored.append(tag)
                     continue
@@ -558,7 +580,7 @@ class Agent:
             return None, "no-build"
         current = self.state.get("current") or {}
         if version is not None and isinstance(current.get("tag"), str):
-            running = semver(str(current["tag"]))
+            running = tag_version(str(follow["pattern"]), str(current["tag"]))
             if running is not None and version < running:
                 return None, "older"
         if current.get("ref") == body["ref"] and str(

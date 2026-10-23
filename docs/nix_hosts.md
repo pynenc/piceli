@@ -63,6 +63,38 @@ that is not a version is ignored, and the status lists it under
 declaration that does not hold is refused with `host-invalid` or
 `host-check-invalid`.
 
+### Several hosts in one repository: tag prefixes
+
+Give each host its own tag prefix, and release each one with its own
+tags:
+
+```python
+web = NixHost("web-1", ..., follow=Tag("web-v*"))   # web-v1.2.3
+api = NixHost("api-1", ..., follow=Tag("api-v*"))   # api-v0.4.0
+```
+
+A tag counts for a host when it matches the glob **and** what follows the
+pattern's literal prefix is a version as above. The prefix (`Tag.prefix`)
+is the pattern before its first `*`, `?` or `[`, without the digits and
+dots of a version it pins:
+
+| Pattern | Prefix | Counts | Never counts |
+| --- | --- | --- | --- |
+| `v*` | `v` | `v1.2.3` | `web-v1.2.3` (no match) |
+| `web-v*` | `web-v` | `web-v1.10.0` above `web-v1.9.0` | `api-v2.0.0`, `v3.0.0`, `web-vNext` (ignored) |
+| `web-*` | `web-` | `web-1.2.3`, `web-v1.2.3` | `web-api-1.2.3` (ignored: `api-1.2.3` is no version) |
+| `web-v1.*` | `web-v` | `web-v1.4.0` | `web-v2.0.0` (no match) |
+| `*` | (none) | `1.2.3`, `v1.2.3` | `web-v1.2.3` (ignored) |
+
+So two hosts with different prefixes never see each other's tags, in the
+agent's resolve and ordering ("never older" included), in the pointer
+`dev nix build --publish --tag-pattern 'web-v*'` writes, and in the
+versions `dev nix gc --tag-pattern 'web-v*' --tag-pattern 'api-v*'` keeps
+(see {doc}`dev_builds`). Put the prefix before the first wildcard:
+`Tag("*-v*")` has no prefix, so `web-v1.2.3` is not a version for it.
+`Tag(...).version(tag)` gives a tag's sort key, `None` when it does not
+count.
+
 ## Install the agent
 
 ```sh

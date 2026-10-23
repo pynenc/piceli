@@ -231,6 +231,16 @@ def build(
             "closure, upload the manifest (needs --approve)",
         ),
     ] = None,
+    tag_pattern: Annotated[
+        str | None,
+        typer.Option(
+            "--tag-pattern",
+            help="With --publish: the pointer names the highest version tag at "
+            "the commit matching this NixHost Tag pattern (web-v*), compared "
+            "after its prefix (default: --ref when it is a tag, else the first "
+            "tag at the commit)",
+        ),
+    ] = None,
     branch: Annotated[
         str | None,
         typer.Option(
@@ -282,7 +292,16 @@ def build(
             raise DevError("dev-run-invalid", "give --ref or --worktree, not both")
         root_dir = toplevel(repo if ref is not None else (worktree or Path(".")))
         rev = resolve(root_dir, ref) if ref is not None else None
-        tag = tag_of(root_dir, ref, rev) if rev is not None else None
+        if tag_pattern is not None:
+            from piceli.hosts.model import HostError, Tag
+
+            try:
+                Tag(tag_pattern)
+            except HostError:
+                raise DevError(
+                    "dev-nix-invalid", "--tag-pattern is a glob of tag names (web-v*)"
+                ) from None
+        tag = tag_of(root_dir, ref, rev, tag_pattern) if rev is not None else None
         if branch is None and ref is not None:
             branch = branch_of(root_dir, ref)
         elif branch is not None and not ref_name_ok(branch):
@@ -321,6 +340,8 @@ def build(
                 command += f" --name {name}"
             if image:
                 command += " --image"
+            if tag_pattern is not None:
+                command += f" --tag-pattern '{tag_pattern}'"
             if plan["branch"] is not None:
                 command += f" --branch {plan['branch']}"
             say(f"publish {target} at {rev[:12]} to {cache.store_url}")
@@ -544,6 +565,15 @@ def gc(
         int,
         typer.Option("--keep-tags", help="Keep the builds of the newest N tags", min=0),
     ] = 5,
+    tag_pattern: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--tag-pattern",
+            help="Keep the newest --keep-tags versions of each NixHost Tag "
+            "pattern (web-v*, compared after its prefix) instead of the newest "
+            "tags by date; repeat it for each host of the repository",
+        ),
+    ] = None,
     main: Annotated[
         str, typer.Option("--main", help="The branch whose current commit stays")
     ] = "main",
@@ -577,8 +607,18 @@ def gc(
 
     cache = load_cache(cache_ref)
     try:
+        patterns = tuple(tag_pattern or ())
+        for pattern in patterns:
+            from piceli.hosts.model import HostError, Tag
+
+            try:
+                Tag(pattern)
+            except HostError:
+                raise DevError(
+                    "dev-nix-invalid", "--tag-pattern is a glob of tag names (web-v*)"
+                ) from None
         root = toplevel(repo)
-        kept = kept_commits(root, keep_tags, main)
+        kept = kept_commits(root, keep_tags, main, patterns)
         keys = None
         if cache.scheme == "s3":
             access, _, secret = load_credential(
@@ -588,7 +628,7 @@ def gc(
         objects = CacheObjects(cache, keys)
         plan = gc_plan(
             objects, kept, keep_tags=keep_tags, main=main,
-            grace_seconds=float(grace), now=time.time(),
+            grace_seconds=float(grace), now=time.time(), tag_patterns=patterns,
         )  # fmt: skip
     except (DevError, InfraError) as error:
         reject(error.code, str(error))
@@ -605,6 +645,7 @@ def gc(
         command = (
             f"piceli dev nix gc --cache {cache_ref} --repo {repo} "
             f"--keep-tags {keep_tags} --main {main} --grace {grace}"
+            + "".join(f" --tag-pattern '{pattern}'" for pattern in patterns)
         )
         say("approve with:")
         say(f"  {command} --approve {digest}")

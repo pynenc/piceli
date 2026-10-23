@@ -1642,7 +1642,9 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "client uploads the manifest. Prints the store path, the image's "
             "sha256 and the public key, never a secret. Exit 1: the build "
             "failed, no output (dev-nix-no-output), dev-nix-publish-failed, "
-            "dev-nix-manifest-failed.",
+            "dev-nix-manifest-failed. --tag-pattern GLOB (a NixHost's Tag "
+            "pattern) points the highest version tag of that pattern at the "
+            "commit; a --ref tag of another pattern is refused (dev-nix-invalid).",
         ),
         "dev nix gc": _C(
             "Remove the builds of old commits from a Nix cache: keep the manifests "
@@ -1664,7 +1666,9 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "path a kept manifest's closure reaches is never deleted; objects "
             "younger than --grace stay. --approve with another digest is "
             "refused (dev-nix-plan-changed); a failed delete exits 1 "
-            "(dev-nix-gc-failed).",
+            "(dev-nix-gc-failed). --tag-pattern GLOB (repeatable, each host's "
+            "Tag pattern) keeps the newest --keep-tags versions of each pattern, "
+            "compared after its prefix; the plan lists tag_patterns.",
         ),
         "dev run": _C(
             "Run a build or test command on the cluster's builder node for a "

@@ -84,9 +84,11 @@ class Tag:
     """Follow the highest version among the tags that match ``pattern``.
 
     Tags compare as semantic versions (an optional ``v``, then
-    ``MAJOR.MINOR.PATCH``, an optional ``-prerelease`` and ``+build``); a
-    matching tag that is not one is ignored (the status lists it).
-    Pre-releases count only with ``prereleases=True``.
+    ``MAJOR.MINOR.PATCH``, an optional ``-prerelease`` and ``+build``) after
+    the pattern's literal :attr:`prefix`: ``Tag("web-v*")`` orders
+    ``web-v1.10.0`` above ``web-v1.9.0`` and never sees ``api-v2.0.0`` or
+    ``v3.0.0``. A matching tag whose rest is not a version is ignored (the
+    status lists it). Pre-releases count only with ``prereleases=True``.
     """
 
     pattern: str = "v*"
@@ -95,6 +97,21 @@ class Tag:
     def __post_init__(self) -> None:
         if not isinstance(self.pattern, str) or not _PATTERN.fullmatch(self.pattern):
             raise _invalid("Tag(pattern=) is a glob of tag names (v*)")
+
+    @property
+    def prefix(self) -> str:
+        """The literal part before the version (``web-v`` of ``web-v*``)."""
+        from piceli.hosts.agent import tag_prefix
+
+        return tag_prefix(self.pattern)
+
+    def version(self, tag: str) -> tuple[Any, ...] | None:
+        """``tag``'s sort key under this pattern, ``None`` when it does not
+        match or the rest after :attr:`prefix` is no version (pre-releases
+        included: :attr:`prereleases` is the follower's choice)."""
+        from piceli.hosts.agent import tag_version
+
+        return tag_version(self.pattern, tag)
 
     def describe(self) -> dict[str, Any]:
         return {"kind": "tag", "pattern": self.pattern, "prereleases": self.prereleases}

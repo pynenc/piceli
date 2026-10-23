@@ -11259,6 +11259,7 @@
      "--quiet",
      "--ref",
      "--repo",
+     "--tag-pattern",
      "--worktree"
     ],
     "subcommands": []
@@ -11272,7 +11273,8 @@
      "--json",
      "--keep-tags",
      "--main",
-     "--repo"
+     "--repo",
+     "--tag-pattern"
     ],
     "subcommands": []
    },

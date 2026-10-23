@@ -757,12 +757,37 @@ def _git(repo: Path, *args: str) -> str:
     return done.stdout.strip() if done.returncode == 0 else ""
 
 
-def tag_of(repo: Path, ref: str | None, commit: str) -> str | None:
-    """The tag being built: ``--ref`` when it is a tag, else a tag at the commit."""
-    if ref and _git(repo, "rev-parse", "--verify", "-q", f"refs/tags/{ref}"):
+def tag_of(
+    repo: Path, ref: str | None, commit: str, pattern: str | None = None
+) -> str | None:
+    """The tag being built: ``--ref`` when it is a tag, else a tag at the commit.
+
+    With ``pattern`` (a ``NixHost``'s ``Tag`` pattern, ``--tag-pattern``)
+    only a tag whose version after the pattern's prefix parses counts
+    (:func:`piceli.hosts.agent.tag_version`): ``--ref`` when it is one, else
+    the highest one at the commit, else ``None``; a ``--ref`` tag of another
+    pattern is refused (``dev-nix-invalid``)."""
+    from piceli.hosts.agent import tag_version
+
+    is_tag = bool(ref and _git(repo, "rev-parse", "--verify", "-q", f"refs/tags/{ref}"))
+    if pattern is None:
+        if is_tag:
+            return ref
+        tags = sorted(_git(repo, "tag", "--points-at", commit).split())
+        return tags[0] if tags else None
+    if is_tag and ref is not None:
+        if tag_version(pattern, ref) is None:
+            raise DevError(
+                "dev-nix-invalid",
+                f"--ref {ref} is not a version tag of --tag-pattern {pattern}",
+            )
         return ref
-    tags = sorted(_git(repo, "tag", "--points-at", commit).split())
-    return tags[0] if tags else None
+    ranked = [
+        (version, tag)
+        for tag in _git(repo, "tag", "--points-at", commit).split()
+        if (version := tag_version(pattern, tag)) is not None
+    ]
+    return max(ranked)[1] if ranked else None
 
 
 def branch_of(repo: Path, ref: str) -> str | None:
@@ -776,14 +801,37 @@ def branch_of(repo: Path, ref: str) -> str | None:
     return None
 
 
-def kept_commits(repo: Path, keep_tags: int, main: str) -> dict[str, list[str]]:
+def kept_commits(
+    repo: Path, keep_tags: int, main: str, patterns: Sequence[str] = ()
+) -> dict[str, list[str]]:
     """The commits whose builds stay: the newest ``keep_tags`` tags (by tag or
-    commit date) and ``main``; each with the refs that name it."""
+    commit date) and ``main``; each with the refs that name it.
+
+    With ``patterns`` (each host's ``Tag`` pattern, ``--tag-pattern``), the
+    highest ``keep_tags`` versions of each pattern instead (the version
+    after its prefix, :func:`piceli.hosts.agent.tag_version`): one target's
+    releases never push another's out."""
+    from piceli.hosts.agent import tag_version
+
     kept: dict[str, list[str]] = {}
     tags = _git(
         repo, "for-each-ref", "--sort=-creatordate", "--format=%(refname:short)",
         "refs/tags",
     ).split()  # fmt: skip
+    if patterns:
+        chosen: list[str] = []
+        for pattern in patterns:
+            ranked = sorted(
+                (
+                    (version, tag)
+                    for tag in tags
+                    if (version := tag_version(pattern, tag)) is not None
+                ),
+                reverse=True,
+            )
+            chosen += [tag for _, tag in ranked[: max(0, keep_tags)]]
+        tags = list(dict.fromkeys(chosen))
+        keep_tags = len(tags)
     for tag in tags[: max(0, keep_tags)]:
         commit = _git(repo, "rev-parse", "--verify", "-q", f"{tag}^{{commit}}")
         if commit:
@@ -811,6 +859,7 @@ def gc_plan(
     main: str,
     grace_seconds: float,
     now: float,
+    tag_patterns: Sequence[str] = (),
 ) -> dict[str, Any]:
     """What ``piceli dev nix gc`` would delete: tag pointers of tags not
     kept, manifests of other commits that no remaining pointer names, then
@@ -907,6 +956,8 @@ def gc_plan(
         "schema": GC_SCHEMA,
         "cache": objects.cache.store_url,
         "keep_tags": keep_tags,
+        # Only when given: other plans (and their digests) are unchanged.
+        **({"tag_patterns": list(tag_patterns)} if tag_patterns else {}),
         "main": main,
         "kept": [
             {

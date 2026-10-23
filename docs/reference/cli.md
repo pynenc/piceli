@@ -1105,6 +1105,7 @@ Build a flake output on a Nix build host; with --publish, sign and push it.
 | `--host` | text |  | A docker or native build host (default: the first) |
 | `--image` | boolean | `False` | The output is a disk image: copy its file back with its sha256 |
 | `--publish` | text |  | MODULE:ATTR of a piceli.infra.NixCache: sign and push the closure, upload the manifest (needs --approve) |
+| `--tag-pattern` | text |  | With --publish: the pointer names the highest version tag at the commit matching this NixHost Tag pattern (web-v*), compared after its prefix (default: --ref when it is a tag, else the first tag at the commit) |
 | `--branch` | text |  | With --publish: also point refs/heads/BRANCH at this build (default: --ref when it names a branch) |
 | `--approve` | text |  | The publish plan's digest |
 | `--artifacts-dir` | path | `piceli-dev-artifacts` | Where an image lands (RUN/) |
@@ -1121,7 +1122,7 @@ Build a flake output on a Nix build host; with --publish, sign and push it.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** 0.24.0. Without --publish it is a development run (no approval; covered like dev run). With --publish it prints the plan (commit, output, host, cache, key) and exits 3; --approve DIGEST builds, then a separate step on the same host receives the signing key and S3 keys on stdin only (never the build), pushes with nix copy and the client uploads the manifest. Prints the store path, the image's sha256 and the public key, never a secret. Exit 1: the build failed, no output (dev-nix-no-output), dev-nix-publish-failed, dev-nix-manifest-failed.
+- **Notes:** 0.24.0. Without --publish it is a development run (no approval; covered like dev run). With --publish it prints the plan (commit, output, host, cache, key) and exits 3; --approve DIGEST builds, then a separate step on the same host receives the signing key and S3 keys on stdin only (never the build), pushes with nix copy and the client uploads the manifest. Prints the store path, the image's sha256 and the public key, never a secret. Exit 1: the build failed, no output (dev-nix-no-output), dev-nix-publish-failed, dev-nix-manifest-failed. --tag-pattern GLOB (a NixHost's Tag pattern) points the highest version tag of that pattern at the commit; a --ref tag of another pattern is refused (dev-nix-invalid).
 
 (cli-dev-nix-gc)=
 ### `piceli dev nix gc`
@@ -1133,6 +1134,7 @@ Remove builds of old commits from a Nix cache: plan, then --approve.
 | `--cache` | text | required | MODULE:ATTR of the piceli.infra.NixCache |
 | `--repo` | path | `.` | The repository whose tags and main count |
 | `--keep-tags` | integer | `5` | Keep the builds of the newest N tags |
+| `--tag-pattern` | text (repeatable) |  | Keep the newest --keep-tags versions of each NixHost Tag pattern (web-v*, compared after its prefix) instead of the newest tags by date; repeat it for each host of the repository |
 | `--main` | text | `main` | The branch whose current commit stays |
 | `--grace` | integer | `3600` | Seconds: younger objects stay (a publish in progress) |
 | `--approve` | text |  | The gc plan's digest |
@@ -1147,7 +1149,7 @@ Remove builds of old commits from a Nix cache: plan, then --approve.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** 0.24.0. Without --approve prints the keys it would delete and the plan digest (exit 3; 0 and state clean when nothing goes). A path a kept manifest's closure reaches is never deleted; objects younger than --grace stay. --approve with another digest is refused (dev-nix-plan-changed); a failed delete exits 1 (dev-nix-gc-failed).
+- **Notes:** 0.24.0. Without --approve prints the keys it would delete and the plan digest (exit 3; 0 and state clean when nothing goes). A path a kept manifest's closure reaches is never deleted; objects younger than --grace stay. --approve with another digest is refused (dev-nix-plan-changed); a failed delete exits 1 (dev-nix-gc-failed). --tag-pattern GLOB (repeatable, each host's Tag pattern) keeps the newest --keep-tags versions of each pattern, compared after its prefix; the plan lists tag_patterns.
 
 (cli-dev-release-host)=
 ### `piceli dev release-host`

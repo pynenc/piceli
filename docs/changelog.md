@@ -132,6 +132,14 @@ and rollback.
   retried, and its earlier failure is not reported meanwhile);
   `--published-after` pins one before the host has polled. New codes
   `host-*`; see `docs/nix_hosts.md`.
+- **Tag prefixes per host.** `Tag("web-v*")` orders tags by the version
+  after the pattern's literal prefix (`Tag.prefix`, `Tag.version(tag)`):
+  `web-v1.10.0` is above `web-v1.9.0`, and two hosts released from one
+  repository (`web-v*`, `api-v*`) never see each other's tags.
+  `Tag("v*")` never matches `web-v1.2.3`. The agent's resolve and "never
+  older" use it; `dev nix build --publish --tag-pattern GLOB` points the
+  host's tag when a commit carries several, and `dev nix gc --tag-pattern
+  GLOB` (repeatable) keeps the newest `--keep-tags` versions of each.
 - **A Nix host keeps 5 systems, not every one.** `NixHost(generations=5)`
   (at least 2: a rollback needs the previous one). After a deploy whose
   checks passed, the agent deletes the system profile's older generations
