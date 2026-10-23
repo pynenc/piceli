@@ -132,6 +132,25 @@ and rollback.
   retried, and its earlier failure is not reported meanwhile);
   `--published-after` pins one before the host has polled. New codes
   `host-*`; see `docs/nix_hosts.md`.
+- **The controller publishes Nix host releases.** `NixRelease(host,
+  source=, builder=, auto_approve=False)` (new in `piceli.infra`) in a
+  composition makes the GitOps controller follow the host's
+  `Tag("web-v*")` in the flake's source: a new tag is planned
+  (`piceli.nix-release-plan.v1`), waits for `piceli gitops approve NAME
+  <plan digest>` unless `auto_approve=True`, and is asked for as a
+  `nix-publish` wanted build. `piceli builder serve --publish MODULE:ATTR`
+  (repeatable; a native host with it only publishes) claims it only for a
+  cache whose signing and S3 write keys are in its own secrets, proves it
+  with the key's signature over the claim (the keys never leave it), checks
+  that the tag points at the commit, builds, signs and publishes exactly as
+  `dev nix build --publish` does and answers `nix-published`; the
+  controller accepts only a manifest signed by the cache's key for the
+  planned commit and tag. `gitops status --json` lists `nix_releases`
+  (latest tag, state, stages with times, manifest digest); the history and
+  telemetry (`piceli.nix.release.finished`) record each attempt. A failure
+  is `failed` with its tail (`gitops-nix-release-failed`) until a newer tag
+  or `gitops sync`; tags present at first sight are the baseline. A
+  composition may now hold releases and no environment.
 - **Tag prefixes per host.** `Tag("web-v*")` orders tags by the version
   after the pattern's literal prefix (`Tag.prefix`, `Tag.version(tag)`):
   `web-v1.10.0` is above `web-v1.9.0`, and two hosts released from one

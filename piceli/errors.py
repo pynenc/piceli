@@ -4633,6 +4633,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "gitops",
     ),
     _E(
+        "gitops-nix-release-failed",
+        "NixRelease publish failed",
+        "The build host that claimed a NixRelease's publish answered `build-failed`: the source could not be fetched at the commit, the tag points at another commit, the Nix build failed, or signing, pushing or uploading the manifest failed. The release stays `failed` with the host's reason and output tail in `piceli gitops status`.",
+        "Read the release's `failure` (`reason`, `log_tail`) in `piceli gitops status --json`, fix the cause (a newer tag publishes again), or retry the same tag with `piceli gitops sync NAME`.",
+        True,
+        "gitops",
+    ),
+    _E(
         "gitops-approval-stale",
         "Approval does not match",
         "`piceli gitops approve ENV HASH` named a plan hash the environment is not waiting for: a newer push or re-plan replaced the plan, or the environment is not waiting for approval.",

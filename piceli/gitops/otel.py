@@ -915,6 +915,65 @@ class ControllerTelemetry:
                     {"piceli.dev.priority": _text(record.get("priority"), 16)},
                 )
 
+    def nix_release(self, event: Mapping[str, Any]) -> None:
+        """A NixRelease attempt ended (0.24.0): one trace (``PUBLISH NAME
+        TAG``) with a span per stage (``approval``, ``queue``, ``fetch``,
+        ``build``, ``publish``) and an event ``piceli.nix.release.finished``
+        with the state, the tag, the commit, the build host and the
+        manifest's digest."""
+        if not self.enabled:
+            return
+        with self._guard("nix release"):
+            name = str(event.get("release") or "release")
+            attempt = str(event.get("id") or name)
+            state = str(event.get("state") or "failed")
+            end = _iso_ns(event.get("finished_at")) or self._now()
+            start = _iso_ns(event.get("requested_at")) or end
+            run = {
+                "trace_id": f"{trace_id_of(self.cluster, 'nix', attempt):032x}",
+                "record": "nix",
+                "run": attempt,
+            }
+            attributes = {
+                "piceli.nix.release": _text(name, 63),
+                "piceli.nix.tag": _text(event.get("tag"), 200),
+                "vcs.ref.head.revision": _text(event.get("commit"), 64),
+                "piceli.nix.state": state,
+                "piceli.nix.builder": _text(event.get("builder"), 64),
+                "piceli.nix.build_host": _text(event.get("host"), 64),
+                "piceli.nix.trigger": _text(event.get("trigger"), 64),
+                "piceli.nix.manifest_sha256": _text(event.get("manifest_sha256"), 80),
+                "error.type": _text(event.get("reason"), 64)
+                if state != "published"
+                else None,
+                "k8s.cluster.name": self.cluster,
+            }
+            title = f"PUBLISH {name} {event.get('tag') or ''}".strip()
+            self._span(
+                run, "root", title, start, max(start, end), attributes,
+                ok=state == "published", root=True, parent=None,
+                message=_text(event.get("reason"), 64),
+            )  # fmt: skip
+            for stage, item in _dict(event.get("stages")).items():
+                begin, finish = (
+                    _iso_ns(_dict(item).get("started_at")),
+                    _iso_ns(_dict(item).get("finished_at")),
+                )
+                if begin is not None and finish is not None:
+                    self._span(
+                        run, stage, _text(stage, 32) or "stage", begin,
+                        max(begin, finish), {}, ok=None,
+                    )  # fmt: skip
+            self._event(
+                "piceli.nix.release.finished",
+                f"{self.cluster}:nix/{attempt}:finished",
+                end,
+                body=f"nix release {name} {event.get('tag')}: {state}",
+                attributes=attributes,
+                context=self._span_context(run, "root"),
+                error=state != "published",
+            )
+
     def _last_success_age(self, _options: Any) -> Iterator[Any]:
         from opentelemetry.metrics import Observation
 

@@ -27,6 +27,16 @@ container engine, with the cluster owner's credential profile:
    and a receipt: host, times, image, commits) or ``build-failed`` with
    the output's tail.
 
+0.24.0: a host started with ``--publish MODULE:ATTR`` (a ``NixCache`` whose
+signing key, and S3 write keys, are in its own Piceli secrets) also takes
+the ``nix-publish`` builds of the ``NixRelease`` s that name it as their
+builder (:mod:`piceli.infra.nix_releases`): its claim carries the cache
+key's signature over the claim, never a key; it fetches the flake's source
+at the commit, checks that the tag points at it, builds the attribute,
+signs and pushes the closure, uploads the manifest and the tag's pointer and
+answers ``nix-published``. A publish to a cache it has no keys for is never
+claimed.
+
 0.22.0: each delivered image gets its provenance (host, builder image,
 commits, times; :mod:`piceli.infra.provenance`) pushed as an OCI referrer
 when the registry takes it. A build whose output shows a machine-health
@@ -60,6 +70,8 @@ from typing import Any
 #: blobs, stage), per build host.
 CACHE_VOLUME = "piceli-build-cache"
 TAIL_LINES = 120
+#: Lines of a failed publish's output kept for its answer.
+TAIL_CHARS_LINES = 120
 #: Where the builder container finds the sources: its own copy of the
 #: read-only ``/work/src/<name>`` checkouts, in the build cache. The copy is
 #: owned by the container's user, so Git verifies it without any exception
@@ -344,6 +356,12 @@ class BuilderServe:
     #: The current build's toolchain versions (``{tool: version}``), from
     #: its receipt.
     toolchains: dict[str, str] = field(default_factory=dict)
+    #: 0.24.0: publishes NixReleases (:class:`piceli.infra.nix_releases.Publisher`)
+    #: to the caches it holds the keys of; ``None``: claims no publish.
+    publisher: Any = None
+    #: 0.24.0: whether it builds images (a native host only publishes).
+    images: bool = True
+    _refused: set[str] = field(default_factory=set)
 
     # ------------------------------------------------------------ choosing
     def wanted(self) -> list[dict[str, Any]]:
@@ -374,10 +392,34 @@ class BuilderServe:
         for entry in entries:
             if entry.get("failed") or str(entry.get("id")) in self.answered:
                 continue  # a failed build is retried by `piceli gitops sync`
+            if entry.get("kind") == "nix-publish":
+                if not self._can_publish(entry):
+                    continue
+            elif not self.images:
+                continue
             claimed = entry.get("claimed") or {}
             if not claimed or claimed.get("host") == self.host:
                 return entry
         return None
+
+    def _can_publish(self, entry: Mapping[str, Any]) -> bool:
+        """Whether this host publishes ``entry``: it is the release's builder
+        and holds the keys of its cache (said once when it does not)."""
+        if entry.get("builder") != self.host:
+            return False
+        if self.publisher is not None and self.publisher.cache_for(entry) is not None:
+            return True
+        build = str(entry.get("id"))
+        if build not in self._refused:
+            self._refused.add(build)
+            cache = ((entry.get("plan") or {}).get("cache") or {}).get("store_url")
+            self.say(
+                f"builder: nix release {entry.get('release')} publishes to {cache}; "
+                "this host has no keys for it (builder serve --publish "
+                "MODULE:ATTR of that NixCache, with its keys in piceli secrets); "
+                "not claimed"
+            )
+        return False
 
     def claim(self, entry: Mapping[str, Any]) -> bool:
         """Claim ``entry`` and wait until the controller confirms it (another
@@ -386,7 +428,14 @@ class BuilderServe:
 
         if (entry.get("claimed") or {}).get("host") == self.host:
             return True
-        self.channel.add_request(*build_claim_request(str(entry["id"]), self.host))
+        proof = (
+            self.publisher.proof(entry, self.host)
+            if entry.get("kind") == "nix-publish"
+            else None
+        )
+        self.channel.add_request(
+            *build_claim_request(str(entry["id"]), self.host, proof)
+        )
         deadline = self.clock() + self.claim_wait
         while self.clock() < deadline:
             self.sleep(5.0)
@@ -446,6 +495,8 @@ class BuilderServe:
         entry = self.pick()
         if entry is None or not self.claim(entry):
             return None
+        if entry.get("kind") == "nix-publish":
+            return self.release(entry)
         build = str(entry["id"])
         self.say(f"builder: building {', '.join(entry.get('images') or ())} ({build})")
         began = self.clock()
@@ -497,6 +548,84 @@ class BuilderServe:
         self.channel.add_request(*built_request(build, self.host, images, receipt))
         self.answered.add(build)
         self.say(f"builder: {build} delivered in {receipt['seconds']:.0f}s")
+        return build
+
+    def release(self, entry: Mapping[str, Any]) -> str:
+        """Fetch, check the tag, build and publish a NixRelease (0.24.0);
+        answer ``nix-published`` or ``build-failed`` with the output's tail."""
+        import contextlib
+
+        from piceli.gitops.state import build_failed_request, nix_published_request
+        from piceli.infra import nix_releases
+
+        build = str(entry["id"])
+        plan = entry.get("plan") or {}
+        self.say(
+            f"builder: publishing {entry.get('release')} {plan.get('tag')} ({build})"
+        )
+        tail: deque[str] = deque(maxlen=TAIL_CHARS_LINES)
+        marks: dict[str, tuple[float, float]] = {}
+
+        def line(text: str) -> None:
+            tail.append(text)
+            self.say(text)
+
+        @contextlib.contextmanager
+        def stage(name: str) -> Any:
+            began = self.clock()
+            try:
+                yield
+            finally:
+                marks[name] = (began, self.clock())
+
+        began = self.clock()
+        try:
+            nix_releases.check_plan(plan)
+            source, commit = next(iter(sorted((entry.get("commits") or {}).items())))
+            url = str((entry.get("urls") or {}).get(source) or "")
+            if not url or commit != plan["commit"]:
+                raise BuildFailed("the publish names no source at the plan's commit")
+            checkout = self.root / "checkouts" / f"{source}-{_slug(url)}"
+            with stage("fetch"):
+                export_source(url, commit, checkout, self.root / "git", self.git)
+                pointed = nix_releases.tag_commit(
+                    url, str(plan["tag"]), self.root / "git", self.git
+                )
+            if pointed != commit:
+                raise BuildFailed(
+                    f"tag {plan['tag']} of {source} points at "
+                    f"{(pointed or 'nothing')[:12]}, not {commit[:12]}"
+                )
+            done = self.publisher.publish(entry, checkout, line, stage)
+        except Exception as error:  # every refusal answers, with its tail
+            from piceli.errors import ERRORS
+
+            code = getattr(error, "code", None)
+            reason = (
+                f"{code}: {error}" if isinstance(code, str) and code in ERRORS else
+                str(error) if isinstance(error, BuildFailed | ValueError) else
+                f"the publish failed ({type(error).__name__})"
+            )  # fmt: skip
+            self.channel.add_request(
+                *build_failed_request(build, self.host, reason, "\n".join(tail))
+            )
+            self.answered.add(build)
+            self.say(f"builder: {build} failed: {reason}")
+            return build
+        receipt = {
+            "host": self.host,
+            "started_at": _iso(began),
+            "finished_at": _iso(self.clock()),
+            "seconds": round(self.clock() - began, 3),
+            "stages": nix_releases.receipt_stages(marks),
+        }
+        self.channel.add_request(
+            *nix_published_request(
+                build, self.host, done["manifest"], done["pointers"], receipt
+            )
+        )
+        self.answered.add(build)
+        self.say(f"builder: {build} published in {receipt['seconds']:.0f}s")
         return build
 
     def attach(

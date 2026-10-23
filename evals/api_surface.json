@@ -6010,6 +6010,28 @@
     "ssh_target": "SshTarget"
    }
   },
+  "NixRelease": {
+   "attrs": [
+    "auto_approve",
+    "builder",
+    "host",
+    "name",
+    "source",
+    "target"
+   ],
+   "init": [
+    "auto_approve",
+    "builder",
+    "host",
+    "source"
+   ],
+   "methods": {
+    "target": []
+   },
+   "returns": {
+    "target": "ReleaseTarget"
+   }
+  },
   "Node": {
    "attrs": [
     "arch",
@@ -8323,6 +8345,49 @@
    ],
    "methods": {},
    "pydantic": true
+  },
+  "ReleaseTarget": {
+   "attrs": [
+    "attribute",
+    "auto_approve",
+    "build",
+    "builder",
+    "from_dict",
+    "latest",
+    "name",
+    "pattern",
+    "prereleases",
+    "public_key",
+    "source",
+    "store_url",
+    "to_dict",
+    "version"
+   ],
+   "init": [
+    "attribute",
+    "auto_approve",
+    "build",
+    "builder",
+    "name",
+    "pattern",
+    "prereleases",
+    "public_key",
+    "source",
+    "store_url"
+   ],
+   "methods": {
+    "from_dict": [
+     "sources",
+     "value"
+    ],
+    "latest": [
+     "tags"
+    ],
+    "to_dict": [],
+    "version": [
+     "tag"
+    ]
+   }
   },
   "ReleaseWorkflow": {
    "attr_types": {
@@ -10946,6 +11011,7 @@
      "--namespace",
      "--once",
      "--poll",
+     "--publish",
      "--state-dir",
      "--transport"
     ],
@@ -13202,6 +13268,7 @@
    "gitops-git-failed",
    "gitops-image-unpinned",
    "gitops-image-unresolved",
+   "gitops-nix-release-failed",
    "gitops-not-installed",
    "gitops-pipeline-invalid",
    "gitops-plan-changed",
@@ -14547,6 +14614,9 @@
    "NixHost": {
     "class": "NixHost"
    },
+   "NixRelease": {
+    "class": "NixRelease"
+   },
    "Node": {
     "class": "Node"
    },
@@ -15465,6 +15535,7 @@
   "piceli.infra.machines.status",
   "piceli.infra.machines.tofu",
   "piceli.infra.multicluster",
+  "piceli.infra.nix_releases",
   "piceli.infra.pipelines",
   "piceli.infra.provenance",
   "piceli.infra.remote_builds",

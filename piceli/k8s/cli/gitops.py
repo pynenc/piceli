@@ -1078,6 +1078,21 @@ def status(
                     f"{cluster_checks.get('passed')}/{cluster_checks.get('total')}"
                 )
             say(part)
+    for name, release in (body.get("nix_releases") or {}).items():
+        # 0.24.0: a NixRelease the controller publishes.
+        line = (
+            f"  nix release {name}: {release.get('state')} "
+            f"{release.get('tag') or ''} {str(release.get('commit') or '')[:12]}"
+        ).rstrip()
+        if release.get("state") == "approval-required":
+            line += f"; approve: {release.get('approve_command')}"
+        elif release.get("state") == "published":
+            line += (
+                f"; manifest {(release.get('published') or {}).get('manifest_sha256')}"
+            )
+        elif release.get("state") == "failed":
+            line += f" ({(release.get('failure') or {}).get('reason')})"
+        say(line)
     if as_json:
         emit_json(body)
 

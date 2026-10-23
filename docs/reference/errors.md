@@ -305,6 +305,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`gitops-git-failed`](#error-gitops-git-failed) | gitops | yes |
 | [`gitops-image-unpinned`](#error-gitops-image-unpinned) | gitops | no |
 | [`gitops-image-unresolved`](#error-gitops-image-unresolved) | gitops | no |
+| [`gitops-nix-release-failed`](#error-gitops-nix-release-failed) | gitops | yes |
 | [`gitops-not-installed`](#error-gitops-not-installed) | gitops | no |
 | [`gitops-pipeline-invalid`](#error-gitops-pipeline-invalid) | gitops | yes |
 | [`gitops-plan-changed`](#error-gitops-plan-changed) | gitops | yes |
@@ -4352,6 +4353,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Render from a `release.toml` whose `[images]` or receipts pin every image by digest, or deploy the pipeline with `piceli deploy`.
 - **Retry-safe:** no
+
+(error-gitops-nix-release-failed)=
+### `gitops-nix-release-failed`
+
+**NixRelease publish failed.** The build host that claimed a NixRelease's publish answered `build-failed`: the source could not be fetched at the commit, the tag points at another commit, the Nix build failed, or signing, pushing or uploading the manifest failed. The release stays `failed` with the host's reason and output tail in `piceli gitops status`.
+
+- **Fix:** Read the release's `failure` (`reason`, `log_tail`) in `piceli gitops status --json`, fix the cause (a newer tag publishes again), or retry the same tag with `piceli gitops sync NAME`.
+- **Retry-safe:** yes
 
 (error-gitops-not-installed)=
 ### `gitops-not-installed`

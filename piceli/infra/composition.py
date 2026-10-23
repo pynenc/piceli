@@ -78,6 +78,10 @@ class Composition:
         cluster).
     :param clusters: Every declared cluster, the home one included (0.15;
         default: ``cluster`` alone).
+    :param nix_releases: The Nix host releases the controller publishes
+        (0.24.0, :class:`~piceli.infra.nix_releases.ReleaseTarget` of each
+        :class:`~piceli.infra.NixRelease`); a composition of releases only
+        needs no environment.
     """
 
     name: str
@@ -85,16 +89,25 @@ class Composition:
     components: tuple[Component, ...]
     cluster: Cluster | None = None
     clusters: tuple[Cluster, ...] = ()
+    nix_releases: tuple[Any, ...] = ()
 
     def __post_init__(self) -> None:
         self._check_clusters()
         if not _LABEL.fullmatch(self.name or ""):
             raise _invalid(f"composition name {self.name!r} is not a DNS label")
-        if not self.environments:
+        if not self.environments and not self.nix_releases:
             raise _invalid("the composition declares no environment")
         names = [item.name for item in self.environments]
         if len(set(names)) != len(names):
             raise _invalid("two environments share a name")
+        released = [item.name for item in self.nix_releases]
+        if len(set(released)) != len(released):
+            raise _invalid("two NixReleases release the same host")
+        for name in set(released) & set(names):
+            raise _invalid(
+                f"NixRelease {name!r} has an environment's name: approve and sync "
+                "name either"
+            )
         named = [item for item in self.environments if isinstance(item, Environment)]
         spaces = [item.namespace for item in named]
         if len(set(spaces)) != len(spaces):
@@ -109,7 +122,12 @@ class Composition:
             components[component.name] = component
         object.__setattr__(self, "components", tuple(components.values()))
         sources: dict[str, Source] = {}
-        for source in self.sources_of_components() + self.sources_of_envs():
+        declared: list[Source] = [
+            *self.sources_of_components(),
+            *self.sources_of_envs(),
+        ]
+        declared += [item.source for item in self.nix_releases]
+        for source in declared:
             if sources.get(source.key, source).url != source.url:
                 raise _invalid(f"two sources are named {source.key!r}")
             sources[source.key] = source
@@ -200,7 +218,11 @@ class Composition:
     @property
     def sources(self) -> tuple[Source, ...]:
         found: dict[str, Source] = {}
-        for source in self.sources_of_envs() + self.sources_of_components():
+        for source in (
+            self.sources_of_envs()
+            + self.sources_of_components()
+            + [item.source for item in self.nix_releases]
+        ):
             found.setdefault(source.key, source)
         return tuple(found[key] for key in sorted(found))
 
@@ -270,6 +292,12 @@ class Composition:
                 if self.remote_clusters
                 else {}
             ),
+            # 0.24.0, only when declared: other configs (and hashes) unchanged.
+            **(
+                {"nix_releases": [item.to_dict() for item in self.nix_releases]}
+                if self.nix_releases
+                else {}
+            ),
         }
 
     @classmethod
@@ -307,12 +335,19 @@ class Composition:
                 _env_from(item, sources, components, cluster, named)
                 for item in value.get("environments") or ()
             )
+            from piceli.infra.nix_releases import ReleaseTarget
+
+            releases = tuple(
+                ReleaseTarget.from_dict(item, sources)
+                for item in value.get("nix_releases") or ()
+            )
             return cls(
                 name=str(value["name"]),
                 environments=environments,
                 components=tuple(components.values()),
                 cluster=cluster,
                 clusters=tuple(named.values()),
+                nix_releases=releases,
             )
         except (KeyError, TypeError, ValueError, EnvError) as error:
             if isinstance(error, CompositionError):
@@ -731,8 +766,18 @@ def load_composition(entry: str | Path, root: Path | None = None) -> Composition
 
 def composition_from(module: Any, *, default_name: str = "composition") -> Composition:
     """The :class:`Composition` of an imported module (or any namespace object)."""
+    from piceli.infra.nix_releases import NixRelease
+
     values = vars(module) if not isinstance(module, Mapping) else dict(module)
-    environments = values.get("environments")
+    # 0.24.0: every NixRelease of the module, as Components are found.
+    releases = tuple(
+        {
+            id(value): value
+            for value in values.values()
+            if isinstance(value, NixRelease)
+        }.values()
+    )
+    environments = values.get("environments", () if releases else None)
     if isinstance(environments, str) or not isinstance(environments, Sequence):
         raise _invalid("the module declares no environments = [...] list")
     items = tuple(environments)
@@ -764,7 +809,11 @@ def composition_from(module: Any, *, default_name: str = "composition") -> Compo
                     f"stack {item.stack.name!r} names {sorted(missing)[0]!r}, which is "
                     "no Component of the composition"
                 )
-    if not components and not any(item.pipeline is not None for item in items):
+    if (
+        not components
+        and not any(item.pipeline is not None for item in items)
+        and not (releases and not items)
+    ):
         raise _invalid("the composition declares no Component and no pipeline")
     name = values.get("name")
     if not isinstance(name, str):
@@ -777,6 +826,7 @@ def composition_from(module: Any, *, default_name: str = "composition") -> Compo
         components=tuple(components),
         cluster=home,
         clusters=tuple(clusters.values()),
+        nix_releases=tuple(item.target() for item in releases),
     )
 
 

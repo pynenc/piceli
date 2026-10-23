@@ -1451,7 +1451,9 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "approval (auto_approve or gitops approve of the plan hash). An "
             "unknown environment or component is dropped "
             "(gitops-request-invalid in gitops status); --component needs a "
-            "composition controller.",
+            "composition controller. 0.24.0: ENV may name a NixRelease (its host): "
+            "the controller publishes its newest tag now, with the release's "
+            "approval; a sync of every environment also retries failed releases.",
         ),
         "gitops suspects": _C(
             "List the deployed images a build host (or the builder node) built, "
@@ -1712,9 +1714,13 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
                 "credential profile",
                 "the controller's status",
                 "each source with this machine's Git access",
+                "MODULE:ATTR of each --publish NixCache, and its signing key "
+                "and S3 write keys from this machine's credentials (0.24.0)",
             ),
             writes=(
-                "the controller's requests (build-claim, built, build-failed)",
+                "the controller's requests (build-claim, built, build-failed, "
+                "nix-published)",
+                "the binary cache: closure, signed manifest, tag pointer (--publish)",
                 "images in the cluster's registry (through a port-forward)",
                 "~/.cache/piceli/builder (Git mirrors), the piceli-build-cache volume",
                 "the host's health record (piceli-health-* volumes)",
@@ -1727,7 +1733,14 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "delivered image's provenance is pushed as an OCI referrer when the "
             "registry takes it; a build showing a machine-health signature "
             "records a health event on the host, and a quarantined host claims "
-            "nothing (quarantined in --once --json).",
+            "nothing (quarantined in --once --json). 0.24.0: --publish "
+            "MODULE:ATTR (repeatable) also takes the nix-publish builds of the "
+            "NixReleases that name this host as builder, only for those caches; "
+            "every key is read at start (infra-credential-missing, "
+            "dev-nix-key-mismatch refuse it) and never leaves the host: a claim "
+            "carries the cache key's signature over it. A native host with "
+            "--publish only publishes. The publish itself was approved by the "
+            "release's policy or gitops approve of its plan digest.",
         ),
         "dev hosts": _C(
             "Show each declared build host: up or down (and why), its platforms, "
@@ -2108,7 +2121,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             notes="Read-only. Reads the ConfigMap piceli-gitops-status and the "
             "controller Deployment (or a local --state-dir). Health: healthy, "
             "degraded (last poll failed), stale (no poll for 3 intervals), "
-            "starting, down. gitops-not-installed without a controller.",
+            "starting, down. gitops-not-installed without a controller. 0.24.0: "
+            "nix_releases lists each NixRelease (latest tag, state, plan digest "
+            "and approve_command, stages with times, the published manifest's "
+            "sha256, failure).",
         ),
         "gitops wait": _C(
             "Wait until an environment runs a commit: deployed, failed (the "
@@ -2137,7 +2153,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             notes="This is the owner's approval: run it only with the hash the "
             "owner approved. Writes a request to the ConfigMap "
             "piceli-gitops-requests; a hash the environment is no longer "
-            "waiting for is dropped (gitops-approval-stale in gitops status).",
+            "waiting for is dropped (gitops-approval-stale in gitops status). "
+            "0.24.0: ENV may name a NixRelease waiting in approval-required; "
+            "the hash is its plan digest, and approving it lets a build host "
+            "build, sign and publish that tag.",
         ),
         "gitops run": _C(
             "Run the GitOps controller loop (the controller Deployment's "

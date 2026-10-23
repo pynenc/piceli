@@ -601,6 +601,126 @@ NAME` ends a quarantine once the machine is sound. A build that passed but
 met a corrupt cached blob (`cache-corrupt` in a host build's log: the blob
 is discarded and fetched or written again) also counts against its host.
 
+(gitops-nix-releases)=
+### Nix host releases (0.24.0)
+
+The controller can also publish the releases of a {doc}`NixHost <nix_hosts>`,
+so a new tag needs no hand-run `piceli dev nix build --publish`. Declare a
+`NixRelease` in the composition module, next to the host and the `Source`
+that holds its flake:
+
+```python
+from piceli.infra import NixCache, NixHost, NixRelease, Source, Tag
+
+hosts = Source("https://git.example.org/org/hosts.git")
+cache = NixCache("cache-1:<base64 public key>",
+                 url="s3://nix-cache?endpoint=s3.example.org&region=us-east-1",
+                 write_credentials="cache-s3-write")
+web = NixHost("web-1", server="ssh://root@web-1.example.org", flake=".#web-1",
+              follow=Tag("web-v*"), cache=cache)
+web_release = NixRelease(web, source=hosts, builder="mini", auto_approve=False)
+```
+
+`piceli gitops enable infra.py` puts it into the controller's
+configuration (the install plan hash covers it). A composition may hold
+releases and no environment. A `NixRelease` follows `Tag(...)` only, and
+its name (the host's) may not be an environment's: `approve` and `sync`
+name either.
+
+**The write keys stay on the build host.** The controller in the cluster
+never holds them. On the build host named by `builder=` (a docker or
+native host of the cluster's `DevBuilds(hosts=[...])` with
+`DevProfile.for_nix()`), with the cache's signing key and S3 write keys in
+its own Piceli secrets (`piceli secrets nix-cache cache-1 --prompt`,
+`piceli secrets s3 cache-s3-write --prompt`):
+
+```sh
+piceli builder serve --cluster infra.py:my_cluster --host mini \
+  --publish infra.py:cache
+```
+
+`--publish MODULE:ATTR` (repeat it for several caches) names the caches
+this host publishes to. It reads every key when it starts and refuses to
+start without one (`infra-credential-missing`) or with another cache's
+(`dev-nix-key-mismatch`). It claims a publish only when it is the
+release's builder and holds that cache's keys, and says once why it skips
+any other. Its claim carries the cache key's signature over the claim
+(`piceli.nix-publish-claim.v1`, the build's id and the host), which the
+controller checks with the cache's public key: the key itself is never
+sent. A native host with `--publish` only publishes; a docker host also
+builds images as before.
+
+What happens when a tag appears in the source:
+
+1. The controller takes the highest version of the host's pattern (the
+   version after its prefix, see {doc}`nix_hosts`). Tags that exist when it
+   first sees the release are the **baseline** and publish nothing;
+   `piceli gitops sync web-1` publishes the newest one. A newer tag starts
+   a new attempt (an older or equal one never does).
+2. It plans the publish, `piceli.nix-release-plan.v1`: the attribute, the
+   build's name, the commit and the tag, the source, the builder, the
+   cache, the manifest key and the tag's pointer. With
+   `auto_approve=True` it goes on; otherwise the release waits in
+   `approval-required` until `piceli gitops approve web-1
+   sha256:<plan digest>`.
+3. It asks for the publish in `controller.builds_wanted` (kind
+   `nix-publish`, with the plan and its digest). The release is
+   `waiting-build`, then `publishing` once its builder claimed it.
+4. The build host fetches the source at the commit with its own Git
+   access, checks that the tag points at that commit (a tag moved since
+   fails the publish), builds the attribute as a development run (as
+   `piceli dev nix build`), signs and pushes the closure, then uploads the
+   signed manifest (its `commit` and `tag` are the tag's) and the tag's
+   pointer, exactly as `dev nix build --publish` does. It refuses a plan
+   whose pointers are not exactly its tag's. It answers `nix-published`
+   with the signed manifest, the pointer and its stages.
+5. The controller records the release `published` only when the manifest
+   is signed by the cache's key and names the planned build, commit, tag
+   and attribute, and the pointer is the tag's. Anything else is a
+   rejected request (`rejected_requests`).
+
+A failed fetch, build or publish is answered `build-failed`: the release
+is `failed` with the host's reason and output tail
+(`gitops-nix-release-failed`) and is not tried again until a newer tag or
+`piceli gitops sync` (`sync web-1` retries that release, `sync` alone
+every failed one). A quarantined build host claims nothing. The hosts
+deploy the published build on their own, as {doc}`nix_hosts` describes.
+
+`piceli gitops status --json` lists each release under `nix_releases`:
+
+```json
+"nix_releases": {"web-1": {
+  "host": "web-1", "source": "hosts", "builder": "mini", "auto_approve": false,
+  "follow": {"kind": "tag", "pattern": "web-v*", "prereleases": false},
+  "latest_tag": "web-v1.4.0", "latest_commit": "3f2c…",
+  "state": "published", "reason": null, "trigger": "tag web-v1.4.0",
+  "tag": "web-v1.4.0", "commit": "3f2c…",
+  "plan": {"schema": "piceli.nix-release-plan.v1", "…": "…"},
+  "plan_digest": "sha256:…", "build_id": "0a1b…",
+  "approval": {"via": "cli", "at": "2026-10-23T10:04:00Z", "requested_at": "…"},
+  "requested_at": "2026-10-23T10:00:00Z", "started_at": "2026-10-23T10:05:00Z",
+  "finished_at": "2026-10-23T10:20:00Z", "seconds": 1200.0,
+  "stages": {"approval": {"started_at": "…", "finished_at": "…", "seconds": 240.0},
+             "queue": {"seconds": 60.0}, "fetch": {"seconds": 4.1},
+             "build": {"seconds": 590.0}, "publish": {"seconds": 300.0}},
+  "published": {"host": "mini", "manifest": "piceli/web-1/3f2c….json",
+                "manifest_sha256": "sha256:…", "store_path": "/nix/store/…",
+                "system": "x86_64-linux", "nar_hash": "sha256:…",
+                "pointers": [{"ref": "refs/tags/web-v1.4.0", "commit": "3f2c…",
+                              "published_at": "…"}]},
+  "published_tag": "web-v1.4.0", "published_commit": "3f2c…"}}
+```
+
+`state` is `idle` (no matching tag), `baseline`, `approval-required` (with
+`approve_command`), `waiting-build`, `publishing` (with `claimed`),
+`published` or `failed` (with `failure`: `host`, `reason`, `log_tail`).
+The history (`piceli-gitops-history`) keeps each attempt under
+`nix_releases.<name>.runs` (newest first; the tag, commit, state, trigger,
+approval, stages, build host and manifest digest), and the controller's
+telemetry sends each as a trace `PUBLISH <name> <tag>` with a span per
+stage and the event `piceli.nix.release.finished` (see
+{doc}`opentelemetry`).
+
 ### Removed objects are deleted (pruning)
 
 New in 0.14.7. Every sync, of a branch, a named environment or main, and of

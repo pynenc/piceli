@@ -101,6 +101,8 @@ DYNAMIC = {
     "checks-failed-rolled-back",
     # gitops.recovery.INTERRUPTED: the reason of a run the controller died under
     "gitops-run-interrupted",
+    # infra.nix_releases.FAILED: the reason of a NixRelease a build host failed
+    "gitops-nix-release-failed",
     # delivery_inputs.discover_tool: f"{name}-tool-required"
     "docker-tool-required",
     "ssh-tool-required",

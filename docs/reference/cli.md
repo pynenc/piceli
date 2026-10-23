@@ -660,7 +660,8 @@ Take the builds the controller publishes, build and deliver them, answer it.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster whose controller to serve |
-| `--host` | text |  | The docker build host to build on (DevBuilds(hosts=[...]); default: the first docker host) |
+| `--host` | text |  | The docker build host to build on (DevBuilds(hosts=[...]); default: the first docker host); with --publish also a native host, which then only publishes |
+| `--publish` | text (repeatable) |  | MODULE:ATTR of a piceli.infra.NixCache this host publishes NixReleases to (repeat); its signing key and S3 write keys must be in this machine's piceli secrets (checked at start, never sent) |
 | `--image` | text |  | The builder image (default: the host's, else DevBuilds(image=)); the same Piceli version as the controller |
 | `--namespace` | text | `piceli-system` | The controller's namespace |
 | `--once` | boolean | `False` | Build at most one wanted build, then exit |
@@ -673,14 +674,14 @@ Take the builds the controller publishes, build and deliver them, answer it.
 
 **Contract**
 
-- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=DevBuilds(hosts=[...])), credential profile, the controller's status, each source with this machine's Git access
-- **Writes:** the controller's requests (build-claim, built, build-failed), images in the cluster's registry (through a port-forward), ~/.cache/piceli/builder (Git mirrors), the piceli-build-cache volume, the host's health record (piceli-health-* volumes)
+- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=DevBuilds(hosts=[...])), credential profile, the controller's status, each source with this machine's Git access, MODULE:ATTR of each --publish NixCache, and its signing key and S3 write keys from this machine's credentials (0.24.0)
+- **Writes:** the controller's requests (build-claim, built, build-failed, nix-published), the binary cache: closure, signed manifest, tag pointer (--publish), images in the cluster's registry (through a port-forward), ~/.cache/piceli/builder (Git mirrors), the piceli-build-cache volume, the host's health record (piceli-health-* volumes)
 - **Cluster:** writes
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.21.0. Runs until Ctrl-C (--once: one build). The builder image must be the controller's Piceli version. 0.22.0: each delivered image's provenance is pushed as an OCI referrer when the registry takes it; a build showing a machine-health signature records a health event on the host, and a quarantined host claims nothing (quarantined in --once --json).
+- **Notes:** 0.21.0. Runs until Ctrl-C (--once: one build). The builder image must be the controller's Piceli version. 0.22.0: each delivered image's provenance is pushed as an OCI referrer when the registry takes it; a build showing a machine-health signature records a health event on the host, and a quarantined host claims nothing (quarantined in --once --json). 0.24.0: --publish MODULE:ATTR (repeatable) also takes the nix-publish builds of the NixReleases that name this host as builder, only for those caches; every key is read at start (infra-credential-missing, dev-nix-key-mismatch refuse it) and never leaves the host: a claim carries the cache key's signature over it. A native host with --publish only publishes. The publish itself was approved by the release's policy or gitops approve of its plan digest.
 
 (cli-bundle)=
 ### `piceli bundle`
@@ -1506,7 +1507,7 @@ Approve the pending plan of ENV; the controller applies it on its next poll.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** This is the owner's approval: run it only with the hash the owner approved. Writes a request to the ConfigMap piceli-gitops-requests; a hash the environment is no longer waiting for is dropped (gitops-approval-stale in gitops status).
+- **Notes:** This is the owner's approval: run it only with the hash the owner approved. Writes a request to the ConfigMap piceli-gitops-requests; a hash the environment is no longer waiting for is dropped (gitops-approval-stale in gitops status). 0.24.0: ENV may name a NixRelease waiting in approval-required; the hash is its plan digest, and approving it lets a build host build, sign and publish that tag.
 
 (cli-gitops-cache-clear)=
 ### `piceli gitops cache clear`
@@ -1736,7 +1737,7 @@ Controller health, repository, last poll and every branch's state.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** Read-only. Reads the ConfigMap piceli-gitops-status and the controller Deployment (or a local --state-dir). Health: healthy, degraded (last poll failed), stale (no poll for 3 intervals), starting, down. gitops-not-installed without a controller.
+- **Notes:** Read-only. Reads the ConfigMap piceli-gitops-status and the controller Deployment (or a local --state-dir). Health: healthy, degraded (last poll failed), stale (no poll for 3 intervals), starting, down. gitops-not-installed without a controller. 0.24.0: nix_releases lists each NixRelease (latest tag, state, plan digest and approve_command, stages with times, the published manifest's sha256, failure).
 
 (cli-gitops-suspects)=
 ### `piceli gitops suspects`
@@ -1789,7 +1790,7 @@ Ask the controller to deploy ENV now at its revision (--component: rebuild one).
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** Writes a request to the ConfigMap piceli-gitops-requests; the controller deploys on its next poll with the environment's usual approval (auto_approve or gitops approve of the plan hash). An unknown environment or component is dropped (gitops-request-invalid in gitops status); --component needs a composition controller.
+- **Notes:** Writes a request to the ConfigMap piceli-gitops-requests; the controller deploys on its next poll with the environment's usual approval (auto_approve or gitops approve of the plan hash). An unknown environment or component is dropped (gitops-request-invalid in gitops status); --component needs a composition controller. 0.24.0: ENV may name a NixRelease (its host): the controller publishes its newest tag now, with the release's approval; a sync of every environment also retries failed releases.
 
 (cli-gitops-wait)=
 ### `piceli gitops wait`

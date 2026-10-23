@@ -69,7 +69,7 @@ def test_the_agent_follows_a_published_tag_with_the_real_nix(
                       hosts=[BuildHost.native("laptop",
                                               state_dir=str(tmp_path / "state"))]),
     )  # fmt: skip
-    monkeypatch.setattr(dev_nix, "load_cluster", lambda _ref: cluster)
+    monkeypatch.setattr(dev_nix, "load_dev", lambda _ref: cluster.dev)
     monkeypatch.setattr(dev_nix, "load_cache", lambda _ref: cache)
     attribute = f"packages.{system_name}.hello"
     args = [

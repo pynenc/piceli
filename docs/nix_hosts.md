@@ -11,6 +11,10 @@ The builds come from `piceli dev nix build --publish` ({doc}`dev_builds`),
 which signs the closure, its manifest and the ref pointers with the cache's
 key.
 
+The GitOps controller can also publish them itself when a tag appears
+(0.24.0, a `NixRelease`): the build and the keys stay on a build host. See
+[Nix host releases](#gitops-nix-releases) in {doc}`gitops`.
+
 {doc}`single_nixos_host` takes one host from nothing to its first release
 with one complete example, and compares it with a Kubernetes environment.
 

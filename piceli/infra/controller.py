@@ -848,6 +848,12 @@ class CompositionController:
             github_token_expiry
         )
         self.telemetry.attach(self)  # closes runs a crash interrupted
+        # 0.24.0: the Nix host releases it publishes (piceli.infra.nix_releases).
+        from piceli.infra.nix_releases import Releases
+
+        self.nix = Releases(
+            self.state, clock=self.clock, log=self.log, telemetry=self.telemetry
+        )
 
     # ------------------------------------------------------------ helpers
     @property
@@ -1528,7 +1534,8 @@ class CompositionController:
             kind = body.get("kind")
             try:
                 if kind == "approve":
-                    self._approve(body)
+                    if not self.nix.approve(body):  # 0.24.0: a NixRelease
+                        self._approve(body)
                 elif kind == "promote":
                     self._promote(body)
                 elif kind == "sync":
@@ -1541,9 +1548,14 @@ class CompositionController:
                     from piceli.infra import remote_builds
 
                     self._refuse_quarantined(str(body.get("host") or ""))
+                    publish = self.nix.entry(body.get("id"))
+                    if publish is not None:  # 0.24.0: proves the cache's key
+                        self.nix.check_claim(publish, body)
                     remote_builds.claim(self.state, body, self.clock())
                 elif kind == "built":
                     self._delivered(body)
+                elif kind == "nix-published":
+                    self.nix.published(body)
                 elif kind == "build-failed":
                     from piceli.infra import remote_builds
 
@@ -1689,6 +1701,10 @@ class CompositionController:
         # 0.22.0: an explicit sync retries builds a host reported failed.
         remote_builds.clear_failures(self.state)
         env = body.get("env")
+        # 0.24.0: a NixRelease publishes its newest tag now; a sync of every
+        # environment also retries the failed releases.
+        if self.nix.sync(str(env) if env else None) and env:
+            return
         component = body.get("component")
         instances = self._instances()
         names = list(dict.fromkeys(item.group for item in instances))
@@ -3181,6 +3197,7 @@ class CompositionController:
             return self._publish()
         self._requests()
         self._desired()
+        self.nix.poll(self.composition.nix_releases, self.refs)
         if not self.swept and not failed:  # only on a complete view of the sources
             self.swept = True
             try:
@@ -3673,6 +3690,9 @@ class CompositionController:
                 for key, value in sorted(self.state["sources"].items())
             },
             "envs": envs,
+            # Added in 0.24.0, only when declared: each NixRelease's latest
+            # tag, publish state, timings and manifest digest.
+            **({"nix_releases": releases} if (releases := self.nix.status()) else {}),
             "rejected_requests": list(self.state.get("rejected") or []),
             # Added in 0.15, only with several clusters: each cluster's reach
             # and the placements removed from them.
@@ -3941,6 +3961,9 @@ class CompositionController:
                 key=lambda item: str(item.get("started_at") or ""), reverse=True
             )
             document["envs"][group] = {"runs": entries[: history.MAX_RUNS]}
+        releases = self.nix.history()
+        if releases:  # 0.24.0: each NixRelease's attempts, newest first
+            document["nix_releases"] = releases
         return history.bounded(document) if merged else document
 
     def _publish_history(self) -> None:

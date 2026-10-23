@@ -255,6 +255,17 @@ their queue and sends each finished run as its own trace:
 - histograms `piceli.dev.run.duration` (by profile and state) and
   `piceli.dev.queue.wait` (by priority).
 
+## Nix host releases
+
+Each attempt of a `NixRelease` (0.24.0, see {doc}`gitops`) that ends,
+published or failed, is a trace of its own: the root span `PUBLISH <name>
+<tag>` (from the tag's sight to the end; status `ERROR` unless published)
+with `piceli.nix.release`, `piceli.nix.tag`, `vcs.ref.head.revision`,
+`piceli.nix.state`, `piceli.nix.builder`, `piceli.nix.build_host`,
+`piceli.nix.trigger`, `piceli.nix.manifest_sha256` and `error.type`; a child
+span per stage (`approval`, `queue`, `fetch`, `build`, `publish`); and the
+event `piceli.nix.release.finished` on the root span.
+
 ## A controller restart
 
 The open run (its ids, start, stage marks and the events it sent) is kept

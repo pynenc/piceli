@@ -88,7 +88,7 @@ def test_a_native_nix_host_builds_signs_and_pushes_to_a_file_cache(
         dev=DevBuilds(node=None, image=IMAGE, profiles=[DevProfile.for_nix()],
                       hosts=[host]),
     )  # fmt: skip
-    monkeypatch.setattr(dev_nix, "load_cluster", lambda _ref: cluster)
+    monkeypatch.setattr(dev_nix, "load_dev", lambda _ref: cluster.dev)
     monkeypatch.setattr(dev_nix, "load_cache", lambda _ref: cache)
     args = [
         "dev", "nix", "build", f"packages.{system.stdout.strip()}.hello",

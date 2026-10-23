@@ -488,63 +488,21 @@ def _publish(
     s3_keys: tuple[str, str] | None,
 ) -> dict[str, Any]:
     """Sign and push on the host, then sign and upload the manifest here."""
+    from piceli.dev import nix
     from piceli.dev.model import DevError
-    from piceli.dev.nix import (
-        manifest,
-        publisher_argv,
-        run_publisher,
-        sign_manifest,
-        upload_manifest,
-        upload_pointers,
-    )
 
-    say(f"publishing {store_path} to {cache.store_url} (on {chosen.name})")
-    request = {
-        "store_path": store_path,
-        "store_url": cache.store_url,
-        "signing_key": secret,
-        "s3": None
-        if s3_keys is None
-        else {"access_key_id": s3_keys[0], "secret_access_key": s3_keys[1]},
-    }
+    def push(request: Any, say_line: Any) -> Any:
+        return nix.run_publisher(
+            nix.publisher_argv(chosen, str(profile.image)), request, say=say_line
+        )
+
     try:
-        outcome = run_publisher(
-            publisher_argv(chosen, str(profile.image)), request, say=say
-        )
-        del request
-        signed = sign_manifest(
-            manifest(
-                name=plan["name"], commit=plan["commit"], tag=plan["tag"],
-                target=plan["attribute"],
-                published=outcome, host=chosen.name, key=cache.key_name,
-                image=found_image,
-            ),
-            secret,
+        return nix.publish_closure(
+            cache, plan, store_path, chosen.name, found_image, secret, s3_keys,
+            say=say, push=push,
         )  # fmt: skip
-        url = upload_manifest(cache, signed, s3_keys=s3_keys)
-        pointers = upload_pointers(
-            cache, signed, plan.get("pointers") or [], secret, s3_keys=s3_keys
-        )
     except DevError as error:
         fail(error.code, str(error))
-    say(f"published; manifest {url}")
-    for body in pointers:
-        say(f"  {body['ref']} -> {str(body['commit'])[:12]} ({body['published_at']})")
-    return {
-        "cache": cache.store_url,
-        "public_key": cache.public_key,
-        "nar_hash": outcome["nar_hash"],
-        "nar_size": outcome["nar_size"],
-        "signatures": outcome.get("signatures") or [],
-        "system": outcome.get("system"),
-        "closure_size": signed.get("closure_size"),
-        "manifest": plan["manifest"],
-        "manifest_url": url,
-        "manifest_body": signed,
-        "pointers": [
-            {k: body[k] for k in ("ref", "commit", "published_at")} for body in pointers
-        ],
-    }
 
 
 @nix_app.command("gc")

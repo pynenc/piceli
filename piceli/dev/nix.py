@@ -745,6 +745,65 @@ def upload_pointers(
     return written
 
 
+def publish_closure(
+    cache: NixCache,
+    plan: Mapping[str, Any],
+    store_path: str,
+    host: str,
+    image: Mapping[str, Any] | None,
+    secret: str,
+    s3_keys: tuple[str, str] | None,
+    *,
+    say: Callable[[str], None],
+    push: Callable[[Mapping[str, Any], Callable[[str], None]], Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Publish a built store path as ``plan`` says: ``push`` signs and pushes
+    the closure on the build host (the keys on its stdin only, see
+    :func:`run_publisher`), then the signed manifest and the plan's ref
+    pointers go into the cache. :raises DevError: a step failed."""
+    say(f"publishing {store_path} to {cache.store_url} (on {host})")
+    request = {
+        "store_path": store_path,
+        "store_url": cache.store_url,
+        "signing_key": secret,
+        "s3": None
+        if s3_keys is None
+        else {"access_key_id": s3_keys[0], "secret_access_key": s3_keys[1]},
+    }
+    outcome = push(request, say)
+    del request
+    signed = sign_manifest(
+        manifest(
+            name=plan["name"], commit=plan["commit"], tag=plan["tag"],
+            target=plan["attribute"], published=outcome, host=host,
+            key=cache.key_name, image=image,
+        ),
+        secret,
+    )  # fmt: skip
+    url = upload_manifest(cache, signed, s3_keys=s3_keys)
+    pointers = upload_pointers(
+        cache, signed, plan.get("pointers") or [], secret, s3_keys=s3_keys
+    )
+    say(f"published; manifest {url}")
+    for body in pointers:
+        say(f"  {body['ref']} -> {str(body['commit'])[:12]} ({body['published_at']})")
+    return {
+        "cache": cache.store_url,
+        "public_key": cache.public_key,
+        "nar_hash": outcome["nar_hash"],
+        "nar_size": outcome["nar_size"],
+        "signatures": outcome.get("signatures") or [],
+        "system": outcome.get("system"),
+        "closure_size": signed.get("closure_size"),
+        "manifest": plan["manifest"],
+        "manifest_url": url,
+        "manifest_body": signed,
+        "pointers": [
+            {k: body[k] for k in ("ref", "commit", "published_at")} for body in pointers
+        ],
+    }
+
+
 # ------------------------------------------------------------------ git
 
 
