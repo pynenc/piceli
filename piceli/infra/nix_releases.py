@@ -34,6 +34,15 @@ names the planned build, commit and tag. A host's failure (``build-failed``)
 leaves the release ``failed`` with its tail until a newer tag or ``piceli
 gitops sync``.
 
+0.26.0: **private flake inputs.** The plan names the inputs of the commit's
+``flake.lock`` the build host fetches into its own store before the build
+(the gate's input, those whose repository is a ``Source`` of the
+composition, ``NixRelease(inputs=)``) and the name of the build host's
+credential for each, never a credential; the build host checks them against
+its own checkout and fetches them with its own ``git-token`` s
+(:mod:`piceli.dev.nix_inputs`), else answers ``build-failed`` with
+``infra-nix-input-unreachable`` before any build.
+
 Tags that exist when the controller first sees a release are its baseline
 and publish nothing; ``piceli gitops sync web-1`` publishes the newest one.
 
@@ -124,6 +133,13 @@ class NixRelease:
     :param gate: A :class:`~piceli.infra.Promotion`: publish only a commit
         whose ``flake.lock`` pins its input to a commit its environment ran
         with passed release checks (:mod:`piceli.infra.promotion`).
+    :param inputs: 0.26.0: private flake inputs the build host fetches
+        before the build, ``{input: credential}``: the name of the input in
+        ``flake.lock`` and of a ``git-token`` in the build host's Piceli
+        secrets. The gate's input and every input whose repository is a
+        :class:`~piceli.infra.Source` of the composition are fetched first
+        anyway, with the credential named here or ``git``
+        (:mod:`piceli.dev.nix_inputs`).
     """
 
     host: Any
@@ -131,6 +147,7 @@ class NixRelease:
     builder: str
     auto_approve: bool = False
     gate: Any = None
+    inputs: Any = None
 
     def __post_init__(self) -> None:
         from piceli.hosts.model import NixHost, Tag
@@ -154,6 +171,15 @@ class NixRelease:
 
         if self.gate is not None and not isinstance(self.gate, Promotion):
             raise _invalid("NixRelease(gate=) is a piceli.infra.Promotion")
+        from piceli.dev.nix_inputs import check_declared
+
+        try:
+            mapped = check_declared(
+                self.inputs, f"NixRelease {self.host.name}: inputs="
+            )
+        except ValueError as error:
+            raise _invalid(str(error)) from None
+        object.__setattr__(self, "inputs", tuple(mapped.items()))
         declared = getattr(self.host, "gate", None)
         if self.gate is None and declared is not None:
             object.__setattr__(self, "gate", declared)
@@ -194,6 +220,7 @@ class NixRelease:
             public_key=cache.public_key,
             gate=self.gate,
             key_unset=unset,
+            inputs=self.inputs,
         )
 
 
@@ -216,9 +243,13 @@ class ReleaseTarget:
     gate: Any = None
     #: Why the release cannot publish: its cache's public key is not declared.
     key_unset: str | None = None
+    #: 0.26.0: the declared private inputs, ``((input, credential), ...)``.
+    inputs: tuple[tuple[str, str], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         gate = {"gate": self.gate.to_dict()} if self.gate is not None else {}
+        # 0.26.0, only when declared: other configs (and hashes) unchanged.
+        gate |= {"inputs": dict(self.inputs)} if self.inputs else {}
         return gate | {
             "name": self.name,
             "build": self.build,
@@ -239,6 +270,7 @@ class ReleaseTarget:
     def from_dict(cls, value: Mapping[str, Any], sources: Mapping[str, Any]) -> Any:
         from piceli.dev.model import DevError
         from piceli.dev.nix import check_public_key, installable
+        from piceli.dev.nix_inputs import check_declared
         from piceli.hosts.model import HostError, Tag
         from piceli.infra.promotion import Promotion
 
@@ -261,8 +293,9 @@ class ReleaseTarget:
                 public_key=public,
                 gate=Promotion.from_dict(value["gate"]) if value.get("gate") else None,
                 key_unset=None if public else unset,
+                inputs=tuple(check_declared(value.get("inputs")).items()),
             )
-        except (KeyError, TypeError, HostError, DevError) as error:
+        except (KeyError, TypeError, ValueError, HostError, DevError) as error:
             raise _invalid(f"a nix release is invalid: {error}") from None
         for label in (target.name, target.build, target.builder):
             if not _LABEL.fullmatch(label):
@@ -295,13 +328,17 @@ def release_plan(
     commit: str,
     tag: str,
     pinned: Mapping[str, Any] | None = None,
+    inputs: Sequence[Mapping[str, str]] = (),
 ) -> dict[str, Any]:
     """What publishing ``tag`` does; its digest (:func:`digest`) is what the
     owner approves and what the build host publishes, nothing else.
-    ``pinned``: the promotion gate's result (only for a gated release)."""
+    ``pinned``: the promotion gate's result (only for a gated release).
+    ``inputs``: 0.26.0, the private inputs the build host fetches first
+    (:func:`piceli.dev.nix_inputs.covered`; only when there are some)."""
     from piceli.dev.nix import manifest_key, pointer_key
 
-    extra = {"pinned": dict(pinned)} if pinned is not None else {}
+    extra: dict[str, Any] = {"pinned": dict(pinned)} if pinned is not None else {}
+    extra |= {"inputs": [dict(item) for item in inputs]} if inputs else {}
     return extra | {
         "schema": PLAN_SCHEMA,
         "release": target.name,
@@ -345,9 +382,11 @@ def check_plan(plan: Any) -> dict[str, Any]:
         or list(plan.get("pointers") or ()) != [pointer_key(name, "tag", tag)]
     ):
         raise ValueError("the plan names another build, commit, tag or pointer")
+    from piceli.dev.nix_inputs import check_entries
     from piceli.infra.promotion import check_pinned
 
     check_pinned(plan.get("pinned"))
+    check_entries(plan.get("inputs"))
     return dict(plan)
 
 
@@ -382,6 +421,8 @@ class Releases:
         self.log = log
         self.telemetry = telemetry
         self._gate: Callable[[ReleaseTarget, str], dict[str, Any]] | None = None
+        self._lock: Callable[[ReleaseTarget, str], bytes | None] | None = None
+        self._sources: tuple[tuple[str, str], ...] = ()
 
     def records(self) -> dict[str, dict[str, Any]]:
         found: dict[str, dict[str, Any]] = self.state.setdefault(STATE_KEY, {})
@@ -400,14 +441,21 @@ class Releases:
         refs: Mapping[str, Any],
         *,
         gate: Callable[[ReleaseTarget, str], dict[str, Any]] | None = None,
+        lock: Callable[[ReleaseTarget, str], bytes | None] | None = None,
+        sources: Sequence[tuple[str, str]] = (),
     ) -> None:
         """Follow each release's tags and move it on (one poll).
 
         ``gate(target, commit)`` checks a gated release's commit: the
         ``pinned`` field, or :class:`~piceli.infra.promotion.PromotionError`.
         A rejected tag is checked again on every poll, so it publishes once
-        its environment verified the pinned commit."""
+        its environment verified the pinned commit. 0.26.0: ``lock(target,
+        commit)`` reads the commit's ``flake.lock`` (``None``: none), whose
+        private inputs (the gate's, those of ``sources``, the composition's
+        ``(key, url)``, and the declared ones) the plan names."""
         self._gate = gate
+        self._lock = lock
+        self._sources = tuple(sources)
         records = self.records()
         forced = self.state.setdefault("nix_forced", {})
         names = {target.name for target in targets}
@@ -509,7 +557,7 @@ class Releases:
                 self._refuse(target, record, latest, trigger, error)
                 return
         self._drop_wanted(record)
-        plan = release_plan(target, commit, tag, pinned)
+        plan = release_plan(target, commit, tag, pinned, self._inputs(target, commit))
         approved = record.get("approved_digest")
         for key in ("failure", "claimed", "published_now", "approval", "stages",
                     "refusal"):  # fmt: skip
@@ -531,6 +579,19 @@ class Releases:
             approved_digest=approved,
         )
         self.log(f"nix release {target.name}: {trigger} -> {tag}@{commit[:12]}")
+
+    def _inputs(self, target: ReleaseTarget, commit: str) -> list[dict[str, str]]:
+        """The private inputs the build host fetches first (0.26.0)."""
+        from piceli.dev.nix_inputs import covered
+
+        if self._lock is None:
+            return []
+        return covered(
+            self._lock(target, commit),
+            gate=target.gate.input if target.gate is not None else None,
+            sources=self._sources,
+            declared=dict(target.inputs),
+        )
 
     def _refuse(
         self,
@@ -779,7 +840,8 @@ class Releases:
                 k: item.get(k) for k in ("started_at", "finished_at", "seconds")
             }
             for name, item in (receipt.get("stages") or {}).items()
-            if isinstance(item, Mapping) and name in ("fetch", "build", "publish")
+            if isinstance(item, Mapping)
+            and name in ("fetch", "inputs", "build", "publish")
         }
         record["stages"] = stages
         record["published"] = {
@@ -923,6 +985,10 @@ class Publisher:
         on the publisher's stdin only; the outcome of
         :func:`piceli.dev.nix.run_publisher`.
     :param host: This build host's name (the manifests' ``host``).
+    :param fetch: 0.26.0: ``(pairs, say) -> outcome``: fetches the plan's
+        private inputs on this host before the build, with its own
+        credentials (:func:`piceli.dev.nix_inputs.fetch_inputs`); ``None``:
+        a plan that names inputs is refused.
     :raises DevError, InfraError: a cache's key is missing or is not its key.
     """
 
@@ -934,12 +1000,14 @@ class Publisher:
         push: Callable[..., Mapping[str, Any]],
         host: str,
         clock: Callable[[], float] | None = None,
+        fetch: Callable[..., Mapping[str, Any]] | None = None,
     ) -> None:
         import time
 
         self.caches = list(caches)
         self.build = build
         self.push = push
+        self.fetch = fetch
         self.host = host
         self.clock = clock or time.time
         for cache in self.caches:
@@ -980,6 +1048,7 @@ class Publisher:
         cache = self.cache_for(entry)
         if cache is None:
             raise DevError("dev-nix-cache-invalid", "no key for the plan's cache")
+        self.fetch_inputs(plan, checkout, say, stage)
         with stage("build"):
             store_path = self.build(checkout, plan["attribute"], say)
         with stage("publish"):
@@ -990,6 +1059,35 @@ class Publisher:
             )  # fmt: skip
             del secret
         return {"manifest": done["manifest_body"], "pointers": done["pointers"]}
+
+    def fetch_inputs(
+        self,
+        plan: Mapping[str, Any],
+        checkout: Path,
+        say: Callable[[str], None],
+        stage: Callable[[str], Any],
+    ) -> None:
+        """Fetch the plan's private inputs on this host, before any build
+        (0.26.0): each one as ``flake.lock`` of the checkout locks it.
+
+        :raises DevError: ``infra-nix-input-unreachable``."""
+        from piceli.dev.model import DevError
+        from piceli.dev.nix_inputs import LOCK_FILE, check_entries, resolve
+
+        entries = check_entries(plan.get("inputs"))
+        if not entries:
+            return
+        with stage("inputs"):
+            lock = checkout / LOCK_FILE
+            pairs = resolve(entries, lock.read_bytes() if lock.is_file() else None)
+            if self.fetch is None:
+                first = entries[0]
+                raise DevError(
+                    "infra-nix-input-unreachable",
+                    f"{first['input']} {first['url']}: this build host fetches no "
+                    "flake inputs (Publisher(fetch=))",
+                )
+            self.fetch(pairs, say)
 
 
 def cache_keys(cache: Any) -> tuple[str, tuple[str, str] | None]:

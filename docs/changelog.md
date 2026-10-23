@@ -185,6 +185,32 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   keeps the queue, the lock, the run in progress, the runs queued requests
   name and the newest promoted runs.
 
+- **Private flake inputs of a Nix build.** A NixRelease (and `piceli dev
+  nix build`) whose `flake.lock` pins a private input now builds on a
+  build host with no Git credential of its own: before the build, the
+  build host fetches each private input into its own Nix store
+  (`builtins.fetchTree` of the locked attributes, one `nix` process per
+  input) with a `git-token` from its own Piceli secrets, and the build finds
+  it there by its `narHash`. Covered: the promotion gate's input, every
+  input whose repository is a `Source` of the composition (by host and path,
+  `git+ssh`, `git+https`, `github:` and `.git` normalised), and
+  `NixRelease(inputs={"lib": "lib-token"})` (default credential `git`); the
+  release plan lists them (`inputs`), and the build host checks each one
+  against `flake.lock` of the commit it fetched. `git+https` uses
+  `GIT_ASKPASS` with credential helpers off, `git+ssh` of the token's host is
+  fetched over HTTPS, `github:`/`gitlab:` get Nix's `access-tokens`; the
+  token is on the fetch step's stdin only, never in an argument, the build,
+  the log, the receipt, the manifest, the cache or the closure. A failure
+  refuses before any build with the new code `infra-nix-input-unreachable`,
+  naming the input, its URL and the credential tried. The release's stages
+  gain `inputs`. See {doc}`nix_hosts`.
+- **`piceli secrets git-token NAME --host HOST --prompt`** stores that token
+  (with its host, used for no other, and `--username`); it reaches a build
+  host with `piceli secrets backup --only NAME` and `restore`.
+- **`piceli dev nix build --input NAME[=CREDENTIAL]`** adds private inputs
+  to a hand-run build; with `--publish`, the composition's `NixRelease` of
+  the output adds its own, and the plan lists them.
+
 ## Version 0.25.3
 
 - **The Infomaniak preset refuses `S3Key`.** Infomaniak's API lets only the

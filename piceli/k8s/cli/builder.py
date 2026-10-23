@@ -275,6 +275,7 @@ def _publisher(refs: list[str], dev: Any, chosen: Any) -> Any:
     """The NixRelease publisher of ``--publish`` (0.25.0): every cache's keys
     are read now, so a missing or wrong key refuses before any claim."""
     from piceli.dev.model import DevError
+    from piceli.dev.nix_inputs import fetch_inputs
     from piceli.infra.machines.model import InfraError
     from piceli.infra.nix_releases import Publisher, dev_build, dev_push
     from piceli.k8s.cli.dev_nix import load_cache
@@ -298,6 +299,8 @@ def _publisher(refs: list[str], dev: Any, chosen: Any) -> Any:
             build=dev_build(dev, chosen, profile),
             push=dev_push(chosen, str(profile.image)),
             host=chosen.name,
+            # 0.26.0: private flake inputs, fetched on this host first.
+            fetch=fetch_inputs(chosen, str(profile.image)),
         )
     except (DevError, InfraError) as error:
         reject(error.code, str(error))

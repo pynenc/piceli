@@ -762,6 +762,10 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["secrets", "s3", "cache-s3"],
         "infra-prompt-required",
     ),
+    "secrets git-token": (
+        lambda p: ["secrets", "git-token", "git", "--host", "github.com"],
+        "infra-prompt-required",
+    ),
     "secrets backup": (
         lambda p: [
             "secrets",

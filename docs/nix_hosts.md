@@ -114,6 +114,80 @@ environment; any other build is refused (`host-promotion-missing`). The
 gate and `piceli promote` are described in {doc}`gitops` (Nix host
 releases).
 
+### Private flake inputs: fetched on the build host first
+
+A flake whose `flake.lock` pins a private input (`app =
+git+ssh://git@github.com/org/app`) builds on a build host that holds no Git
+credential of its own (0.26.0). Before the build, the build host fetches
+each private input into its own Nix store with a Git token from **its own**
+Piceli secrets; the build then finds every one of them in the store by its
+`narHash` and fetches nothing. The token never reaches the build run, the
+image, the build log, the cache, the manifest or the published closure, and
+the controller never sends one: its plan names the inputs and the
+credential names only.
+
+Which inputs are fetched first:
+
+- the input of the release's promotion gate (`Promotion(input="app")`);
+- every input whose locked URL is the repository of a `Source` of the
+  composition, by host and path: `git+ssh://git@github.com/org/app`,
+  `git+https://github.com/org/app.git`, `github:org/app` and
+  `git@github.com:org/app` are one repository;
+- the inputs the release declares, `NixRelease(..., inputs={"lib":
+  "lib-token"})`: the input's name in `flake.lock` and the credential that
+  reads it.
+
+Each one uses the credential named in `inputs=`, else `git`. Other inputs
+are public: the build fetches them as before. The plan (and so the
+approval) lists them:
+
+```json
+"inputs": [{"input": "app", "url": "git+ssh://git@github.com/org/app",
+            "credential": "git", "why": "gate"}]
+```
+
+On the build host, store the token and say which host it is for (it is
+used for no other):
+
+```sh
+piceli secrets git-token git --host github.com --prompt   # type the token
+```
+
+Made on the owner's machine instead, it travels as the cache's keys do:
+`piceli secrets backup --only git --to git.age --recipient <the build
+host's age1...>`, then `piceli secrets restore git.age` there. A token that
+reads the repositories is enough (GitHub: a fine-grained token with
+*Contents: read*).
+
+How each input is fetched, by a short step on the build host (a native
+host's Python, or a `docker run --rm -i` of the run image with the host's
+`/nix`, as the publisher; the token on its stdin only):
+
+- `git+https`: Git asks a `GIT_ASKPASS` script reading two `0600` files in
+  a temporary directory; credential helpers are off for that fetch, so none
+  stores the token;
+- `git+ssh` of the token's host: fetched from the same repository over
+  HTTPS (the store path is the same: Nix checks the `narHash`);
+- `github:`, `gitlab:`, `sourcehut:`: Nix's `access-tokens` for that host,
+  in the step's `NIX_CONFIG` only;
+- without a stored credential: the host's own access (a public input, or a
+  native host's own credential helpers and SSH agent).
+
+Nix's fetcher cache lives in the temporary directory too, so no clone of
+the private repository stays on the host. On a docker host the run image
+needs `git` (and `python3`). An input that cannot be fetched fails the
+release before any build, naming the input, its URL (never a credential)
+and the credential tried:
+
+```text
+infra-nix-input-unreachable: app git+ssh://git@github.com/org/app (credential git over HTTPS): fatal: Authentication failed for 'https://github.com/org/app/'
+```
+
+A hand-run publish (`piceli dev nix build --publish`) covers the same
+inputs when its composition has the `NixRelease` (`--composition`, or the
+`--publish` module), and `--input NAME[=CREDENTIAL]` adds others (see
+{doc}`dev_builds`). The release's stages show the step as `inputs`.
+
 ## Install the agent
 
 ```sh

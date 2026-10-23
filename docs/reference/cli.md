@@ -149,6 +149,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli secrets cluster`](#cli-secrets-cluster) | Store another cluster's credentials for the GitOps controller (never printed). | writes | no |
 | [`piceli secrets delete`](#cli-secrets-delete) | Delete a stored credential (a spent bootstrap key, an old token); never printed. | none | yes |
 | [`piceli secrets git`](#cli-secrets-git) | Store the Git token the controller and cluster builds use (read from stdin, never printed). | writes | no |
+| [`piceli secrets git-token`](#cli-secrets-git-token) | Store a Git token a build host fetches private flake inputs with (never printed). | none | no |
 | [`piceli secrets nix-cache`](#cli-secrets-nix-cache) | A Nix binary cache's signing key: generate or import it; print its public key. | none | no |
 | [`piceli secrets provider`](#cli-secrets-provider) | Store a provider's API credential, part by part (never printed). | none | no |
 | [`piceli secrets restore`](#cli-secrets-restore) | Restore the secret store from an encrypted backup (plans first when not empty). | none | yes |
@@ -1127,6 +1128,7 @@ Build a flake output on a Nix build host; with --publish, sign and push it.
 | `--context` | text |  | With --kubeconfig: its context |
 | `--state-dir` | path |  | With --release: a local controller's state directory |
 | `--namespace` | text | `piceli-system` | With --release: the controller's namespace |
+| `--input` | text (repeatable) |  | A private flake input to fetch on the build host before the build, NAME or NAME=CREDENTIAL (a git-token in this machine's piceli secrets; default: git); repeat. The NixRelease of the composition that publishes this output adds its own |
 | `--artifacts-dir` | path | `piceli-dev-artifacts` | Where an image lands (RUN/) |
 | `--queue-timeout` | integer | `3600` | Seconds to wait for a slot |
 | `--quiet` | boolean | `False` | Do not stream the build's log |
@@ -3499,6 +3501,29 @@ Store the Git token the controller and cluster builds use (read from stdin, neve
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** The token is read from stdin only (typed without echo, or piped); a token argument or PICELI_GIT_TOKEN is refused (secrets-token-refused) without echoing it. Creates or updates the Secret without a plan; prints its name and key names, never a value. Needs piceli cluster init first (cluster-not-initialized).
+
+(cli-secrets-git-token)=
+### `piceli secrets git-token`
+
+Store a Git token a build host fetches private flake inputs with (never printed).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--host` | text | required | The Git host it is for (github.com); used for no other |
+| `--prompt` | boolean | `False` | Read the token from stdin (typed without echo, or piped) |
+| `--username` | text | `git` | The Git user name sent with the token |
+
+**Contract**
+
+- **Reads:** stdin (--prompt)
+- **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. The token, its host (--host; it is used for no other) and a user name (--username, default git). A build host fetches the private inputs of a NixRelease or `dev nix build` with it before the build, never inside it. Prints the name and the host, never the token; an argument is refused (infra-credential-refused) without echoing it. It reaches another build host with `piceli secrets backup --only NAME` and `piceli secrets restore`.
 
 (cli-secrets-nix-cache)=
 ### `piceli secrets nix-cache`

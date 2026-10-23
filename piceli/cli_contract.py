@@ -2287,6 +2287,21 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "An argument is refused (infra-credential-refused) without "
             "echoing it. Prints the name and the parts' names, never a value.",
         ),
+        "secrets git-token": _C(
+            "Store a Git token a build host fetches private flake inputs with "
+            "as a local credential.",
+            reads=("stdin (--prompt)",),
+            writes=("$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)",),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.26.0. The token, its host (--host; it is used for no other) "
+            "and a user name (--username, default git). A build host fetches the "
+            "private inputs of a NixRelease or `dev nix build` with it before the "
+            "build, never inside it. Prints the name and the host, never the "
+            "token; an argument is refused (infra-credential-refused) without "
+            "echoing it. It reaches another build host with `piceli secrets "
+            "backup --only NAME` and `piceli secrets restore`.",
+        ),
         "secrets user-data": _C(
             "Store a server's user data (a cloud-config, a script or a bootstrap "
             "key) as a local credential.",

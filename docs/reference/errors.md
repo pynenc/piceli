@@ -413,6 +413,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`infra-k3s-not-ready`](#error-infra-k3s-not-ready) | infra | yes |
 | [`infra-kubeconfig-invalid`](#error-infra-kubeconfig-invalid) | infra | no |
 | [`infra-load-failed`](#error-infra-load-failed) | infra | no |
+| [`infra-nix-input-unreachable`](#error-infra-nix-input-unreachable) | dev | yes |
 | [`infra-no-cluster`](#error-infra-no-cluster) | infra | no |
 | [`infra-not-applied`](#error-infra-not-applied) | infra | no |
 | [`infra-not-found`](#error-infra-not-found) | infra | no |
@@ -5378,6 +5379,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Upload failed.** The archive did not reach the run's pod (exec refused or broken), did not match its SHA-256, held an unsafe path, or did not arrive in time.
 
 - **Fix:** Run again; check that your credentials allow `pods/exec` in namespace `piceli-dev`.
+- **Retry-safe:** yes
+
+(error-infra-nix-input-unreachable)=
+### `infra-nix-input-unreachable`
+
+**Private flake input not fetched.** Before a Nix build (a NixRelease on its build host, or `piceli dev nix build`), the build host fetches the flake's private inputs (the promotion gate's input, the inputs whose repository is a Source of the composition, and `NixRelease(inputs=)` or `--input`) into its Nix store, and one of them could not be fetched: the message names the input, its URL (never a credential) and the credential tried. Or the plan names an input that `flake.lock` at the commit does not lock at that URL. Nothing was built.
+
+- **Fix:** Store the Git token on the machine that runs the build (`piceli secrets git-token NAME --host HOST --prompt`, or `piceli secrets restore` of a backup made with `--only NAME`), check it can read the repository, map the input to that credential (`NixRelease(inputs={"app": "NAME"})` or `--input app=NAME`), then retry (`piceli gitops sync NAME` or the same command).
 - **Retry-safe:** yes
 
 

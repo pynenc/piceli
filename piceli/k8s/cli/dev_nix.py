@@ -292,6 +292,16 @@ def build(
         str,
         typer.Option("--namespace", help="With --release: the controller's namespace"),
     ] = "piceli-system",
+    inputs: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--input",
+            help="A private flake input to fetch on the build host before the "
+            "build, NAME or NAME=CREDENTIAL (a git-token in this machine's "
+            "piceli secrets; default: git); repeat. The NixRelease of the "
+            "composition that publishes this output adds its own",
+        ),
+    ] = None,
     artifacts_dir: Annotated[
         Path, typer.Option("--artifacts-dir", help="Where an image lands (RUN/)")
     ] = Path("piceli-dev-artifacts"),
@@ -354,6 +364,10 @@ def build(
     chosen = _host(dev, host)
     cache = load_cache(publish) if publish is not None else None
     plan: dict[str, Any] | None = None
+    # 0.26.0: the private inputs fetched on the build host before the build.
+    private = _private_inputs(
+        inputs or [], publish, composition, cache, target, root_dir, rev
+    )
     if release is not None and cache is None:
         reject("dev-nix-invalid", "--release gates a --publish")
     if cache is not None:
@@ -380,6 +394,8 @@ def build(
             if release is not None
             else _covering(str(publish), composition, cache, target)
         )
+        if private:  # the approval covers which credential each input uses
+            plan["inputs"] = private
         if covering is not None:  # a gated host: the gate always runs
             plan["pinned"] = _gate(
                 covering, root_dir, str(rev),
@@ -410,10 +426,15 @@ def build(
                 command += f" --tag-pattern '{tag_pattern}'"
             if plan["branch"] is not None:
                 command += f" --branch {plan['branch']}"
+            for item in inputs or ():
+                command += f" --input {item}"
             say(f"publish {target} at {rev[:12]} to {cache.store_url}")
             say(f"  signed by {cache.key_name}; manifest {plan['manifest']}")
             for key in plan["pointers"]:
                 say(f"  pointer {key}")
+            for item in plan.get("inputs") or ():
+                say(f"  input {item['input']} {item['url']} fetched first on the "
+                    f"build host with its credential {item['credential']}")  # fmt: skip
             if plan.get("pinned"):
                 pinned = plan["pinned"]
                 say(f"  pinned {pinned['input']} {pinned['commit'][:12]} verified on "
@@ -447,6 +468,8 @@ def build(
             "dev-host-unavailable",
             f"build host {chosen.name}: {state.detail or state.quarantined}",
         )
+    if private:
+        _fetch_private(private, chosen, chosen_profile, root_dir, rev)
     request = RunRequest(
         root=SourceRequest(repository_name(root_dir), root_dir, rev),
         command=build_argv(target),
@@ -515,6 +538,126 @@ def build(
     body["state"] = "published" if body["publish"] else "built"
     if as_json:
         emit_json(body)
+
+
+def _private_inputs(
+    flags: list[str],
+    publish: str | None,
+    composition: Path | None,
+    cache: Any,
+    target: str,
+    root: Path,
+    rev: str | None,
+) -> list[dict[str, str]]:
+    """The private inputs of this build (0.26.0,
+    :func:`piceli.dev.nix_inputs.covered`): ``--input`` and, when the
+    composition (``--composition``, else the ``--publish`` module) has a
+    NixRelease of this output (and cache), its gate's input, its declared
+    inputs and the inputs whose repository is a Source of it."""
+    from piceli.dev.nix_inputs import check_declared, covered, lock_nodes
+
+    declared: dict[str, str] = {}
+    gate: str | None = None
+    sources: list[tuple[str, str]] = []
+    release = _release_of(publish, composition, cache, target)
+    if release is not None:
+        found, sources = release
+        declared = dict(found.inputs)
+        gate = found.gate.input if found.gate is not None else None
+    try:
+        flagged = check_declared(
+            {
+                name: credential or "git"
+                for name, _, credential in (item.partition("=") for item in flags)
+            },
+            "--input",
+        )
+    except ValueError as error:
+        reject("dev-nix-invalid", str(error))
+    lock = _lock_of(root, rev)
+    nodes, names = lock_nodes(lock)
+    for name in flagged:
+        if name not in names and name not in nodes:
+            reject(
+                "dev-nix-invalid",
+                f"--input {name}: flake.lock "
+                + (f"at {rev[:12]} " if rev else "")
+                + "locks no such input",
+            )
+    return covered(lock, gate=gate, sources=sources, declared=declared | flagged)
+
+
+def _lock_of(root: Path, rev: str | None) -> bytes | None:
+    import subprocess
+
+    from piceli.dev.nix_inputs import LOCK_FILE
+
+    if rev is None:
+        lock = root / LOCK_FILE
+        return lock.read_bytes() if lock.is_file() else None
+    shown = subprocess.run(
+        ["git", "show", f"{rev}:{LOCK_FILE}"],
+        cwd=root, capture_output=True, check=False,
+    )  # fmt: skip
+    return shown.stdout if shown.returncode == 0 else None
+
+
+def _release_of(
+    publish: str | None, composition: Path | None, cache: Any, target: str
+) -> tuple[Any, list[tuple[str, str]]] | None:
+    """The NixRelease of ``target`` (and ``cache``) in the composition, and
+    the composition's sources ``(key, url)``; ``None``: none is declared."""
+    from piceli.cli_contract import describe_user_error
+    from piceli.infra.composition import _import, composition_from
+    from piceli.infra.nix_releases import NixRelease
+
+    if composition is None and publish is None:
+        return None
+    path = composition or Path(str(publish).rsplit(":", 1)[0])
+    if composition is None and (path.suffix != ".py" or not path.is_file()):
+        return None
+    try:
+        module = _import(path.resolve())
+    except Exception as error:  # never build past a composition it cannot read
+        reject(
+            "composition-invalid",
+            f"importing {path} failed: {describe_user_error(error)}",
+        )
+    releases = [
+        value
+        for value in vars(module).values()
+        if isinstance(value, NixRelease)
+        and value.host.attribute == target
+        and (
+            cache is None
+            or (
+                value.host.cache.store_url == cache.store_url
+                and value.host.cache.public_key == cache.public_key
+            )
+        )
+    ]
+    if not releases:
+        return None
+    try:
+        sources = list(composition_from(module, default_name=path.stem).sources)
+    except Exception:  # not a whole composition: the releases' own sources
+        sources = [item.source for item in releases]
+    return releases[0], [(source.key, source.url) for source in sources]
+
+
+def _fetch_private(
+    private: list[dict[str, str]], host: Any, profile: Any, root: Path, rev: str | None
+) -> None:
+    """Fetch the private inputs on the build host with this machine's
+    credentials, before the build (else ``infra-nix-input-unreachable``)."""
+    from piceli.dev.model import DevError
+    from piceli.dev.nix_inputs import fetch_inputs, resolve
+
+    try:
+        pairs = resolve(private, _lock_of(root, rev))
+        fetch_inputs(host, str(profile.image))(pairs, say)
+    except DevError as error:
+        reject(error.code, str(error))
 
 
 def _named_release(release: str, composition: Path, target: str) -> Any:
@@ -927,6 +1070,61 @@ def s3_secret(
                "parts": shape.keys, "replaced": replaced})  # fmt: skip
 
 
+def git_token_secret(
+    context: typer.Context,
+    name: Annotated[
+        str, typer.Argument(help="Credential name (NixRelease(inputs=) names it; git)")
+    ],
+    host: Annotated[
+        str,
+        typer.Option(
+            "--host", help="The Git host it is for (github.com); used for no other"
+        ),
+    ],
+    prompt: Annotated[
+        bool,
+        typer.Option(
+            "--prompt", help="Read the token from stdin (typed without echo, or piped)"
+        ),
+    ] = False,
+    username: Annotated[
+        str,
+        typer.Option("--username", help="The Git user name sent with the token"),
+    ] = "git",
+) -> None:
+    """Store a Git token a build host fetches private flake inputs with (never printed).
+
+    0.26.0. The build host fetches each private input of a Nix build with it
+    before the build (git+https through GIT_ASKPASS, git+ssh of the same host
+    over HTTPS, github:/gitlab: as Nix's access-tokens), never inside the
+    build. Running it again replaces it.
+    """
+    from piceli.dev.nix_inputs import KIND, save_git_token
+    from piceli.infra.machines.credentials import credential_present
+    from piceli.infra.machines.model import InfraError
+    from piceli.k8s.cli.infra import _guard, _no_secret_arguments, _read_secret
+
+    _no_secret_arguments(context)
+    if not prompt:
+        reject(
+            "infra-prompt-required",
+            "pass --prompt: the token is read from stdin (no echo on a terminal)",
+        )
+    with _guard():
+        replaced = credential_present(name)
+        token = _read_secret(f"Git token for {host} (not echoed): ")
+        try:
+            save_git_token(name, host, username, token)
+        except InfraError as error:
+            reject(error.code, str(error))
+        del token
+    say(
+        f"stored credential {name} ({KIND}) for {host.lower()}; the token was not printed"
+    )
+    emit_json({"state": "stored", "name": name, "kind": KIND,
+               "host": host.lower().split(":", 1)[0], "replaced": replaced})  # fmt: skip
+
+
 def register(dev_app: typer.Typer) -> None:
     from piceli.k8s.cli.cluster import secrets_app
 
@@ -937,3 +1135,4 @@ def register(dev_app: typer.Typer) -> None:
     }
     secrets_app.command("nix-cache", context_settings=settings)(nix_cache_secret)
     secrets_app.command("s3", context_settings=settings)(s3_secret)
+    secrets_app.command("git-token", context_settings=settings)(git_token_secret)

@@ -6530,6 +6530,7 @@
     "builder",
     "gate",
     "host",
+    "inputs",
     "name",
     "source",
     "target"
@@ -6539,6 +6540,7 @@
     "builder",
     "gate",
     "host",
+    "inputs",
     "source"
    ],
    "methods": {
@@ -9082,6 +9084,7 @@
     "builder",
     "from_dict",
     "gate",
+    "inputs",
     "key_unset",
     "latest",
     "name",
@@ -9099,6 +9102,7 @@
     "build",
     "builder",
     "gate",
+    "inputs",
     "key_unset",
     "name",
     "pattern",
@@ -12285,6 +12289,7 @@
      "--dev",
      "--host",
      "--image",
+     "--input",
      "--json",
      "--kubeconfig",
      "--name",
@@ -13609,6 +13614,7 @@
      "cluster",
      "delete",
      "git",
+     "git-token",
      "nix-cache",
      "provider",
      "restore",
@@ -13686,6 +13692,17 @@
      "--exec-sha256",
      "--prompt",
      "--transport",
+     "--username"
+    ],
+    "subcommands": []
+   },
+   "secrets git-token": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--host",
+     "--prompt",
      "--username"
     ],
     "subcommands": []
@@ -14507,6 +14524,7 @@
    "infra-k3s-not-ready",
    "infra-kubeconfig-invalid",
    "infra-load-failed",
+   "infra-nix-input-unreachable",
    "infra-no-cluster",
    "infra-not-applied",
    "infra-not-found",
@@ -16706,6 +16724,8 @@
   "piceli.dev.jobs",
   "piceli.dev.model",
   "piceli.dev.nix",
+  "piceli.dev.nix_fetch",
+  "piceli.dev.nix_inputs",
   "piceli.dev.nix_publish",
   "piceli.dev.nix_verify",
   "piceli.dev.pack",

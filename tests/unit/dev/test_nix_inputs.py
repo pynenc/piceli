@@ -1,0 +1,384 @@
+"""Private flake inputs, fetched on the build host before the build (0.26.0).
+
+Which inputs a build covers, how each one is fetched with which credential,
+in which order, how a failure is named, and that no token reaches an
+argument, the output or the result. ``nix`` is faked; nothing reaches a
+network.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import stat
+import subprocess
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from piceli.dev import nix_fetch, nix_inputs
+from piceli.dev.model import DevError
+
+TOKEN = "ghp_" + "t0k3n" * 6
+REV = "a" * 40
+APP_SSH = {"type": "git", "url": "ssh://git@github.com/org/app", "rev": REV,
+           "narHash": "sha256-AAAA", "lastModified": 1, "revCount": 3}  # fmt: skip
+LOCK = json.dumps(
+    {
+        "version": 7,
+        "root": "root",
+        "nodes": {
+            "root": {"inputs": {"app": "app", "lib": "lib", "nixpkgs": "nixpkgs"}},
+            "app": {"locked": APP_SSH, "inputs": {"shared": "shared"}},
+            "lib": {
+                "locked": {
+                    "type": "github",
+                    "owner": "Org",
+                    "repo": "lib",
+                    "rev": REV,
+                    "narHash": "sha256-BBBB",
+                }
+            },
+            "nixpkgs": {
+                "locked": {
+                    "type": "github",
+                    "owner": "NixOS",
+                    "repo": "nixpkgs",
+                    "rev": REV,
+                    "narHash": "sha256-CCCC",
+                }
+            },
+            "shared": {
+                "locked": {
+                    "type": "git",
+                    "rev": REV,
+                    "narHash": "sha256-DDDD",
+                    "url": "https://gitlab.example.org/org/shared.git",
+                }
+            },
+        },
+    }
+)
+
+
+# ------------------------------------------------------------------ matching
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "git+ssh://git@github.com/org/app",
+        "ssh://git@github.com:22/org/app.git",
+        "https://github.com/Org/App.git",
+        "git@github.com:org/app.git",
+        "git+https://user@github.com/org/app/",
+    ],
+)
+def test_every_spelling_of_a_repository_is_one_location(url: str) -> None:
+    assert nix_inputs.url_location(url) == ("github.com", "org/app")
+
+
+def test_forge_inputs_and_local_paths_have_locations() -> None:
+    github = {"type": "github", "owner": "Org", "repo": "App"}
+    assert nix_inputs.location(github) == ("github.com", "org/app")
+    gitlab = {"type": "gitlab", "owner": "group%2Fsub", "repo": "x", "host": "gl.io"}
+    assert nix_inputs.location(gitlab) == ("gl.io", "group/sub/x")
+    assert nix_inputs.url_location("/srv/git/app.git") == ("", "/srv/git/app")
+    assert nix_inputs.location({"type": "tarball", "url": "https://x/y.tgz"}) is None
+
+
+def test_the_gate_the_sources_and_the_declared_inputs_are_covered_in_order() -> None:
+    found = nix_inputs.covered(
+        LOCK,
+        gate="app",
+        sources=[("lib", "https://github.com/org/lib"), ("hosts", "/local/hosts")],
+        declared={"shared": "gitlab-token"},
+    )
+    assert found == [
+        {"input": "app", "url": "git+ssh://git@github.com/org/app",
+         "credential": "git", "why": "gate"},
+        {"input": "lib", "url": "github:Org/lib", "credential": "git",
+         "why": "source:lib"},
+        {"input": "shared", "url": "git+https://gitlab.example.org/org/shared.git",
+         "credential": "gitlab-token", "why": "declared"},
+    ]  # fmt: skip
+    # nixpkgs is public: nothing to do; a declared name it lacks: nothing.
+    assert nix_inputs.covered(LOCK, declared={"gone": "git"}) == []
+    assert nix_inputs.covered(None, gate="app") == []
+    # A declared credential replaces the default of a gate's input.
+    (app,) = nix_inputs.covered(LOCK, gate="app", declared={"app": "app-token"})
+    assert (app["credential"], app["why"]) == ("app-token", "gate")
+
+
+def test_declared_inputs_are_checked() -> None:
+    assert nix_inputs.check_declared({"b": "x", "a": "git"}) == {"a": "git", "b": "x"}
+    for bad in ({"a b": "git"}, {"app": "Bad Name"}, ["app"]):
+        with pytest.raises(ValueError):
+            nix_inputs.check_declared(bad)
+
+
+def test_the_build_host_reads_each_input_from_its_own_checkout() -> None:
+    entries = nix_inputs.covered(LOCK, gate="app")
+    ((entry, locked),) = nix_inputs.resolve(entries, LOCK)
+    assert locked == APP_SSH and entry["credential"] == "git"
+    moved = LOCK.replace("org/app", "evil/app")
+    with pytest.raises(DevError) as error:
+        nix_inputs.resolve(entries, moved)
+    assert error.value.code == "infra-nix-input-unreachable"
+    assert str(error.value).startswith("app git+ssh://git@github.com/org/app: ")
+    with pytest.raises(DevError):
+        nix_inputs.resolve([{**entries[0], "input": "other"}], LOCK)
+    with pytest.raises(ValueError):
+        nix_inputs.check_entries([{"input": "app"}])
+
+
+def test_urls_never_carry_a_credential() -> None:
+    locked = {"type": "git", "url": f"https://x:{TOKEN}@github.com/org/app?a=1"}
+    assert nix_inputs.display(locked) == "git+https://github.com/org/app"
+    assert nix_inputs.safe_url("ssh://git@github.com/org/app") == (
+        "ssh://git@github.com/org/app"
+    )
+
+
+# ------------------------------------------------------------------ credentials
+
+
+def _token(host: str = "github.com") -> dict[str, str]:
+    return {"host": host, "username": "x-access-token", "token": TOKEN}
+
+
+def test_a_git_ssh_input_is_fetched_over_https_with_the_token() -> None:
+    pairs = nix_inputs.resolve(nix_inputs.covered(LOCK, gate="app"), LOCK)
+    request, tried = nix_inputs.plan_fetch(pairs, load=lambda _n: _token())
+    (item,) = request["inputs"]
+    assert item["mode"] == "askpass" and item["token"] == TOKEN
+    assert item["locked"]["url"] == "https://github.com/org/app"
+    assert item["locked"]["narHash"] == APP_SSH["narHash"]  # the same tree
+    assert tried == [{"input": "app", "url": "git+ssh://git@github.com/org/app",
+                      "credential": "git", "tried": "credential git over HTTPS"}]  # fmt: skip
+    assert TOKEN not in json.dumps(tried)
+
+
+def test_forge_inputs_get_nix_access_tokens_and_other_hosts_get_nothing() -> None:
+    entries = nix_inputs.covered(LOCK, declared={"lib": "git", "shared": "git"})
+    pairs = nix_inputs.resolve(entries, LOCK)
+    request, tried = nix_inputs.plan_fetch(pairs, load=lambda _n: _token())
+    lib, shared = request["inputs"]
+    assert (lib["mode"], lib["host"], lib["token"]) == (
+        "access-token",
+        "github.com",
+        TOKEN,
+    )
+    assert shared["mode"] == "none" and "token" not in shared
+    assert tried[1]["tried"] == (
+        "credential git is for github.com, not gitlab.example.org, so the host's "
+        "own access"
+    )
+    gitlab = [({"input": "x", "url": "gitlab:o/r", "credential": "g"},
+               {"type": "gitlab", "owner": "o", "repo": "r"})]  # fmt: skip
+    request, _ = nix_inputs.plan_fetch(gitlab, load=lambda _n: _token("gitlab.com"))
+    assert request["inputs"][0]["token"] == f"PAT:{TOKEN}"
+
+
+def test_a_missing_credential_falls_back_to_the_hosts_own_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PICELI_CREDENTIALS_DIR", str(tmp_path / "credentials"))
+    pairs = nix_inputs.resolve(nix_inputs.covered(LOCK, gate="app"), LOCK)
+    request, tried = nix_inputs.plan_fetch(pairs)
+    assert request["inputs"][0]["mode"] == "none"
+    assert tried[0]["tried"] == (
+        "credential git is not stored on this host, so the host's own access"
+    )
+
+
+def test_a_git_token_is_stored_private_and_read_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.infra.machines.model import InfraError
+
+    monkeypatch.setenv("PICELI_CREDENTIALS_DIR", str(tmp_path / "credentials"))
+    path = nix_inputs.save_git_token("git", "GitHub.com", "x-access-token", TOKEN)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert nix_inputs.load_git_token("git") == {
+        "host": "github.com", "username": "x-access-token", "token": TOKEN,
+    }  # fmt: skip
+    with pytest.raises(InfraError):
+        nix_inputs.save_git_token("git", "not a host", "git", TOKEN)
+
+
+def test_secrets_git_token_reads_stdin_and_prints_no_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from piceli.k8s.cli import app
+
+    monkeypatch.setenv("PICELI_CREDENTIALS_DIR", str(tmp_path / "credentials"))
+    runner = CliRunner()
+    argv = ["secrets", "git-token", "git", "--host", "github.com", "--prompt"]
+    done = runner.invoke(app, argv, input=TOKEN + "\n")
+    assert done.exit_code == 0, done.output
+    assert TOKEN not in done.output
+    assert json.loads(done.stdout.splitlines()[-1])["kind"] == "git-token"
+    assert nix_inputs.load_git_token("git")["token"] == TOKEN
+    refused = runner.invoke(app, ["secrets", "git-token", "git", "--host", "h", TOKEN])
+    assert refused.exit_code == 2 and TOKEN not in refused.output
+
+
+# ------------------------------------------------------------------ the fetcher
+
+
+def _unquote(expr: str) -> str:
+    """The JSON inside the fetch expression's Nix string literal."""
+    literal = expr[expr.index('fromJSON "') + 10 : expr.rindex('")).outPath')]
+    out, chars = [], iter(literal)
+    for char in chars:
+        out.append(next(chars) if char == "\\" else char)
+    return "".join(out)
+
+
+def test_the_fetch_expression_quotes_any_attribute() -> None:
+    locked = {"type": "git", "url": 'https://h/a"b\\c${x}', "rev": REV}
+    assert json.loads(_unquote(nix_fetch.fetch_expr(locked))) == locked
+
+
+class FakeNix:
+    """``nix eval`` per input: records argv and env, reads the askpass files."""
+
+    def __init__(self, fail: set[str] | None = None) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.fail = fail or set()
+
+    def __call__(self, argv: list[str], **kwargs: Any) -> Any:
+        env = kwargs["env"]
+        locked = json.loads(_unquote(argv[-1]))
+        seen = {"argv": argv, "env": dict(env), "locked": locked}
+        if env.get("GIT_ASKPASS"):
+            script = Path(env["GIT_ASKPASS"])
+            seen["askpass_mode"] = stat.S_IMODE(script.stat().st_mode)
+            seen["token_mode"] = stat.S_IMODE(
+                Path(env["PICELI_ASKPASS_TOKEN"]).stat().st_mode
+            )
+            seen["answers"] = [
+                subprocess.run(
+                    [str(script), prompt], env=env, capture_output=True, text=True
+                ).stdout
+                for prompt in ("Username for 'https://github.com': ", "Password: ")
+            ]
+        self.calls.append(seen)
+        url = str(locked.get("url") or locked.get("repo"))
+        if any(name in url for name in self.fail):
+            return subprocess.CompletedProcess(
+                argv, 128, b"",
+                f"fatal: Authentication failed for '{url}' token={TOKEN}\n"
+                "error: Failed to fetch git repository\n".encode(),
+            )  # fmt: skip
+        return subprocess.CompletedProcess(
+            argv, 0, f"/nix/store/{'b' * 32}-source".encode(), b"fetched\n"
+        )
+
+
+def _request() -> tuple[dict[str, Any], list[dict[str, str]]]:
+    entries = nix_inputs.covered(LOCK, gate="app", declared={"lib": "git"})
+    return nix_inputs.plan_fetch(
+        nix_inputs.resolve(entries, LOCK), load=lambda _n: _token()
+    )
+
+
+def test_the_fetcher_fetches_each_input_in_order_with_its_own_credential(
+    tmp_path: Path,
+) -> None:
+    request, _ = _request()
+    fake = FakeNix()
+    environ = {"PATH": str(tmp_path), "HOME": str(tmp_path),
+               "GIT_CONFIG_COUNT": "2", "NIX_CONFIG": "cores = 2"}  # fmt: skip
+    (tmp_path / "nix").write_text("#!/bin/sh\n")
+    (tmp_path / "nix").chmod(0o755)
+    said: list[str] = []
+    outcome = nix_fetch.fetch(request, runner=fake, emit=said.append, environ=environ)
+    assert outcome["state"] == "fetched"
+    assert [item["name"] for item in outcome["inputs"]] == ["app", "lib"]
+    app, lib = fake.calls
+    assert app["locked"]["url"] == "https://github.com/org/app"
+    assert app["answers"] == ["x-access-token\n", TOKEN + "\n"]
+    assert (app["askpass_mode"], app["token_mode"]) == (0o700, 0o600)
+    assert app["env"]["GIT_CONFIG_KEY_0"] == "credential.helper"
+    assert (
+        app["env"]["GIT_CONFIG_VALUE_0"] == "" and app["env"]["GIT_CONFIG_COUNT"] == "1"
+    )
+    assert app["env"]["GIT_TERMINAL_PROMPT"] == "0"
+    assert "NIX_CONFIG" not in app["env"] or TOKEN not in app["env"]["NIX_CONFIG"]
+    assert lib["env"]["NIX_CONFIG"] == f"cores = 2\naccess-tokens = github.com={TOKEN}"
+    assert "GIT_ASKPASS" not in lib["env"]
+    for call in fake.calls:
+        assert TOKEN not in " ".join(call["argv"])
+        cache = Path(call["env"]["XDG_CACHE_HOME"])
+        assert not cache.parent.exists()  # the temporary directory went
+    assert TOKEN not in json.dumps(outcome) and TOKEN not in "\n".join(said)
+
+
+def test_the_fetcher_stops_at_the_first_input_it_cannot_fetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request, _ = _request()
+    fake = FakeNix(fail={"org/app"})
+    (tmp_path / "nix").write_text("#!/bin/sh\n")
+    (tmp_path / "nix").chmod(0o755)
+    said: list[str] = []
+    outcome = nix_fetch.fetch(
+        request, runner=fake, emit=said.append, environ={"PATH": str(tmp_path)}
+    )
+    assert len(fake.calls) == 1  # lib was never tried
+    assert outcome["state"] == "failed" and outcome["input"] == "app"
+    assert outcome["detail"] == (
+        "fatal: Authentication failed for 'https://github.com/org/app' token=***"
+    )
+    assert TOKEN not in json.dumps(outcome) and TOKEN not in "\n".join(said)
+    monkeypatch.setattr(nix_fetch, "NIX_PATHS", ())
+    assert (
+        nix_fetch.fetch(request, environ={"PATH": str(tmp_path / "none")})["reason"]
+        == "dev-tool-missing"
+    )
+
+
+def test_a_failure_names_the_input_its_url_and_the_credential_before_any_build() -> (
+    None
+):
+    request, tried = _request()
+    result = {"state": "failed", "input": "app", "failure": "unreachable",
+              "detail": "fatal: Authentication failed", "inputs": []}  # fmt: skip
+    seen: dict[str, Any] = {}
+
+    def runner(argv: list[str], **kwargs: Any) -> Any:
+        seen["argv"], seen["stdin"] = argv, kwargs["input"]
+        return subprocess.CompletedProcess(
+            argv, 1,
+            (nix_fetch.RESULT_MARKER + json.dumps(result)).encode(),
+            f"git said {TOKEN}\n".encode(),
+        )  # fmt: skip
+
+    said: list[str] = []
+    with pytest.raises(DevError) as error:
+        nix_inputs.run_fetcher(["fetcher"], request, tried, runner=runner,
+                               say=said.append)  # fmt: skip
+    assert error.value.code == "infra-nix-input-unreachable"
+    assert str(error.value) == (
+        "app git+ssh://git@github.com/org/app (credential git over HTTPS): "
+        "fatal: Authentication failed"
+    )
+    assert TOKEN in seen["stdin"].decode()  # on its stdin only
+    assert TOKEN not in " ".join(seen["argv"]) and TOKEN not in "\n".join(said)
+
+
+def test_the_fetcher_runs_where_the_publisher_runs() -> None:
+    from piceli.dev.model import BuildHost
+
+    native = nix_inputs.fetcher_argv(BuildHost.native("mini"), "img")
+    assert native[1:3] == ["-I", "-c"] and "def fetch(" in native[3]
+    docker = BuildHost.docker("box", image="ghcr.io/x/run@sha256:" + "c" * 64)
+    argv = nix_inputs.fetcher_argv(docker, "img")
+    assert argv[argv.index("run") : argv.index("run") + 3] == ["run", "--rm", "-i"]
+    assert "/nix:/nix:ro" in argv and "NIX_REMOTE=daemon" in argv
+    assert "--cap-drop" in argv and os.path.basename(argv[0]) == "docker"

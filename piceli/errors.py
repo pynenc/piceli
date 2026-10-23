@@ -6102,6 +6102,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "dev",
     ),
     _E(
+        "infra-nix-input-unreachable",
+        "Private flake input not fetched",
+        "Before a Nix build (a NixRelease on its build host, or `piceli dev nix build`), the build host fetches the flake's private inputs (the promotion gate's input, the inputs whose repository is a Source of the composition, and `NixRelease(inputs=)` or `--input`) into its Nix store, and one of them could not be fetched: the message names the input, its URL (never a credential) and the credential tried. Or the plan names an input that `flake.lock` at the commit does not lock at that URL. Nothing was built.",
+        'Store the Git token on the machine that runs the build (`piceli secrets git-token NAME --host HOST --prompt`, or `piceli secrets restore` of a backup made with `--only NAME`), check it can read the repository, map the input to that credential (`NixRelease(inputs={"app": "NAME"})` or `--input app=NAME`), then retry (`piceli gitops sync NAME` or the same command).',
+        True,
+        "dev",
+    ),
+    _E(
         "dev-nix-manifest-failed",
         "Build manifest not stored",
         "The closure is in the cache but uploading `piceli/NAME/REV.json` failed.",

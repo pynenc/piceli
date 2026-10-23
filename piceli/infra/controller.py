@@ -3289,7 +3289,13 @@ class CompositionController:
             return self._publish()
         self._requests()
         self._desired()
-        self.nix.poll(self.composition.nix_releases, self.refs, gate=self._promotion)
+        self.nix.poll(
+            self.composition.nix_releases,
+            self.refs,
+            gate=self._promotion,
+            lock=self._flake_lock,
+            sources=[(source.key, source.url) for source in self.composition.sources],
+        )
         if not self.swept and not failed:  # only on a complete view of the sources
             self.swept = True
             try:
@@ -4031,6 +4037,18 @@ class CompositionController:
             )
             | ({"requested_at": str(at)[:32]} if at else {}),
         )
+
+    def _flake_lock(self, target: Any, commit: str) -> bytes | None:
+        """The ``flake.lock`` of a NixRelease's commit, from the source's
+        mirror (0.26.0: its private inputs go into the plan); ``None`` when
+        it has none or it cannot be read."""
+        from piceli.infra import promotion
+
+        try:
+            self.sources.fetch(target.source.key)
+            return self.sources.read(target.source.key, commit, promotion.LOCK_FILE)
+        except GitOpsError:
+            return None
 
     def _promotion(self, target: Any, commit: str) -> dict[str, Any]:
         """A gated NixRelease's commit checked against this controller's own

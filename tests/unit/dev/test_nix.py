@@ -968,3 +968,82 @@ def test_s3_listing_and_deletes_are_signed_requests() -> None:
         headers = dict(request.header_items())
         assert "AKID/" in headers["Authorization"]
         assert "s3-secret" not in json.dumps(headers)
+
+
+# ------------------------------------------------------------------ 0.26.0: inputs
+
+PRIVATE_LOCK = json.dumps(
+    {
+        "version": 7,
+        "root": "root",
+        "nodes": {
+            "root": {"inputs": {"app": "app"}},
+            "app": {
+                "locked": {
+                    "type": "git",
+                    "url": "ssh://git@github.com/org/app",
+                    "rev": "c" * 40,
+                    "narHash": "sha256-AAAA",
+                }
+            },
+        },
+    }
+)
+
+
+def test_private_inputs_are_fetched_on_the_host_before_the_build(
+    cli_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.dev import nix_inputs
+    from tests.unit.dev.test_pack import commit
+
+    commit(cli_env["app"], {"flake.lock": PRIVATE_LOCK})
+    nix_inputs.save_git_token("app-token", "github.com", "git", "tok-" + "z" * 20)
+    fetched: list[dict[str, Any]] = []
+
+    def fake_fetcher(argv: Any, request: Any, tried: Any, **_: Any) -> Any:
+        fetched.append({"request": request, "tried": tried,
+                        "runs_before": len(cli_env["runs"])})  # fmt: skip
+        return {"state": "fetched", "inputs": [{"name": "app"}]}
+
+    monkeypatch.setattr(nix_inputs, "run_fetcher", fake_fetcher)
+    args = ("dev", "nix", "build", ATTR, "--cluster", "infra.py:c", "--ref", "HEAD",
+            "--publish", "infra.py:cache", "--input", "app=app-token", "--json")  # fmt: skip
+    planned = _invoke(*args)
+    assert planned.exit_code == 3, planned.stdout + planned.stderr
+    plan = json.loads(planned.stdout)
+    assert plan["plan"]["inputs"] == [
+        {"input": "app", "url": "git+ssh://git@github.com/org/app",
+         "credential": "app-token", "why": "declared"},
+    ]  # fmt: skip
+    assert "--input app=app-token" in plan["approve_command"]
+    done = _invoke(*args, "--approve", plan["digest"])
+    assert done.exit_code == 0, done.stdout + done.stderr
+    ((call),) = fetched
+    assert call["runs_before"] == 0 and len(cli_env["runs"]) == 1
+    assert call["request"]["inputs"][0]["mode"] == "askpass"
+    assert "z" * 20 not in done.stdout + done.stderr
+
+
+def test_an_unreachable_input_refuses_before_the_build(
+    cli_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.dev import nix_inputs
+    from piceli.dev.model import DevError
+    from tests.unit.dev.test_pack import commit
+
+    commit(cli_env["app"], {"flake.lock": PRIVATE_LOCK})
+
+    def unreachable(argv: Any, request: Any, tried: Any, **_: Any) -> Any:
+        raise DevError("infra-nix-input-unreachable", f"app {tried[0]['url']} (...)")
+
+    monkeypatch.setattr(nix_inputs, "run_fetcher", unreachable)
+    refused = _invoke("dev", "nix", "build", ATTR, "--cluster", "infra.py:c",
+                      "--input", "app", "--json")  # fmt: skip
+    assert refused.exit_code == 2
+    assert json.loads(refused.stdout)["reason"] == "infra-nix-input-unreachable"
+    assert cli_env["runs"] == []
+    unknown = _invoke("dev", "nix", "build", ATTR, "--cluster", "infra.py:c",
+                      "--input", "nope", "--json")  # fmt: skip
+    assert unknown.exit_code == 2
+    assert json.loads(unknown.stdout)["reason"] == "dev-nix-invalid"

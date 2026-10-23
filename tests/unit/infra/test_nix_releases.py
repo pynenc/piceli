@@ -108,6 +108,7 @@ def _worker(
     caches: list[Any] | None = None,
     host: str = "mini",
     said: list[str] | None = None,
+    fetch: Callable[..., Any] | None | str = "fake",
 ) -> tuple[BuilderServe, list[dict[str, Any]]]:
     """``builder serve`` on ``host`` with a publisher whose Nix steps are fakes."""
     seen: list[dict[str, Any]] = []
@@ -130,6 +131,9 @@ def _worker(
         build=build or fake_build,
         push=fake_push,
         host=host,
+        fetch=(lambda pairs, _say: {"state": "fetched", "inputs": []})
+        if fetch == "fake"
+        else fetch,  # type: ignore[arg-type]
     )
     controller = world["controller"]
     worker = BuilderServe(
@@ -758,3 +762,148 @@ def test_a_release_whose_cache_has_no_key_is_rejected_and_publishes_nothing(
     record = controller.nix.records()["web-1"]
     assert (record["state"], record["tag"]) == ("baseline", "web-v1.1.0")
     assert "reason" not in record and "refusal" not in record
+
+
+# ------------------------------------------------------------------ 0.26.0: inputs
+
+APP = "ssh://git@github.com/org/app"
+FLAKE_LOCK = json.dumps(
+    {
+        "version": 7,
+        "root": "root",
+        "nodes": {
+            "root": {"inputs": {"app": "app", "nixpkgs": "nixpkgs"}},
+            "app": {
+                "locked": {
+                    "type": "git",
+                    "url": APP,
+                    "rev": "c" * 40,
+                    "narHash": "sha256-AAAA",
+                }
+            },
+            "nixpkgs": {
+                "locked": {
+                    "type": "github",
+                    "owner": "NixOS",
+                    "repo": "nixpkgs",
+                    "rev": "d" * 40,
+                    "narHash": "sha256-BBBB",
+                }
+            },
+        },
+    }
+)
+
+
+def _inputs_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    infra = INFRA.replace(
+        "auto_approve=AUTO)", 'auto_approve=AUTO, inputs={"app": "app-token"})'
+    )
+    world = _world(tmp_path, monkeypatch, auto=True, infra=infra)
+    world["controller"].poll_once()
+    world["commit"] = world["repo"].commit({"flake.lock": FLAKE_LOCK})
+    world["repo"].tag("web-v1.1.0")
+    return world
+
+
+def test_the_plan_names_the_private_inputs_and_the_host_fetches_them_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = _inputs_world(tmp_path, monkeypatch)
+    controller = world["controller"]
+    record = _release(controller.poll_once())
+    assert record["state"] == "waiting-build"
+    assert record["plan"]["inputs"] == [
+        {"input": "app", "url": f"git+{APP}", "credential": "app-token",
+         "why": "declared"},
+    ]  # fmt: skip
+    assert world["composition"].to_dict()["nix_releases"][0]["inputs"] == {
+        "app": "app-token"
+    }
+    order: list[str] = []
+
+    def fetch(pairs: Any, say: Any) -> dict[str, Any]:
+        ((entry, locked),) = pairs
+        order.append("fetch")
+        assert entry["credential"] == "app-token" and locked["url"] == APP
+        return {"state": "fetched", "inputs": [{"name": "app"}]}
+
+    def build(checkout: Path, attribute: str, say: Any) -> str:
+        order.append("build")
+        return STORE
+
+    worker, _ = _worker(world, tmp_path, fetch=fetch, build=build)
+    assert worker.once() is not None
+    done = _release(controller.poll_once())
+    assert done["state"] == "published", done.get("failure")
+    assert order == ["fetch", "build"]
+    assert {"inputs", "build", "publish"} <= set(done["stages"])
+
+
+def test_an_unreachable_input_fails_the_release_before_any_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = _inputs_world(tmp_path, monkeypatch)
+    controller = world["controller"]
+    controller.poll_once()
+    built: list[str] = []
+
+    def fetch(pairs: Any, say: Any) -> dict[str, Any]:
+        raise DevError(
+            "infra-nix-input-unreachable",
+            f"app git+{APP} (credential app-token over HTTPS): fatal: "
+            "Authentication failed",
+        )
+
+    worker, _ = _worker(
+        world, tmp_path, fetch=fetch, build=lambda *_a: built.append("x") or STORE
+    )
+    assert worker.once() is not None
+    failed = _release(controller.poll_once())
+    assert failed["state"] == "failed" and not built
+    assert failed["failure"]["reason"] == (
+        f"infra-nix-input-unreachable: app git+{APP} (credential app-token over "
+        "HTTPS): fatal: Authentication failed"
+    )
+    # A host without a fetcher refuses the plan the same way.
+    controller.channel.add_request(*sync_request())
+    controller.poll_once()
+    worker, _ = _worker(
+        world, tmp_path, fetch=None, build=lambda *_a: built.append("x") or STORE
+    )
+    assert worker.once() is not None
+    failed = _release(controller.poll_once())
+    assert failed["failure"]["reason"].startswith(
+        f"infra-nix-input-unreachable: app git+{APP}: this build host fetches no"
+    )
+    assert not built
+
+
+def test_a_release_without_private_inputs_keeps_its_plan(world: dict[str, Any]) -> None:
+    world["controller"].poll_once()
+    world["repo"].commit({"flake.lock": FLAKE_LOCK})
+    world["repo"].tag("web-v1.1.0")
+    record = _release(world["controller"].poll_once())
+    assert "inputs" not in record["plan"]  # nixpkgs is public; nothing declared
+    assert "inputs" not in world["composition"].to_dict()["nix_releases"][0]
+
+
+def test_declared_inputs_are_checked(world: dict[str, Any]) -> None:
+    from piceli.infra import NixRelease, Source
+
+    release = next(iter(world["composition"].nix_releases))
+    host = _host_of(world)
+    with pytest.raises(CompositionError):
+        NixRelease(host, source=Source(release.source.url, name="hosts"),
+                   builder="mini", inputs={"app": "Not A Name"})  # fmt: skip
+    found = NixRelease(host, source=Source(release.source.url, name="hosts"),
+                       builder="mini", inputs={"app": "git"})  # fmt: skip
+    assert found.target().inputs == (("app", "git"),)
+
+
+def _host_of(world: dict[str, Any]) -> Any:
+    from piceli.infra import NixCache, NixHost, Tag
+
+    cache = NixCache(PUBLIC, url=f"file://{world['cache']}")
+    return NixHost("web-1", server="ssh://root@web-1.example.org", flake=".#web-1",
+                   follow=Tag("web-v*"), cache=cache)  # fmt: skip
