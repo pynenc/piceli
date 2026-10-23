@@ -169,6 +169,21 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   (`prune`). `piceli train-prune NAME|SPEC [--dry-run] [--json]` does the
   same by hand. The cache layout is now `checkouts/<train>/<repo>/` and
   `targets/<train>/<repo>/`.
+- **Fast trains are seen too.** A step on a build host emits
+  `step-placed` with the host its command went to, so `piceli trains` shows
+  it running there, and its span and run row name it (`hosts` in each
+  recent run). A reused step is `reused` in its event (with the run, trial
+  and host it came from), in the status (`reused` per run; no trend
+  sample) and in the trace (an ok span with `piceli.train.reused_from`).
+  Parallel halves show both trials and steps at once (`trials`, `steps`,
+  the right half `speculative`, a discarded one in `discarded`), and
+  `halves-parallel`, `trial-discarded`, `outputs-restored` and `pruned`
+  are span events of the run. `--promote-run` is an ordinary run of the
+  train: it can be queued (`--promote-run last --queue` pins the run it
+  means when it queues), and one that raises midway is `run-failed`, as is
+  a run whose build hosts are all gone (`train-host-unavailable`). Pruning
+  keeps the queue, the lock, the run in progress, the runs queued requests
+  name and the newest promoted runs.
 
 ## Version 0.25.3
 

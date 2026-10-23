@@ -341,6 +341,10 @@ def train_queue(
     requests = queue.pending()
     for row in requests:
         flags = " ".join(f for f in ("--promote", "--push") if row.get(f.strip("-")))
+        if row.get("promote_run"):
+            flags = f"--promote-run {row['promote_run']}" + (
+                " --push" if row.get("push") else ""
+            )
         where = f"#{row['position']}" if row.get("position") else row["state"]
         say(f"{where} {row['id']} {' '.join(row.get('branches') or ())} {flags}".rstrip()
             + f" (queued {row.get('queued_at')})")  # fmt: skip

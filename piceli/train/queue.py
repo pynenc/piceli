@@ -4,7 +4,8 @@
 and returns at once with its id and position. Whoever runs the train serves
 the queue when its own run ends: any ``piceli train`` process, after its
 run, takes the oldest waiting request, runs it with the flags it was given
-(``--promote``, ``--push``), and so on until the queue is empty. ``piceli
+(``--promote``, ``--push``, ``--promote-run``), and so on until the queue
+is empty. ``piceli
 train-queue NAME --drain`` does the same without a run of its own.
 
 Layout under the train's state directory::
@@ -124,8 +125,13 @@ class TrainQueue:
         branches: Sequence[str],
         promote: bool,
         push: bool,
+        promote_run: str | None = None,
     ) -> dict[str, Any]:
-        """Add a request at the tail; returns it with its ``position``."""
+        """Add a request at the tail; returns it with its ``position``.
+
+        ``promote_run``: promote that earlier run's head when served
+        (``--promote-run``, the run id, not ``last``) instead of running
+        ``branches``."""
         request: dict[str, Any] = {
             "schema": REQUEST_SCHEMA,
             "id": new_queue_id(),
@@ -135,6 +141,7 @@ class TrainQueue:
             "branches": list(branches),
             "promote": promote,
             "push": push,
+            **({"promote_run": promote_run} if promote_run else {}),
             "queued_at": _now(),
             "state": "waiting",
             "resumed": 0,
@@ -262,7 +269,7 @@ class TrainQueue:
                 key: row.get(key)
                 for key in (
                     "id", "state", "position", "branches", "promote", "push",
-                    "queued_at", "started_at", "run", "resumed",
+                    "promote_run", "queued_at", "started_at", "run", "resumed",
                 )
             }
             for row in rows
@@ -304,7 +311,12 @@ def drain(
         request = queue.claim()
         if request is None:
             return
-        say(f"queue: {request['id']}: {' '.join(request['branches'])}")
+        what = (
+            f"--promote-run {request['promote_run']}"
+            if request.get("promote_run")
+            else " ".join(request["branches"])
+        )
+        say(f"queue: {request['id']}: {what}")
         try:
             run = build(request)
             run.prepare()

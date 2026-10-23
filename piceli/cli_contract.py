@@ -1352,7 +1352,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             writes=(
                 "worktrees of the repository at stable paths under the train cache (removed after each trial)",
                 "unreferenced merge commits; refs/piceli/train/<name>/last",
-                "$XDG_STATE_HOME/piceli/train/<name> (run records, logs, flaky.jsonl)",
+                "$XDG_STATE_HOME/piceli/train/<name> (run records, events, logs, flaky.jsonl, the queue)",
                 "$XDG_CACHE_HOME/piceli/train (slot locks, shared cargo targets, the content store)",
                 "build hosts: dev runs of the merged tree (their queues, warm caches, health events)",
                 "--promote: the tag, tested and the base (fast-forward only), publish steps",
@@ -1372,9 +1372,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "temporary worktree; its steps come from the merged tree's spec. "
             "A failing set is bisected. --json prints one piceli.train.v1 "
             "object. --queue on a busy train writes a queued request (keeping "
-            "its flags) and returns at once (piceli.train.queued.v1, exit 0); "
+            "its flags, --promote-run too, with last resolved when queued) and "
+            "returns at once (piceli.train.queued.v1, exit 0); "
             "every run serves the train's queue when it ends. A run that "
-            "raises midway is recorded failed (run-failed: train-git-failed, "
+            "raises midway (a --promote-run too) is recorded failed "
+            "(run-failed: train-git-failed, train-host-unavailable, "
             "train-run-failed, train-run-cancelled), notified, exit 1. Exit 0: every branch joined (or was already in) and the "
             "promotion and push asked for succeeded; 1: a branch was ejected "
             "(train-step-failed, train-step-timeout, train-merge-conflict, "

@@ -5,14 +5,18 @@
 (:class:`~piceli.train.state.TrainState`) and nothing else:
 
 - ``current``: the run holding the train's lock (the lock names its run and
-  live process), its branches and verdicts so far, the trial and the step in
-  progress with its start, elapsed time, host, log and the last lines of
-  that log, read from ``runs/<id>/events.jsonl``;
-- ``runs``: recent runs, newest first, with their verdicts and the seconds
-  each step took (summed over the run's trials). A run whose record still
+  live process), its branches and verdicts so far, the trials and steps in
+  progress (two at once while parallel halves run) with their start,
+  elapsed time, host (the build host a command was placed on), log and the
+  last lines of that log, the steps done (a ``reused`` step names the run it
+  came from), read from ``runs/<id>/events.jsonl``;
+- ``runs``: recent runs, newest first, with their verdicts, the seconds
+  each step took (summed over the run's trials), the hosts its steps ran on
+  and the steps it reused. A run whose record still
   says ``running`` while no process holds the lock was killed:
   ``interrupted``;
-- ``trends``: per step, the median duration of its last N executions and
+- ``trends``: per step, the median duration of its last N executions (not
+  skipped or reused steps, nor discarded speculative trials) and
   the last one against it (``slower`` above 125 %, ``faster`` below 80 %);
 - ``flaky``: each flaky test's count, first and last sighting and the
   output of its last first failure.
@@ -91,25 +95,39 @@ def current(
     started = _epoch(started_at) or float(owner.get("since") or now)
     branches: list[str] = []
     verdicts: dict[str, str] = {}
-    trial: dict[str, Any] | None = None
-    step: dict[str, Any] | None = None
+    trials: dict[Any, dict[str, Any]] = {}
+    steps: dict[Any, dict[str, Any]] = {}
     done: list[dict[str, Any]] = []
+    discarded: list[Any] = []
+    restored: list[str] = []
+    promote_run: str | None = None
+    parallel = False
     phase = "trials"
     for event in events:
         kind = event.get("event")
         if kind == "run-started":
             branches = [str(b) for b in event.get("branches") or ()]
             verdicts = dict.fromkeys(branches, "pending")
+            if event.get("promote_run"):
+                promote_run = str(event["promote_run"])
+                verdicts.update(
+                    {str(k): str(v) for k, v in (event.get("verdicts") or {}).items()}
+                )
+                phase = "promote"
         elif kind == "trial-started":
-            trial = {
+            trials[event.get("trial")] = {
                 "id": event.get("trial"),
                 "branches": list(event.get("branches") or ()),
                 "base": event.get("base"),
                 "started": event.get("at"),
+                **({"speculative": True} if event.get("speculative") else {}),
             }
-            done = []
+            if not parallel:
+                done = []
+        elif kind == "halves-parallel":
+            parallel = True
         elif kind == "step-started":
-            step = {
+            steps[event.get("trial")] = {
                 "trial": event.get("trial"),
                 "name": event.get("step"),
                 "kind": event.get("kind"),
@@ -119,27 +137,40 @@ def current(
             }
             if event.get("trial") is None:
                 phase = "publish"
+        elif kind == "step-placed":
+            running = steps.get(event.get("trial"))
+            if running is not None and running.get("name") == event.get("step"):
+                running["host"] = event.get("host")
         elif kind in {"step-finished", "published", "publish-failed"}:
-            step = None
-            done.append(
-                {
-                    "trial": event.get("trial"),
-                    "name": event.get("step"),
-                    "verdict": event.get("verdict"),
-                    "duration": event.get("duration"),
-                    "host": event.get("host"),
-                }
-            )
+            steps.pop(event.get("trial"), None)
+            row = {
+                "trial": event.get("trial"),
+                "name": event.get("step"),
+                "verdict": event.get("verdict"),
+                "duration": event.get("duration"),
+                "host": event.get("host"),
+            }
+            if event.get("reused"):
+                row["reused"] = event["reused"]
+            done.append(row)
         elif kind == "trial-finished":
-            trial = None
+            trials.pop(event.get("trial"), None)
+            if not trials:
+                parallel = False
+        elif kind == "trial-discarded":
+            discarded.append(event.get("trial"))
+        elif kind == "outputs-restored":
+            restored = [str(s) for s in event.get("steps") or ()]
         elif kind in {"branch-joined", "branch-ejected", "branch-included"}:
             verdicts[str(event.get("branch"))] = str(kind).removeprefix("branch-")
         elif kind == "promoted":
             phase = "promote"
-    if step is not None:
-        begun = _epoch(step["started"]) or now
-        step["elapsed"] = round(max(0.0, now - begun), 1)
-        step["tail"] = tail(step.get("log"), lines)
+    running_steps = list(steps.values())
+    for item in running_steps:
+        begun = _epoch(item["started"]) or now
+        item["elapsed"] = round(max(0.0, now - begun), 1)
+        item["tail"] = tail(item.get("log"), lines)
+    open_trials = list(trials.values())
     return {
         "run": run_id,
         "started": started_at,
@@ -147,9 +178,16 @@ def current(
         "branches": branches,
         "verdicts": verdicts,
         "phase": phase,
-        "trial": trial,
-        "step": step,
+        # the newest trial and step in progress (the speculative right half
+        # of parallel halves is in ``trials`` and ``steps`` too)
+        "trial": open_trials[-1] if open_trials else None,
+        "step": running_steps[-1] if running_steps else None,
+        "trials": open_trials,
+        "steps": running_steps,
         "done": done,
+        "discarded": discarded,
+        **({"restored": restored} if restored else {}),
+        **({"promote_run": promote_run} if promote_run else {}),
         "pid": owner.get("pid"),
     }
 
@@ -171,6 +209,30 @@ def _step_seconds(record: Mapping[str, Any]) -> dict[str, float]:
             totals.get(name, 0.0) + float(step.get("duration") or 0), 3
         )
     return totals
+
+
+def _placement(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Where a run's steps ran (``hosts``: build hosts and ``local``) and
+    which were ``reused`` from an earlier run (not discarded trials)."""
+    hosts: list[str] = []
+    reused: list[str] = []
+    steps = [
+        step
+        for trial in record.get("trials") or ()
+        if not trial.get("discarded")
+        for step in trial.get("steps") or ()
+    ]
+    steps += list((record.get("promote") or {}).get("publish") or ())
+    for step in steps:
+        if step.get("kind") in {"merge", "spec"} or step.get("verdict") == "skipped":
+            continue
+        name = str(step.get("name"))
+        if step.get("verdict") == "reused":
+            if name not in reused:
+                reused.append(name)
+        elif step.get("host") and str(step["host"]) not in hosts:
+            hosts.append(str(step["host"]))
+    return {"hosts": hosts, "reused": reused}
 
 
 def run_row(record: Mapping[str, Any], active: str | None) -> dict[str, Any]:
@@ -198,6 +260,7 @@ def run_row(record: Mapping[str, Any], active: str | None) -> dict[str, Any]:
         ],
         "trials": len(record.get("trials") or ()),
         "steps": _step_seconds(record),
+        **_placement(record),
         "tag": promote.get("tag"),
         "promote": promote.get("state", "not-requested"),
         "push": push.get("state", "not-requested"),
@@ -219,8 +282,10 @@ def trends(
             record.get("trials") or (), key=lambda t: t.get("id") or 0, reverse=True
         )
         for trial in trials:
+            if trial.get("discarded"):
+                continue
             for step in trial.get("steps") or ():
-                if step.get("verdict") == "skipped" or step.get("kind") in {
+                if step.get("verdict") in {"skipped", "reused"} or step.get("kind") in {
                     "merge",
                     "spec",
                 }:
@@ -471,15 +536,25 @@ def table(document: Mapping[str, Any], *, logs: bool = True) -> list[str]:
                     f"{b}={verdicts.get(b, 'pending')}" for b in live["branches"]
                 )
             )
-            trial, step = live.get("trial"), live.get("step")
-            if trial:
-                out.append(f"  trial {trial['id']}: {' '.join(trial['branches'])}")
+            if live.get("promote_run"):
+                out.append(f"  promoting the head of run {live['promote_run']}")
+            for trial in live.get("trials") or ():
+                ahead = " (speculative)" if trial.get("speculative") else ""
+                out.append(
+                    f"  trial {trial['id']}{ahead}: {' '.join(trial['branches'])}"
+                )
             for item in live.get("done") or ():
+                origin = item.get("reused") or {}
+                where = (
+                    f"from run {origin.get('run')}"
+                    if item.get("verdict") == "reused"
+                    else f"on {item.get('host')}"
+                )
                 out.append(
                     f"    {item['name']:<14} {item['verdict']:<8} "
-                    f"{seconds(item.get('duration'))} on {item.get('host')}"
+                    f"{seconds(item.get('duration'))} {where}"
                 )
-            if step:
+            for step in live.get("steps") or ():
                 out.append(
                     f"    {step['name']:<14} running  {seconds(step['elapsed'])} on "
                     f"{step.get('host')} (started {_clock(step.get('started'))})"
@@ -496,6 +571,10 @@ def table(document: Mapping[str, Any], *, logs: bool = True) -> list[str]:
             flags = " ".join(
                 flag for flag in ("--promote", "--push") if row.get(flag.strip("-"))
             )
+            if row.get("promote_run"):
+                flags = f"--promote-run {row['promote_run']}" + (
+                    " --push" if row.get("push") else ""
+                )
             where = f"#{row['position']}" if row.get("position") else row.get("state")
             out.append(
                 f"    {where} {row['id']} {' '.join(row.get('branches') or ())}"
@@ -519,6 +598,10 @@ def table(document: Mapping[str, Any], *, logs: bool = True) -> list[str]:
                 extra += f" [{run['reason']}]"
             if run.get("push") == "pushed":
                 extra += " pushed"
+            if run.get("hosts"):
+                extra += " on " + ", ".join(run["hosts"])
+            if run.get("reused"):
+                extra += " (reused: " + ", ".join(run["reused"]) + ")"
             out.append(
                 f"    {run['run']} {run['state']!s:<11} {seconds(run.get('duration')):>8}"
                 f"{extra}  {verdicts}"

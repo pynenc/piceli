@@ -438,6 +438,12 @@ base is no ancestor of that head (it moved in a way that is not a
 fast-forward to it: `train-not-fast-forward`), or when the run is unknown,
 unfinished or joined nothing (`train-run-unknown`).
 
+A promotion of an earlier run is a run of its own: it takes the train's
+lock (on a busy train, add `--queue`: see {ref}`train-queue`), gets its own
+record (`promoted_from`), events (`run-started` names `promote_run` and
+the branches' verdicts), notifications and trace, and one that raises
+midway is recorded `failed` with `run-failed`.
+
 ## Images for the cluster
 
 The cluster's push-to-running wait is mostly building: the GitOps
@@ -522,7 +528,7 @@ Whatever a train creates it removes, and what it keeps is bounded by
 | Times records | `<cache>/checkouts/<train>/<repo>/<n>.times.json` | with their target directory |
 | Cargo target directories | `<cache>/targets/<train>/<repo>/<n>/` (and `slot-<n>/`) | unused for `target_days=14` days go, then the least recently used beyond `targets_size="100GiB"` (per train and repository) |
 | Content store | `<cache>/store/keys/*.json`, `<cache>/store/blobs/<aa>/<sha256>` | records unused for `store_days=30` days go, then the least recently used beyond `store_size="20GiB"` (shared by every train of the machine); bytes no record keeps go once an hour old |
-| Run records and logs | `<state>/runs/<run>/` | runs older than `log_days=30` days go, but never the newest `keep_runs=20`; `flaky.jsonl` stays |
+| Run records, events and logs | `<state>/runs/<run>/` | runs older than `log_days=30` days go, but never the newest `keep_runs=20`, the run in progress, a run serving a queued request or named by a queued `--promote-run`, nor the newest `keep_runs` runs that promoted (what `piceli trains` matches deployed targets to); `flaky.jsonl`, the queue (`queue/`) and the lock stay |
 
 `<cache>` is `Train(cache=)`, else `$XDG_CACHE_HOME/piceli/train`, else
 `~/.cache/piceli/train`; `<state>` is `$XDG_STATE_HOME/piceli/train/<name>`
@@ -558,19 +564,25 @@ piceli train shop/train_spec.py --branches feat-d feat-e --promote --push --queu
 piceli train-queue shop                    # waiting requests, their flags, when queued
 piceli train-queue shop --cancel q-20261023T101700123456Z-ab12
 piceli train-wait q-20261023T101700123456Z-ab12 --json   # waits for the run that serves it
+piceli train shop/train_spec.py --promote-run last --push --queue --json
 ```
+
+`--promote-run last --queue` resolves `last` when it queues: the request
+promotes the run the caller saw, not whichever run is last when it is
+served. The promotion's checks (the run joined something, the base is
+still an ancestor of its head) run again when it is served.
 
 With `--queue` on a busy train, the request is written to the train's
 queue and the command returns at once (exit 0) with one
 `piceli.train.queued.v1` object: `queue_id`, `position`, `branches`,
-`promote`, `push` and `queued_at`. Its branches are checked first (a branch
+`promote`, `push`, `promote_run` (for `--promote-run`) and `queued_at`. Its branches are checked first (a branch
 that does not exist is refused at once). On a free train, `--queue` runs
 the request now, after any older waiting ones, and prints its result.
 
 **Who serves the queue.** Every `piceli train` process, once its own run
 ends, takes the oldest waiting request and runs it with the flags it was
-queued with (`--promote`, `--push`), then the next, until the queue is
-empty; then it exits. `piceli train-queue NAME --drain` does the same
+queued with (`--promote`, `--push`, `--promote-run`), then the next,
+until the queue is empty; then it exits. `piceli train-queue NAME --drain` does the same
 without a run of its own. Each run is an ordinary run: its own record
 (with `"queue": <id>`), events, notifications and trace. A request whose
 branches no longer exist when it starts is rejected
@@ -604,17 +616,23 @@ piceli train-wait shop --json      # block until the run ends; exit with its ver
 takes the lock, never loads the spec) and shows:
 
 - **the run in progress**: its branches and their verdicts so far, the
-  trial, the steps done and the running step with its start, elapsed time,
-  host and the last lines of its log (`--follow` streams the log);
+  trial, the steps done (a `reused` step names the run it came from) and
+  the running step with its start, elapsed time, host (the build host its
+  command was placed on, from `step-placed`) and the last lines of its log
+  (`--follow` streams the log). While parallel halves run, both trials and
+  both steps are listed (`trials`, `steps`; the right half `speculative`),
+  and a speculative trial the run did not reach is in `discarded`;
 - **the queue**: requests waiting (with their position, branches, flags
   and when they were queued), and the one being served (`stale` when its
   process died);
 - **recent runs** (`--runs N`, default 10): state, duration, tag, push and
-  each branch's verdict (with the failing step), and the seconds each step
-  took, summed over the run's trials. A record still `running` while no
+  each branch's verdict (with the failing step), the seconds each step
+  took, summed over the run's trials, the hosts its steps ran on (`hosts`)
+  and the steps it reused (`reused`). A record still `running` while no
   live process holds the lock was killed: `interrupted`;
 - **step trends** (`--trend N`, default 10): per step, the median of its
-  last N executions and the last one against it: `slower` above 125 %,
+  last N executions (a skipped or reused step, or a discarded speculative
+  trial, is no execution) and the last one against it: `slower` above 125 %,
   `faster` below 80 %, else `steady`;
 - **flaky tests**: count, first and last seen, the branches of the last
   sighting and the output of the last first failure;
@@ -711,9 +729,11 @@ like any other request:
 ```text
 piceli.dev.train                     run: train, run id, branches; at the end state, ok, joined,
 │                                    ejected (branch=step), tag, promote, push, flaky, duration
-│  events: branch-joined, branch-ejected, branch-included, promoted, promote-rejected, pushed, push-failed
-├─ piceli.dev.train.trial            trial, branches, verdict, failing step, duration
-│  ├─ piceli.dev.train.step          step, kind, phase=test, host, verdict, duration, branches, selection
+│  events: branch-joined, branch-ejected, branch-included, promoted, promote-rejected, pushed, push-failed,
+│          halves-parallel, trial-discarded, outputs-restored, pruned
+├─ piceli.dev.train.trial            trial, branches, verdict, failing step, duration, speculative
+│  ├─ piceli.dev.train.step          step, kind, phase=test, host (where it ran: a build host or local),
+│  │                                 verdict, duration, branches, selection, reused_from (a reused step's run)
 │  │     events: piceli.dev.train.flaky (test, target)
 │  └─ …
 └─ piceli.dev.train.step             phase=publish (publish steps hang off the root)
@@ -722,7 +742,7 @@ logs: piceli.dev.train.step          one per step, body = the last 20 lines of i
 ```
 
 Attributes are named `piceli.train.*`. A failed step, trial or run has
-status `ERROR`. Spans are sent as they end, so a long run is visible while
+status `ERROR`; a `reused` step is ok. Spans are sent as they end, so a long run is visible while
 it runs.
 
 Without `telemetry=`, the standard variables apply, as for `piceli
@@ -832,6 +852,7 @@ in, exit status, start, duration, host and output out; `LocalRunner` runs
 them here in a slot, `piceli.train.hosts.HostRunner` places them on the
 train's hosts), and the run reports each step and verdict to an event sink
 (`run-started`, `trial-started`, `step-started` (with host and log),
+`step-placed` (the host a command of the step went to),
 `step-finished` (with kind, verdict, duration, the host it ran on, log,
 selection, flaky tests and a failing tail), `trial-finished`,
 `halves-parallel`, `trial-discarded`, `branch-joined`, `branch-ejected`,

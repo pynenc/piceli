@@ -31,8 +31,9 @@ def _strip(document: dict[str, Any]) -> dict[str, Any]:
         live = train.get("current")
         if live:
             live.pop("pid", None)
-            if live.get("step"):
-                live["step"].pop("log", None)
+            for step in (live.get("step"), *(live.get("steps") or ())):
+                if step:
+                    step.pop("log", None)
     return document
 
 

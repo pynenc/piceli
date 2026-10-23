@@ -16,9 +16,12 @@ of every run, and with ``piceli train-prune NAME [--dry-run]``:
   recently used while the bytes they keep pass ``store_size`` [20 GiB];
   bytes no record keeps go once an hour old (a step being stored writes
   its bytes before its record), and so do interrupted partial files;
-- **run records and logs** (``<state>/runs/<run>/``): runs older than
-  ``log_days`` [30] go, but never the newest ``keep_runs`` [20] (the flaky
-  registry, ``flaky.jsonl``, stays).
+- **run records, events and logs** (``<state>/runs/<run>/``): runs older
+  than ``log_days`` [30] go, but never the newest ``keep_runs`` [20], the
+  run in progress (the lock names it), a run serving a queued request or
+  named by a queued ``--promote-run``, nor the newest ``keep_runs`` runs
+  that promoted (what ``piceli trains`` matches deployed targets to). The flaky registry
+  (``flaky.jsonl``), the queue (``queue/``) and the lock stay.
 
 The result (``piceli.train-prune.v1``) lists what went (path, kind, bytes,
 why) and the sizes kept per kind, with their limits.
@@ -250,14 +253,51 @@ def _blob_size(store: Path, digest: str) -> int:
     return disk_usage(store / "blobs" / hexa[:2] / hexa)
 
 
+def _needed(state_root: Path, found: list[Path], retention: Retention) -> set[str]:
+    """Runs still read, whatever their age: the run holding the lock, the
+    run serving a queued request and the run a queued ``--promote-run``
+    names, and the newest ``keep_runs`` runs that promoted (what
+    ``piceli trains`` matches deployed targets to)."""
+    from piceli.train.queue import TrainQueue
+    from piceli.train.state import TrainState
+
+    state = TrainState(state_root)
+    needed: set[str] = set()
+    owner = state.owner()
+    if owner and isinstance(owner.get("run"), str):
+        needed.add(owner["run"])
+    for request in TrainQueue(state).pending():
+        for key in ("run", "promote_run"):
+            if request.get(key):
+                needed.add(str(request[key]))
+    promoted = 0
+    for path in found:
+        if promoted >= retention.keep_runs:
+            break
+        record = state.record(path.name) or {}
+        if (record.get("promote") or {}).get("state") in {
+            "promoted",
+            "publish-failed",
+        }:
+            needed.add(path.name)
+            promoted += 1
+    return needed
+
+
 def _runs(
-    job: Pruning, runs: Path, retention: Retention, now: float, current: str | None
+    job: Pruning,
+    state_root: Path,
+    retention: Retention,
+    now: float,
+    current: str | None,
 ) -> int:
+    runs = state_root / "runs"
     found = sorted(
         (path for path in runs.glob("*") if path.is_dir()),
         key=lambda path: path.name,
         reverse=True,
     )
+    needed = _needed(state_root, found, retention) if found else set()
     kept = 0
     for index, path in enumerate(found):
         record = path / "run.json"
@@ -266,6 +306,7 @@ def _runs(
             index >= retention.keep_runs
             and age > retention.log_days * DAY
             and path.name != current
+            and path.name not in needed
         ):
             job.drop(
                 path, "run", disk_usage(path), f"older than {retention.log_days} days"
@@ -297,7 +338,7 @@ def prune(
     job.sizes["checkouts"] = _checkouts(job, cache, train)
     job.sizes["targets"] = _targets(job, cache, train, retention, moment)
     job.sizes["store"] = _store(job, cache / "store", retention, moment)
-    job.sizes["runs"] = _runs(job, state_root / "runs", retention, moment, current)
+    job.sizes["runs"] = _runs(job, state_root, retention, moment, current)
     return {
         "schema": SCHEMA,
         "train": train,

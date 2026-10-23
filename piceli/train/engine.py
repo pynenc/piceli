@@ -164,6 +164,11 @@ class TrainRun:
         (:mod:`piceli.train.telemetry`) and, when the run ends, its
         notifications (:mod:`piceli.train.notify`).
     :param warn: Prints an observer's warning line (default: nowhere).
+    :param queue: The queued request this run serves (recorded as ``queue``).
+    :param promote_run: Promote the head of this earlier run (its id, or
+        ``last``) instead of running branches (``--promote-run``); the run is
+        then a promotion only, with the same record, events, observers and
+        ``run-failed`` handling as any other.
 
     An observer (an event sink, the telemetry, a notifier) that fails never
     changes the run.
@@ -187,6 +192,7 @@ class TrainRun:
         observe: bool = True,
         warn: Callable[[str], None] = lambda _message: None,
         queue: str | None = None,
+        promote_run: str | None = None,
     ) -> None:
         if push and not promote:
             raise TrainError("train-push-needs-promote", "--push needs --promote")
@@ -238,6 +244,12 @@ class TrainRun:
         self.observers: list[EventSink] = []
         self.notified: list[dict[str, Any]] = []
         self.queue_id = queue
+        #: ``--promote-run``: the run as asked (an id or ``last``).
+        self.promote_run_of = promote_run
+        #: ``Runner`` hook: the host a command was placed on (``step-placed``).
+        self._placing: dict[str, dict[str, Any]] = {}
+        if promote_run is not None:
+            self.promote_requested = True
         #: The reason code of a run that raised midway (``run-failed``).
         self.failure: str | None = None
 
@@ -249,6 +261,9 @@ class TrainRun:
         Idempotent: :meth:`run` calls it when the caller did not.
         """
         if self.start:
+            return
+        if self.promote_run_of is not None:
+            self._prepare_promote(self.promote_run_of)
             return
         if not self.branches:
             raise TrainError("train-branches-required", "name at least one branch")
@@ -287,12 +302,19 @@ class TrainRun:
                 telemetry = telemetry_for(self.train.telemetry, self.warn)
                 if telemetry is not None:
                     self.observers.append(telemetry)
+            on_place = getattr(self.runner, "on_place", False)
+            if on_place is None:  # a runner that places commands on hosts
+                self.runner.on_place = self._placed  # type: ignore[attr-defined]
             try:
+                if self.promote_run_of is not None:
+                    return self._promote_run()
                 return self._run()
             except BaseException as error:
                 self._failed(error)
                 raise
             finally:
+                if on_place is None:
+                    self.runner.on_place = None  # type: ignore[attr-defined]
                 if telemetry is not None:
                     telemetry.close()
 
@@ -561,6 +583,7 @@ class TrainRun:
             verdict=trial.verdict,
             step=trial.failed_step,
             duration=round(trial.duration, 3),
+            **({"speculative": True} if trial.speculative else {}),
         )
         with self._lock:
             self.state.write_record(self.run_id, self.result())
@@ -635,6 +658,7 @@ class TrainRun:
             self._step_started(trial.id, step.name, step.kind, ctx)
             result = run_step(step, ctx)
             trial.steps.append(result)
+            self._step_done(str(log_path(ctx, step.name)))
             self.emit("step-finished", **self._step_fields(trial.id, result, ctx))
             if not result.passed:
                 trial.verdict, trial.failed_step = "failed", step.name
@@ -649,6 +673,9 @@ class TrainRun:
     def _step_started(
         self, trial: int | None, step: str, kind: str, ctx: StepContext
     ) -> None:
+        log = str(log_path(ctx, step))
+        with self._lock:
+            self._placing[log] = {"trial": trial, "step": step}
         self.emit(
             "step-started",
             trial=trial,
@@ -656,8 +683,20 @@ class TrainRun:
             kind=kind,
             host=self.runner.host,
             branches=list(ctx.branches),
-            log=str(log_path(ctx, step)),
+            log=log,
         )
+
+    def _placed(self, log: Path, host: str) -> None:
+        """A command of a running step went to ``host`` (a build host, or
+        here): ``step-placed``, so a status view shows where it runs now."""
+        with self._lock:
+            step = self._placing.get(str(log))
+        if step is not None:
+            self.emit("step-placed", **step, host=host, log=str(log))
+
+    def _step_done(self, log: str | None) -> None:
+        with self._lock:
+            self._placing.pop(str(log), None)
 
     @staticmethod
     def _step_fields(
@@ -678,6 +717,11 @@ class TrainRun:
         }
         if "selection" in result.detail:
             fields["selection"] = result.detail["selection"]
+        reused = result.detail.get("reused")
+        if result.verdict == "reused" and isinstance(reused, Mapping):
+            fields["reused"] = {
+                key: reused.get(key) for key in ("run", "trial", "host", "at")
+            }
         if result.flaky:
             fields["flaky"] = [
                 {"target": item["target"], "test": item["test"]}
@@ -821,6 +865,7 @@ class TrainRun:
                 else:
                     result = run_step(step, ctx)
                 results.append(result)
+                self._step_done(str(log_path(ctx, step.name)))
                 self.emit(
                     "published" if result.passed else "publish-failed",
                     **self._step_fields(None, result, ctx),
@@ -987,9 +1032,15 @@ class TrainRun:
 
     def promote_run(self, run: str) -> dict[str, Any]:
         """Promote the head an earlier run reached, without running it again
-        (``--promote-run``). Refused (``train-run-unknown``,
-        ``train-not-fast-forward``) when the run is unknown, joined nothing,
-        or the base moved in a way that is not a fast-forward of its head."""
+        (``--promote-run``; the same as ``TrainRun(promote_run=run).run()``).
+        Refused (``train-run-unknown``, ``train-not-fast-forward``) when the
+        run is unknown, joined nothing, or the base moved in a way that is not
+        a fast-forward of its head."""
+        self.promote_run_of = run
+        self.promote_requested = True
+        return self.run()
+
+    def _prepare_promote(self, run: str) -> None:
         record = self._record_of(run)
         head, start = str(record.get("head") or ""), str(record.get("start") or "")
         if not head or head == start or self.git.commit(head) is None:
@@ -1004,26 +1055,13 @@ class TrainRun:
                 f"({head[:12]}) is no fast-forward of {self.train.base} "
                 f"({(base_now or '?')[:12]}); run the train again",
             )
-        with self.state.lock(self.run_id):
-            self.state.run_dir(self.run_id)
-            self.promoted_from = str(record.get("run"))
-            self.start, self.head = base_now, head
-            for item in record.get("branches") or ():
-                candidate = Candidate(str(item["branch"]), str(item.get("tip") or ""))
-                candidate.verdict = str(item.get("verdict") or "pending")
-                self.candidates.append(candidate)
-            telemetry = None
-            if self.observe:
-                from piceli.train.telemetry import telemetry_for
-
-                telemetry = telemetry_for(self.train.telemetry, self.warn)
-                if telemetry is not None:
-                    self.observers.append(telemetry)
-            try:
-                return self._promote_run()
-            finally:
-                if telemetry is not None:
-                    telemetry.close()
+        self.promoted_from = str(record.get("run"))
+        self.start, self.head = base_now, head
+        for item in record.get("branches") or ():
+            candidate = Candidate(str(item["branch"]), str(item.get("tip") or ""))
+            candidate.verdict = str(item.get("verdict") or "pending")
+            self.candidates.append(candidate)
+        self.branches = [c.branch for c in self.candidates]
 
     def _promote_run(self) -> dict[str, Any]:
         self.emit(
@@ -1031,8 +1069,9 @@ class TrainRun:
             run=self.run_id,
             train=self.train.name,
             base=self.start,
-            branches=[c.branch for c in self.candidates],
+            branches=self.branches,
             promote_run=self.promoted_from,
+            verdicts={c.branch: c.verdict for c in self.candidates},
         )
         self.promotion = self._promote()
         if self.push_requested and self.promotion.get("state") in {

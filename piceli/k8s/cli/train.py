@@ -284,26 +284,13 @@ def train(
         push=push,
         events=fan_out(_human),
         warn=say,
+        promote_run=promote_run,
     )
-    if promote_run is not None:
-        try:
-            result = run.promote_run(promote_run)
-        except TrainError as error:
-            reject(error.code, str(error))
-        say(
-            f"train {result['train']}: run {promote_run} promoted as "
-            f"{result['promote'].get('tag') or result['promote']['state']}"
-        )
-        if as_json:
-            emit_json(result)
-        if not result["ok"]:
-            raise typer.Exit(EXIT_FAILED)
-        return
     try:
         run.prepare()
     except TrainError as error:
         reject(error.code, str(error))
-    if spec_path is None:
+    if spec_path is None and promote_run is None:
         say(f"note: {app} is outside {repo}; every commit is judged by its steps")
     if queue:
         entry = f"{loaded.file}:{loaded.attr}" if loaded.file is not None else app
@@ -311,10 +298,13 @@ def train(
             TrainQueue(state),
             entry=entry,
             branches=branches or [],
-            promote=promote,
+            promote=promote or promote_run is not None,
             push=push,
             state_dir=state_dir,
             as_json=as_json,
+            # ``last`` is resolved now: the run the caller saw, not whichever
+            # run is last when the request is served
+            promote_run=run.promoted_from,
         )
         return
     try:
@@ -329,7 +319,13 @@ def train(
         say(f"run {run.run_id} failed midway [{error.code}]")
         serve_queue(TrainQueue(state), state_dir)  # the queue does not wait on it
         fail(error.code, str(error), run=run.run_id)
-    _summary(result)
+    if promote_run is not None:
+        say(
+            f"train {result['train']}: run {run.promoted_from} promoted as "
+            f"{result['promote'].get('tag') or result['promote']['state']}"
+        )
+    else:
+        _summary(result)
     serve_queue(TrainQueue(state), state_dir)
     if as_json:
         emit_json(result)
@@ -359,11 +355,12 @@ def build_request(state_dir: Path | None) -> Callable[[Mapping[str, Any]], Any]:
             spec_path=spec_path,
             branches=list(request["branches"]),
             state=TrainState.for_train(loaded.train.name, state_dir),
-            promote=bool(request["promote"]),
+            promote=bool(request["promote"]) or bool(request.get("promote_run")),
             push=bool(request["push"]),
             events=fan_out(_human),
             warn=say,
             queue=str(request["id"]),
+            promote_run=request.get("promote_run") or None,
         )
 
     return build
@@ -394,6 +391,11 @@ def queued_body(request: Mapping[str, Any], position: int | None) -> dict[str, A
         "promote": request["promote"],
         "push": request["push"],
         "queued_at": request["queued_at"],
+        **(
+            {"promote_run": request["promote_run"]}
+            if request.get("promote_run")
+            else {}
+        ),
     }
 
 
@@ -406,11 +408,17 @@ def _queued_run(
     push: bool,
     state_dir: Path | None,
     as_json: bool,
+    promote_run: str | None = None,
 ) -> None:
     """``--queue``: write the request; return at once when the train is
     busy, else serve the queue (this request in its turn) here."""
     request = queue.enqueue(
-        entry=entry, cwd=str(Path.cwd()), branches=branches, promote=promote, push=push
+        entry=entry,
+        cwd=str(Path.cwd()),
+        branches=branches,
+        promote=promote,
+        push=push,
+        promote_run=promote_run,
     )
     if queue.state.owner() is None:
         for done, result in serve_queue(queue, state_dir):

@@ -253,6 +253,9 @@ class HostRunner:
         #: Commands this runner has running on each host (parallel trials
         #: prefer a host it is not using yet).
         self.inflight: dict[str, int] = {}
+        #: Told ``(command log, host)`` when a command goes to a host (the
+        #: run's ``step-placed`` event); it never changes the placement.
+        self.on_place: Callable[[Path, str], None] | None = None
         self._lock = threading.Lock()
 
     @property
@@ -321,6 +324,11 @@ class HostRunner:
         for position, name in enumerate(order):
             with self._lock:
                 self.inflight[name] = self.inflight.get(name, 0) + 1
+            if self.on_place is not None:
+                try:
+                    self.on_place(command.log, name)
+                except Exception:  # an observer never changes the run
+                    pass
             try:
                 done = self._runner(name).run(command)
             finally:

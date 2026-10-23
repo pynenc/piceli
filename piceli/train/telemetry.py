@@ -5,10 +5,15 @@ that turns a run's events into OTLP/HTTP requests (JSON encoding, no SDK):
 
 - a root span ``piceli.dev.train`` for the run, with span events for each
   verdict (``branch-joined``, ``branch-ejected``, ``branch-included``) and
-  for ``promoted``, ``promote-rejected``, ``pushed`` and ``push-failed``;
-- a child span ``piceli.dev.train.trial`` per trial, and under it a span
+  for ``promoted``, ``promote-rejected``, ``pushed``, ``push-failed``,
+  ``halves-parallel``, ``trial-discarded``, ``outputs-restored`` and
+  ``pruned``;
+- a child span ``piceli.dev.train.trial`` per trial (``speculative`` for
+  the right half of parallel halves), and under it a span
   ``piceli.dev.train.step`` per step (publish steps hang off the root), with
-  the branches, step, kind, host, verdict, duration and impact selection;
+  the branches, step, kind, the host it ran on (a build host or ``local``),
+  verdict (``reused``, with the run it came from, is ok), duration and
+  impact selection;
 - a span event ``piceli.dev.train.flaky`` on a step for each flaky test;
 - a log record per step (``event.name`` ``piceli.dev.train.step``) whose
   body is the last lines of the step's output, linked to its span;
@@ -65,7 +70,7 @@ MAX_FAILURES = 3
 #: Lines and bytes of a step's output in its log record.
 TAIL_LINES = 20
 TAIL_BYTES = 4096
-_OK_STEP = frozenset({"passed", "skipped"})
+_OK_STEP = frozenset({"passed", "skipped", "reused"})
 _ROOT_EVENTS = frozenset(
     {
         "branch-joined",
@@ -75,6 +80,10 @@ _ROOT_EVENTS = frozenset(
         "promote-rejected",
         "pushed",
         "push-failed",
+        "halves-parallel",
+        "trial-discarded",
+        "outputs-restored",
+        "pruned",
     }
 )
 
@@ -255,6 +264,13 @@ class TrainTelemetry:
                             "piceli.train.tag": event.get("tag"),
                             "piceli.train.head": event.get("head"),
                             "piceli.train.remote": event.get("remote"),
+                            "piceli.train.base_commit": event.get("base"),
+                            "piceli.train.reached": event.get("reached"),
+                            "piceli.train.left": event.get("left"),
+                            "piceli.train.right": event.get("right"),
+                            "piceli.train.steps": event.get("steps"),
+                            "piceli.train.pruned.freed": event.get("freed"),
+                            "piceli.train.pruned.removed": event.get("removed"),
                         }
                     ),
                 }
@@ -375,6 +391,7 @@ class TrainTelemetry:
             "piceli.train.selection": (
                 list(selection) if isinstance(selection, list) else selection
             ),
+            "piceli.train.reused_from": (event.get("reused") or {}).get("run"),
         }
         flaky = [
             {
@@ -435,6 +452,7 @@ class TrainTelemetry:
                         "piceli.train.duration_ms": int(
                             float(event.get("duration") or 0) * 1000
                         ),
+                        "piceli.train.speculative": event.get("speculative"),
                     },
                     verdict == "passed",
                 )
