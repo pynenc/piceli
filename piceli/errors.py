@@ -5983,7 +5983,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "targets-input-required",
         "No targets named",
         "`piceli targets` was given no module and no controller, so it has nothing to show.",
-        "Pass `--composition MODULE` (environments and NixReleases), `--infra MODULE` (NixHosts and their servers) and the controller (`--kubeconfig FILE --context NAME`, or `--state-dir`).",
+        "Pass `--composition MODULE` (environments and NixReleases), `--infra MODULE` (NixHosts and their servers) and, to read another controller than the composition's home cluster's (its `piceli login` profile), `--kubeconfig FILE --context NAME` or `--state-dir`.",
         False,
         "hosts",
     ),

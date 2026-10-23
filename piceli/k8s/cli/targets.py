@@ -3,7 +3,9 @@
 Every GitOps environment and every NixHost, with its deployed commit or
 tag, the product commit it pins, its checks and its state, in one table
 (stderr) or one ``piceli.targets.v1`` object (``--json``). The controller
-is read once, as ``piceli gitops status`` reads it; the hosts over SSH, in
+is read once, as ``piceli gitops status`` reads it (by default the
+composition's home cluster, with its ``piceli login`` profile, as ``gitops
+enable`` finds it); the hosts over SSH, in
 parallel, each within ``--timeout``. One unreachable source never fails
 the view (:mod:`piceli.targets`).
 
@@ -46,6 +48,29 @@ def _controller(
         return None, error.code, str(error)
     except Exception as error:  # an unreachable cluster never fails the view
         return None, "gitops-cluster-failed", type(error).__name__
+
+
+def _home(module: Any) -> tuple[Any, Path | None, str | None, str | None]:
+    """``(cluster, kubeconfig, context, why not)`` of the composition's home
+    cluster, from its ``piceli login`` profile, as ``gitops enable`` finds it."""
+    from piceli.infra import CompositionError
+    from piceli.infra.composition import composition_from
+    from piceli.k8s.cli.gitops import home_credentials
+    from piceli.profiles import ProfileError
+
+    try:
+        cluster = composition_from(module).cluster
+    except CompositionError:
+        return None, None, None, None
+    if cluster is None:
+        return None, None, None, None
+    try:
+        kubeconfig, context = home_credentials(cluster)
+    except ProfileError as error:
+        return cluster, None, None, error.code
+    except ValueError:
+        return cluster, None, None, "profile-invalid"
+    return cluster, kubeconfig, context, None
 
 
 def _hosts(
@@ -106,7 +131,7 @@ def targets(
     as_json: JsonOption = False,
 ) -> None:
     """Every environment and NixHost: commit or tag, pinned product commit, checks, state."""
-    from piceli.k8s.cli.host import _module_values
+    from piceli.k8s.cli.host import load_module_of
     from piceli.targets import build, declared, exit_code, table
 
     if composition is None and infra is None and kubeconfig is None and not state_dir:
@@ -119,12 +144,21 @@ def targets(
     infra_values: list[Any] = []
     for ref in (composition, infra):
         if ref is not None:
-            loaded = _module_values(ref)
+            loaded = list(vars(load_module_of(ref)).values())
             values += loaded
             if ref == infra:
                 infra_values = loaded
     found = declared(values)
     body, reason, detail = None, "gitops-target-required", "no controller named"
+    if composition is not None and kubeconfig is None and state_dir is None:
+        # The home cluster's controller, with its `piceli login` profile.
+        home, kubeconfig, context, missing = _home(load_module_of(composition))
+        if missing is not None:
+            reason = missing
+            detail = (
+                f"no credential profile {home.credentials} for cluster {home.name}: "
+                f"run piceli login {home.credentials} --kubeconfig FILE --context NAME"
+            )
     if kubeconfig is not None or state_dir is not None:
         body, reason, detail = _controller(
             state_dir, kubeconfig, context, namespace, transport

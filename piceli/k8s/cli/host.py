@@ -70,19 +70,23 @@ def _is_ref(text: str) -> bool:
     )
 
 
-def _module_values(ref: str) -> list[Any]:
-    """The values of the module that ``ref`` (``MODULE`` or ``MODULE:ATTR``) names."""
+def load_module_of(ref: str) -> Any:
+    """The module that ``ref`` (``MODULE`` or ``MODULE:ATTR``) names."""
     from piceli.app.render import load_module
     from piceli.cli_contract import describe_user_error
 
     module = ref.rpartition(":")[0] if _is_ref(ref) else ref
     try:
-        loaded = load_module(module, Path.cwd())
+        return load_module(module, Path.cwd())
     except Exception as error:
         reject(
             "infra-not-found", f"loading {module} failed: {describe_user_error(error)}"
         )
-    return list(vars(loaded).values())
+
+
+def _module_values(ref: str) -> list[Any]:
+    """The values of the module that ``ref`` (``MODULE`` or ``MODULE:ATTR``) names."""
+    return list(vars(load_module_of(ref)).values())
 
 
 def _declared(name: str, infra_ref: str) -> Any:

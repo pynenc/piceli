@@ -334,8 +334,7 @@ composition in one table (stderr), or one `piceli.targets.v1` object with
 `--json`:
 
 ```sh
-piceli targets --composition infra.py --infra infra.py \
-  --kubeconfig ~/.kube/home.yaml --context home --json
+piceli targets --composition infra.py --infra infra.py --json
 ```
 
 ```text
@@ -363,8 +362,11 @@ runs), `checks` (`passed`, `failed`, `running` or `none`, with `at`),
   controller's status, when the host runs that release's commit; `null`
   without a gate or for older releases.
 
-The controller is read once, as `gitops status` reads it (`--kubeconfig
---context`, or `--state-dir`); the hosts declared by `--composition` (its
+The controller is read once, as `gitops status` reads it: from the
+composition's home `Cluster` with its `piceli login` profile, as `gitops
+enable` finds it (`--kubeconfig --context` or `--state-dir` win). Without
+that profile the environments show `unreachable` (`profile-not-found`,
+with the `piceli login` command to run); the hosts declared by `--composition` (its
 `NixRelease`s) and `--infra` (its `NixHost`s, with their servers' applied
 addresses and pinned host keys) over SSH, in parallel, each within
 `--timeout` seconds (default 20). An unreachable source never fails the

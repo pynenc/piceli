@@ -110,6 +110,16 @@ def _api(
         yield api
 
 
+def home_credentials(cluster: Any) -> tuple[Path, str]:
+    """The kubeconfig and context of a composition's home ``Cluster``: its
+    credential profile (``piceli login NAME``), never in Git.
+    :raises ProfileError, ValueError:"""
+    from piceli.profiles import resolve
+
+    found = resolve(cluster.credentials)
+    return found.kubeconfig, found.context
+
+
 @contextmanager
 def open_channel(
     state_dir: Path | None,
@@ -574,18 +584,16 @@ def _enable_composition(
             or (controller is not None and controller.delete_volumes),
         )
     if kubeconfig is None and composition.cluster is not None:
-        # The cluster's credential profile (`piceli login`), never in Git.
-        from piceli.profiles import ProfileError, resolve
+        from piceli.profiles import ProfileError
 
         try:
-            found = resolve(composition.cluster.credentials)
+            kubeconfig, context = home_credentials(composition.cluster)
         except (ProfileError, ValueError):
             reject(
                 "gitops-target-required",
                 "the cluster's credential profile is unknown here: run piceli login "
                 "or pass --kubeconfig FILE --context NAME",
             )
-        kubeconfig, context = found.kubeconfig, found.context
     say(f"composition {composition.name}: sources " + ", ".join(
         f"{source.key} ({source.url})" for source in composition.sources
     ))  # fmt: skip

@@ -349,3 +349,90 @@ def test_cli_refuses_without_any_input() -> None:
     done = CliRunner().invoke(app, ["targets", "--json"])
     assert done.exit_code == 2
     assert json.loads(done.stdout)["reason"] == "targets-input-required"
+
+
+# ------------------------------------------- the controller of the home cluster
+
+HOME = """
+from piceli.envs import Environment
+from piceli.infra import Cluster, Component, Source
+
+product = Source("https://git.example/shop/product.git", name="product")
+web = Component("web", source=product)
+home = Cluster("my-cluster", api="https://203.0.113.9:6443", credentials="my-cluster")
+environments = [Environment("main", namespace="shop", follow={product: "main"},
+                            cluster=home)]
+"""
+
+
+def _home_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    from piceli import profiles
+
+    monkeypatch.setenv("PICELI_PROFILES_DIR", str(tmp_path / "profiles"))
+    monkeypatch.delenv("PICELI_IN_CLUSTER", raising=False)
+    monkeypatch.setenv("PICELI_SERVICE_ACCOUNT_DIR", str(tmp_path / "no-sa"))
+    profiles.set_override(None)
+    path = tmp_path / "infra_home.py"
+    path.write_text(HOME)
+    return path
+
+
+def _seen_controller(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    from piceli.k8s.cli import targets as cli
+
+    seen: list[Any] = []
+
+    def controller(*args: Any) -> Any:
+        seen.append(args)
+        status = _status()
+        status["envs"] = {"main": status["envs"]["main"]}
+        return status, None, None
+
+    monkeypatch.setattr(cli, "_controller", controller)
+    return seen
+
+
+def test_cli_reads_the_home_clusters_controller_with_its_login_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli import profiles
+    from piceli.k8s.cli import app
+
+    module = _home_module(tmp_path, monkeypatch)
+    kubeconfig = tmp_path / "kc.yaml"
+    kubeconfig.write_text(
+        "apiVersion: v1\nkind: Config\nclusters:\n- name: c\n  cluster: "
+        '{server: "https://203.0.113.9"}\nusers:\n- name: u\n  user: {token: t}\n'
+        "contexts:\n- name: ctx\n  context: {cluster: c, user: u}\n"
+    )
+    profiles.save_profile("my-cluster", kubeconfig, "ctx")
+    seen = _seen_controller(monkeypatch)
+    done = CliRunner().invoke(app, ["targets", "--composition", str(module), "--json"])
+    assert done.exit_code == 0, done.stdout + done.stderr
+    assert [(a[1].resolve(), a[2]) for a in seen] == [(kubeconfig.resolve(), "ctx")]
+    assert json.loads(done.stdout)["targets"][0]["state"] == "deployed"
+    # Explicit flags win over the profile.
+    other = tmp_path / "other.yaml"
+    other.write_text(kubeconfig.read_text())
+    seen.clear()
+    done = CliRunner().invoke(app, ["targets", "--composition", str(module),
+                                    "--kubeconfig", str(other), "--context", "ctx"])  # fmt: skip
+    assert done.exit_code == 0, done.stdout + done.stderr
+    assert seen[0][1] == other
+
+
+def test_cli_without_the_home_profile_shows_environments_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.k8s.cli import app
+
+    module = _home_module(tmp_path, monkeypatch)
+    seen = _seen_controller(monkeypatch)
+    done = CliRunner().invoke(app, ["targets", "--composition", str(module), "--json"])
+    assert done.exit_code == 1, done.stdout + done.stderr
+    body = json.loads(done.stdout)
+    (main,) = body["targets"]
+    assert main["state"] == "unreachable" and main["reason"] == "profile-not-found"
+    assert main["where"] == "my-cluster/shop"
+    assert "piceli login my-cluster" in main["detail"]
+    assert "piceli login my-cluster" in done.stderr and seen == []

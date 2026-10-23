@@ -3704,14 +3704,14 @@ Every environment and NixHost: commit or tag, pinned product commit, checks, sta
 
 **Contract**
 
-- **Reads:** --composition MODULE (environments, NixReleases), --infra MODULE (NixHosts, applied addresses, pinned host keys), kubeconfig or --state-dir (the controller's status, read once), each host's /var/lib/piceli-host/status.json (ssh, in parallel)
+- **Reads:** --composition MODULE (environments, NixReleases), --infra MODULE (NixHosts, applied addresses, pinned host keys), the controller's status, read once: --kubeconfig/--context or --state-dir, else the composition's home Cluster with its piceli login profile, each host's /var/lib/piceli-host/status.json (ssh, in parallel)
 - **Writes:** nothing (read-only)
 - **Cluster:** reads
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.24.0. Read-only; safe to retry. --json prints one piceli.targets.v1 object. An unreachable controller or host never fails the view: its rows say unreachable with the reason (host rows still work with the home cluster down). Exit 0: every target reachable, none failed; 1: a target failed, rolled back, is unreachable or its checks failed; 2: no module and no controller named (targets-input-required) or a module that does not load.
+- **Notes:** 0.24.0. Read-only; safe to retry. --json prints one piceli.targets.v1 object. An unreachable controller or host never fails the view: its rows say unreachable with the reason (host rows still work with the home cluster down; a missing login profile of the home cluster shows profile-not-found with a piceli login hint). Exit 0: every target reachable, none failed; 1: a target failed, rolled back, is unreachable or its checks failed; 2: no module and no controller named (targets-input-required) or a module that does not load.
 
 (cli-ui-backup)=
 ### `piceli ui backup`

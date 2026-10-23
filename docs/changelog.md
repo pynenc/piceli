@@ -182,7 +182,10 @@ and rollback.
   NixHost with its commit or tag, the product commit it pins (a promotion
   gate's `pinned` where present, else every source's commit), its checks
   and its state, as of when and from which source (controller or host
-  agent): `piceli.targets.v1`. The controller is read once; hosts over
+  agent): `piceli.targets.v1`. The controller is read once, by default
+  from the composition's home cluster with its `piceli login` profile
+  (explicit flags win; without the profile, environments show
+  `profile-not-found` and the login to run); hosts over
   SSH in parallel with `--timeout`; an unreachable one shows `unreachable`
   and never fails the view (exit 1 when any target failed or is
   unreachable). The UI's new Targets view shows the same document; the
