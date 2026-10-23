@@ -61,7 +61,7 @@ web = NixHost(
 | `checks=` | `HostCheck.unit(UNIT)`, `HostCheck.http(URL)` (2xx), `HostCheck.command(ARG, ...)` (exit 0); each tried every 2 s until its `timeout=` (60 s) |
 | `report=` | `HostReport(endpoint, headers_file=None, insecure=False)`: OTLP/HTTP logs |
 | `build=` | The manifests' name, `--name` of the publish (`NAME` of `.#NAME`, else the host's name) |
-| `read_credentials_file=` | The host's file with the cache's read-only S3 keys, a sops-nix secret (`/run/secrets/piceli/cache.env` for an `s3://` cache, none otherwise) |
+| `read_credentials_file=` | The host's file with the cache's read S3 keys. When the cache's bucket declares `S3Key(access="read")` (0.25.0): `/var/lib/piceli-host/cache.env`, which `piceli host secrets` writes. Otherwise a sops-nix secret (`/run/secrets/piceli/cache.env` for an `s3://` cache, none otherwise). A path you give is your own file: `host secrets` leaves it alone |
 | `poll_seconds=`, `history=` | How often the agent polls (300) and how many attempts the status keeps (20) |
 | `generations=` | How many system generations the host keeps (5, at least 2: a rollback needs the previous one); see [Old systems](#old-systems) |
 | `age_identity=`, `age_key_file=` | The local credential with the host's age identity, and where `piceli host secrets` puts it (`/var/lib/sops-nix/key.txt`, sops-nix's `sops.age.keyFile`) |
@@ -133,8 +133,9 @@ upgrade Piceli.
 ## Secrets: one age key, the rest in sops-nix
 
 The module holds no secret. The host's secrets live in Git, encrypted with
-[sops-nix](https://github.com/Mic92/sops-nix): the cache's **read-only** S3
-keys (never the write ones), the report's headers and your services'
+[sops-nix](https://github.com/Mic92/sops-nix): the cache's read S3 keys
+(never the write ones; since 0.25.0 Piceli can create and install them,
+below), the report's headers and your services'
 secrets. The only secret Piceli puts on the host is the key sops-nix
 decrypts them with, an age identity:
 
@@ -154,6 +155,23 @@ ssh's stdin into a temporary file that is renamed over the path, and the
 host re-runs its activation (`switch-to-configuration switch`) so sops-nix
 decrypts with it. Another key is replaced only with `--replace`
 (`host-secret-exists`); the same key is a no-op.
+
+**The cache's read keys from Piceli** (0.25.0). When the cache's bucket
+declares `S3Key("cache-read", access="read")`, `piceli infra apply`
+creates that pair and stores it (see {doc}`infrastructure`), and `piceli
+host secrets` also puts it on the host, at `/var/lib/piceli-host/cache.env`
+(`0600` root; `AWS_ACCESS_KEY_ID=` and `AWS_SECRET_ACCESS_KEY=` lines), the
+agent's default `read_credentials_file=` for such a cache. The plan's
+`cache` shows the path, the credential, a short digest and whether the host
+has the same file, another one or none (compared by sha256, never read
+back). A different file is a rotated pair: it is replaced without
+`--replace`, and nothing is re-activated, since the agent reads the file on
+each poll. A host without `age_identity=` gets only this file. The pair is
+not read-only at OpenStack (the plan of `infra apply` says
+`read_only_enforced: false`); see {doc}`infrastructure` for what that means
+and how to limit it. The sops-nix path below still works: give
+`read_credentials_file=` the path of your sops secret, and keys you created
+yourself.
 
 Declare the secrets in the host's configuration, encrypted to that public
 key:

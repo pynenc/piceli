@@ -3,9 +3,10 @@
 No Kubernetes and no cache access: ``ssh`` (``BatchMode``, strict host key
 checking) runs ``cat`` of the status file, so ``piceli host status`` and
 ``piceli host wait`` work with every cluster down. :func:`control` runs the
-agent once for ``piceli host pin|unpin|rollback``; :func:`age_key_state`
-and :func:`write_age_key` serve ``piceli host secrets`` (the key goes on
-ssh's stdin, never in an argument). Importing this module is side-effect
+agent once for ``piceli host pin|unpin|rollback``; :func:`age_key_state`,
+:func:`file_state` and :func:`write_age_key` serve ``piceli host secrets``
+(a secret goes on ssh's stdin, never in an argument, and is compared by its
+sha256, never read back). Importing this module is side-effect
 free.
 """
 
@@ -26,6 +27,7 @@ from piceli.hosts.model import STATE_DIR, HostError, SshTarget
 __all__ = [
     "age_key_state",
     "control",
+    "file_state",
     "matches",
     "outcome",
     "read_status",
@@ -157,6 +159,33 @@ def age_key_state(
     return "same" if found == _key_line(identity) else "different"
 
 
+def file_state(
+    target: SshTarget,
+    path: str,
+    content: bytes,
+    *,
+    known_hosts: Path | None = None,
+    runner: Callable[..., Any] = subprocess.run,
+) -> str:
+    """``same``, ``different`` or ``absent``: whether the host's file holds
+    exactly ``content`` (the host prints its sha256, never the file)."""
+    quoted = shlex.quote(path)
+    script = (
+        f"if [ -e {quoted} ]; then sha256sum {quoted} | cut -d ' ' -f 1; "
+        "else echo absent; fi"
+    )
+    done = _ssh(
+        target, ["sh", "-c", shlex.quote(script)], known_hosts=known_hosts,
+        runner=runner, timeout=60,
+    )  # fmt: skip
+    found = (done.stdout or b"").decode("ascii", "replace").strip()
+    if done.returncode != 0 or not re.fullmatch(r"absent|[0-9a-f]{64}", found):
+        raise HostError("host-secret-write-failed", "the file could not be read")
+    if found == "absent":
+        return "absent"
+    return "same" if found == hashlib.sha256(content).hexdigest() else "different"
+
+
 def write_age_key(
     target: SshTarget,
     path: str,
@@ -166,7 +195,8 @@ def write_age_key(
     runner: Callable[..., Any] = subprocess.run,
 ) -> None:
     """Write ``content`` (on stdin) to ``path``: a temporary file in its
-    directory, ``0600`` root, renamed over it."""
+    directory, ``0600`` root, renamed over it (any secret file, also the
+    cache's read keys)."""
     quoted = shlex.quote(path)
     script = (
         "set -eu; umask 077; "

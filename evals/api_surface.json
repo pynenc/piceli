@@ -1055,15 +1055,24 @@
   "Bucket": {
    "attrs": [
     "describe",
+    "key",
+    "keys",
     "protect"
    ],
    "init": [
+    "keys",
     "name",
     "protect",
     "provider"
    ],
    "methods": {
-    "describe": []
+    "describe": [],
+    "key": [
+     "access"
+    ]
+   },
+   "returns": {
+    "key": "S3Key"
    }
   },
   "Build": {
@@ -4290,6 +4299,7 @@
     "default_ttl",
     "describe",
     "endpoint",
+    "hides_id",
     "known_error",
     "labels_of",
     "ledger_owned",
@@ -4308,16 +4318,20 @@
     "render_primary_ip",
     "render_record",
     "render_records",
+    "render_s3_key",
     "render_server",
     "render_ssh_key",
     "render_user_data",
     "resource_labels",
+    "s3_key_enforcement",
+    "s3_key_values",
     "server_id",
     "server_status",
     "server_types",
     "supports_buckets",
     "supports_dns",
     "supports_images",
+    "supports_s3_keys",
     "supports_servers",
     "supports_user_data",
     "token_env"
@@ -4342,6 +4356,9 @@
     ],
     "data_sources": [],
     "describe": [],
+    "hides_id": [
+     "type_"
+    ],
     "known_error": [
      "diagnostics"
     ],
@@ -4394,6 +4411,11 @@
      "record",
      "values"
     ],
+    "render_s3_key": [
+     "bucket",
+     "key",
+     "labels"
+    ],
     "render_server": [
      "firewall",
      "ips",
@@ -4415,6 +4437,12 @@
      "type_",
      "values"
     ],
+    "s3_key_enforcement": [
+     "key"
+    ],
+    "s3_key_values": [
+     "values"
+    ],
     "server_id": [
      "server"
     ],
@@ -4434,6 +4462,7 @@
     "render_primary_ip": "Resource",
     "render_record": "Resource",
     "render_records": "Resource",
+    "render_s3_key": "Resource",
     "render_server": "Resource",
     "render_ssh_key": "Resource",
     "render_user_data": "Resource"
@@ -4921,6 +4950,7 @@
     "default_ttl",
     "describe",
     "flavors",
+    "hides_id",
     "ip_prices",
     "known_error",
     "labels_of",
@@ -4943,15 +4973,19 @@
     "render_primary_ip",
     "render_record",
     "render_records",
+    "render_s3_key",
     "render_server",
     "render_ssh_key",
     "render_user_data",
     "resource_labels",
+    "s3_key_enforcement",
+    "s3_key_values",
     "server_id",
     "server_status",
     "supports_buckets",
     "supports_dns",
     "supports_images",
+    "supports_s3_keys",
     "supports_servers",
     "supports_user_data",
     "token_env"
@@ -4979,6 +5013,9 @@
     ],
     "data_sources": [],
     "describe": [],
+    "hides_id": [
+     "type_"
+    ],
     "known_error": [
      "diagnostics"
     ],
@@ -5031,6 +5068,11 @@
      "record",
      "values"
     ],
+    "render_s3_key": [
+     "bucket",
+     "key",
+     "labels"
+    ],
     "render_server": [
      "firewall",
      "ips",
@@ -5052,6 +5094,12 @@
      "type_",
      "values"
     ],
+    "s3_key_enforcement": [
+     "key"
+    ],
+    "s3_key_values": [
+     "values"
+    ],
     "server_id": [
      "server"
     ],
@@ -5071,6 +5119,7 @@
     "render_primary_ip": "Resource",
     "render_record": "Resource",
     "render_records": "Resource",
+    "render_s3_key": "Resource",
     "render_server": "Resource",
     "render_ssh_key": "Resource",
     "render_user_data": "Resource"
@@ -5103,6 +5152,7 @@
     "images",
     "providers",
     "records",
+    "s3_keys",
     "server",
     "servers",
     "state_dir",
@@ -5123,6 +5173,7 @@
     "firewalls": [],
     "images": [],
     "providers": [],
+    "s3_keys": [],
     "server": [
      "name"
     ]
@@ -5933,11 +5984,13 @@
    "attrs": [
     "bucket",
     "bucket_name",
+    "creates",
     "describe",
     "endpoint",
     "key_name",
     "manifest_url",
     "public_key",
+    "read_credentials",
     "region",
     "scheme",
     "signing_credential",
@@ -5956,6 +6009,9 @@
     "write_credentials"
    ],
    "methods": {
+    "creates": [
+     "credential"
+    ],
     "describe": [],
     "manifest_url": [
      "commit",
@@ -5975,6 +6031,7 @@
     "attribute",
     "build",
     "cache",
+    "cache_credentials",
     "checks",
     "flake",
     "follow",
@@ -6491,6 +6548,7 @@
     "default_ttl",
     "describe",
     "flavors",
+    "hides_id",
     "ip_prices",
     "known_error",
     "labels_of",
@@ -6513,15 +6571,19 @@
     "render_primary_ip",
     "render_record",
     "render_records",
+    "render_s3_key",
     "render_server",
     "render_ssh_key",
     "render_user_data",
     "resource_labels",
+    "s3_key_enforcement",
+    "s3_key_values",
     "server_id",
     "server_status",
     "supports_buckets",
     "supports_dns",
     "supports_images",
+    "supports_s3_keys",
     "supports_servers",
     "supports_user_data",
     "token_env"
@@ -6549,6 +6611,9 @@
     ],
     "data_sources": [],
     "describe": [],
+    "hides_id": [
+     "type_"
+    ],
     "known_error": [
      "diagnostics"
     ],
@@ -6601,6 +6666,11 @@
      "record",
      "values"
     ],
+    "render_s3_key": [
+     "bucket",
+     "key",
+     "labels"
+    ],
     "render_server": [
      "firewall",
      "ips",
@@ -6622,6 +6692,12 @@
      "type_",
      "values"
     ],
+    "s3_key_enforcement": [
+     "key"
+    ],
+    "s3_key_values": [
+     "values"
+    ],
     "server_id": [
      "server"
     ],
@@ -6641,6 +6717,7 @@
     "render_primary_ip": "Resource",
     "render_record": "Resource",
     "render_records": "Resource",
+    "render_s3_key": "Resource",
     "render_server": "Resource",
     "render_ssh_key": "Resource",
     "render_user_data": "Resource"
@@ -7352,6 +7429,7 @@
     "data_sources",
     "default_ttl",
     "describe",
+    "hides_id",
     "known_error",
     "labels_of",
     "ledger_owned",
@@ -7369,15 +7447,19 @@
     "render_primary_ip",
     "render_record",
     "render_records",
+    "render_s3_key",
     "render_server",
     "render_ssh_key",
     "render_user_data",
     "resource_labels",
+    "s3_key_enforcement",
+    "s3_key_values",
     "server_id",
     "server_status",
     "supports_buckets",
     "supports_dns",
     "supports_images",
+    "supports_s3_keys",
     "supports_servers",
     "supports_user_data",
     "token_env"
@@ -7399,6 +7481,9 @@
     ],
     "data_sources": [],
     "describe": [],
+    "hides_id": [
+     "type_"
+    ],
     "known_error": [
      "diagnostics"
     ],
@@ -7452,6 +7537,11 @@
      "record",
      "values"
     ],
+    "render_s3_key": [
+     "bucket",
+     "key",
+     "labels"
+    ],
     "render_server": [
      "firewall",
      "ips",
@@ -7473,6 +7563,12 @@
      "type_",
      "values"
     ],
+    "s3_key_enforcement": [
+     "key"
+    ],
+    "s3_key_values": [
+     "values"
+    ],
     "server_id": [
      "server"
     ],
@@ -7492,6 +7588,7 @@
     "render_primary_ip": "Resource",
     "render_record": "Resource",
     "render_records": "Resource",
+    "render_s3_key": "Resource",
     "render_server": "Resource",
     "render_ssh_key": "Resource",
     "render_user_data": "Resource"
@@ -9107,6 +9204,20 @@
    "returns": {
     "capture": "RunResult",
     "feed": "RunResult"
+   }
+  },
+  "S3Key": {
+   "attrs": [
+    "access",
+    "describe",
+    "name"
+   ],
+   "init": [
+    "access",
+    "name"
+   ],
+   "methods": {
+    "describe": []
    }
   },
   "Scaling": {
@@ -13466,11 +13577,13 @@
    "infra-plan-changed",
    "infra-prompt-required",
    "infra-register-changed",
+   "infra-s3-key-refused",
    "infra-server-unknown",
    "infra-ssh-missing",
    "infra-ssh-unreachable",
    "infra-state-in-git",
    "infra-state-locked",
+   "infra-state-unencrypted",
    "infra-state-unexpected",
    "infra-tofu-failed",
    "infra-tofu-missing",
@@ -14748,6 +14861,9 @@
    "Rule": {
     "class": "Rule"
    },
+   "S3Key": {
+    "class": "S3Key"
+   },
    "Server": {
     "class": "Server"
    },
@@ -15637,6 +15753,7 @@
   "piceli.infra.machines.hetzner",
   "piceli.infra.machines.images",
   "piceli.infra.machines.install",
+  "piceli.infra.machines.keys",
   "piceli.infra.machines.model",
   "piceli.infra.machines.openstack",
   "piceli.infra.machines.plan",

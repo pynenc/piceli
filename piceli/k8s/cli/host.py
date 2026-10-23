@@ -5,7 +5,9 @@
 a timer); ``piceli host status`` and ``piceli host wait`` read the agent's
 status over SSH, with no cluster involved. ``piceli host pin|unpin|rollback``
 run the agent once over SSH; ``piceli host secrets`` puts the host's age
-identity (``piceli secrets age``) where sops-nix reads it, after approval.
+identity (``piceli secrets age``) where sops-nix reads it, and (0.25.0) the
+cache's read keys ``piceli infra apply`` created where the agent reads them,
+after approval.
 """
 
 from __future__ import annotations
@@ -418,7 +420,8 @@ def host_secrets(
     target: Annotated[
         str,
         typer.Argument(
-            help="MODULE:ATTR of a piceli.infra.NixHost with age_identity=",
+            help="MODULE:ATTR of a piceli.infra.NixHost with age_identity= or a "
+            "cache whose bucket declares S3Key(access='read')",
             show_default=False,
         ),
     ],
@@ -427,7 +430,7 @@ def host_secrets(
         bool,
         typer.Option(
             "--replace",
-            help="Replace a different key the host has "
+            help="Replace a different age key the host has "
             "(what it decrypts with it changes)",
         ),
     ] = False,
@@ -436,7 +439,8 @@ def host_secrets(
     ] = None,
     as_json: JsonOption = False,
 ) -> None:
-    """Put the host's age identity where sops-nix reads it: plan, then --approve."""
+    """Put the host's age identity where sops-nix reads it, and the cache's
+    read keys Piceli created where the agent reads them: plan, then --approve."""
     import hashlib
     import json
 
@@ -444,38 +448,86 @@ def host_secrets(
     from piceli.hosts import remote
     from piceli.hosts.age import AgeError, check_identity, recipient
     from piceli.hosts.model import HostError
-    from piceli.infra.machines.credentials import load_credential
+    from piceli.infra.machines.credentials import credential_present, load_credential
+    from piceli.infra.machines.keys import value_digest
     from piceli.infra.machines.model import InfraError
 
     host, ssh, known = _target(target, infra)
-    if host is None or host.age_identity is None:
+    if host is None or (host.age_identity is None and host.cache_credentials is None):
         reject(
             "host-secret-undeclared",
-            "give a NixHost with age_identity= (piceli secrets age NAME --generate)",
+            "give a NixHost with age_identity= (piceli secrets age NAME --generate) "
+            "or a cache whose bucket declares S3Key(access='read')",
         )
+    plan: dict[str, Any] = {
+        "host": host.name, "target": ssh.address, "port": ssh.port,
+        "user": ssh.user,
+    }  # fmt: skip
+    identity = public = existing = None
+    cache_content: bytes | None = None
+    cache_plan: dict[str, Any] | None = None
     try:
-        identity = check_identity(load_credential(host.age_identity, "age-identity"))
-        public = recipient(identity)
-        existing = remote.age_key_state(
-            ssh, host.age_key_file, identity, known_hosts=known
-        )
+        if host.age_identity is not None:
+            identity = check_identity(
+                load_credential(host.age_identity, "age-identity")
+            )
+            public = recipient(identity)
+            existing = remote.age_key_state(
+                ssh, host.age_key_file, identity, known_hosts=known
+            )
+            plan.update({
+                "path": host.age_key_file, "mode": "0600", "owner": "root",
+                "credential": host.age_identity, "public_key": public,
+                "existing": existing,
+            })  # fmt: skip
+        if host.cache_credentials is not None:
+            name = host.cache_credentials
+            if not credential_present(name):
+                raise InfraError(
+                    "infra-credential-missing",
+                    f"no credential {name!r}: piceli infra apply creates it "
+                    f"(the S3Key of bucket {host.cache.bucket_name})",
+                )
+            pair = load_credential(name, "s3-keys")
+            access, _, secret = pair.partition(":")
+            cache_content = (
+                f"# read keys of bucket {host.cache.bucket_name} (credential "
+                f"{name}), written by piceli host secrets\n"
+                f"AWS_ACCESS_KEY_ID={access}\nAWS_SECRET_ACCESS_KEY={secret}\n"
+            ).encode()
+            cache_plan = {
+                "path": host.read_credentials_file, "mode": "0600", "owner": "root",
+                "credential": name, "bucket": host.cache.bucket_name,
+                "digest": value_digest(pair),
+                "existing": remote.file_state(
+                    ssh, str(host.read_credentials_file), cache_content,
+                    known_hosts=known,
+                ),
+                # The agent reads the file on each poll: no activation.
+                "activation": False,
+            }  # fmt: skip
+            del pair, access, secret
+            plan["cache"] = cache_plan
     except (InfraError, AgeError, HostError) as error:
         reject(error.code, str(error))
-    plan = {
-        "host": host.name, "target": ssh.address, "port": ssh.port,
-        "user": ssh.user, "path": host.age_key_file, "mode": "0600",
-        "owner": "root", "credential": host.age_identity, "public_key": public,
-        "existing": existing, "replace": replace,
-    }  # fmt: skip
+    plan["replace"] = replace
     digest = (
         "sha256:"
         + hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
     )
     body = {"schema": "piceli.host-secrets.v1", **plan, "digest": digest}
-    say(f"{host.name}: age identity {host.age_identity} -> {ssh.address}:"
-        f"{host.age_key_file} (0600 root), public key {public}")  # fmt: skip
-    say(f"  the host has: {existing} key")
-    if existing == "same":
+    write_age = identity is not None and existing != "same"
+    write_cache = cache_plan is not None and cache_plan["existing"] != "same"
+    if identity is not None:
+        say(f"{host.name}: age identity {host.age_identity} -> {ssh.address}:"
+            f"{host.age_key_file} (0600 root), public key {public}")  # fmt: skip
+        say(f"  the host has: {existing} key")
+    if cache_plan is not None:
+        say(f"{host.name}: cache read keys {cache_plan['credential']} "
+            f"({cache_plan['digest']}) -> {ssh.address}:{cache_plan['path']} "
+            f"(0600 root, read on each poll)")  # fmt: skip
+        say(f"  the host has: {cache_plan['existing']} file")
+    if not write_age and not write_cache:
         emit_json({**body, "state": "current"})
         return
     if existing == "different" and not replace:
@@ -499,22 +551,41 @@ def host_secrets(
             "host-secret-plan-changed",
             "what host secrets would do changed since it was approved; review it again",
         )
-    content = f"# public key: {public}\n{identity}\n".encode()
-    del identity
+    written: list[str] = []
     try:
-        remote.write_age_key(ssh, host.age_key_file, content, known_hosts=known)
-        del content
+        if write_cache:
+            assert cache_content is not None and cache_plan is not None
+            remote.write_age_key(
+                ssh, str(cache_plan["path"]), cache_content, known_hosts=known
+            )
+            written.append(str(cache_plan["path"]))
+        del cache_content
+        if write_age:
+            content = f"# public key: {public}\n{identity}\n".encode()
+            del identity
+            remote.write_age_key(ssh, host.age_key_file, content, known_hosts=known)
+            del content
+            written.append(host.age_key_file)
+    except HostError as error:
+        fail(error.code, str(error), **body, written=written)
+    if not write_age:
+        say(f"written: {', '.join(written)} (the agent reads it on its next poll)")
+        emit_json({**body, "state": "written", "written": written,
+                   "activated": False})  # fmt: skip
+        return
+    try:
         activated = remote.activate(ssh, known_hosts=known)
     except HostError as error:
-        fail(error.code, str(error), **body)
+        fail(error.code, str(error), **body, written=written)
     if not activated:
         fail(
             "host-secret-activation-failed",
             "the key was written; re-running the activation failed",
             **body,
+            written=written,
         )
     say(f"written; {ssh.address} re-ran its activation (sops-nix decrypts with it)")
-    emit_json({**body, "state": "written", "activated": True})
+    emit_json({**body, "state": "written", "written": written, "activated": True})
 
 
 def age_secret(

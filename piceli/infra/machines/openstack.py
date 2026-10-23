@@ -27,8 +27,19 @@ What each declared object becomes:
 - ``ssh_keys`` → ``openstack_compute_keypair_v2`` (one per server: Nova
   boots with a single key pair).
 - ``Image`` → ``openstack_images_image_v2`` (private, checksum verified).
-- ``Bucket`` → ``openstack_objectstorage_container_v1`` (Swift; S3 access
-  through the provider's EC2 credentials, which Piceli does not create).
+- ``Bucket`` → ``openstack_objectstorage_container_v1`` (Swift).
+- ``Bucket(keys=[S3Key(...)])`` (0.25.0) → one
+  ``openstack_identity_ec2_credential_v3`` per key: an EC2 credential of
+  the application credential's user in its project, the S3 API's key pair.
+  Its secret is in the state (encrypted, see
+  :mod:`piceli.infra.machines.state`). Keystone gives an EC2 credential the
+  roles its user has in the project, and Swift's ``keystoneauth`` lets an
+  operator role (``member`` at Infomaniak) read **and write** every
+  container of the project: ``S3Key(access="read")`` is a separate pair,
+  revocable on its own, not one the cloud limits to reading
+  (``read_only_enforced: false`` in the plan). Since Keystone's
+  OSSA-2026-005 fix, a *restricted* application credential may not create
+  EC2 credentials at all (``infra-s3-key-refused``).
 
 Ownership labels: server metadata and container metadata, tags on ports,
 security groups and images, the description of security group rules; key
@@ -56,6 +67,7 @@ from piceli.infra.machines.model import (
     Image,
     InfraError,
     PrimaryIp,
+    S3Key,
     Server,
 )
 from piceli.infra.machines.provider import Pin, Prices, Provider, Resource
@@ -114,6 +126,12 @@ INFOMANIAK_FLAVORS = ("a1-ram2-disk20-perf1",)
 ID_ENV = "OS_APPLICATION_CREDENTIAL_ID"
 SECRET_ENV = "OS_APPLICATION_CREDENTIAL_SECRET"
 NETWORK_LOOKUP = "public-network"
+EC2_TYPE = "openstack_identity_ec2_credential_v3"
+#: OpenTofu's error when Keystone refuses to create an EC2 credential.
+_EC2_REFUSED = re.compile(
+    rf"Error creating {EC2_TYPE}.*\b(?:403|401)\b|{EC2_TYPE}.*(?:Forbidden|not allowed)",
+    re.S,
+)
 _URL = re.compile(r"https?://[^\s?#@]+")
 _TOKEN = re.compile(r"[A-Za-z0-9][-A-Za-z0-9_.]{0,127}")
 _UUID = re.compile(r"[0-9a-fA-F]{8}-?(?:[0-9a-fA-F]{4}-?){3}[0-9a-fA-F]{12}")
@@ -180,6 +198,7 @@ class OpenStack(Provider):
     supports_buckets = True
     supports_dns = False
     supports_user_data = True
+    supports_s3_keys = True
 
     def __init__(
         self,
@@ -442,6 +461,54 @@ class OpenStack(Provider):
         return Resource(
             "openstack_objectstorage_container_v1", f"bucket-{bucket.name}", body
         )
+
+    def render_s3_key(
+        self, key: S3Key, bucket: Resource, labels: Mapping[str, str]
+    ) -> Resource:
+        # The application credential's own user and project: no arguments.
+        # EC2 credentials carry no labels (the ledger owns them); the
+        # bucket is a dependency so a destroy removes the keys first.
+        return Resource(EC2_TYPE, f"s3key-{key.name}", {"depends_on": [bucket.address]})
+
+    def s3_key_values(self, values: Mapping[str, Any]) -> tuple[str, str] | None:
+        access, secret = values.get("access"), values.get("secret")
+        if isinstance(access, str) and isinstance(secret, str) and access and secret:
+            return access, secret
+        return None
+
+    def s3_key_enforcement(self, key: S3Key) -> dict[str, Any]:
+        if key.access == "write":
+            return {
+                "read_only_enforced": False,
+                "how": "an EC2 credential of the application credential's user: "
+                "read and write on every container of the project",
+            }
+        return {
+            "read_only_enforced": False,
+            "how": "not enforced by the cloud: an EC2 credential has its user's "
+            "project roles (read and write on every container of the project); "
+            "a separate pair, revocable alone; hosts only read with it and verify "
+            "every build's signature. A project of its own for the cache bucket "
+            "limits it to the cache",
+        }
+
+    def hides_id(self, type_: str) -> bool:
+        return type_ == EC2_TYPE
+
+    def ledger_owned(self, type_: str) -> bool:
+        return type_ == EC2_TYPE
+
+    def known_error(self, diagnostics: Sequence[str]) -> InfraError | None:
+        if any(_EC2_REFUSED.search(line) for line in diagnostics):
+            return InfraError(
+                "infra-s3-key-refused",
+                "the cloud refused to create an EC2 credential (S3 keys) with this "
+                "application credential; only an unrestricted one may (Keystone's "
+                "OSSA-2026-005), or create the keys yourself and store them with "
+                "piceli secrets s3 NAME --prompt",
+                diagnostics,
+            )
+        return None
 
     def render_server(
         self,

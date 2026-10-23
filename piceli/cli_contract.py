@@ -1397,16 +1397,18 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "piceli.host.rollback.",
         ),
         "host secrets": _C(
-            "Put a Nix host's age identity (its sops-nix key) on the host: "
-            "plan, then --approve DIGEST.",
+            "Put a Nix host's age identity (its sops-nix key) and the cache's "
+            "read keys Piceli created on the host: plan, then --approve DIGEST.",
             reads=(
-                "MODULE:ATTR (piceli.infra.NixHost with age_identity=)",
-                "$PICELI_CREDENTIALS_DIR/NAME.json (age-identity)",
-                "the host's key file, by fingerprint only (ssh)",
+                "MODULE:ATTR (piceli.infra.NixHost with age_identity= or a cache "
+                "bucket with S3Key(access='read'))",
+                "$PICELI_CREDENTIALS_DIR/NAME.json (age-identity, s3-keys)",
+                "the host's key file and cache.env, by fingerprint only (ssh)",
             ),
             writes=(
                 "NixHost(age_key_file=) on the host, 0600 root (ssh stdin, "
                 "atomic rename)",
+                "/var/lib/piceli-host/cache.env, 0600 root (0.25.0)",
             ),
             approval_required=True,
             contract="conforms",
@@ -1416,7 +1418,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "the digest; 0 when it has the same). A different key is refused "
             "without --replace (host-secret-exists). The key travels on ssh's "
             "stdin, never in an argument, log or state. After writing, the "
-            "host re-runs switch-to-configuration switch so sops-nix decrypts.",
+            "host re-runs switch-to-configuration switch so sops-nix decrypts. "
+            "0.25.0: with a bucket S3Key(access='read') the plan's cache lists the "
+            "read pair (credential, short digest, same/different/absent); it is "
+            "written without --replace and needs no activation (the agent reads "
+            "it each poll).",
         ),
         "gitops enable": _C(
             "Plan and, with --approve HASH, install the GitOps controller that "
@@ -1974,9 +1980,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
                 "credentials (provider token, state passphrase)",
             ),
             writes=(
-                "resources at the provider (servers, IPs, firewalls, DNS records)",
+                "resources at the provider (servers, IPs, firewalls, DNS records, "
+                "bucket S3 key pairs)",
                 "encrypted OpenTofu state",
-                "state directory records (inventory.json)",
+                "state directory records (inventory.json, s3-keys.json)",
+                "$PICELI_CREDENTIALS_DIR/NAME.json of each S3Key (s3-keys, 0600)",
             ),
             approval_required=True,
             safe_to_retry=True,

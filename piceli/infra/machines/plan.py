@@ -32,6 +32,15 @@ once without it; if it creates such a server, the secret goes into
 ``infra-user-data-missing``). The plan shows the secret's name and a short
 digest, which the plan hash covers; the value is redacted from every output.
 
+S3 keys (0.25.0): a bucket's ``S3Key`` pairs are listed in the plan's
+``s3_keys`` (name, bucket, access, action, what limits them; never a
+value). A declaration with key pairs needs an encrypted, enforced state
+(``infra-state-unencrypted``). After an apply, also a partial one, each pair
+is stored as its local credential and a removed one deleted; a plan stores
+again a pair the state holds and the store does not
+(:mod:`piceli.infra.machines.keys`); their ids (access key ids) are never
+reported.
+
 Partial applies: ``tofu apply -json`` prints an ``apply_complete`` line per
 finished change. When the apply fails after one of them, the error carries
 ``partially_applied``, what was applied (address, action, the provider's id)
@@ -96,9 +105,12 @@ class Workspace:
     #: Server address -> its user data, once a plan that creates it loaded it.
     user_data: dict[str, str] = field(default_factory=dict, repr=False)
 
-    def run(self, *args: str, timeout: float = 1800) -> TofuResult:
+    def run(
+        self, *args: str, timeout: float = 1800, redacted: bool = True
+    ) -> TofuResult:
+        extra: dict[str, Any] = {} if redacted else {"redacted": False}
         return self.tofu.run(
-            list(args), cwd=self.directory, env=self.env, timeout=timeout
+            list(args), cwd=self.directory, env=self.env, timeout=timeout, **extra
         )
 
     def ledger(self) -> set[str]:
@@ -183,6 +195,11 @@ def workspace(infra: Infrastructure, *, tofu: str | None = None) -> Iterator[Wor
                 + ", ".join(stray),
             )
         rendered = render(infra)
+        from piceli.infra.machines import keys
+
+        if rendered.s3_keys or read_record(directory, keys.KEYS_RECORD):
+            keys.require_encrypted(env)
+            binary.secrets.extend(keys.known_values(infra, directory))
         _write(directory / CONFIG, rendered.config_text)
         _write(directory / LOCK, rendered.lock)
         ws = Workspace(infra, directory, binary, rendered, env, tokens)
@@ -246,9 +263,11 @@ class InfraPlan:
     checks: tuple[dict[str, Any], ...] = ()
     #: The user data the plan passes: server, secret name, short digest.
     user_data: tuple[dict[str, str], ...] = ()
+    #: The S3 key pairs: name, bucket, access, action, enforcement (0.25.0).
+    s3_keys: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        body = {
             "schema": PLAN_SCHEMA,
             "infra": self.infra,
             "operation": self.operation,
@@ -262,6 +281,9 @@ class InfraPlan:
             "checks": [dict(check) for check in self.checks],
             "user_data": [dict(item) for item in self.user_data],
         }
+        if self.s3_keys:
+            body["s3_keys"] = [dict(item) for item in self.s3_keys]
+        return body
 
 
 def _summary(changes: tuple[Change, ...]) -> dict[str, int]:
@@ -503,6 +525,19 @@ def plan(
             for address in creates
         )
         changes, foreign = changes_of(ws, document)
+        from piceli.infra.machines.keys import plan_entries
+
+        s3_keys = plan_entries(ws, changes)
+        if any(e["action"] == "keep" and not e["stored"] for e in s3_keys):
+            # In the state but not stored (a failed store, a deleted file):
+            # stored again from the state, nothing at the provider changes.
+            from piceli.infra.machines.keys import store_keys
+            from piceli.infra.machines.tofu import redact
+
+            fresh_values = store_keys(ws)
+            # Hashed as the approving run will see it: with them redacted.
+            document = json.loads(redact(json.dumps(document), fresh_values))
+            s3_keys = plan_entries(ws, changes)
         ledger = frozenset(ws.ledger())
         checks: list[dict[str, Any]] = []
         for provider in ws.infra.providers():
@@ -521,6 +556,7 @@ def plan(
             ws.tofu.version_text,
             checks=tuple(checks),
             user_data=user_data,
+            s3_keys=s3_keys,
         )
         if keep is not None:
             target = keep / "plan.tfplan"
@@ -577,13 +613,23 @@ def apply(
             )
         finally:
             unstage_images(ws.directory)
+        from piceli.infra.machines.keys import store_keys
+        from piceli.infra.machines.tofu import redact
+
         if result.code == 0:
+            store_keys(ws)
             return fresh, refresh_inventory(ws, prices=fresh.estimate)
-        diagnostics = result.diagnostics()
+        try:
+            fresh_values = store_keys(ws)
+        except InfraError:
+            fresh_values = []
+        diagnostics = [redact(line, fresh_values) for line in result.diagnostics()]
         error = _known(ws, diagnostics) or InfraError(
             "infra-apply-failed", "tofu apply failed", diagnostics
         )
-        error.fields.update(progress(result, fresh.changes))
+        error.fields.update(
+            progress(result, fresh.changes, hidden=lambda a: _hides_id(ws, a))
+        )
         try:
             refresh_inventory(ws, prices=fresh.estimate)
         except InfraError:
@@ -592,7 +638,16 @@ def apply(
         raise error
 
 
-def progress(result: TofuResult, changes: tuple[Change, ...]) -> dict[str, Any]:
+def _hides_id(ws: Workspace, address: str) -> bool:
+    provider = _provider_of(ws, address)
+    return provider is not None and provider.hides_id(address.split(".", 1)[0])
+
+
+def progress(
+    result: TofuResult,
+    changes: tuple[Change, ...],
+    hidden: Callable[[str], bool] = lambda _: False,
+) -> dict[str, Any]:
     """What a failed apply changed (``apply_complete`` lines); ``{}`` if nothing.
 
     ``applied``: address, action and the provider's id where OpenTofu
@@ -619,7 +674,7 @@ def progress(result: TofuResult, changes: tuple[Change, ...]) -> dict[str, Any]:
             errored.add(address)
         elif item.get("type") == "apply_complete":
             done.setdefault(address, []).append(str(action))
-            if hook.get("id_value"):
+            if hook.get("id_value") and not hidden(address):
                 ids[address] = str(hook["id_value"])
     if not done:
         return {}

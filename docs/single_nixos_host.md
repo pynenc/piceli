@@ -75,7 +75,7 @@ web = Server(
 )
 
 # The Nix binary cache: a bucket, a signing key and S3 keys that write
-# (builds, gc). The host reads it with separate read-only keys, in sops-nix.
+# (builds, gc). The host reads it with separate keys, in sops-nix.
 nix_bucket = Bucket("example-nix-cache", provider=cloud, protect=True)
 cache = NixCache(
     "example-cache-1:jXbGkEMPpvXtlVqGBrqfsnU8Jyn1cZB9u0QhGhvsKP0=",
@@ -221,9 +221,10 @@ after installing Tailscale.
 3. **The age identity with `piceli host secrets`; cache keys and OTLP
    headers in sops-nix.** The host's secrets live encrypted in Git, in
    `secrets/web-1.yaml` (`sops secrets/web-1.yaml`, encrypted to the
-   `age1...` key): `piceli/cache.env` with the cache's **read-only** keys
-   (`AWS_ACCESS_KEY_ID=...` and `AWS_SECRET_ACCESS_KEY=...` lines, EC2
-   credentials that can only read the bucket) and `piceli/otlp-headers`
+   `age1...` key): `piceli/cache.env` with the cache's read keys
+   (`AWS_ACCESS_KEY_ID=...` and `AWS_SECRET_ACCESS_KEY=...` lines: a second
+   EC2 credential, never the write one; at Infomaniak it is not limited to
+   reading, see {doc}`infrastructure`) and `piceli/otlp-headers`
    (`Authorization: Bearer ...`). The configuration declares them:
 
    ```nix
@@ -247,6 +248,15 @@ after installing Tailscale.
    `/var/lib/sops-nix/key.txt`, and the host re-runs its activation so
    sops-nix decrypts. A host that already has another key is refused
    unless you pass `--replace`.
+
+   Since 0.25.0 Piceli can make the cache's keys itself: declare
+   `Bucket(..., keys=[S3Key("nix-cache-write"), S3Key("nix-cache-read",
+   access="read")])`, drop `write_credentials=` and `piceli secrets s3`,
+   and leave `piceli/cache.env` out of sops. `infra apply` creates and
+   stores both pairs, and `piceli host secrets` also writes the read pair
+   to `/var/lib/piceli-host/cache.env`. At Infomaniak that pair is separate
+   but not read-only (see {doc}`infrastructure`), and the application
+   credential must be unrestricted to create it.
 
 4. **The agent's module, into the flake.**
 

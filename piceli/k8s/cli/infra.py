@@ -166,6 +166,19 @@ def _say_plan(result: InfraPlan) -> None:
             f"  user data of {item['server']}: secret {item['secret']} "
             f"({item['digest']}), passed at creation only"
         )
+    for item in result.s3_keys:
+        enforced = item.get("read_only_enforced")
+        limit = (
+            ""
+            if item["access"] != "read"
+            else " (read-only enforced)"
+            if enforced
+            else " (read-only NOT enforced by the cloud)"
+        )
+        say(
+            f"  s3 key {item['name']}: {item['access']} on bucket {item['bucket']}, "
+            f"{item['action']}{limit}; stored as credential {item['credential']}"
+        )
     for check in result.checks:
         if not check.get("ran"):
             say(f"  not checked {check['check']}: {check.get('why')}")

@@ -96,7 +96,8 @@ declaration fails at import, never halfway through a plan.
 | `Hook(argv, timeout=3600)` | The command that installs the OS. Placeholders `{name}`, `{id}`, `{ipv4}`, `{ipv6}`, `{address}`. |
 | `Ssh(user="root", address=None, port=22, kubeconfig_path="/etc/rancher/k3s/k3s.yaml")` | How Piceli reaches the server to read its k3s kubeconfig. |
 | `Image(name, file= \| url=, sha256=, format="qcow2", min_disk_gb=, properties=)` | A disk image to upload (OpenStack). `sha256` is required and checked before the upload (`infra-image-checksum`). |
-| `Bucket(name, provider=, protect=False)` | An S3-compatible object-storage bucket (OpenStack Swift). Never emptied: destroying one that holds objects fails. |
+| `Bucket(name, provider=, protect=False, keys=[])` | An S3-compatible object-storage bucket (OpenStack Swift). Never emptied: destroying one that holds objects fails. `keys=` (0.25.0): the `S3Key` pairs Piceli creates for it (below). |
+| `S3Key(name, access="write")` | An S3 key pair of a bucket, created by `infra apply` and stored as the local credential `name` (`s3-keys`); `access="read"` for the hosts' pair. |
 | `Infrastructure(name, servers=, records=, state_dir=, state_key=, backend=, home=, buckets=)` | Everything one OpenTofu state holds. |
 
 Each resource Piceli renders is labelled `piceli.io/managed-by=piceli`,
@@ -163,6 +164,7 @@ infra = Infrastructure("web", servers=[host], buckets=[Bucket("my-cache", provid
 | `ssh_keys` | `openstack_compute_keypair_v2`; one key per server (Nova boots with one key pair) |
 | `Image` | `openstack_images_image_v2`, private, named by its checksum: at apply time Piceli copies the file (or downloads the URL) into the state directory, verifies it, uploads it, then removes the copy |
 | `Bucket` | `openstack_objectstorage_container_v1` (Swift) |
+| `S3Key` | `openstack_identity_ec2_credential_v3`: an EC2 credential of the application credential's user in its project (0.25.0) |
 | `user_data=UserData(NAME)` | `user_data` from the sensitive variable `user_data_<server>`, with `ignore_changes`: read at creation only |
 
 The credential is an application credential (Horizon: Identity →
@@ -171,9 +173,10 @@ stored as `ID:SECRET`: `printf '%s:%s' "$ID" "$SECRET" | piceli secrets
 provider cloud --prompt`. OpenTofu gets it only as
 `OS_APPLICATION_CREDENTIAL_ID` and `OS_APPLICATION_CREDENTIAL_SECRET`; both
 are redacted from its output. S3 access to a bucket needs EC2 credentials
-(`openstack ec2 credentials create`; at Infomaniak the endpoint is
-`https://s3.pub1.infomaniak.cloud`); Piceli never creates these long-lived
-keys. OpenStack has no price API here: `prices=` (monthly net per flavor) and
+(at Infomaniak the endpoint is `https://s3.pub1.infomaniak.cloud`): declare
+them as `S3Key`s (below), or create them yourself (`openstack ec2
+credentials create`) and store them with `piceli secrets s3 NAME --prompt`.
+OpenStack has no price API here: `prices=` (monthly net per flavor) and
 `ip_prices=` (`{"ipv4": …}`) are your own table, shown as the plan's
 estimate. One region per declaration; `ipv4=False` and `ipv6=PrimaryIp` are
 refused (the port holds both families). OpenStack serves no DNS: give a
@@ -195,8 +198,69 @@ to any process on it, so a key in it should be single-use and short-lived.
 {doc}`single_nixos_host` uses one to join a tailnet on first boot.
 
 Ownership marks: metadata on servers and buckets, tags on ports, security
-groups and images, the description of security group rules. Key pairs carry
-none: their name (`<infra>-<digest>`) and the ledger stand in.
+groups and images, the description of security group rules. Key pairs and
+EC2 credentials carry none: their name (`<infra>-<digest>`) and the ledger stand in.
+
+**S3 keys** (0.25.0). A bucket declares the key pairs it needs, and
+`infra apply` creates them:
+
+```python
+nix_bucket = Bucket("my-cache", provider=cloud, keys=[
+    S3Key("cache-write"),                 # the build host: put and delete
+    S3Key("cache-read", access="read"),   # the hosts
+])
+cache = NixCache("cache-1:…", bucket=nix_bucket)  # write_credentials: cache-write
+```
+
+`infra plan` lists them in `s3_keys` (never a value):
+
+```json
+{"name": "cache-read", "bucket": "my-cache", "access": "read", "action": "create",
+ "credential": "cache-read", "stored": false, "read_only_enforced": false,
+ "how": "not enforced by the cloud: an EC2 credential has its user's project roles …"}
+```
+
+After the apply (also a partial one) Piceli reads each pair out of the
+state and stores it as the credential of its name (`s3-keys`,
+`ACCESS_KEY_ID:SECRET`, `0600`), where `NixCache` (`write_credentials`
+defaults to the bucket's write key), `builder serve --publish`, `dev nix
+build --publish` and `piceli host secrets` (the read key, see
+{doc}`nix_hosts`) load it. The values are redacted from OpenTofu's output
+as soon as they are known; an EC2 credential's id is its access key id, so
+a partial apply does not report it. `s3-keys.json` in the state directory
+records each key's credential name and a short digest of what was stored.
+A re-apply changes nothing; a plan stores again a pair the state holds and
+the store lost. Removing an `S3Key` deletes the pair through the
+plan (approved like any change) and then its stored credential, if it still
+holds what Piceli wrote. A credential of that name that Piceli did not
+store is never replaced (`infra-credential-exists`): delete it first
+(`piceli secrets delete NAME`) or pick another name.
+
+The secret is in the OpenTofu state (the provider keeps it there in plain
+text), so Piceli creates key pairs only into a state and plan files that
+OpenTofu encrypts and refuses to read unencrypted
+(`infra-state-unencrypted`); `piceli infra` always configures that.
+
+**What "read" means at OpenStack.** Keystone gives an EC2 credential the
+roles its user has in the project, and Swift lets any operator role
+(`member` at Infomaniak) read and write every container of the project.
+Piceli authenticates with one application credential and cannot create a
+user with fewer roles, so `S3Key(access="read")` is a **separate pair, not
+a read-only one**: the plan says `read_only_enforced: false`. What keeps it
+safe enough for a host: the host only reads with it, Nix and the host agent
+verify every build's signature (a write cannot make a host run something
+unsigned, only delete or spoil builds), and it can be removed alone. To
+limit what a leaked pair reaches, put the cache bucket in an OpenStack
+project of its own (a separate `Infrastructure` with that project's
+application credential): its keys then reach only the cache. Two more
+limits come from Keystone itself: since its OSSA-2026-005 fix, a
+*restricted* application credential (the default) may not create EC2
+credentials (`infra-s3-key-refused`: use an unrestricted one, or create the
+keys yourself), and a `reader`-only identity may not either.
+
+**Rotation** is not a command yet: remove the key, apply, add it back and
+apply (a new pair, stored over the old one), then run `piceli host secrets`
+again for a read key.
 
 To move to a newer OpenStack provider, change `OPENSTACK_PIN` in
 `piceli/infra/machines/openstack.py` and take its hashes from `tofu

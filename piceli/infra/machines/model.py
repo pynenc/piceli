@@ -34,6 +34,7 @@ __all__ = [
     "Infrastructure",
     "PrimaryIp",
     "Rule",
+    "S3Key",
     "Server",
     "Ssh",
     "UserData",
@@ -497,17 +498,58 @@ class Image:
         return {"name": self.name, "sha256": self.sha256, "format": self.format}
 
 
+S3_ACCESS = ("write", "read")
+
+
+@dataclass(frozen=True)
+class S3Key:
+    """An S3 access key pair of a :class:`Bucket` that ``piceli infra apply``
+    creates (0.25.0).
+
+    The pair is a resource of the infrastructure's OpenTofu state (always
+    encrypted); after the apply Piceli stores it as the local credential
+    ``name`` (kind ``s3-keys``, ``ACCESS_KEY_ID:SECRET``), where
+    ``NixCache`` and ``piceli host secrets`` read it. It is never printed.
+
+    :param name: The credential name it is stored under (``cache-write``).
+    :param access: ``"write"`` (put, delete: the build host's) or ``"read"``
+        (the hosts'). What the provider can enforce for ``"read"`` is in the
+        plan (``s3_keys[].read_only_enforced``): an OpenStack EC2 credential
+        cannot be limited to reading.
+    """
+
+    name: str
+    access: Literal["write", "read"] = "write"
+
+    def __post_init__(self) -> None:
+        from piceli.profiles import ProfileError, check_name
+
+        try:
+            check_name(self.name)
+        except (ProfileError, TypeError):
+            raise _invalid(
+                f"S3Key {self.name!r}: the name is a credential name (like cache-read)"
+            ) from None
+        if self.access not in S3_ACCESS:
+            raise _invalid(f"S3Key {self.name}: access= is write or read")
+
+    def describe(self) -> dict[str, Any]:
+        return {"name": self.name, "access": self.access}
+
+
 @dataclass(frozen=True)
 class Bucket:
     """An object-storage bucket (S3-compatible) at a provider that has them.
 
     Piceli creates it and never empties it: destroying a bucket that still
     holds objects fails. ``protect=True`` also refuses its destroy plan.
+    ``keys=`` (0.25.0) lists the :class:`S3Key` pairs Piceli creates for it.
     """
 
     name: str
     provider: Provider
     protect: bool = False
+    keys: Sequence[S3Key] = ()
 
     def __post_init__(self) -> None:
         from piceli.infra.machines.provider import Provider
@@ -525,13 +567,31 @@ class Bucket:
             )
         if not isinstance(self.protect, bool):
             raise _invalid(f"Bucket {self.name}: protect= is True or False")
+        keys = _tuple(self.keys, f"Bucket {self.name}: keys=")
+        if not all(isinstance(key, S3Key) for key in keys):
+            raise _invalid(f"Bucket {self.name}: keys= is a list of S3Key")
+        if len({key.name for key in keys}) != len(keys):
+            raise _invalid(f"Bucket {self.name}: two keys have the same name")
+        if keys and not self.provider.supports_s3_keys:
+            raise _invalid(
+                f"Bucket {self.name}: Piceli creates no S3 keys at {self.provider.name}"
+            )
+        object.__setattr__(self, "keys", keys)
+
+    def key(self, access: str) -> S3Key | None:
+        """The bucket's one key with ``access`` (``None``: none, or several)."""
+        found = [key for key in self.keys if key.access == access]
+        return found[0] if len(found) == 1 else None
 
     def describe(self) -> dict[str, Any]:
-        return {
+        body: dict[str, Any] = {
             "name": self.name,
             "provider": self.provider.name,
             "protect": self.protect,
         }
+        if self.keys:
+            body["keys"] = [key.describe() for key in self.keys]
+        return body
 
 
 def _family(value: object, what: str) -> bool | PrimaryIp:
@@ -860,6 +920,9 @@ class Infrastructure:
             raise _invalid("Infrastructure buckets are Bucket objects")
         if len({item.name for item in buckets}) != len(buckets):
             raise _invalid("a bucket is declared twice")
+        key_names = [key.name for item in buckets for key in item.keys]
+        if len(set(key_names)) != len(key_names):
+            raise _invalid("two buckets declare S3 keys with the same name")
         object.__setattr__(self, "servers", servers)
         object.__setattr__(self, "records", records)
         object.__setattr__(self, "buckets", buckets)
@@ -916,6 +979,14 @@ class Infrastructure:
                 "Infrastructure(state_key=) must be a credential name"
             ) from None
         object.__setattr__(self, "state_key", key)
+        taken = {key} | {
+            p.credentials for p in providers.values() if p.credentials is not None
+        }
+        for name in key_names:
+            if name in taken:
+                raise _invalid(
+                    f"S3Key {name}: the name is the state key or a provider credential"
+                )
         backend = self.backend if self.backend is not None else LocalState()
         if not isinstance(backend, StateBackend):
             raise _invalid("Infrastructure(backend=) is LocalState() or HttpState(...)")
@@ -954,6 +1025,10 @@ class Infrastructure:
             if isinstance(item.firewall, Firewall):
                 found.setdefault(item.firewall.name, item.firewall)
         return [found[name] for name in sorted(found)]
+
+    def s3_keys(self) -> list[tuple[S3Key, Bucket]]:
+        """Each declared :class:`S3Key` with its bucket, in declaration order."""
+        return [(key, bucket) for bucket in self.buckets for key in bucket.keys]
 
     def describe(self) -> dict[str, Any]:
         """The declaration as data (``piceli.infra.v1``); no credentials, no paths."""

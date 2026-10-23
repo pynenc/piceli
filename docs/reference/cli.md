@@ -88,7 +88,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli host module`](#cli-host-module) | Render the NixOS module that installs the host agent (commit it, import it). | none | no |
 | [`piceli host pin`](#cli-host-pin) | Deploy a tag's build (an older one too) and hold it: no newer build until unpin. | none | no |
 | [`piceli host rollback`](#cli-host-rollback) | Switch back to the previous system (in the store) and hold it until unpin. | none | no |
-| [`piceli host secrets`](#cli-host-secrets) | Put the host's age identity where sops-nix reads it: plan, then --approve. | none | yes |
+| [`piceli host secrets`](#cli-host-secrets) | Put the host's age identity where sops-nix reads it, and the cache's read keys Piceli created where the agent reads them: plan, then --approve. | none | yes |
 | [`piceli host status`](#cli-host-status) | Read the host agent's status over SSH (current build, last attempt, checks). | none | no |
 | [`piceli host unpin`](#cli-host-unpin) | Drop a pin or rollback hold: the host follows its declared ref again. | none | no |
 | [`piceli host wait`](#cli-host-wait) | Wait until the host runs REV with its checks passed (exit 1: failed or timeout). | none | no |
@@ -1960,26 +1960,26 @@ Switch back to the previous system (in the store) and hold it until unpin.
 (cli-host-secrets)=
 ### `piceli host secrets`
 
-Put the host's age identity where sops-nix reads it: plan, then --approve.
+Put the host's age identity where sops-nix reads it, and the cache's read keys Piceli created where the agent reads them: plan, then --approve.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `TARGET` | text | required |  |
 | `--infra` | text |  | MODULE (or MODULE:ATTR of its Infrastructure): the NixHosts it declares by name, its servers' applied addresses and pinned host keys |
-| `--replace` | boolean | `False` | Replace a different key the host has (what it decrypts with it changes) |
+| `--replace` | boolean | `False` | Replace a different age key the host has (what it decrypts with it changes) |
 | `--approve` | text |  | The plan's digest |
 | `--json` | boolean | `False` | Print one JSON object on stdout |
 
 **Contract**
 
-- **Reads:** MODULE:ATTR (piceli.infra.NixHost with age_identity=), $PICELI_CREDENTIALS_DIR/NAME.json (age-identity), the host's key file, by fingerprint only (ssh)
-- **Writes:** NixHost(age_key_file=) on the host, 0600 root (ssh stdin, atomic rename)
+- **Reads:** MODULE:ATTR (piceli.infra.NixHost with age_identity= or a cache bucket with S3Key(access='read')), $PICELI_CREDENTIALS_DIR/NAME.json (age-identity, s3-keys), the host's key file and cache.env, by fingerprint only (ssh)
+- **Writes:** NixHost(age_key_file=) on the host, 0600 root (ssh stdin, atomic rename), /var/lib/piceli-host/cache.env, 0600 root (0.25.0)
 - **Cluster:** none
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** 0.24.0. The plan lists host, path, mode, owner, public key and whether the host has the same, a different or no key (exit 3 with the digest; 0 when it has the same). A different key is refused without --replace (host-secret-exists). The key travels on ssh's stdin, never in an argument, log or state. After writing, the host re-runs switch-to-configuration switch so sops-nix decrypts.
+- **Notes:** 0.24.0. The plan lists host, path, mode, owner, public key and whether the host has the same, a different or no key (exit 3 with the digest; 0 when it has the same). A different key is refused without --replace (host-secret-exists). The key travels on ssh's stdin, never in an argument, log or state. After writing, the host re-runs switch-to-configuration switch so sops-nix decrypts. 0.25.0: with a bucket S3Key(access='read') the plan's cache lists the read pair (credential, short digest, same/different/absent); it is written without --replace and needs no activation (the agent reads it each poll).
 
 (cli-host-status)=
 ### `piceli host status`
@@ -2119,7 +2119,7 @@ Apply the plan whose hash is --approve (without it: plan, exit 3).
 **Contract**
 
 - **Reads:** MODULE:ATTR (piceli.infra.Infrastructure), tofu binary, credentials (provider token, state passphrase)
-- **Writes:** resources at the provider (servers, IPs, firewalls, DNS records), encrypted OpenTofu state, state directory records (inventory.json)
+- **Writes:** resources at the provider (servers, IPs, firewalls, DNS records, bucket S3 key pairs), encrypted OpenTofu state, state directory records (inventory.json, s3-keys.json), $PICELI_CREDENTIALS_DIR/NAME.json of each S3Key (s3-keys, 0600)
 - **Cluster:** none
 - **Approval required:** yes
 - **Safe to retry:** yes

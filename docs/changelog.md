@@ -113,6 +113,40 @@ environment and host in one view.
   `piceli.infra.machines.secrets_backup.staleness()` tells when the last
   backup is older than the newest secret; `backup --json` includes it.
   Needs the `age` command (`secrets-age-missing` otherwise).
+- **The cache's S3 keys from `infra apply`.** `Bucket(..., keys=[S3Key(
+  "cache-write"), S3Key("cache-read", access="read")])` (`S3Key` new in
+  `piceli.infra`) declares the key pairs a bucket needs. `infra plan` lists
+  them in `s3_keys` (name, bucket, access, action, credential,
+  `read_only_enforced` and how; never a value); `infra apply` creates them
+  (OpenStack: `openstack_identity_ec2_credential_v3`) and stores each as the
+  credential of its name (`s3-keys`, `0600`), also after a partial apply,
+  redacted from every output (an EC2 credential's id, its access key id, is
+  not reported). A re-apply is a no-op; removing a key deletes the pair
+  through the plan and then its stored credential; a credential Piceli did
+  not store is never replaced (`infra-credential-exists`). Key pairs need an
+  encrypted, enforced state (`infra-state-unencrypted`). `NixCache(bucket=)`
+  takes the bucket's write key as `write_credentials` by default.
+- **What "read" means at OpenStack.** An EC2 credential carries its user's
+  project roles, and Swift lets `member` read and write every container:
+  `S3Key(access="read")` is a separate pair, not a read-only one, and the
+  plan says `read_only_enforced: false`. A bucket in a project of its own
+  limits what the pair reaches. Since Keystone's OSSA-2026-005 fix a
+  restricted application credential may not create EC2 credentials:
+  `infra-s3-key-refused` (new) names that.
+- **`piceli host secrets` installs the cache's read pair.** This reverses
+  0.24.0, where the hosts' cache keys lived only in sops-nix: for a cache
+  whose bucket declares `S3Key(access="read")`, `NixHost`'s
+  `read_credentials_file=` defaults to `/var/lib/piceli-host/cache.env`,
+  and `host secrets` writes the stored pair there (`0600` root, on ssh's
+  stdin, compared by sha256, never read back). The plan's `cache` shows the
+  path, credential, a short digest and what the host has; a rotated pair is
+  replaced without `--replace` and needs no activation (the agent reads the
+  file each poll). A host without `age_identity=` gets only this file; the
+  age-only plan and its digest are unchanged. A `read_credentials_file=`
+  you give (a sops-nix path) is left alone.
+- **`piceli.infra.machines.keys.needed_secrets(...)`** lists every secret
+  a declaration (`Infrastructure`, `Bucket`, `NixCache`, `NixHost`) needs:
+  name, kind, who creates it (`infra-apply` or `operator`) and the command.
 
 ## Version 0.24.0
 

@@ -416,11 +416,13 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`infra-plan-changed`](#error-infra-plan-changed) | infra | yes |
 | [`infra-prompt-required`](#error-infra-prompt-required) | infra | no |
 | [`infra-register-changed`](#error-infra-register-changed) | infra | yes |
+| [`infra-s3-key-refused`](#error-infra-s3-key-refused) | infra | yes |
 | [`infra-server-unknown`](#error-infra-server-unknown) | infra | no |
 | [`infra-ssh-missing`](#error-infra-ssh-missing) | infra | no |
 | [`infra-ssh-unreachable`](#error-infra-ssh-unreachable) | infra | yes |
 | [`infra-state-in-git`](#error-infra-state-in-git) | infra | no |
 | [`infra-state-locked`](#error-infra-state-locked) | infra | yes |
+| [`infra-state-unencrypted`](#error-infra-state-unencrypted) | infra | no |
 | [`infra-state-unexpected`](#error-infra-state-unexpected) | infra | no |
 | [`infra-tofu-failed`](#error-infra-tofu-failed) | infra | yes |
 | [`infra-tofu-missing`](#error-infra-tofu-missing) | infra | no |
@@ -6536,6 +6538,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Run `piceli infra register MODULE:ATTR SERVER` again, check the fingerprints, and approve the new digest.
 - **Retry-safe:** yes
 
+(error-infra-s3-key-refused)=
+### `infra-s3-key-refused`
+
+**Cloud refused to create S3 keys.** OpenStack's identity service refused to create an EC2 credential (S3 keys) with the provider's application credential. Since Keystone's OSSA-2026-005 fix, a restricted application credential (the default) may not create EC2 credentials.
+
+- **Fix:** Create an unrestricted application credential and store it (`piceli secrets provider NAME --prompt`), then plan again; or remove `keys=`, create the keys yourself (`openstack ec2 credentials create`) and store them with `piceli secrets s3 NAME --prompt`.
+- **Retry-safe:** yes
+
 (error-infra-server-unknown)=
 ### `infra-server-unknown`
 
@@ -6575,6 +6585,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Wait for the other command to end, then run this one again.
 - **Retry-safe:** yes
+
+(error-infra-state-unencrypted)=
+### `infra-state-unencrypted`
+
+**S3 keys need an encrypted state.** The declaration has `Bucket(keys=[S3Key(...)])`: their secrets go into the OpenTofu state and plan files, and the encryption configuration does not encrypt and enforce both.
+
+- **Fix:** Run it through `piceli infra plan` and `apply`, which always encrypt the state with `Infrastructure(state_key=)`; or remove `keys=` and store keys yourself with `piceli secrets s3 NAME --prompt`.
+- **Retry-safe:** no
 
 (error-infra-state-unexpected)=
 ### `infra-state-unexpected`
@@ -6918,9 +6936,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-host-secret-undeclared)=
 ### `host-secret-undeclared`
 
-**Host declares no age identity.** `piceli host secrets` needs a `NixHost` with `age_identity=` (a credential from `piceli secrets age NAME --generate`).
+**Host declares no secret to install.** `piceli host secrets` needs a `NixHost` with `age_identity=` (a credential from `piceli secrets age NAME --generate`) or a cache whose bucket declares `S3Key(access="read")` (0.25.0).
 
-- **Fix:** Declare `NixHost(age_identity=NAME)` and give the `NixHost` (`MODULE:ATTR`).
+- **Fix:** Declare `NixHost(age_identity=NAME)` or the bucket's read key, and give the `NixHost` (`MODULE:ATTR`).
 - **Retry-safe:** no
 
 (error-host-secret-write-failed)=

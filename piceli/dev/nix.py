@@ -195,9 +195,12 @@ class NixCache:
     :param write_credentials: The local credential with S3 access keys
         that may **put and delete** objects (``piceli secrets s3 NAME
         --prompt``): only the publishing side (``dev nix build --publish``,
-        ``dev nix gc``) uses them; required for ``s3://``. Hosts read with
-        separate read-only keys that live in sops-nix on the host
-        (``NixHost(read_credentials_file=)``), never in Piceli.
+        ``dev nix gc``) uses them; required for ``s3://``. Default (0.25.0):
+        the ``S3Key(access="write")`` of ``bucket=``, which ``piceli infra
+        apply`` creates and stores. Hosts read with separate keys: the
+        bucket's ``S3Key(access="read")``, which ``piceli host secrets``
+        puts on the host (0.25.0), or keys in sops-nix on the host
+        (``NixHost(read_credentials_file=)``).
     :param endpoint: The S3 endpoint host (``s3.example.net``).
     :param region: The S3 region signatures name.
     """
@@ -222,6 +225,9 @@ class NixCache:
 
             if not isinstance(self.bucket, Bucket):
                 raise _invalid("NixCache(bucket=) is a piceli.infra.Bucket")
+            write = self.bucket.key("write")
+            if self.write_credentials is None and write is not None:
+                object.__setattr__(self, "write_credentials", write.name)
             endpoint = self.endpoint or S3_ENDPOINTS.get(
                 str(getattr(self.bucket.provider, "preset", "") or "")
             )
@@ -288,6 +294,21 @@ class NixCache:
         return key_name(self.public_key)
 
     @property
+    def read_credentials(self) -> str | None:
+        """The credential of the bucket's ``S3Key(access="read")`` that
+        ``piceli infra apply`` creates (``None``: hosts get keys another way)."""
+        if self.bucket is None:
+            return None
+        found = self.bucket.key("read")
+        return found.name if found is not None else None
+
+    def creates(self, credential: str) -> bool:
+        """Whether ``piceli infra apply`` creates ``credential`` (a bucket key)."""
+        return self.bucket is not None and any(
+            key.name == credential for key in self.bucket.keys
+        )
+
+    @property
     def signing_credential(self) -> str:
         return self.signing_key or self.key_name
 
@@ -316,6 +337,11 @@ class NixCache:
             "public_key": self.public_key,
             "signing_key": self.signing_credential,
             "write_credentials": self.write_credentials,
+            **(
+                {"read_credentials": self.read_credentials}
+                if self.read_credentials
+                else {}
+            ),
         }
 
 

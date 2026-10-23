@@ -51,6 +51,8 @@ STATE_DIR = "/var/lib/piceli-host"
 AGE_KEY_FILE = "/var/lib/sops-nix/key.txt"
 #: Where sops-nix decrypts ``sops.secrets."piceli/cache.env"``.
 CACHE_ENV = "/run/secrets/piceli/cache.env"
+#: Where ``piceli host secrets`` puts the read pair Piceli created (0.25.0).
+PICELI_CACHE_ENV = "/var/lib/piceli-host/cache.env"
 #: Defaults (proposals): a poll every 5 minutes, 60 s per check, 20 attempts kept.
 POLL_SECONDS = 300
 CHECK_TIMEOUT = 60
@@ -316,10 +318,15 @@ class NixHost:
         (``--name`` of ``piceli dev nix build``; default: ``NAME`` of
         ``.#NAME``, else the host's name).
     :param read_credentials_file: A root-only file on the host with the
-        cache's **read-only** S3 keys (``AWS_ACCESS_KEY_ID=`` and
-        ``AWS_SECRET_ACCESS_KEY=`` lines), decrypted by sops-nix; default
-        ``/run/secrets/piceli/cache.env`` (``sops.secrets."piceli/cache.env"``)
-        for an ``s3://`` cache, none for a ``file://`` or ``https://`` one.
+        cache's read S3 keys (``AWS_ACCESS_KEY_ID=`` and
+        ``AWS_SECRET_ACCESS_KEY=`` lines). Default (0.25.0) when the cache's
+        bucket declares ``S3Key(access="read")``:
+        ``/var/lib/piceli-host/cache.env``, which ``piceli host secrets``
+        writes from the pair ``piceli infra apply`` created (the agent reads
+        it on each poll). Otherwise ``/run/secrets/piceli/cache.env``
+        (``sops.secrets."piceli/cache.env"``, decrypted by sops-nix) for an
+        ``s3://`` cache, none for a ``file://`` or ``https://`` one. A path
+        given here is the host's own file: ``host secrets`` leaves it alone.
     :param poll_seconds: How often the agent looks for a new build.
     :param history: How many attempts the status keeps.
     :param generations: How many system generations the host keeps (at
@@ -354,6 +361,9 @@ class NixHost:
     age_key_file: str = AGE_KEY_FILE
     gate: Any = None
     attribute: str = field(init=False, default="")
+    #: The credential ``piceli host secrets`` writes to
+    #: ``read_credentials_file`` (``None``: the host's own file).
+    cache_credentials: str | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         from piceli.dev.nix import NixCache
@@ -400,6 +410,9 @@ class NixHost:
             raise _invalid("NixHost(build=) is the builds' manifest name (a DNS label)")
         object.__setattr__(self, "build", build)
         path = self.read_credentials_file
+        if path is None and self.cache.read_credentials is not None:
+            path = PICELI_CACHE_ENV
+            object.__setattr__(self, "cache_credentials", self.cache.read_credentials)
         if path is None and self.cache.scheme == "s3":
             path = CACHE_ENV
         if path is not None and not _PATH.fullmatch(path):
