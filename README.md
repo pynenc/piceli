@@ -66,21 +66,20 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.24
+## What's new in 0.25
 
-- **A single NixOS host, end to end**: one typed-Python file declares the
-  machine, its image, firewall, key, bucket and DNS, and a host that
-  follows your release tags; see the
-  [guide](https://docs.pynenc.org/projects/piceli/en/stable/single_nixos_host.html).
-- **OpenStack machines, with an Infomaniak preset**: servers on a
-  persistent public port, security groups, key pairs, uploaded images and
-  buckets.
-- **DNS records at Porkbun** for servers at any provider, following their
-  addresses; API access checked at plan time.
-- **Signed Nix builds**: `piceli dev nix build --publish` pushes a closure
-  to your binary cache with a signed manifest and ref pointers.
-- **Nix host releases**: a `NixHost` agent verifies, switches, checks and
-  rolls back on its own, with no cluster; `piceli host wait` follows it.
+- **The controller publishes Nix host releases**: push a host's tag and the
+  GitOps controller plans the release, waits for approval (or your
+  `auto_approve`) and has a builder that holds the cache's keys build, sign
+  and publish it; no hand-run publish step.
+- **A promotion gate**: a host only gets a build whose product commit an
+  environment ran with its checks passed; `piceli promote HOST --from ENV`
+  pins that commit, tags and pushes after approval.
+- **Tag prefixes per host**: `web-v*` and `api-v*` release two hosts from
+  one repository without seeing each other's tags.
+- **One view of every target**: `piceli targets` (and the UI's Targets
+  view) lists each environment and Nix host with its commit or tag, the
+  product commit it pins, its checks and its state.
 
 ## Web UI
 
