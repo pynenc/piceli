@@ -810,6 +810,10 @@ CASES: dict[str, tuple[Argv, str]] = {
         "host-invalid",
     ),
     "targets": (lambda p: ["targets"], "targets-input-required"),
+    "train": (
+        lambda p: ["train", "no_such_module:train", "--branches", "feature"],
+        "train-not-found",
+    ),
     "host wait": (
         lambda p: ["host", "wait", "no_such_module:web", "v1.0.0"],
         "host-not-found",

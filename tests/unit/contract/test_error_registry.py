@@ -38,6 +38,7 @@ FIRST_ARGUMENT = {
     "_result_error",
     "ImportFailure",
     "PipelineError",
+    "TrainError",
     "EnvError",
     "CompositionError",
     "_refuse",
@@ -172,6 +173,15 @@ DYNAMIC = {
     "bundle-unsafe-network",
     "bundle-unsafe-rbac",
     "bundle-unsafe-node-port",
+}
+DYNAMIC |= {
+    # train.engine: a trial's or branch's reason, and promote/push outcomes
+    # recorded in the result (piceli.train.v1)
+    "train-merge-conflict",
+    "train-step-failed",
+    "train-step-timeout",
+    "train-publish-failed",
+    "train-push-failed",
 }
 # Registered for the CLI contract itself (piceli/cli_contract.py users).
 CONTRACT = {"unknown-error-code"}

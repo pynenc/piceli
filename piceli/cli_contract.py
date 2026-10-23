@@ -1339,6 +1339,41 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "unreachable or its checks failed; 2: no module and no controller "
             "named (targets-input-required) or a module that does not load.",
         ),
+        "train": _C(
+            "Merge candidate branches onto the base one tested merge at a time; "
+            "eject the failing ones with the step that failed.",
+            reads=(
+                "the train spec module (MODULE[:ATTR]), then the same module in each merged tree",
+                "the Git repository (branches, base, tested)",
+                "the steps' tools (cargo, scripts of the merged tree)",
+            ),
+            writes=(
+                "temporary worktrees of the repository (removed)",
+                "unreferenced merge commits",
+                "$XDG_STATE_HOME/piceli/train/<name> (run records, logs, flaky.jsonl)",
+                "--promote: the tag, tested and the base (fast-forward only), publish steps",
+                "--push: the remote's tag, tested and base",
+            ),
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.26.0. Runs the train's steps, which run code: the explicit "
+            "branch list is the approval, and --promote/--push the approval to "
+            "move refs and push. Without --promote no ref changes; nothing is "
+            "pushed without --push (which needs --promote). Each candidate set "
+            "is merged with git merge --no-ff onto the train's head in a "
+            "temporary worktree; its steps come from the merged tree's spec. "
+            "A failing set is bisected. --json prints one piceli.train.v1 "
+            "object. Exit 0: every branch joined (or was already in) and the "
+            "promotion and push asked for succeeded; 1: a branch was ejected "
+            "(train-step-failed, train-step-timeout, train-merge-conflict, "
+            "train-spec-invalid), the promotion was refused "
+            "(train-not-fast-forward, train-checkout-dirty), a publish step "
+            "or the push failed; 2: rejected before anything ran "
+            "(train-not-found, train-branch-unknown, train-busy, ...).",
+        ),
         "host wait": _C(
             "Wait until a Nix host runs a commit or tag with its checks passed.",
             reads=(
