@@ -68,8 +68,8 @@ from piceli.infra import (
     Bucket,
     Firewall,
     Image,
+    Infomaniak,
     Infrastructure,
-    OpenStack,
     PrimaryIp,
     Rule,
     S3Key,
@@ -101,12 +101,18 @@ def _setting(name: str, default: str) -> str:
 
 
 def _stored_credential() -> str:
+    """``ID:SECRET`` of the stored application credential (stored by part, or
+    as an older joined value)."""
     name = _setting("CREDENTIAL", "infomaniak")
     path = STORE / f"{name}.json"
     if not path.is_file():
         pytest.fail(f"no stored credential {name!r}: piceli secrets provider {name}")
     body = json.loads(path.read_text())
     assert body.get("kind") == "provider-token", f"{name} is not a provider token"
+    parts = body.get("parts")
+    if isinstance(parts, dict):
+        identifier = parts["application_credential_id"]
+        return f"{identifier}:{parts['application_credential_secret']}"
     return str(body["value"])
 
 
@@ -185,13 +191,40 @@ class Api:
     def containers(self) -> list[dict[str, Any]]:
         return list(self.call("GET", "object-store", "?format=json"))
 
-    def ec2(self) -> list[dict[str, Any]]:
-        path = f"/users/{self.user}/credentials/OS-EC2"
-        return list(self.call("GET", "identity", path)["credentials"])
+    def ec2(self, access: list[str]) -> list[str]:
+        """Which of ``access`` still exist. A restricted application
+        credential may not list EC2 credentials (403): each is then read by
+        its id, and one that is not found is gone."""
+        try:
+            path = f"/users/{self.user}/credentials/OS-EC2"
+            found = self.call("GET", "identity", path)["credentials"]
+            return [a for a in access if a in {item.get("access") for item in found}]
+        except urllib.error.HTTPError as error:
+            if error.code != 403:
+                raise
+        left = []
+        for key in access:
+            try:
+                self.call(
+                    "GET", "identity", f"/users/{self.user}/credentials/OS-EC2/{key}"
+                )
+            except urllib.error.HTTPError as error:
+                if error.code != 404:
+                    raise
+            else:
+                left.append(key)
+        return left
 
     def app_credentials(self) -> list[dict[str, Any]]:
+        """The user's application credentials; none when this one may not
+        list them (a restricted one: then it could not have made any)."""
         path = f"/users/{self.user}/application_credentials"
-        return list(self.call("GET", "identity", path)["application_credentials"])
+        try:
+            return list(self.call("GET", "identity", path)["application_credentials"])
+        except urllib.error.HTTPError as error:
+            if error.code != 403:
+                raise
+            return []
 
     def left(self, prefix: str, access: list[str]) -> dict[str, list[str]]:
         """Everything in the project named with ``prefix`` (and our EC2 keys)."""
@@ -207,8 +240,7 @@ class Api:
             )
             for kind, lister in named.items()
         }  # fmt: skip
-        existing = {item.get("access") for item in self.ec2()}
-        left["ec2_credentials"] = sorted(a[:4] + "…" for a in access if a in existing)
+        left["ec2_credentials"] = sorted(a[:4] + "…" for a in self.ec2(access))
         left["application_credentials"] = sorted(
             str(item.get("name")) for item in self.app_credentials()
             if str(item.get("name") or "").startswith(prefix)
@@ -252,18 +284,41 @@ class Api:
                 self.try_delete("identity", path)
 
 
-def _cirros(directory: Path) -> tuple[str, str] | None:
-    """The CirrOS URL and its sha256, if the download site answers."""
+def _subnets(api: Api, port: dict[str, Any]) -> list[dict[str, Any]]:
+    """Which network and subnet each of the port's addresses comes from."""
+    networks = {
+        n["id"]: n["name"] for n in api.call("GET", "network", "/networks")["networks"]
+    }
+    found = []
+    for item in port["fixed_ips"]:
+        subnet = api.call("GET", "network", f"/subnets/{item['subnet_id']}")["subnet"]
+        found.append({
+            "family": f"ipv{subnet['ip_version']}", "network": networks.get(subnet["network_id"]),
+            "subnet": subnet["name"] or subnet["id"], "cidr": subnet["cidr"],
+            "ipv6_address_mode": subnet.get("ipv6_address_mode"),
+        })  # fmt: skip
+    return sorted(found, key=lambda f: f["family"])
+
+
+def _cirros(directory: Path) -> tuple[Path, str] | None:
+    """CirrOS downloaded into ``directory`` (checked against the site's
+    MD5SUMS, the only sums it publishes) and its sha256, if the site answers."""
     try:
-        with urllib.request.urlopen(CIRROS + "SHA256SUMS", timeout=30) as answer:
+        with urllib.request.urlopen(CIRROS + "MD5SUMS", timeout=30) as answer:
             sums = answer.read().decode()
-    except (OSError, urllib.error.URLError):
+        wanted = next(
+            line.split()[0] for line in sums.splitlines()
+            if line.split()[-1:] == [CIRROS_FILE]
+        )  # fmt: skip
+        path = directory / CIRROS_FILE
+        with urllib.request.urlopen(CIRROS + CIRROS_FILE, timeout=120) as answer:
+            path.write_bytes(answer.read())
+    except (OSError, urllib.error.URLError, StopIteration):
         return None
-    for line in sums.splitlines():
-        digest, _, name = line.partition("  ")
-        if name.strip() == CIRROS_FILE:
-            return CIRROS + CIRROS_FILE, digest.strip()
-    return None
+    data = path.read_bytes()
+    if hashlib.md5(data, usedforsecurity=False).hexdigest() != wanted:
+        return None
+    return path, hashlib.sha256(data).hexdigest()
 
 
 def _s3(
@@ -376,7 +431,12 @@ def test_infomaniak_end_to_end(
     user_data = f"#!/bin/sh\necho {marker}\n"
     api = Api(auth_url, region, credential)
     credentials.save_credential("live-state", "state-key", PASSPHRASE)
-    credentials.save_credential("live-cloud", "provider-token", credential)
+    identifier, _, secret = credential.partition(":")
+    credentials.save_parts("live-cloud", "openstack", {
+        "application_credential_id": identifier,
+        "application_credential_secret": secret,
+    })  # fmt: skip
+    del identifier, secret
     credentials.save_credential(f"{prefix}-boot", "user-data", user_data)
     del credential
     report: dict[str, Any] = {"prefix": prefix, "region": region, "created": [],
@@ -392,13 +452,14 @@ def test_infomaniak_end_to_end(
 
     found = _cirros(tmp_path)
     if found is not None:
-        image: str | Image = Image(f"{prefix}-cirros", url=found[0], sha256=found[1])
+        image: str | Image = Image(f"{prefix}-cirros", file=found[0], sha256=found[1])
     else:
         image = _setting("IMAGE", "")
         skipped["image_upload"] = "CirrOS download not reachable"
         if not image:
             pytest.fail("CirrOS is not reachable: set PICELI_OPENSTACK_IMAGE")
-    cloud = OpenStack(
+    # The preset as users declare it: its network found by name alone.
+    cloud = Infomaniak(
         credentials="live-cloud", auth_url=auth_url, region=region,
         public_network=_setting("NETWORK", "ext-net1"), flavors=[flavor],
     )  # fmt: skip
@@ -419,8 +480,9 @@ def test_infomaniak_end_to_end(
             user_data=UserData(f"{prefix}-boot"),
         )  # fmt: skip
         return Infrastructure(
-            prefix, servers=[server], buckets=[bucket], state_dir=homes / "state"
-        )
+            prefix, servers=[server], buckets=[bucket], state_dir=homes / "state",
+            state_key="live-state",
+        )  # fmt: skip
 
     first = declare(_key(tmp_path, "first"))
     infra = first
@@ -456,6 +518,7 @@ def test_infomaniak_end_to_end(
         assert port["device_id"] == server["id"]
         assert any(":" in a for a in addresses) and any("." in a for a in addresses)
         verified["port"] = {"addresses": addresses, "server": server["id"]}
+        verified["port_subnets"] = _subnets(api, port)
 
         rules = [
             r for r in group["security_group_rules"] if r["direction"] == "ingress"
@@ -594,7 +657,10 @@ def test_infomaniak_end_to_end(
                 if doomed.changes:
                     apply(ws, doomed.plan_hash, destroy=True)
         except Exception as error:  # report, then sweep
-            problems.append(f"piceli destroy: {type(error).__name__}")
+            # Codes, messages and OpenTofu's diagnostics are redacted.
+            code = getattr(error, "code", type(error).__name__)
+            details = "; ".join(getattr(error, "details", ()))
+            problems.append(f"piceli destroy: {code}: {error} {details}".strip())
         try:
             api.sweep(prefix, access)
         except Exception as error:
