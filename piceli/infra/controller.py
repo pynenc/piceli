@@ -748,6 +748,12 @@ def _wanted_builds(state: Mapping[str, Any], now: float) -> list[dict[str, Any]]
     return public(state, now)
 
 
+def _offers(state: Mapping[str, Any]) -> list[dict[str, Any]]:
+    from piceli.infra.remote_builds import public_offers
+
+    return public_offers(state)
+
+
 def _failing(record: Mapping[str, Any], reason: str) -> str:
     """``; failing: name: detail, ...`` of a check failure's checks (0.19)."""
     checks = record.get("checks") or {}
@@ -1495,6 +1501,38 @@ class CompositionController:
         )
         self._wake_waiting()
 
+    def _prebuilt(self, body: Mapping[str, Any]) -> None:
+        """A merge train's ``prebuilt`` offer (0.26.0): checked and kept until
+        a step's own change key asks for it (see
+        :mod:`piceli.infra.remote_builds`)."""
+        from piceli.infra import remote_builds
+
+        cluster = getattr(self._composition, "cluster", None)
+        controller = getattr(cluster, "controller", None)
+        if not getattr(controller, "prebuilt", False):
+            raise GitOpsError(
+                "gitops-request-invalid",
+                "this controller takes no prebuilt images (Controller(prebuilt=True))",
+            )
+        if getattr(controller, "delivery", "registry") == "nodes":
+            raise GitOpsError(
+                "gitops-request-invalid",
+                "prebuilt images go through the registry; this controller "
+                "delivers into the nodes",
+            )
+        registry = self.composition.registry
+        names = remote_builds.offered(
+            self.state,
+            body,
+            present=self._in_registry,
+            repository=self._repository,
+            components=[item.name for item in self.composition.components],
+            registry=getattr(registry, "host", None),
+            now=self.clock(),
+        )
+        self.log(f"prebuilt offer from {body.get('host')}: {', '.join(names)}")
+        self._wake_waiting()
+
     def _wake_waiting(self) -> None:
         """Environments waiting for a build go at once, not at their next try."""
         for record in self._envs().values():
@@ -1554,6 +1592,8 @@ class CompositionController:
                     remote_builds.claim(self.state, body, self.clock())
                 elif kind == "built":
                     self._delivered(body)
+                elif kind == "prebuilt":
+                    self._prebuilt(body)
                 elif kind == "nix-published":
                     self.nix.published(body)
                 elif kind == "build-failed":
@@ -1970,7 +2010,7 @@ class CompositionController:
     def _cached(self, component: str, digest: str) -> BuiltImage | None:
         found = read_json(self._cache_path(component, digest))
         if not isinstance(found, Mapping) or not found.get("pull_ref"):
-            return None
+            return self._from_offer(component, digest)
         return BuiltImage(
             str(found["pull_ref"]),
             str(found.get("manifest_digest") or ""),
@@ -1981,6 +2021,32 @@ class CompositionController:
                 if k not in ("pull_ref", "manifest_digest")
             },
         )
+
+    def _from_offer(self, component: str, digest: str) -> BuiltImage | None:
+        """0.26.0: a train's offer under this exact change key (computed by
+        this controller), its digest still in the registry: recorded and used
+        as this controller's own build."""
+        from piceli.infra import remote_builds
+
+        offer = remote_builds.take_offer(self.state, component, digest)
+        if offer is None or not self._in_registry(str(offer["pull_ref"])):
+            return None
+        extra: dict[str, Any] = {
+            "host": offer.get("host"),
+            "provenance": offer.get("provenance"),
+            "prebuilt": True,
+        }
+        if offer.get("platforms"):
+            extra = {"platforms": offer["platforms"], **extra}
+        image = BuiltImage(str(offer["pull_ref"]), str(offer["manifest_digest"]), extra)
+        self._remember(component, digest, image)
+        train = (offer.get("provenance") or {}).get("train") or {}
+        self.log(
+            f"{component}: prebuilt image {image.manifest_digest[:19]} from "
+            f"{offer.get('host')} taken"
+            + (f" (train {train.get('name')} run {train.get('run')})" if train else "")
+        )
+        return image
 
     def _remember(self, component: str, digest: str, image: BuiltImage) -> None:
         write_json(self._cache_path(component, digest), image.to_dict())
@@ -3635,6 +3701,8 @@ class CompositionController:
                 # Added in 0.21.0: what this controller waits for build hosts
                 # to build (piceli builder serve reads it).
                 "builds_wanted": _wanted_builds(self.state, self.clock()),
+                # Added in 0.26.0: images a merge train offered (only when any).
+                **({"prebuilt": offers} if (offers := _offers(self.state)) else {}),
                 # Added in 0.22.0: health events and quarantine of its build
                 # hosts and builder node, and the last rebuild request.
                 **(

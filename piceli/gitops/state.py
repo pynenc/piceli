@@ -60,6 +60,8 @@ REQUEST_KINDS = (
     "rebuild", "host-release",
     # 0.25.0: a build host published a NixRelease
     "nix-published",
+    # 0.26.0: a merge train offers images built before they were asked for
+    "prebuilt",
 )  # fmt: skip
 #: Env states a status may carry.
 ENV_STATES = (
@@ -355,6 +357,23 @@ def built_request(
     return request(
         "built",
         id=_build_id(build),
+        host=str(host)[:64],
+        images={name: dict(item) for name, item in images.items()},
+        receipt=dict(receipt),
+    )
+
+
+def prebuilt_request(
+    host: str,
+    images: Mapping[str, Mapping[str, Any]],
+    receipt: Mapping[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """Images built and pushed before the controller asked (0.26.0, a merge
+    train's ``Step.images``): each component's key (the controller's change
+    key), source, commit, pull reference, digest and platforms, and a
+    receipt (host, times, builder image, commits, the train run)."""
+    return request(
+        "prebuilt",
         host=str(host)[:64],
         images={name: dict(item) for name, item in images.items()},
         receipt=dict(receipt),

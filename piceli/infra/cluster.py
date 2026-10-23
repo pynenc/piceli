@@ -112,6 +112,8 @@ def check_controller(controller: Controller) -> None:
         raise _invalid('Controller(sync=) must be "on change"')
     if not isinstance(controller.delete_volumes, bool):
         raise _invalid("Controller(delete_volumes=) must be True or False")
+    if not isinstance(controller.prebuilt, bool):
+        raise _invalid("Controller(prebuilt=) must be True or False")
     from piceli.infra import Otlp
 
     if controller.telemetry is not None and not isinstance(controller.telemetry, Otlp):
@@ -304,6 +306,8 @@ def describe(cluster: Cluster) -> dict[str, Any]:
             body["controller"]["host_wait"] = cluster.controller.host_wait
         if cluster.controller.delivery != "registry":  # 0.22.0; same hashes
             body["controller"]["delivery"] = cluster.controller.delivery
+        if cluster.controller.prebuilt:  # 0.26.0; same hashes
+            body["controller"]["prebuilt"] = True
         if (
             cluster.controller.quarantine_after,
             cluster.controller.quarantine_window,

@@ -288,8 +288,8 @@ class Step:
         push them to the cluster's registry under the controller's own change
         key, and offer them to the controller (see :mod:`piceli.train.images`).
 
-        :param composition: ``MODULE:ATTR`` of the ``Composition`` (read from
-            the promoted head).
+        :param composition: The composition module (``infra.py``, relative to
+            the repository root; read from the promoted head).
         :param components: The components to build (default: every component
             built from a source of this repository).
         :param platforms: The platforms (default: the controller's).
@@ -369,8 +369,16 @@ class ImagesStep(Step):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        if not isinstance(self.composition, str) or ":" not in self.composition:
-            raise _invalid(f"step {self.name}: composition is MODULE:ATTR")
+        if (
+            not isinstance(self.composition, str)
+            or not self.composition.endswith(".py")
+            or self.composition.startswith("/")
+            or ".." in self.composition.split("/")
+        ):
+            raise _invalid(
+                f"step {self.name}: composition is the composition module's path "
+                "in the repository (infra.py)"
+            )
         object.__setattr__(
             self,
             "components",

@@ -174,6 +174,7 @@ class TrainRun:
         events: EventSink = no_events,
         environment: Mapping[str, str] | None = None,
         store: Store | None = None,
+        images: Any = None,
     ) -> None:
         if push and not promote:
             raise TrainError("train-push-needs-promote", "--push needs --promote")
@@ -195,6 +196,9 @@ class TrainRun:
 
             store = Store(cache_root(self.train.cache) / "store")
         self.store = store
+        #: How an images step builds, pushes and offers (tests pass a fake;
+        #: default :func:`piceli.train.images.cluster_tools`).
+        self.images = images
         from piceli.train.local import Checkouts, cache_root
 
         self.checkouts = Checkouts(cache_root(self.train.cache), self.train.name, repo)
@@ -667,7 +671,7 @@ class TrainRun:
                 if isinstance(step, ImagesStep):
                     from piceli.train.images import run_images_step
 
-                    result = run_images_step(step, ctx, tag=tag)
+                    result = run_images_step(step, ctx, tag=tag, tools=self.images)
                 else:
                     result = run_step(step, ctx)
                 results.append(result)

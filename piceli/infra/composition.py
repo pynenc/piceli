@@ -605,13 +605,17 @@ def _cluster_dict(cluster: Cluster, *, remote: bool = False) -> dict[str, Any]:
         "registry": described,
     }
     controller = cluster.controller
-    if controller is not None and tuple(controller.builds) != ("cluster",):
+    if controller is not None and (
+        tuple(controller.builds) != ("cluster",) or controller.prebuilt
+    ):
         # 0.21.0, only when declared (other configs and hashes unchanged).
         body["controller"] = {
             "on": controller.on,
             "builds": list(controller.builds),
             "host_wait": controller.host_wait,
         }
+        if controller.prebuilt:  # 0.26.0, only when on
+            body["controller"]["prebuilt"] = True
         if controller.delivery == "nodes":
             # 0.22.0: the nodes build hosts import into, with their
             # architecture; the targets without their SSH user.
@@ -660,6 +664,7 @@ def _cluster_from(value: Any) -> Cluster | None:
             builds=tuple(found_controller.get("builds") or ("cluster",)),
             host_wait=str(found_controller.get("host_wait") or "30m"),
             delivery=found_controller.get("delivery") or "registry",
+            prebuilt=bool(found_controller.get("prebuilt", False)),
         )
     nodes = tuple(
         Node(item["name"], arch=item["arch"], target=item.get("target"))

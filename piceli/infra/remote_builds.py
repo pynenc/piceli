@@ -41,6 +41,19 @@ the config digest on the node before answering. A node that lacks the
 image anyway cannot pull it from anywhere (the ``.invalid`` domain never
 resolves): its pod fails to start and the rollout's checks fail.
 
+Prebuilt images (0.26.0, ``Controller(prebuilt=True)``): a merge train
+that promoted a commit may build its images before the controller sees the
+commit (``Step.images``: built from the tested commit, pushed to this
+registry) and offer them with a ``prebuilt`` request. :func:`offered`
+checks each offer (a declared component, a reference into the component's
+own repository of this registry, pinned by its digest, the digest present)
+and keeps it by component and key. When a step later needs a component and
+has no cached image, :func:`take_offer` hands it the offer **whose key is
+the change key the controller computed itself**; the controller checks the
+digest is still in its registry, then records the image as its own build,
+with the train's provenance. A build is never asked for then: no host wait,
+no Job. An offer under any other key is never used.
+
 Importing this module is side-effect free.
 """
 
@@ -61,6 +74,11 @@ STATE_KEY = "host_builds"
 #: Builds a host reported failed, by id: the same inputs are not offered
 #: again until ``piceli gitops sync`` (0.22.0).
 FAILED_KEY = "host_builds_failed"
+#: Prebuilt offers by component and key (0.26.0).
+OFFERS_KEY = "prebuilt"
+#: Offers kept per component (the newest).
+OFFERS_PER_COMPONENT = 20
+_KEY = re.compile(r"[A-Za-z0-9:._-]{1,100}")
 #: A claim with no answer for this long may be claimed again.
 CLAIM_SECONDS = 4 * 3600
 WAITING = "build-waiting"
@@ -532,3 +550,109 @@ def _node_delivered(
         "platforms": dict(sorted(configs.items())),
         "nodes": sorted(nodes),
     }
+
+
+def offered(
+    state: dict[str, Any],
+    body: Mapping[str, Any],
+    *,
+    present: Callable[[str], bool],
+    repository: Callable[[str], str],
+    components: Sequence[str],
+    registry: str | None,
+    now: float,
+) -> list[str]:
+    """Check a ``prebuilt`` request and keep its offers (see the module doc);
+    the components offered.
+
+    :param repository: The component's repository in this registry.
+    :param components: The components the composition declares.
+    :param registry: The registry's host (``None``: not checked).
+    :raises GitOpsError: ``gitops-request-invalid``.
+    """
+    images = body.get("images")
+    if not isinstance(images, Mapping) or not images:
+        raise GitOpsError("gitops-request-invalid", "a prebuilt offer holds no images")
+    receipt = body.get("receipt")
+    receipt = receipt if isinstance(receipt, Mapping) else {}
+    from piceli.infra import provenance
+
+    record = provenance.from_receipt(receipt, str(body.get("host") or "?"))
+    checked: dict[str, dict[str, Any]] = {}
+    for name, image in images.items():
+        if not isinstance(image, Mapping):
+            raise GitOpsError("gitops-request-invalid", f"image {name}: not an object")
+        if name not in components:
+            raise GitOpsError(
+                "gitops-request-invalid", f"image {name}: not a declared component"
+            )
+        key = str(image.get("key") or "")
+        if not _KEY.fullmatch(key):
+            raise GitOpsError("gitops-request-invalid", f"image {name}: no change key")
+        pull_ref = str(image.get("pull_ref") or "")
+        digest = str(image.get("manifest_digest") or "")
+        if not _DIGEST.fullmatch(digest) or not pull_ref.endswith("@" + digest):
+            raise GitOpsError(
+                "gitops-request-invalid", f"image {name}: not pinned by its digest"
+            )
+        where = pull_ref.rsplit("@", 1)[0]
+        host, _, path = where.partition("/")
+        if path != repository(name) or (registry is not None and host != registry):
+            raise GitOpsError(
+                "gitops-request-invalid",
+                f"image {name}: not in this registry's repository {repository(name)}",
+            )
+        if not present(pull_ref):
+            raise GitOpsError(
+                "gitops-request-invalid",
+                f"image {name}: {digest} is not in the registry",
+            )
+        platforms = image.get("platforms")
+        checked[name] = {
+            "key": key,
+            "pull_ref": pull_ref,
+            "manifest_digest": digest,
+            "platforms": dict(platforms) if isinstance(platforms, Mapping) else {},
+            "source": str(image.get("source") or "")[:100],
+            "commit": str(image.get("commit") or "")[:64],
+            "host": str(body.get("host") or "?")[:64],
+            "provenance": record,
+            "at": _iso(now),
+            "epoch": now,
+        }
+    offers = state.setdefault(OFFERS_KEY, {})
+    for name, item in checked.items():
+        kept = offers.setdefault(name, {})
+        kept[item["key"]] = item
+        for old in sorted(kept, key=lambda k: float(kept[k].get("epoch") or 0))[
+            :-OFFERS_PER_COMPONENT
+        ]:
+            del kept[old]
+    return sorted(checked)
+
+
+def take_offer(
+    state: Mapping[str, Any], component: str, key: str
+) -> dict[str, Any] | None:
+    """The offer of ``component`` under ``key`` (the controller's own change
+    key), or ``None``. The offer stays until it is replaced or aged out."""
+    found = ((state.get(OFFERS_KEY) or {}).get(component) or {}).get(key)
+    return dict(found) if isinstance(found, Mapping) else None
+
+
+def public_offers(state: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """``prebuilt`` in the controller's status: each offer, newest first."""
+    found = []
+    for component, items in sorted((state.get(OFFERS_KEY) or {}).items()):
+        for key, item in items.items():
+            found.append(
+                {
+                    "component": component,
+                    "key": key,
+                    "image": item.get("pull_ref"),
+                    "host": item.get("host"),
+                    "train": (item.get("provenance") or {}).get("train"),
+                    "at": item.get("at"),
+                }
+            )
+    return sorted(found, key=lambda item: str(item.get("at")), reverse=True)

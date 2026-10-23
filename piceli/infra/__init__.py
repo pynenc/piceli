@@ -204,6 +204,14 @@ class Controller:
     :mod:`piceli.dev.health`) quarantine it: the controller refuses its
     build claims, or builds nothing on the node, until ``piceli gitops
     release-host NAME``. ``None``: never quarantined.
+
+    ``prebuilt`` (0.26.0) lets the controller take images built and pushed
+    to its registry before it asks for them, by a merge train
+    (``Step.images``, request ``prebuilt``): an offered image is used only
+    when its key is the change key the controller computes itself for the
+    component, its reference names the component's repository in this
+    registry pinned by digest, and the digest is in the registry (checked
+    when offered and again when used). Off by default.
     """
 
     on: str
@@ -217,6 +225,7 @@ class Controller:
     delivery: Literal["registry", "nodes"] = "registry"
     quarantine_after: int | None = 2
     quarantine_window: str = "24h"
+    prebuilt: bool = False
 
     def __post_init__(self) -> None:
         from piceli.infra.cluster import check_controller
