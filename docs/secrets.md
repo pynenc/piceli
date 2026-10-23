@@ -502,18 +502,18 @@ value.
    web-1-state      state-key        present     piceli       -
    web-1-age        age-identity     missing     piceli       piceli secrets age web-1-age --generate
    web-1-boot       user-data        missing     owner        piceli secrets user-data web-1-boot --prompt
-   nix-cache-write  s3-keys          missing     infra-apply  piceli infra plan web_1.py:infra
-   nix-cache-read   s3-keys          missing     infra-apply  piceli infra plan web_1.py:infra
+   nix-cache-write  s3-keys          pending     infra-apply  piceli infra plan web_1.py:infra
+   nix-cache-read   s3-keys          pending     infra-apply  piceli infra plan web_1.py:infra
 
    what each is for:
      infomaniak       openstack API [infomaniak: one part of two stored, re-run `piceli secrets provider infomaniak --prompt`]
      web-1-age        sops-nix on web-1; on host web-1 too: piceli host secrets web-1 puts it there; its age1 public key goes in .sops.yaml
      web-1-boot       user data of web-1; read once, when infra apply creates web-1: store a short-lived key right before that apply
-     nix-cache-read   read S3 keys of bucket example-nix-cache; on host web-1 too: piceli host secrets web-1 writes it to /var/lib/piceli-host/cache.env [created and stored by piceli infra apply]
+     nix-cache-read   read S3 keys of bucket example-nix-cache; on host web-1 too: piceli host secrets web-1 writes it to /var/lib/piceli-host/cache.env [created by the next infra apply]
      ...
    backup: no backup yet; next: piceli secrets backup-key --out PATH --add
    warning: S3 key nix-cache-read (bucket example-nix-cache) is not read-only at openstack: hosts only read with it, but the cloud lets it write
-   summary: 1 present, 6 missing, 1 incomplete; piceli secrets setup web_1.py walks through them
+   summary: 1 present, 2 pending, 4 missing, 1 incomplete; piceli secrets setup web_1.py walks through them
    ```
 
    It reads every declaration in the module (`Infrastructure`, `Bucket`,
@@ -524,7 +524,8 @@ value.
    | State | Meaning |
    | --- | --- |
    | `present` | Stored and complete. |
-   | `missing` | Not stored. |
+   | `pending` | A key pair the next `infra apply` creates: the infrastructure has not applied it yet. Not an error. |
+   | `missing` | Not stored. A pair `infra apply` already created but this store lacks: the next `infra plan` stores it again from the state. |
    | `incomplete` | A credential that lacks a part (a Porkbun key pair stored as one value). |
    | `damaged` | Unreadable, readable by other users, of another kind, or a signing key whose public key is not `NixCache(public_key=)`. |
    | `not-needed` | The user data of a server that exists: a plan reads it only to create the server again. |
@@ -534,10 +535,11 @@ value.
    (`piceli infra apply` creates and stores it). `NEXT` is the exact
    command. The backup line tells whether a backup exists and is newer than
    every secret (`stale` names the newer ones). Exit 0 means every secret
-   is stored and complete; 1 that something is missing, incomplete or
-   damaged. `--json` prints the same as one `piceli.secrets-status.v1`
+   is stored and complete, or pending; 1 that something is missing,
+   incomplete or damaged. `--json` prints the same as one `piceli.secrets-status.v1`
    object (`secrets`, each with `state`, `created_by`, `next`, `purpose`,
-   `where`, `detail`; `counts`, `complete`, `backup`, `warnings`).
+   `where`, `build_host`, `detail`; `counts`, `complete`, `backup`,
+   `warnings`).
 
 2. **Walk through what is missing.** `piceli secrets setup web_1.py` takes
    the secrets in this order:
@@ -602,6 +604,13 @@ value.
 4. **Right before the first apply**, store the user data (`piceli secrets
    user-data web-1-boot --prompt`), then plan and apply: `infra apply`
    stores the S3 pairs, and `status` shows them `present`.
+
+5. **A build host that publishes releases.** With a `NixRelease(...,
+   builder="mini")`, the cache's signing key and S3 write pair are made
+   here (`setup`, `infra apply`), but `piceli builder serve --publish` on
+   `mini` reads them from `mini`'s own store. Once they are present here,
+   `status` gives the command that carries them there (`build_host:
+   "mini"`), and the steps are in {ref}`build-host-secrets`.
 
 Without a terminal (scripts, agents), `setup --yes` generates the keys and
 reads provider parts piped one per line, in the order `status` lists them;

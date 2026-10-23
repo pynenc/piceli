@@ -308,6 +308,13 @@ def _user_data(walk: _Walk, item: Item) -> None:
 
 
 def _step(walk: _Walk, item: Item, key_names: Mapping[str, list[str]]) -> None:
+    if item.state == "pending":
+        say(
+            f"  {item.secret.name}: {item.secret.purpose}, {item.detail}; nothing "
+            f"to do here; next: {item.next}"
+        )
+        walk.result(item, "later", next=item.next)
+        return
     if not item.blocking:
         say(f"  {item.state}: {item.secret.name} ({item.secret.kind})")
         walk.result(item, item.state)
@@ -394,8 +401,8 @@ def _backup(walk: _Walk) -> None:
 def _deferred(row: Mapping[str, Any]) -> bool:
     """Left for later on purpose: user data (right before apply) and the
     pairs infra apply makes."""
-    return row["state"] == "missing" and (
-        row["kind"] == "user-data" or row["created_by"] == "infra-apply"
+    return row["state"] == "pending" or (
+        row["state"] == "missing" and row["kind"] == "user-data"
     )
 
 

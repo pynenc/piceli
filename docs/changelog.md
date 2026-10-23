@@ -192,15 +192,18 @@ environment and host in one view.
   `DevBuilds`, and a composition's clusters, whose credentials are `piceli
   login` profiles): `present`, `missing`, `incomplete` (a credential that
   lacks a part), `damaged` (unreadable, readable by others, another kind, a
-  signing key whose public key is not the declared one) or `not-needed`
-  (the user data of a server that exists); who creates it (`infra-apply`,
+  signing key whose public key is not the declared one), `pending` (a key
+  pair the next `infra apply` creates: the infrastructure's records show it
+  not applied yet; not an error) or `not-needed` (the user data of a server
+  that exists); who creates it (`infra-apply`,
   `piceli` with `--generate`, or `owner` with `--prompt`); the exact next
   command; what it is for and where else it must live (the host, a build
   host, "read once at creation"). Then the backup's state (`none`, `stale`
   with the newer names, `single-recipient`, `current`) and warnings (an S3
   read pair the cloud does not limit to reading, a spent user-data key).
   `--json` prints one `piceli.secrets-status.v1` object; exit 0 when every
-  secret is stored and complete, 1 otherwise, 2 for a module that declares
+  secret is stored and complete or pending, 1 otherwise (a pair applied but
+  absent here is `missing`: the next plan stores it again), 2 for a module that declares
   nothing (`secrets-nothing-declared`). `setup` walks the missing ones in
   order: provider credentials part by part, the keys Piceli generates
   (printing only the public halves to copy into the declaration or
@@ -210,7 +213,20 @@ environment and host in one view.
   confirmation; `--json` prints one object per step. Never prints a value.
 - **`needed_secrets()`** also takes `NixRelease` (its cache's signing and
   write keys are needed on its build host too) and `DevBuilds`, and each
-  `NeededSecret` carries `provider` and `where`.
+  `NeededSecret` carries `provider`, `where` and `build_host` (the
+  release's builder).
+- **Carrying a build host's keys there: `piceli secrets backup --only
+  NAME`.** The signing key and S3 write pair a `NixRelease`'s builder
+  publishes with are made on the owner's machine; `backup --only cache-1
+  --only cache-write --to PATH --recipient <the build host's age1...>`
+  writes just those, encrypted to that one key (one recipient is enough
+  with `--only`; the manifest says `only: true`; an unknown name is
+  `secrets-backup-only-unknown`), without touching the last backup's
+  marker or the remembered recipients. `piceli secrets restore PATH
+  --identity KEY` on the build host adds them (plan, then `--approve`, into
+  a store that is not empty) and does not adopt the transfer as its backup
+  configuration. `secrets status` gives that command for each such secret
+  once it is present.
 - **S3 pairs from `infra apply` are stored by part**, as `piceli secrets
   s3` stores them, so `credential_report()` sees them complete. Plans pass
   OpenStack and Porkbun credentials to OpenTofu from their stored parts

@@ -3380,6 +3380,7 @@ Write the whole secret store, encrypted with age, to one file (never printed).
 | `--recipients-file` | path |  | A file of recipients, one per line (age -R) |
 | `--force` | boolean | `False` | Replace an existing backup file |
 | `--single-recipient` | boolean | `False` | Allow one recipient (losing it loses the store and the backup together); recorded in the backup and its marker |
+| `--only` | text (repeatable) |  | Only this credential (repeatable): a transfer to another machine, such as a build host; needs --recipient, allows one, and is not a backup of this store |
 | `--json` | boolean | `False` | Print one JSON object on stdout |
 
 **Contract**
@@ -3391,7 +3392,7 @@ Write the whole secret store, encrypted with age, to one file (never printed).
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.25.0. Runs the age command (PICELI_AGE, else age on PATH; secrets-age-missing otherwise): the tar is streamed into age, no plaintext touches the disk. Refuses an existing file without --force (secrets-backup-exists). Prints names, kinds, the archive's sha256 and the staleness, never a value. Exit 1 when age refuses (secrets-backup-failed). Needs two recipients: one is refused (secrets-backup-single-recipient) unless --single-recipient, which the manifest, the marker and the staleness record.
+- **Notes:** 0.25.0. Runs the age command (PICELI_AGE, else age on PATH; secrets-age-missing otherwise): the tar is streamed into age, no plaintext touches the disk. Refuses an existing file without --force (secrets-backup-exists). Prints names, kinds, the archive's sha256 and the staleness, never a value. Exit 1 when age refuses (secrets-backup-failed). Needs two recipients: one is refused (secrets-backup-single-recipient) unless --single-recipient, which the manifest, the marker and the staleness record. --only NAME (repeatable) writes just those credentials for another machine (a build host): it needs --recipient (never the remembered ones), allows one, records only: true in the manifest, changes neither the marker nor the remembered recipients, and refuses an unknown name (secrets-backup-only-unknown).
 
 (cli-secrets-backup-key)=
 ### `piceli secrets backup-key`
@@ -3648,7 +3649,7 @@ Every secret a declaration needs: present or missing, who creates it, the next c
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.25.0. Read-only; safe to retry; never prints a value. For each secret: state (present, missing, incomplete, damaged, or not-needed: the user data of a server that exists), created_by (infra-apply, piceli: --generate, owner: --prompt), next (the exact command), purpose and where else it must live; then the backup's state (empty, none, stale, single-recipient, current) and warnings (an S3 read pair the provider does not limit to reading, a spent user-data key). --json prints one piceli.secrets-status.v1 object. Exit 0: every secret stored and complete (the backup does not count); 1: something missing, incomplete or damaged; 2: a module that does not load or declares nothing (secrets-nothing-declared).
+- **Notes:** 0.25.0. Read-only; safe to retry; never prints a value. For each secret: state (present, pending: a pair the next infra apply creates, missing, incomplete, damaged, or not-needed: the user data of a server that exists), created_by (infra-apply, piceli: --generate, owner: --prompt), next (the exact command), purpose and where else it must live; then the backup's state (empty, none, stale, single-recipient, current) and warnings (an S3 read pair the provider does not limit to reading, a spent user-data key). --json prints one piceli.secrets-status.v1 object. Exit 0: every secret stored and complete or pending (the backup does not count); a secret a NixRelease's build host needs gets, once present, the backup --only command that carries it there; 1: something missing, incomplete or damaged; 2: a module that does not load or declares nothing (secrets-nothing-declared).
 
 (cli-secrets-user-data)=
 ### `piceli secrets user-data`

@@ -12812,6 +12812,7 @@
     "flags": [
      "--force",
      "--json",
+     "--only",
      "--recipient",
      "--recipients-file",
      "--single-recipient",
@@ -13883,6 +13884,7 @@
    "secrets-backup-key-exists",
    "secrets-backup-key-failed",
    "secrets-backup-key-invalid",
+   "secrets-backup-only-unknown",
    "secrets-backup-recipient-invalid",
    "secrets-backup-recipients-missing",
    "secrets-backup-single-recipient",

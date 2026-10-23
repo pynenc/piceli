@@ -685,6 +685,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`secrets-backup-key-exists`](#error-secrets-backup-key-exists) | infra | no |
 | [`secrets-backup-key-failed`](#error-secrets-backup-key-failed) | infra | yes |
 | [`secrets-backup-key-invalid`](#error-secrets-backup-key-invalid) | infra | no |
+| [`secrets-backup-only-unknown`](#error-secrets-backup-only-unknown) | infra | yes |
 | [`secrets-backup-recipient-invalid`](#error-secrets-backup-recipient-invalid) | infra | no |
 | [`secrets-backup-recipients-missing`](#error-secrets-backup-recipients-missing) | infra | no |
 | [`secrets-backup-single-recipient`](#error-secrets-backup-single-recipient) | infra | no |
@@ -6720,6 +6721,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Choose a path outside the store in an existing directory (a USB drive), or one you delete after printing the key.
 - **Retry-safe:** no
+
+(error-secrets-backup-only-unknown)=
+### `secrets-backup-only-unknown`
+
+**Credential to transfer not found.** `piceli secrets backup --only NAME` named a credential the store does not hold (only `NAME.json` credentials of `$PICELI_CREDENTIALS_DIR` can be named). Nothing was written.
+
+- **Fix:** Check the names with `piceli secrets status MODULE`; create a missing one first (its `next` command), then run the transfer again.
+- **Retry-safe:** yes
 
 (error-secrets-backup-recipient-invalid)=
 ### `secrets-backup-recipient-invalid`

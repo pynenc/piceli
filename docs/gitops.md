@@ -632,7 +632,8 @@ never holds them. On the build host named by `builder=` (a docker or
 native host of the cluster's `DevBuilds(hosts=[...])` with
 `DevProfile.for_nix()`), with the cache's signing key and S3 write keys in
 its own Piceli secrets (`piceli secrets nix-cache cache-1 --prompt`,
-`piceli secrets s3 cache-s3-write --prompt`):
+`piceli secrets s3 cache-s3-write --prompt`, or carried from your machine
+with `piceli secrets backup --only`: {ref}`build-host-secrets`):
 
 ```sh
 piceli builder serve --cluster infra.py:my_cluster --host mini \

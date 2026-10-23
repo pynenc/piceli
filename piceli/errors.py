@@ -5628,6 +5628,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "infra",
     ),
     _E(
+        "secrets-backup-only-unknown",
+        "Credential to transfer not found",
+        "`piceli secrets backup --only NAME` named a credential the store does not hold (only `NAME.json` credentials of `$PICELI_CREDENTIALS_DIR` can be named). Nothing was written.",
+        "Check the names with `piceli secrets status MODULE`; create a missing one first (its `next` command), then run the transfer again.",
+        True,
+        "infra",
+    ),
+    _E(
         "secrets-nothing-declared",
         "No declaration that needs secrets",
         "`piceli secrets status` or `setup` got a module (or `MODULE:ATTR`) that declares no `Infrastructure`, `Bucket`, `NixCache`, `NixHost`, `NixRelease`, `DevBuilds` or `Cluster`. Nothing was read or stored.",

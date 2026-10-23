@@ -242,7 +242,9 @@ class NeededSecret:
     stores it) or ``"operator"`` (someone runs ``setup``). ``provider`` is
     the provider a ``provider-token`` is for (its ``Provider.name``);
     ``where`` says where else the secret must live or when it is needed
-    (the host, a build host, "read once at creation"), when that matters.
+    (the host, a build host, "read once at creation"), when that matters;
+    ``build_host`` names the ``NixRelease`` builder whose own store needs
+    it too.
     """
 
     name: str
@@ -252,6 +254,7 @@ class NeededSecret:
     purpose: str
     provider: str | None = None
     where: str | None = None
+    build_host: str | None = None
 
     def to_dict(self) -> dict[str, str | None]:
         return {
@@ -262,6 +265,7 @@ class NeededSecret:
             "purpose": self.purpose,
             "provider": self.provider,
             "where": self.where,
+            "build_host": self.build_host,
         }
 
 
@@ -319,23 +323,30 @@ def _of_bucket(bucket: Any) -> Iterable[NeededSecret]:
 def _of_cache(cache: Any, builder: str | None = None) -> Iterable[NeededSecret]:
     there = (
         f"also in the Piceli secrets of build host {builder}: piceli builder "
-        f"serve --host {builder} --publish signs and pushes there"
+        f"serve --host {builder} --publish signs and pushes there; move it "
+        "with piceli secrets backup --only and restore"
         if builder is not None
         else None
     )
-    yield _operator(
-        cache.signing_credential, "nix-signing-key", f"signs {cache.store_url}",
-        where=there,
+    yield replace(
+        _operator(
+            cache.signing_credential, "nix-signing-key", f"signs {cache.store_url}",
+            where=there,
+        ),
+        build_host=builder,
     )  # fmt: skip
     if cache.bucket is not None:
         for secret in _of_bucket(cache.bucket):
             if there is not None and secret.name == cache.write_credentials:
-                secret = replace(secret, where=there)
+                secret = replace(secret, where=there, build_host=builder)
             yield secret
     if cache.write_credentials and not cache.creates(cache.write_credentials):
-        yield _operator(
-            cache.write_credentials, KIND, f"write S3 keys of {cache.store_url}",
-            where=there,
+        yield replace(
+            _operator(
+                cache.write_credentials, KIND, f"write S3 keys of {cache.store_url}",
+                where=there,
+            ),
+            build_host=builder,
         )  # fmt: skip
 
 
@@ -400,7 +411,13 @@ def needed_secrets(*declarations: Any) -> list[NeededSecret]:
         if seen is None:
             found[secret.name] = secret
         elif seen.created_by == "operator" and secret.created_by == "infra-apply":
-            found[secret.name] = replace(secret, where=secret.where or seen.where)
+            found[secret.name] = replace(
+                secret,
+                where=secret.where or seen.where,
+                build_host=secret.build_host or seen.build_host,
+            )
         elif seen.where is None and secret.where is not None:
-            found[secret.name] = replace(seen, where=secret.where)
+            found[secret.name] = replace(
+                seen, where=secret.where, build_host=secret.build_host
+            )
     return list(found.values())

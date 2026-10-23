@@ -54,6 +54,15 @@ def backup_secrets(
             "together); recorded in the backup and its marker",
         ),
     ] = False,
+    only: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--only",
+            help="Only this credential (repeatable): a transfer to another "
+            "machine, such as a build host; needs --recipient, allows one, and "
+            "is not a backup of this store",
+        ),
+    ] = None,
     json_output: Annotated[
         bool, typer.Option("--json", help="Print one JSON object on stdout")
     ] = False,
@@ -65,13 +74,35 @@ def backup_secrets(
     backup-key --out PATH --add: paper or USB) or an age-plugin-yubikey
     identity. With one, losing that key loses the store and its backup
     together: it is refused unless --single-recipient.
+
+    --only NAME (repeatable) writes just those credentials for another
+    machine (a build host's signing key and S3 write pair), encrypted to its
+    --recipient; one recipient is enough, the manifest says only: true, and
+    the last backup's marker and the remembered recipients do not change.
+    On that machine: piceli secrets restore PATH --identity KEY.
     """
     from piceli.infra.machines import secrets_backup as sb
     from piceli.k8s.cli.infra import _guard
 
     with _guard():
         chosen = sb.parse_recipients(recipient or [], recipients_file)
-        result = sb.backup(to, chosen, force=force, single_recipient=single_recipient)
+        result = sb.backup(
+            to, chosen, force=force, single_recipient=single_recipient,
+            only=only or (),
+        )  # fmt: skip
+    if result["only"]:
+        names = ", ".join(e["name"] for e in result["entries"])
+        say(
+            f"wrote {names} to {result['path']} for {len(result['recipients'])} "
+            f"recipient(s); {result['sha256']}; no value was printed"
+        )
+        say(
+            "  not a backup of this store (the last backup is unchanged); on the "
+            "receiving machine: piceli secrets restore PATH --identity KEY, then "
+            "delete the file on both machines"
+        )
+        emit_json(result)
+        return
     say(
         f"backed up {result['count']} files to {result['path']} for "
         f"{len(result['recipients'])} recipient(s); {result['sha256']}; no value "

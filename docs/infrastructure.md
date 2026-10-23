@@ -563,6 +563,53 @@ absolute path, `..`, a link or a file outside the store is refused
 (`secrets-restore-archive-invalid`). Read the identity from the password
 manager into a file only for the restore, and delete it afterwards.
 
+(build-host-secrets)=
+### Moving a build host's keys there
+
+A `NixRelease(..., builder="mini")` is published by `piceli builder serve
+--publish` on the build host `mini`, which reads the cache's signing key and
+S3 write pair from its own store. They are made on your machine (`piceli
+secrets setup`, `infra apply`); carry them over with the same encrypted
+archive, for that machine's key only:
+
+1. **On the build host**, make the key that receives them (or use
+   `age-keygen -o ~/.config/piceli/transfer.key`):
+
+   ```console
+   mini$ piceli secrets backup-key --out ~/.config/piceli/transfer.key
+   recipient: age1...
+   ```
+
+2. **On your machine**, write just those secrets, encrypted to it.
+   `piceli secrets status MODULE` prints this command, with the names, for
+   each secret a release's build host needs:
+
+   ```console
+   $ piceli secrets backup --only cache-1 --only cache-write \
+       --to /tmp/x.age --recipient age1...
+   $ scp /tmp/x.age mini:/tmp/x.age
+   $ rm /tmp/x.age
+   ```
+
+   `--only NAME` (repeatable) takes credentials of the store by name
+   (`secrets-backup-only-unknown` otherwise). It needs `--recipient` (the
+   remembered recipients are your own, not the build host's) and one is
+   enough; the archive's manifest says `only: true`. It is not a backup of
+   your store: the last backup's marker, its staleness and the remembered
+   recipients do not change.
+
+3. **On the build host**, restore them and delete the file:
+
+   ```console
+   mini$ piceli secrets restore /tmp/x.age --identity ~/.config/piceli/transfer.key
+   mini$ rm /tmp/x.age
+   ```
+
+   Into an empty store they are added at once; into one that is not empty
+   the restore lists what it adds or replaces and exits 3, and `--approve
+   DIGEST` writes them. A transfer never becomes the build host's backup
+   configuration.
+
 ## The OS hand-off and the cluster
 
 1. **Install.** `piceli infra install machines.py:infra edge-1` renders the

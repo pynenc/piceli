@@ -528,3 +528,71 @@ def test_backup_key_needs_age_keygen(
     assert done.exit_code == 2
     assert json.loads(done.stdout)["reason"] == "secrets-age-missing"
     assert not (tmp_path / "k").exists()
+
+
+# ------------------------------------------------------------- --only
+
+
+@needs_age
+def test_only_moves_named_secrets_to_one_machine_without_a_marker(
+    homes: Path,
+    identity: tuple[Path, str],
+    second: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key, public = identity
+    _fill(homes)
+    # The owner's own backups: remembered recipients and a marker.
+    full = homes / "full.age"
+    assert _run("backup", "--to", str(full), "--recipient", second,
+                "--recipient", public).exit_code == 0  # fmt: skip
+    before = sb.config_path().read_text()
+    target = homes / "transfer.age"
+    done = _run("backup", "--only", "cache-s3", "--only", "edge-state",
+                "--to", str(target), "--recipient", public)  # fmt: skip
+    assert done.exit_code == 0, done.stdout + done.stderr
+    _no_value(done.stdout, done.stderr)
+    body = json.loads(done.stdout)
+    assert body["only"] is True and body["single_recipient"] is True
+    assert sorted(e["name"] for e in body["entries"]) == ["cache-s3", "edge-state"]
+    assert body["count"] == 2
+    # Not a backup of the store: the marker and the recipients are unchanged.
+    assert sb.config_path().read_text() == before
+    # The receiving machine: its store gets just those, and no backup config.
+    fresh = homes / "build-host"
+    monkeypatch.setenv("PICELI_CREDENTIALS_DIR", str(fresh / "credentials"))
+    monkeypatch.setenv("PICELI_PROFILES_DIR", str(fresh / "profiles"))
+    restored = _run("restore", str(target), "--identity", str(key))
+    assert restored.exit_code == 0, restored.stdout + restored.stderr
+    out = json.loads(restored.stdout)
+    assert sorted(e["name"] for e in out["added"]) == ["cache-s3", "edge-state"]
+    assert credentials.load_credential("cache-s3", "s3-keys") == VALUES["cache-s3"][1]
+    assert not sb.config_path().exists()
+    # A store that is not empty: plan, then approve.
+    credentials.save_credential("hcloud", "provider-token", "other-token-0123456789")
+    credentials.delete_credential("cache-s3")
+    planned = _run("restore", str(target), "--identity", str(key))
+    assert planned.exit_code == 3
+    digest = json.loads(planned.stdout)["digest"]
+    applied = _run("restore", str(target), "--identity", str(key), "--approve", digest)
+    assert applied.exit_code == 0, applied.stdout
+
+
+@needs_age
+def test_only_needs_known_names_and_an_explicit_recipient(
+    homes: Path, identity: tuple[Path, str], second: str
+) -> None:
+    _, public = identity
+    _fill(homes)
+    sb.remember_recipients([public, second])
+    target = homes / "transfer.age"
+    unknown = _run("backup", "--only", "nope", "--to", str(target),
+                   "--recipient", public)  # fmt: skip
+    assert unknown.exit_code == 2
+    assert json.loads(unknown.stdout)["reason"] == "secrets-backup-only-unknown"
+    remembered = _run("backup", "--only", "cache-s3", "--to", str(target))
+    assert remembered.exit_code == 2
+    assert (
+        json.loads(remembered.stdout)["reason"] == "secrets-backup-recipients-missing"
+    )
+    assert not target.exists()

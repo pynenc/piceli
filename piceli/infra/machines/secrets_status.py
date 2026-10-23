@@ -49,11 +49,12 @@ __all__ = [
 STATUS_SCHEMA = "piceli.secrets-status.v1"
 #: Kinds ``piceli secrets ... --generate`` creates: no one has to type them.
 GENERATED = frozenset({"state-key", "nix-signing-key", "age-identity"})
-STATES = ("present", "missing", "incomplete", "damaged", "not-needed")
+STATES = ("present", "pending", "missing", "incomplete", "damaged", "not-needed")
 #: The order ``setup`` walks them in: what the owner types, what Piceli
 #: generates, the user data (right before apply), the S3 pairs.
 GROUPS = ("provider", "profile", "generated", "user-data", "s3")
 _REPLACE = {"state-key", "nix-signing-key", "age-identity"}
+PENDING = "created by the next infra apply"
 MISMATCH = (
     "its public key is not NixCache(public_key=): put the stored key's public "
     "key (the next command prints it) in the declaration, or restore the key "
@@ -99,6 +100,7 @@ class Item:
             "where": self.secret.where,
             "detail": self.detail,
             "provider": self.secret.provider,
+            "build_host": self.secret.build_host,
         }
 
 
@@ -108,6 +110,7 @@ class _Index:
 
     caches: dict[str, list[Any]] = field(default_factory=dict)
     infra_refs: dict[str, str] = field(default_factory=dict)
+    key_infra: dict[str, Any] = field(default_factory=dict)
     user_data: dict[str, tuple[Any, Any]] = field(default_factory=dict)
     registered: dict[int, tuple[str, str]] = field(default_factory=dict)
 
@@ -207,6 +210,7 @@ def _index(decls: list[Any], module: str, names: Mapping[int, str]) -> _Index:
             attr = names.get(id(value))
             ref = f"{module}:{attr}" if attr else None
             for key, _bucket in value.s3_keys():
+                index.key_infra.setdefault(key.name, value)
                 if ref is not None:
                     index.infra_refs.setdefault(key.name, ref)
             for server in value.servers:
@@ -307,6 +311,26 @@ def _value_state(
     return "present", None
 
 
+def _applied(name: str, index: _Index) -> bool:
+    """Whether the infrastructure creating key pair ``name`` records it as
+    applied (``True`` when no declared infrastructure tells)."""
+    from piceli.infra.machines.keys import KEYS_RECORD
+    from piceli.infra.machines.model import InfraError
+    from piceli.infra.machines.state import read_record, state_dir
+
+    infra = index.key_infra.get(name)
+    if infra is None:
+        return True
+    try:
+        directory = state_dir(infra.name, infra.state_dir, create=False)
+    except InfraError:
+        return True
+    record = read_record(directory, KEYS_RECORD) if directory.is_dir() else {}
+    return any(
+        isinstance(item, dict) and item.get("name") == name for item in record.values()
+    )
+
+
 def _state(secret: NeededSecret, index: _Index) -> tuple[str, str | None]:
     from piceli.infra.machines.credential_parts import credential_report
 
@@ -316,6 +340,8 @@ def _state(secret: NeededSecret, index: _Index) -> tuple[str, str | None]:
     if why is not None:
         return "damaged", why
     if body is None:
+        if secret.created_by == "infra-apply" and not _applied(secret.name, index):
+            return "pending", PENDING
         if secret.kind == "user-data" and secret.name in index.user_data:
             infra, server = index.user_data[secret.name]
             if _created(infra, server):
@@ -365,7 +391,14 @@ def _next(
     if secret.created_by == "infra-apply":
         ref = index.infra_refs.get(secret.name)
         plan = f"piceli infra plan {ref}" if ref else secret.setup
+        if state == "pending":
+            return plan, detail
         if state == "missing":
+            if secret.name in index.key_infra:
+                return plan, (
+                    f"applied, but not in this store: {plan} stores it again "
+                    "from the state"
+                )
             return plan, detail or "created and stored by piceli infra apply"
         return (
             f"piceli secrets delete {secret.name} --kind s3 --yes",
@@ -384,12 +417,33 @@ def _next(
     return command, detail
 
 
+def transfer_command(names: Iterable[str], host: str) -> str:
+    """The backup that carries ``names`` to build host ``host`` alone."""
+    only = " ".join(f"--only {name}" for name in names)
+    return f"piceli secrets backup {only} --to PATH --recipient AGE_RECIPIENT_OF_{host}"
+
+
 def _items(secrets: list[NeededSecret], index: _Index) -> list[Item]:
     items: list[Item] = []
     for secret in secrets:
         state, detail = _state(secret, index)
         command, detail = _next(secret, state, detail, index)
         items.append(Item(secret, state, _creator(secret), command, detail))
+    # Present here and needed on a release's build host: move them there.
+    hosts: dict[str, list[str]] = {}
+    for item in items:
+        if item.state == "present" and item.secret.build_host is not None:
+            hosts.setdefault(item.secret.build_host, []).append(item.secret.name)
+    for at, item in enumerate(items):
+        host = item.secret.build_host
+        if item.state == "present" and host is not None:
+            items[at] = Item(
+                item.secret, item.state, item.created_by,
+                transfer_command(sorted(hosts[host]), host),
+                f"needed on {host} too, unless it is there already; then on "
+                f"{host}: piceli secrets restore PATH --identity KEY, and "
+                "delete PATH on both machines",
+            )  # fmt: skip
     return items
 
 
@@ -496,7 +550,9 @@ def report(
     decls = declarations(values)
     if not decls:
         raise ValueError("no declaration")
-    index = _index(decls, module, names)
+    # The whole module tells which infrastructure creates a selected pair.
+    every = declarations(v for k, v in namespace.items() if not k.startswith("_"))
+    index = _index(every, module, names)
     from piceli.infra import Cluster
 
     secrets = needed_secrets([d for d in decls if not isinstance(d, Cluster)])
@@ -524,6 +580,7 @@ def items_of(document: Mapping[str, Any]) -> list[Item]:
             row["name"], row["kind"],
             "infra-apply" if row["created_by"] == "infra-apply" else "operator",
             row["next"] or "", row["purpose"], row["provider"], row["where"],
+            row.get("build_host"),
         )  # fmt: skip
         found.append(
             Item(secret, row["state"], row["created_by"], row["next"], row["detail"])

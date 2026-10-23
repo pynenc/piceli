@@ -331,7 +331,11 @@ def parse_recipients(values: Sequence[str], file: Path | None) -> list[str]:
 
 
 def _manifest(
-    entries: Sequence[Entry], recipients: Sequence[str], at: float, single: bool
+    entries: Sequence[Entry],
+    recipients: Sequence[str],
+    at: float,
+    single: bool,
+    only: bool = False,
 ) -> bytes:
     from piceli import __version__
 
@@ -345,6 +349,7 @@ def _manifest(
             "profiles_dir": str(_profiles_dir()),
             "recipients": list(recipients),
             "single_recipient": single,
+            "only": only,
             "entries": [{**e.show(), "path": e.path} for e in entries],
         },
         sort_keys=True,
@@ -364,26 +369,49 @@ def backup(
     *,
     force: bool = False,
     single_recipient: bool = False,
+    only: Sequence[str] = (),
     now: float | None = None,
 ) -> dict[str, Any]:
     """Write the encrypted archive to ``to``; returns names, kinds and digests.
 
     At least two recipients, unless ``single_recipient`` (recorded in the
-    manifest and the marker)."""
+    manifest and the marker).
+
+    ``only`` (``--only NAME``, 0.25.0) writes just those credentials, for
+    another machine (a build host's signing and S3 write keys): the
+    recipients must be given (never the remembered ones), one is enough, the
+    manifest says ``only: true``, and neither the marker of the last backup
+    nor the remembered recipients change."""
     age = age_binary()
     config = load_config()
-    chosen = list(recipients) or list(config.get("recipients") or ())
+    chosen = list(recipients) or ([] if only else list(config.get("recipients") or ()))
     entries, skipped = store_entries()
     if not any(e.area == "credentials" for e, _ in entries):
         raise InfraError("secrets-backup-empty", "the secret store holds no file")
+    if only:
+        wanted = set(only)
+        held = {e.name for e, _ in entries if e.area == "credentials"}
+        unknown = sorted(wanted - held)
+        if unknown:
+            raise InfraError(
+                "secrets-backup-only-unknown",
+                f"--only names no stored credential: {', '.join(unknown)}; "
+                "nothing was written",
+            )
+        entries = [(e, d) for e, d in entries
+                   if e.area == "credentials" and e.name in wanted]  # fmt: skip
+        skipped = []
     if not chosen:
         raise InfraError(
             "secrets-backup-recipients-missing",
-            "no recipients: pass --recipient age1... (repeatable) or "
+            "--only needs --recipient: the age recipient of the machine that "
+            "receives them"
+            if only
+            else "no recipients: pass --recipient age1... (repeatable) or "
             "--recipients-file FILE once; they are remembered",
         )
     chosen = parse_recipients(chosen, None)
-    if len(chosen) < 2 and not single_recipient:
+    if len(chosen) < 2 and not single_recipient and not only:
         raise InfraError(
             "secrets-backup-single-recipient",
             "one recipient: losing that one key loses the store and its backup "
@@ -426,7 +454,8 @@ def backup(
             with tarfile.open(fileobj=process.stdin, mode="w|",
                               format=tarfile.PAX_FORMAT) as tar:  # fmt: skip
                 _add(tar, MANIFEST,
-                     _manifest([e for e, _ in entries], chosen, at, single), at)  # fmt: skip
+                     _manifest([e for e, _ in entries], chosen, at, single,
+                               bool(only)), at)  # fmt: skip
                 for entry, data in entries:
                     _add(tar, entry.path, data, entry.mtime)
             process.stdin.close()
@@ -449,17 +478,19 @@ def backup(
         if staged.exists():
             staged.unlink()
     sha256 = "sha256:" + digest.hexdigest()
-    marker = record_backup(
-        recipients=chosen, sha256=sha256, names=[_label(e) for e, _ in entries],
-        at=at, single_recipient=single,
-    )  # fmt: skip
+    if not only:
+        record_backup(
+            recipients=chosen, sha256=sha256, names=[_label(e) for e, _ in entries],
+            at=at, single_recipient=single,
+        )  # fmt: skip
     return {
         "state": "backed-up",
         "path": str(target),
         "sha256": sha256,
-        "at": marker["at"],
+        "at": _iso(at),
         "recipients": chosen,
         "single_recipient": single,
+        "only": bool(only),
         "count": len(entries),
         "entries": [e.show() for e, _ in entries],
         "skipped": skipped,
@@ -739,7 +770,12 @@ def restore(
         if (entry.area, entry.name) in names:
             body, mtime = files[name]
             _write(target, _roots()[entry.area], _rebased(name, body, manifest), mtime)
-    if not config_path().exists() and manifest.get("recipients"):
+    if (
+        not config_path().exists()
+        and manifest.get("recipients")
+        and manifest.get("only") is not True
+    ):
+        # A transfer (--only) is not a backup of this machine's store.
         # The new machine remembers the recipients and when this backup was made.
         timestamp = manifest.get("timestamp")
         record_backup(

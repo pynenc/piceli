@@ -137,8 +137,8 @@ def test_status_of_an_empty_store_lists_everything_in_setup_order(
         ("web-1-state", "state-key", "missing", "piceli"),
         ("web-1-age", "age-identity", "missing", "piceli"),
         ("web-1-boot", "user-data", "missing", "owner"),
-        ("nix-cache-write", "s3-keys", "missing", "infra-apply"),
-        ("nix-cache-read", "s3-keys", "missing", "infra-apply"),
+        ("nix-cache-write", "s3-keys", "pending", "infra-apply"),
+        ("nix-cache-read", "s3-keys", "pending", "infra-apply"),
     ]  # fmt: skip
     rows = _rows(body)
     assert rows["infomaniak"]["next"] == ("piceli secrets provider infomaniak --prompt")
@@ -151,7 +151,8 @@ def test_status_of_an_empty_store_lists_everything_in_setup_order(
     assert rows["nix-cache-read"]["next"] == f"piceli infra plan {ref}:infra"
     assert "/var/lib/piceli-host/cache.env" in rows["nix-cache-read"]["where"]
     assert ".sops.yaml" in rows["web-1-age"]["where"]
-    assert body["counts"]["missing"] == 8 and body["complete"] is False
+    assert body["counts"]["missing"] == 6 and body["counts"]["pending"] == 2
+    assert body["complete"] is False
     assert body["backup"]["state"] == "empty" and body["backup"]["next"] is None
     assert [w["kind"] for w in body["warnings"]] == ["s3-read-not-enforced"]
     assert [d["kind"] for d in body["declarations"]] == [
@@ -231,8 +232,8 @@ def test_an_attribute_selects_one_declaration(homes: Path) -> None:
     assert body["attr"] == "host"
     assert sorted(_rows(body)) == [
         "example-cache-1", "nix-cache-read", "nix-cache-write", "web-1-age"]  # fmt: skip
-    # Without the Infrastructure, the pairs' command is the generic one.
-    assert "piceli infra apply" in _rows(body)["nix-cache-read"]["next"]
+    # The module's Infrastructure still names the pairs' command.
+    assert _rows(body)["nix-cache-read"]["next"] == f"piceli infra plan {ref}:infra"
 
 
 def test_status_refuses_a_module_without_declarations(homes: Path) -> None:
@@ -438,3 +439,86 @@ def test_setup_on_a_terminal_asks_before_generating_and_offers_user_data(
     summary = _lines(result.stdout)[-1]
     assert [r["name"] for r in summary["remaining"]] == ["web-1-state"]
     assert [c["name"] for c in summary["copy"]] == ["example-cache-1", "web-1-age"]
+
+
+# ------------------------------------------------------------- pending pairs
+
+
+def _applied(homes: Path, *names: str) -> None:
+    """The infrastructure's record of the pairs an apply created."""
+    state = homes / "infra-state"
+    state.mkdir(mode=0o700, exist_ok=True)
+    (state / "s3-keys.json").write_text(json.dumps({
+        f"openstack_identity_ec2_credential_v3.s3key-{name}": {
+            "name": name, "bucket": "example-nix-cache", "access": "read",
+            "digest": "sha256:0"} for name in names}))  # fmt: skip
+
+
+def test_pairs_before_the_first_apply_are_pending(homes: Path) -> None:
+    ref = _store_all(homes)
+    for name in ("nix-cache-write", "nix-cache-read"):
+        credentials.delete_credential(name)
+    result = _run("status", ref, "--json")
+    assert result.exit_code == 0, result.output
+    body = json.loads(result.stdout)
+    rows = _rows(body)
+    assert rows["nix-cache-read"]["state"] == "pending"
+    assert rows["nix-cache-read"]["next"] == f"piceli infra plan {ref}:infra"
+    assert rows["nix-cache-read"]["detail"] == "created by the next infra apply"
+    assert body["counts"]["pending"] == 2 and body["complete"] is True
+    assert "created by the next infra apply" in result.stderr
+    # Applied, but the credential is gone: missing, and a plan stores it again.
+    _applied(homes, "nix-cache-read")
+    again = _run("status", ref, "--json")
+    assert again.exit_code == 1
+    row = _rows(json.loads(again.stdout))["nix-cache-read"]
+    assert row["state"] == "missing"
+    assert row["next"] == f"piceli infra plan {ref}:infra"
+    assert "stores it again from the state" in row["detail"]
+    assert _rows(json.loads(again.stdout))["nix-cache-write"]["state"] == "pending"
+
+
+def test_setup_leaves_pending_pairs_to_infra_apply(homes: Path) -> None:
+    ref = _store_all(homes)
+    for name in ("nix-cache-write", "nix-cache-read"):
+        credentials.delete_credential(name)
+    result = _run("setup", ref, "--json", input="")
+    assert result.exit_code == 0, result.output
+    steps = {s["name"]: s for s in _lines(result.stdout) if "name" in s}
+    assert steps["nix-cache-read"]["state"] == "later"
+
+
+# ------------------------------------------------------------- build host
+
+
+RELEASE = """
+from piceli.infra import NixRelease, Source
+release = NixRelease(host, source=Source("https://git.example.org/hosts.git"),
+                     builder="mini")
+"""
+
+
+def test_a_release_builder_gets_the_transfer_as_its_next_step(homes: Path) -> None:
+    ref = _store_all(homes)
+    Path(ref).write_text(Path(ref).read_text() + RELEASE)
+    body = json.loads(_run("status", ref, "--json").stdout)
+    rows = _rows(body)
+    command = (
+        "piceli secrets backup --only example-cache-1 --only nix-cache-write "
+        "--to PATH --recipient AGE_RECIPIENT_OF_mini"
+    )
+    for name in ("example-cache-1", "nix-cache-write"):
+        assert rows[name]["state"] == "present"
+        assert rows[name]["build_host"] == "mini"
+        assert rows[name]["next"] == command
+        assert (
+            "on mini: piceli secrets restore PATH --identity KEY"
+            in rows[name]["detail"]
+        )
+    assert rows["nix-cache-read"]["build_host"] is None
+    assert rows["nix-cache-read"]["next"] is None
+    assert body["complete"] is True
+    # Missing locally: first make it here.
+    credentials.delete_credential("example-cache-1")
+    row = _rows(json.loads(_run("status", ref, "--json").stdout))["example-cache-1"]
+    assert row["next"] == "piceli secrets nix-cache example-cache-1 --generate"
