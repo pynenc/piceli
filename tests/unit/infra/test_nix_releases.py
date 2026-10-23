@@ -1,4 +1,4 @@
-"""The controller publishes NixHost releases (0.24.0, ``NixRelease``).
+"""The controller publishes NixHost releases (0.25.0, ``NixRelease``).
 
 A real :class:`CompositionController` follows a local Git source with a
 flake; a real ``BuilderServe`` with a :class:`Publisher` (its ``nix

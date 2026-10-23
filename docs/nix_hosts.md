@@ -12,7 +12,7 @@ which signs the closure, its manifest and the ref pointers with the cache's
 key.
 
 The GitOps controller can also publish them itself when a tag appears
-(0.24.0, a `NixRelease`): the build and the keys stay on a build host. See
+(0.25.0, a `NixRelease`): the build and the keys stay on a build host. See
 [Nix host releases](#gitops-nix-releases) in {doc}`gitops`. A remote
 machine that only publishes is declared as a docker host with an SSH
 context to itself, `BuildHost.docker("nix-builder",
@@ -107,7 +107,7 @@ count.
 
 ### Only verified products: `gate=`
 
-`NixHost(..., gate=Promotion(input="app", environment="main"))` (0.24.0)
+`NixHost(..., gate=Promotion(input="app", environment="main"))` (0.25.0)
 makes the agent switch only to a build whose signed manifest carries the
 promotion gate's verified `pinned` for that flake input and GitOps
 environment; any other build is refused (`host-promotion-missing`). The

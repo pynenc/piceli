@@ -676,14 +676,14 @@ Take the builds the controller publishes, build and deliver them, answer it.
 
 **Contract**
 
-- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=DevBuilds(hosts=[...])), credential profile, the controller's status, each source with this machine's Git access, MODULE:ATTR of each --publish NixCache, and its signing key and S3 write keys from this machine's credentials (0.24.0)
+- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=DevBuilds(hosts=[...])), credential profile, the controller's status, each source with this machine's Git access, MODULE:ATTR of each --publish NixCache, and its signing key and S3 write keys from this machine's credentials (0.25.0)
 - **Writes:** the controller's requests (build-claim, built, build-failed, nix-published), the binary cache: closure, signed manifest, tag pointer (--publish), images in the cluster's registry (through a port-forward), ~/.cache/piceli/builder (Git mirrors), the piceli-build-cache volume, the host's health record (piceli-health-* volumes)
 - **Cluster:** writes
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.21.0. Runs until Ctrl-C (--once: one build). The builder image must be the controller's Piceli version. 0.22.0: each delivered image's provenance is pushed as an OCI referrer when the registry takes it; a build showing a machine-health signature records a health event on the host, and a quarantined host claims nothing (quarantined in --once --json). 0.24.0: --publish MODULE:ATTR (repeatable) also takes the nix-publish builds of the NixReleases that name this host as builder, only for those caches; every key is read at start (infra-credential-missing, dev-nix-key-mismatch refuse it) and never leaves the host: a claim carries the cache key's signature over it. A native host with --publish only publishes. The publish itself was approved by the release's policy or gitops approve of its plan digest. 0.25.0: --publish-only (needs --publish, else dev-nix-invalid) claims only those publishes on any kind of host, never an image build (said once), and needs no cluster registry: a remote publisher is a docker host with an SSH context to itself, since a native host is the machine running Piceli.
+- **Notes:** 0.21.0. Runs until Ctrl-C (--once: one build). The builder image must be the controller's Piceli version. 0.22.0: each delivered image's provenance is pushed as an OCI referrer when the registry takes it; a build showing a machine-health signature records a health event on the host, and a quarantined host claims nothing (quarantined in --once --json). 0.25.0: --publish MODULE:ATTR (repeatable) also takes the nix-publish builds of the NixReleases that name this host as builder, only for those caches; every key is read at start (infra-credential-missing, dev-nix-key-mismatch refuse it) and never leaves the host: a claim carries the cache key's signature over it. A native host with --publish only publishes. The publish itself was approved by the release's policy or gitops approve of its plan digest. 0.25.0: --publish-only (needs --publish, else dev-nix-invalid) claims only those publishes on any kind of host, never an image build (said once), and needs no cluster registry: a remote publisher is a docker host with an SSH context to itself, since a native host is the machine running Piceli.
 
 (cli-bundle)=
 ### `piceli bundle`
@@ -1515,7 +1515,7 @@ Approve the pending plan of ENV; the controller applies it on its next poll.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** This is the owner's approval: run it only with the hash the owner approved. Writes a request to the ConfigMap piceli-gitops-requests; a hash the environment is no longer waiting for is dropped (gitops-approval-stale in gitops status). 0.24.0: ENV may name a NixRelease waiting in approval-required; the hash is its plan digest, and approving it lets a build host build, sign and publish that tag.
+- **Notes:** This is the owner's approval: run it only with the hash the owner approved. Writes a request to the ConfigMap piceli-gitops-requests; a hash the environment is no longer waiting for is dropped (gitops-approval-stale in gitops status). 0.25.0: ENV may name a NixRelease waiting in approval-required; the hash is its plan digest, and approving it lets a build host build, sign and publish that tag.
 
 (cli-gitops-cache-clear)=
 ### `piceli gitops cache clear`
@@ -1745,7 +1745,7 @@ Controller health, repository, last poll and every branch's state.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** Read-only. Reads the ConfigMap piceli-gitops-status and the controller Deployment (or a local --state-dir). Health: healthy, degraded (last poll failed), stale (no poll for 3 intervals), starting, down. gitops-not-installed without a controller. 0.24.0: nix_releases lists each NixRelease (latest tag, state, plan digest and approve_command, stages with times, the published manifest's sha256, failure). A gated release shows pinned (input, commit, environment, verified_run, verified_at), or state rejected with its reason and refusal.
+- **Notes:** Read-only. Reads the ConfigMap piceli-gitops-status and the controller Deployment (or a local --state-dir). Health: healthy, degraded (last poll failed), stale (no poll for 3 intervals), starting, down. gitops-not-installed without a controller. 0.25.0: nix_releases lists each NixRelease (latest tag, state, plan digest and approve_command, stages with times, the published manifest's sha256, failure). A gated release shows pinned (input, commit, environment, verified_run, verified_at), or state rejected with its reason and refusal.
 
 (cli-gitops-suspects)=
 ### `piceli gitops suspects`
@@ -1798,7 +1798,7 @@ Ask the controller to deploy ENV now at its revision (--component: rebuild one).
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** Writes a request to the ConfigMap piceli-gitops-requests; the controller deploys on its next poll with the environment's usual approval (auto_approve or gitops approve of the plan hash). An unknown environment or component is dropped (gitops-request-invalid in gitops status); --component needs a composition controller. 0.24.0: ENV may name a NixRelease (its host): the controller publishes its newest tag now, with the release's approval; a sync of every environment also retries failed releases.
+- **Notes:** Writes a request to the ConfigMap piceli-gitops-requests; the controller deploys on its next poll with the environment's usual approval (auto_approve or gitops approve of the plan hash). An unknown environment or component is dropped (gitops-request-invalid in gitops status); --component needs a composition controller. 0.25.0: ENV may name a NixRelease (its host): the controller publishes its newest tag now, with the release's approval; a sync of every environment also retries failed releases.
 
 (cli-gitops-wait)=
 ### `piceli gitops wait`
@@ -2788,7 +2788,7 @@ Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV; w
 | `--namespace` | text | `piceli-system` | The controller's namespace |
 | `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
 | `--transport` | text | `https` | https, or loopback-http for a local test API |
-| `--from` | text |  | 0.24.0: TARGET is a NixRelease's host; pin the newest commit this environment (its gate's) ran with passed release checks in the flake's flake.lock, commit, tag and push (plan, then --approve) |
+| `--from` | text |  | 0.25.0: TARGET is a NixRelease's host; pin the newest commit this environment (its gate's) ran with passed release checks in the flake's flake.lock, commit, tag and push (plan, then --approve) |
 | `--composition`, `--infra` | path | `infra.py` | With --from: the composition module declaring the NixRelease |
 | `--repo` | path | `.` | With --from: the flake's working copy |
 | `--bump` | text | `patch` | With --from: major, minor or patch |
@@ -2804,7 +2804,7 @@ Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV; w
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Writes a request; the controller accepts only a commit it saw on that branch (gitops-promote-unknown otherwise), a named environment only when it follows Promote() (gitops-promote-not-allowed), and the environment then waits for gitops approve of its plan hash. 0.24.0, promote HOST --from ENV: without --approve it prints the plan (pinned, the lock change old rev -> new rev, the commit message, the tag, the remote and branch) with its digest and exits 3. A lock that already pins the commit exits 0 with state current: with a tag of the pattern at HEAD there is nothing to do; without one the plan only tags HEAD and --approve tags and pushes the tag. --approve recomputes the plan (promote-plan-changed when it differs), commits flake.lock alone, tags and pushes with git push --atomic (promote-push-failed exits 1; the commit and tag stay local). Refuses a dirty working copy (promote-dirty), one behind, ahead of or diverged from its upstream (promote-not-in-sync), an environment without a passed run (promotion-not-verified) and an unreadable history (promotion-history-unreachable).
+- **Notes:** Writes a request; the controller accepts only a commit it saw on that branch (gitops-promote-unknown otherwise), a named environment only when it follows Promote() (gitops-promote-not-allowed), and the environment then waits for gitops approve of its plan hash. 0.25.0, promote HOST --from ENV: without --approve it prints the plan (pinned, the lock change old rev -> new rev, the commit message, the tag, the remote and branch) with its digest and exits 3. A lock that already pins the commit exits 0 with state current: with a tag of the pattern at HEAD there is nothing to do; without one the plan only tags HEAD and --approve tags and pushes the tag. --approve recomputes the plan (promote-plan-changed when it differs), commits flake.lock alone, tags and pushes with git push --atomic (promote-push-failed exits 1; the commit and tag stay local). Refuses a dirty working copy (promote-dirty), one behind, ahead of or diverged from its upstream (promote-not-in-sync), an environment without a passed run (promotion-not-verified) and an unreadable history (promotion-history-unreachable).
 
 (cli-publish)=
 ### `piceli publish`
@@ -3712,7 +3712,7 @@ Every environment and NixHost: commit or tag, pinned product commit, checks, sta
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.24.0. Read-only; safe to retry. --json prints one piceli.targets.v1 object. An unreachable controller or host never fails the view: its rows say unreachable with the reason (host rows still work with the home cluster down; a missing login profile of the home cluster shows profile-not-found with a piceli login hint). Exit 0: every target reachable, none failed; 1: a target failed, rolled back, is unreachable or its checks failed; 2: no module and no controller named (targets-input-required) or a module that does not load.
+- **Notes:** 0.25.0. Read-only; safe to retry. --json prints one piceli.targets.v1 object. An unreachable controller or host never fails the view: its rows say unreachable with the reason (host rows still work with the home cluster down; a missing login profile of the home cluster shows profile-not-found with a piceli login hint). Exit 0: every target reachable, none failed; 1: a target failed, rolled back, is unreachable or its checks failed; 2: no module and no controller named (targets-input-required) or a module that does not load.
 
 (cli-ui-backup)=
 ### `piceli ui backup`

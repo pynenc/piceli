@@ -1,4 +1,4 @@
-"""``piceli targets``: one status view of every target (0.24.0).
+"""``piceli targets``: one status view of every target (0.25.0).
 
 Every GitOps environment and every NixHost, with its deployed commit or
 tag, the product commit it pins, its checks and its state, in one table

@@ -652,7 +652,7 @@ class Agent:
         if attribute and manifest.get("attribute") != attribute:
             raise Failure("host-manifest-mismatch", "a build of another attribute")
         gate = self.config.get("gate")
-        if gate:  # 0.24.0: the publish passed the promotion gate
+        if gate:  # 0.25.0: the publish passed the promotion gate
             pinned = manifest.get("pinned")
             if not (
                 isinstance(pinned, dict)
@@ -1029,7 +1029,7 @@ class Agent:
             "checks": [],
             "rollback": None,
             "prune": None,
-            # 0.24.0: the promotion gate's pin of the build (a rollback's: the
+            # 0.25.0: the promotion gate's pin of the build (a rollback's: the
             # one recorded when it was deployed; else the verified manifest's).
             "pinned": _pinned(pointer.get("pinned")) if local else None,
         }

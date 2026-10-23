@@ -1,4 +1,4 @@
-"""``piceli targets``: one status view of every environment and NixHost (0.24.0)."""
+"""``piceli targets``: one status view of every environment and NixHost (0.25.0)."""
 
 from __future__ import annotations
 
@@ -146,7 +146,7 @@ def test_the_hosts_own_pin_wins_and_is_a_host_agent_fact() -> None:
     )
     row = _rows(document)[("web-1", None)]
     assert row["pinned"] == own and row["facts"]["pinned"] == "host-agent"
-    # An agent status without the field (before 0.24.0) falls back.
+    # An agent status without the field (before 0.25.0) falls back.
     legacy = _agent()
     document = targets.build(
         _status(**{"web-1": RELEASE}), hosts={"web-1": {"status": legacy}}

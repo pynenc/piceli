@@ -1,4 +1,4 @@
-"""Tag prefixes per target (0.24.0): ``Tag("web-v*")`` orders by the version
+"""Tag prefixes per target (0.25.0): ``Tag("web-v*")`` orders by the version
 after its literal prefix.
 
 Two hosts released from one repository (``web-v1.2.3``, ``api-v0.4.0``)

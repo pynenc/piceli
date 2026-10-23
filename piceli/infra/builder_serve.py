@@ -27,7 +27,7 @@ container engine, with the cluster owner's credential profile:
    and a receipt: host, times, image, commits) or ``build-failed`` with
    the output's tail.
 
-0.24.0: a host started with ``--publish MODULE:ATTR`` (a ``NixCache`` whose
+0.25.0: a host started with ``--publish MODULE:ATTR`` (a ``NixCache`` whose
 signing key, and S3 write keys, are in its own Piceli secrets) also takes
 the ``nix-publish`` builds of the ``NixRelease`` s that name it as their
 builder (:mod:`piceli.infra.nix_releases`): its claim carries the cache
@@ -357,10 +357,10 @@ class BuilderServe:
     #: The current build's toolchain versions (``{tool: version}``), from
     #: its receipt.
     toolchains: dict[str, str] = field(default_factory=dict)
-    #: 0.24.0: publishes NixReleases (:class:`piceli.infra.nix_releases.Publisher`)
+    #: 0.25.0: publishes NixReleases (:class:`piceli.infra.nix_releases.Publisher`)
     #: to the caches it holds the keys of; ``None``: claims no publish.
     publisher: Any = None
-    #: 0.24.0: whether it builds images (a native host only publishes;
+    #: 0.25.0: whether it builds images (a native host only publishes;
     #: 0.25.0: so does any host with ``--publish-only``).
     images: bool = True
     _refused: set[str] = field(default_factory=set)
@@ -561,7 +561,7 @@ class BuilderServe:
         return build
 
     def release(self, entry: Mapping[str, Any]) -> str:
-        """Fetch, check the tag, build and publish a NixRelease (0.24.0);
+        """Fetch, check the tag, build and publish a NixRelease (0.25.0);
         answer ``nix-published`` or ``build-failed`` with the output's tail."""
         import contextlib
 

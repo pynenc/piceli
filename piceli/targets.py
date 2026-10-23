@@ -1,4 +1,4 @@
-"""One status view of every target: each GitOps environment and each NixHost (0.24.0).
+"""One status view of every target: each GitOps environment and each NixHost (0.25.0).
 
 ``piceli targets`` and the UI's Targets view build the same document,
 ``piceli.targets.v1``, with :func:`build`, from:

@@ -1119,7 +1119,7 @@ def status(
                 )
             say(part)
     for name, release in (body.get("nix_releases") or {}).items():
-        # 0.24.0: a NixRelease the controller publishes.
+        # 0.25.0: a NixRelease the controller publishes.
         line = (
             f"  nix release {name}: {release.get('state')} "
             f"{release.get('tag') or ''} {str(release.get('commit') or '')[:12]}"
@@ -1518,7 +1518,7 @@ def promote(
         str | None,
         typer.Option(
             "--from",
-            help="0.24.0: TARGET is a NixRelease's host; pin the newest commit "
+            help="0.25.0: TARGET is a NixRelease's host; pin the newest commit "
             "this environment (its gate's) ran with passed release checks in "
             "the flake's flake.lock, commit, tag and push (plan, then --approve)",
             show_default=False,
@@ -1549,7 +1549,7 @@ def promote(
 
     ``piceli promote wp-1@abc1234`` targets main; ``piceli promote rc
     main@abc1234`` targets the named environment ``rc`` (it must follow
-    ``Promote()``). ``piceli promote web --from main`` (0.24.0) plans the
+    ``Promote()``). ``piceli promote web --from main`` (0.25.0) plans the
     pin of the newest commit ``main`` verified for the host ``web``'s
     gated NixRelease.
     """

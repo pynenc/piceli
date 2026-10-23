@@ -1,4 +1,4 @@
-"""The promotion gate of a NixHost release (0.24.0).
+"""The promotion gate of a NixHost release (0.25.0).
 
 A :class:`~piceli.infra.NixRelease` with ``gate=Promotion(input="app",
 environment="main")`` publishes only a commit of its flake whose

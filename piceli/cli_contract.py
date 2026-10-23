@@ -1330,7 +1330,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             cluster="reads",
             contract="conforms",
             exit_codes=(0, 1, 2),
-            notes="0.24.0. Read-only; safe to retry. --json prints one "
+            notes="0.25.0. Read-only; safe to retry. --json prints one "
             "piceli.targets.v1 object. An unreachable controller or host never "
             "fails the view: its rows say unreachable with the reason (host rows "
             "still work with the home cluster down; a missing login profile of "
@@ -1474,7 +1474,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "approval (auto_approve or gitops approve of the plan hash). An "
             "unknown environment or component is dropped "
             "(gitops-request-invalid in gitops status); --component needs a "
-            "composition controller. 0.24.0: ENV may name a NixRelease (its host): "
+            "composition controller. 0.25.0: ENV may name a NixRelease (its host): "
             "the controller publishes its newest tag now, with the release's "
             "approval; a sync of every environment also retries failed releases.",
         ),
@@ -1747,7 +1747,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
                 "the controller's status",
                 "each source with this machine's Git access",
                 "MODULE:ATTR of each --publish NixCache, and its signing key "
-                "and S3 write keys from this machine's credentials (0.24.0)",
+                "and S3 write keys from this machine's credentials (0.25.0)",
             ),
             writes=(
                 "the controller's requests (build-claim, built, build-failed, "
@@ -1765,7 +1765,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "delivered image's provenance is pushed as an OCI referrer when the "
             "registry takes it; a build showing a machine-health signature "
             "records a health event on the host, and a quarantined host claims "
-            "nothing (quarantined in --once --json). 0.24.0: --publish "
+            "nothing (quarantined in --once --json). 0.25.0: --publish "
             "MODULE:ATTR (repeatable) also takes the nix-publish builds of the "
             "NixReleases that name this host as builder, only for those caches; "
             "every key is read at start (infra-credential-missing, "
@@ -2158,7 +2158,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             notes="Read-only. Reads the ConfigMap piceli-gitops-status and the "
             "controller Deployment (or a local --state-dir). Health: healthy, "
             "degraded (last poll failed), stale (no poll for 3 intervals), "
-            "starting, down. gitops-not-installed without a controller. 0.24.0: "
+            "starting, down. gitops-not-installed without a controller. 0.25.0: "
             "nix_releases lists each NixRelease (latest tag, state, plan digest "
             "and approve_command, stages with times, the published manifest's "
             "sha256, failure). A gated release shows pinned (input, commit, "
@@ -2193,7 +2193,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "owner approved. Writes a request to the ConfigMap "
             "piceli-gitops-requests; a hash the environment is no longer "
             "waiting for is dropped (gitops-approval-stale in gitops status). "
-            "0.24.0: ENV may name a NixRelease waiting in approval-required; "
+            "0.25.0: ENV may name a NixRelease waiting in approval-required; "
             "the hash is its plan digest, and approving it lets a build host "
             "build, sign and publish that tag.",
         ),
@@ -2226,7 +2226,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "branch's environment, or to a named environment (promote ENV "
             "BRANCH@SHA); with --from ENV, pin the newest commit ENV ran with "
             "passed release checks in a NixRelease's flake.lock, commit it, tag "
-            "the next version of the host's Tag pattern and push both (0.24.0).",
+            "the next version of the host's Tag pattern and push both (0.25.0).",
             reads=(
                 "kubeconfig or --state-dir",
                 "with --from: the composition module (--composition; the "
@@ -2250,7 +2250,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "saw on that branch (gitops-promote-unknown otherwise), a named "
             "environment only when it follows Promote() "
             "(gitops-promote-not-allowed), and the environment then waits for "
-            "gitops approve of its plan hash. 0.24.0, promote HOST --from ENV: "
+            "gitops approve of its plan hash. 0.25.0, promote HOST --from ENV: "
             "without --approve it prints the plan (pinned, the lock change old "
             "rev -> new rev, the commit message, the tag, the remote and branch) "
             "with its digest and exits 3. A lock that already pins the commit "

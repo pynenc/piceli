@@ -79,7 +79,7 @@ class Composition:
     :param clusters: Every declared cluster, the home one included (0.15;
         default: ``cluster`` alone).
     :param nix_releases: The Nix host releases the controller publishes
-        (0.24.0, :class:`~piceli.infra.nix_releases.ReleaseTarget` of each
+        (0.25.0, :class:`~piceli.infra.nix_releases.ReleaseTarget` of each
         :class:`~piceli.infra.NixRelease`); a composition of releases only
         needs no environment.
     """
@@ -109,7 +109,7 @@ class Composition:
                 "name either"
             )
         named = [item for item in self.environments if isinstance(item, Environment)]
-        for release in self.nix_releases:  # 0.24.0: a promotion gate
+        for release in self.nix_releases:  # 0.25.0: a promotion gate
             gate = getattr(release, "gate", None)
             if gate is None:
                 continue
@@ -307,7 +307,7 @@ class Composition:
                 if self.remote_clusters
                 else {}
             ),
-            # 0.24.0, only when declared: other configs (and hashes) unchanged.
+            # 0.25.0, only when declared: other configs (and hashes) unchanged.
             **(
                 {"nix_releases": [item.to_dict() for item in self.nix_releases]}
                 if self.nix_releases
@@ -784,7 +784,7 @@ def composition_from(module: Any, *, default_name: str = "composition") -> Compo
     from piceli.infra.nix_releases import NixRelease
 
     values = vars(module) if not isinstance(module, Mapping) else dict(module)
-    # 0.24.0: every NixRelease of the module, as Components are found.
+    # 0.25.0: every NixRelease of the module, as Components are found.
     releases = tuple(
         {
             id(value): value

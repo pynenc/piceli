@@ -332,7 +332,7 @@ class NixHost:
         puts on the host for sops-nix; ``None``: the host gets its key
         another way.
     :param age_key_file: Where it goes: sops-nix's ``sops.age.keyFile``.
-    :param gate: A :class:`~piceli.infra.Promotion` (0.24.0): the agent
+    :param gate: A :class:`~piceli.infra.Promotion` (0.25.0): the agent
         switches only to a build whose signed manifest carries the gate's
         verified ``pinned`` (input and environment); a ``NixRelease`` of
         this host takes it as its gate.
@@ -484,6 +484,6 @@ def agent_config(host: NixHost) -> dict[str, Any]:
         "history": host.history,
         "generations": host.generations,
         "state_dir": STATE_DIR,
-        # 0.24.0, only when declared: the build must carry a verified pin.
+        # 0.25.0, only when declared: the build must carry a verified pin.
         **({"gate": host.gate.to_dict()} if host.gate is not None else {}),
     }

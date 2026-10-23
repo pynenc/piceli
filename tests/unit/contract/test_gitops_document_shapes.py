@@ -90,7 +90,7 @@ def _repo_status(tmp_path: Path) -> Any:
 
 
 def _release_statuses(tmp_path: Path, monkeypatch: Any) -> list[Any]:
-    """A gated NixRelease (0.24.0): refused (``refusal``), then planned with
+    """A gated NixRelease (0.25.0): refused (``refusal``), then planned with
     its verified ``pinned``."""
     from tests.unit.infra import promotion_support as support
     from tests.unit.infra.promotion_support import history, run

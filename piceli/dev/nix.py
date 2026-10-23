@@ -472,7 +472,7 @@ def manifest(
 ) -> dict[str, Any]:
     """The build manifest, unsigned (:func:`sign_manifest` adds ``signature``).
 
-    ``pinned`` (0.24.0, a gated release): the promotion gate's result. The
+    ``pinned`` (0.25.0, a gated release): the promotion gate's result. The
     field is present only then, so older manifests verify unchanged."""
     moment = (now or _dt.datetime.now(_dt.UTC)).strftime("%Y-%m-%dT%H:%M:%SZ")
     closure = published.get("closure_size")

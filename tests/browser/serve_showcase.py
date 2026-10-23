@@ -111,7 +111,7 @@ COMPOSITION_STATUS["envs"]["wp-idle"] = {
     },
     "components": {},
 }
-# 0.24.0: a NixHost release the controller published, with the product
+# 0.25.0: a NixHost release the controller published, with the product
 # commit a promotion gate verified in main (the Targets view).
 COMPOSITION_STATUS["nix_releases"] = {
     "web-1": {

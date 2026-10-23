@@ -602,7 +602,7 @@ met a corrupt cached blob (`cache-corrupt` in a host build's log: the blob
 is discarded and fetched or written again) also counts against its host.
 
 (gitops-nix-releases)=
-### Nix host releases (0.24.0)
+### Nix host releases (0.25.0)
 
 The controller can also publish the releases of a {doc}`NixHost <nix_hosts>`,
 so a new tag needs no hand-run `piceli dev nix build --publish`. Declare a
@@ -752,7 +752,7 @@ telemetry sends each as a trace `PUBLISH <name> <tag>` with a span per
 stage and the event `piceli.nix.release.finished` (see
 {doc}`opentelemetry`).
 
-#### A promotion gate and `piceli promote` (0.24.0)
+#### A promotion gate and `piceli promote` (0.25.0)
 
 A host often runs a product from another repository, pinned as a flake
 input (`inputs.app.url = "git+https://git.example.org/org/app.git"`). A

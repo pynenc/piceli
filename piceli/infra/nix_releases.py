@@ -1,4 +1,4 @@
-"""Nix host releases the GitOps controller publishes (0.24.0).
+"""Nix host releases the GitOps controller publishes (0.25.0).
 
 A composition module declares, next to its environments, which
 :class:`~piceli.infra.NixHost` the controller releases, from which
@@ -72,7 +72,7 @@ STATES = (
     "publishing",  # a build host claimed it
     "published",
     "failed",
-    "rejected",  # the promotion gate refused the tag's commit (0.24.0)
+    "rejected",  # the promotion gate refused the tag's commit (0.25.0)
 )
 FAILED = "gitops-nix-release-failed"
 _LABEL = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
@@ -190,7 +190,7 @@ class ReleaseTarget:
     auto_approve: bool
     store_url: str
     public_key: str
-    #: 0.24.0: the :class:`~piceli.infra.Promotion` gate, or ``None``.
+    #: 0.25.0: the :class:`~piceli.infra.Promotion` gate, or ``None``.
     gate: Any = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -819,7 +819,7 @@ class Releases:
             "manifest_sha256": published.get("manifest_sha256"),
             "store_path": published.get("store_path"),
             "log_tail": str(failure.get("log_tail") or "")[-2000:] or None,
-            # 0.24.0: the promotion gate's result, or why it refused.
+            # 0.25.0: the promotion gate's result, or why it refused.
             "pinned": record.get("pinned"),
             "refusal": record.get("refusal"),
         }

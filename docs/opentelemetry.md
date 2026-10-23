@@ -257,7 +257,7 @@ their queue and sends each finished run as its own trace:
 
 ## Nix host releases
 
-Each attempt of a `NixRelease` (0.24.0, see {doc}`gitops`) that ends,
+Each attempt of a `NixRelease` (0.25.0, see {doc}`gitops`) that ends,
 published or failed, is a trace of its own: the root span `PUBLISH <name>
 <tag>` (from the tag's sight to the end; status `ERROR` unless published)
 with `piceli.nix.release`, `piceli.nix.tag`, `vcs.ref.head.revision`,

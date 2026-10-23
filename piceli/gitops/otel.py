@@ -916,7 +916,7 @@ class ControllerTelemetry:
                 )
 
     def nix_release(self, event: Mapping[str, Any]) -> None:
-        """A NixRelease attempt ended (0.24.0): one trace (``PUBLISH NAME
+        """A NixRelease attempt ended (0.25.0): one trace (``PUBLISH NAME
         TAG``) with a span per stage (``approval``, ``queue``, ``fetch``,
         ``build``, ``publish``) and an event ``piceli.nix.release.finished``
         with the state, the tag, the commit, the build host and the

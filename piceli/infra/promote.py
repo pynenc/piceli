@@ -1,4 +1,4 @@
-"""``piceli promote``: pin a verified commit in a flake and tag it (0.24.0).
+"""``piceli promote``: pin a verified commit in a flake and tag it (0.25.0).
 
 ``piceli promote web --from main --composition infra.py`` takes the
 :class:`~piceli.infra.NixRelease` of the host ``web`` and its

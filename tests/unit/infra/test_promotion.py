@@ -1,4 +1,4 @@
-"""The promotion gate of a NixRelease (0.24.0, ``gate=Promotion(...)``).
+"""The promotion gate of a NixRelease (0.25.0, ``gate=Promotion(...)``).
 
 The gate's rules on a history, the declaration, the controller's release
 plan (refused, then published once the environment passed the pinned

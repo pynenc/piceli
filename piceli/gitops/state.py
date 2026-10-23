@@ -58,7 +58,7 @@ REQUEST_KINDS = (
     "build-claim", "built", "build-failed",
     # 0.22.0: rebuild what a host built; release a quarantined host
     "rebuild", "host-release",
-    # 0.24.0: a build host published a NixRelease
+    # 0.25.0: a build host published a NixRelease
     "nix-published",
 )  # fmt: skip
 #: Env states a status may carry.
@@ -314,7 +314,7 @@ def build_claim_request(
 ) -> tuple[str, dict[str, Any]]:
     """A build host takes the wanted build ``build`` (``piceli builder serve``).
 
-    ``proof`` (0.24.0, a ``nix-publish``): the cache key's signature over
+    ``proof`` (0.25.0, a ``nix-publish``): the cache key's signature over
     the claim (:func:`piceli.infra.nix_releases.claim_message`), never a key."""
     if proof is None:
         return request("build-claim", id=_build_id(build), host=str(host)[:64])
@@ -330,7 +330,7 @@ def nix_published_request(
     pointers: Sequence[Mapping[str, Any]],
     receipt: Mapping[str, Any],
 ) -> tuple[str, dict[str, Any]]:
-    """The wanted publish ``build`` is in the cache (0.24.0): the signed
+    """The wanted publish ``build`` is in the cache (0.25.0): the signed
     manifest, the pointers written (ref, commit, ``published_at``) and a
     receipt (host, stages with their times)."""
     return request(

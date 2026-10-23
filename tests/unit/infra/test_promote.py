@@ -1,4 +1,4 @@
-"""``piceli promote`` (0.24.0): pin the commit an environment verified.
+"""``piceli promote`` (0.25.0): pin the commit an environment verified.
 
 A flake repository with a bare remote and a working clone, its input's
 repository and a controller history in a ``--state-dir``, all in

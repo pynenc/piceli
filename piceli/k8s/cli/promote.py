@@ -1,5 +1,5 @@
 """``piceli promote HOST --from ENV``: pin a commit a GitOps environment
-verified (0.24.0; ``piceli promote`` without ``--from`` asks the controller
+verified (0.25.0; ``piceli promote`` without ``--from`` asks the controller
 to deploy a branch's commit, :func:`piceli.k8s.cli.gitops.promote`).
 
 See :mod:`piceli.infra.promote` (the plan and its application) and

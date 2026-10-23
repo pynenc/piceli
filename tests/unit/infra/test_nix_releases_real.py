@@ -1,4 +1,4 @@
-"""The controller publishes a NixRelease with the real ``nix`` (opt-in, 0.24.0).
+"""The controller publishes a NixRelease with the real ``nix`` (opt-in, 0.25.0).
 
 Set ``PICELI_TEST_NIX=1`` on a machine with a multi-user Nix. A real
 controller follows a local flake repository; when ``web-v1.0.0`` appears,

@@ -135,7 +135,7 @@ def serve(
                 'images go there (or Controller(delivery="nodes") with '
                 "Node(target=...))",
             )
-        images = False  # 0.24.0: nowhere to deliver images; it only publishes
+        images = False  # 0.25.0: nowhere to deliver images; it only publishes
     builder_image = image or chosen.image or (dev.image if dev is not None else None)
     if images and not builder_image:
         reject("cluster-build-invalid", "name the builder image with --image")
@@ -253,7 +253,7 @@ def _no_container(*_args: Any) -> int:  # a native host builds no image
 
 
 def _publisher(refs: list[str], dev: Any, chosen: Any) -> Any:
-    """The NixRelease publisher of ``--publish`` (0.24.0): every cache's keys
+    """The NixRelease publisher of ``--publish`` (0.25.0): every cache's keys
     are read now, so a missing or wrong key refuses before any claim."""
     from piceli.dev.model import DevError
     from piceli.infra.machines.model import InfraError
