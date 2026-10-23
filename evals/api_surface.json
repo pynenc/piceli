@@ -5339,11 +5339,17 @@
   "Impact": {
    "attrs": [
     "dev_targets",
+    "ignore",
+    "lockfile",
+    "outside",
     "roots",
     "to_dict"
    ],
    "init": [
     "dev_targets",
+    "ignore",
+    "lockfile",
+    "outside",
     "roots"
    ],
    "methods": {
@@ -16721,6 +16727,7 @@
    "CommandStep": {
     "class": "CommandStep"
    },
+   "DEFAULT_IGNORE": {},
    "DEFAULT_ROOTS": {},
    "Impact": {
     "class": "Impact"

@@ -43,7 +43,7 @@ train = Train(
     remote="origin",
     steps=[
         CargoCheck(),
-        CargoTests(select=Impact(roots=("Cargo.toml", "Cargo.lock", "rust-toolchain.toml"))),
+        CargoTests(select=Impact(roots=("Cargo.toml", "rust-toolchain.toml"))),
         Step.command("fitness", ["scripts/fitness.sh"]),
         Step.command("agent-docs", [sys.executable, "scripts/check_agent_docs.py"]),
         Step.command("branch-check", ["scripts/branch_check.sh"], timeout=1800),
@@ -113,9 +113,10 @@ runs, which is read from the merged tree too.
 
 ### Impact selection
 
-`Impact()` selects the cargo packages a change can affect, from `cargo
-metadata --no-deps` read in the merged tree and the paths that differ
-between the head and the commit under test:
+`Impact(roots=DEFAULT_ROOTS, dev_targets=False, lockfile="packages",
+outside="all", ignore=("*.md", "docs/*"))` selects the cargo packages a
+change can affect, from `cargo metadata --no-deps` read in the merged tree
+and the paths that differ between the head and the commit under test:
 
 - every workspace member with a changed file;
 - every member that depends on a selected one (normal and build
@@ -123,13 +124,31 @@ between the head and the commit under test:
 - every member with a dev-dependency on a selected one (its tests link it);
 - every package when a changed path matches one of `roots` (globs,
   relative to the repository root). The default roots are `Cargo.toml`,
-  `Cargo.lock`, `rust-toolchain`, `rust-toolchain.toml` and
-  `.cargo/config[.toml]`.
+  `rust-toolchain`, `rust-toolchain.toml` and `.cargo/config[.toml]`.
 
-Files outside every package that match no root select nothing: other steps
-check scripts and documentation. Add a glob to `roots` for a file a build
-reads from outside its package. `select="all"` always tests the whole
-workspace (`--workspace`).
+**`Cargo.lock`** (`lockfile="packages"`, the default): a lock change
+selects the members that use its changed entries. The train compares the
+lock's packages at the trial's base and in the merged tree (name, version,
+source, checksum and dependencies) and maps each added or changed entry, by
+name and version, over `cargo metadata`'s resolved graph (read with the
+dependencies, `--locked`, offline first) to the workspace members that
+depend on it, transitively; a member whose tests reach it through a
+dev-dependency is selected too. Their dependents follow as above. It still
+selects everything when the toolchain changed with the lock, when a
+`[patch]` (or `[replace]`) table changed in `Cargo.toml`, `.cargo/config`
+or the lock, when either lock cannot be read, or when the resolved graph
+cannot be read (no network and no cached sources). `lockfile="all"`, or
+`Cargo.lock` in `roots`, selects everything for any lock change.
+
+**Files outside every package** (`outside="all"`, the default) select
+everything: a script, a fixture or a generated file a build reads from
+outside its package may change any test. The files that match `ignore`
+(globs, `*` crosses `/`; default `*.md` and `docs/*`) select nothing.
+`outside="none"` makes every file outside a package select nothing (other
+steps check scripts and documentation).
+
+The step's log lists the reason for each package. `select="all"` always
+tests the whole workspace (`--workspace`).
 
 `Impact(dev_targets=True)` narrows the members that reach a selected
 package **only** through a dev-dependency: their library did not change,

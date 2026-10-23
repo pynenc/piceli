@@ -33,8 +33,16 @@ and `cancel` start and stop one, and the UI's Builds page shows them all.
   conflict is never resolved: `train-merge-conflict`). See {doc}`train`.
 - **Impact selection and flaky tests.** `Impact()` tests the cargo packages
   with changed files plus their dependents (from `cargo metadata`), and
-  every package when a root file changes (`Cargo.toml`, `Cargo.lock`, the
-  toolchain and cargo configuration by default; configurable). With
+  every package when a root file changes (`Cargo.toml`, the toolchain and
+  cargo configuration by default; configurable). A `Cargo.lock` change
+  (`Impact(lockfile="packages")`, the default) tests the members that use
+  its added or changed entries, by name and version, transitively over the
+  resolved graph, and their dependents; a toolchain or `[patch]` change, a
+  lock that cannot be read or a graph that cannot be resolved still tests
+  everything (`lockfile="all"`: any lock change does). A file outside every
+  package tests everything (`Impact(outside="all")`, the default), except
+  documentation (`ignore=("*.md", "docs/*")`); `outside="none"` ignores
+  them. With
   `Impact(dev_targets=True)`, a member that reaches a changed package only
   through a dev-dependency runs only its integration test targets that
   name the changed library (the whole member when its unit tests or shared
@@ -309,6 +317,17 @@ and `cancel` start and stop one, and the UI's Builds page shows them all.
 
 **Upgrade notes**
 
+- **Train impact: `Cargo.lock` and files outside every package.** Since
+  the 0.26.0 preview, `Cargo.lock` is no longer a default root: a lock
+  change tests the members that use its changed entries
+  (`Impact(lockfile="packages")`) instead of the whole workspace, and a
+  changed file outside every package (a script, a fixture) now tests the
+  whole workspace instead of nothing (`Impact(outside="all")`), except
+  `*.md` and `docs/*`. A spec that listed `Cargo.lock` in `roots` keeps
+  testing everything on a lock change; drop it from `roots` for the new
+  selection. For the earlier behaviour: `Impact(lockfile="all",
+  outside="none")`. A cargo step's content-hash key includes its
+  selection, so steps with `inputs=` run once more after the upgrade.
 - **Plan digests of gated NixReleases change once.** A release plan now
   lists the private inputs the build host fetches first (`inputs`; the
   promotion gate's input is always among them), so the first plan after

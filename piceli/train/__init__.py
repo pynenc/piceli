@@ -34,6 +34,7 @@ See ``docs/train.md``. Importing this package has no side effects.
 """
 
 from piceli.train.model import (
+    DEFAULT_IGNORE,
     DEFAULT_ROOTS,
     CargoCheck,
     CargoTests,
@@ -48,6 +49,7 @@ from piceli.train.model import (
 from piceli.train.notify import Notify
 
 __all__ = [
+    "DEFAULT_IGNORE",
     "DEFAULT_ROOTS",
     "CargoCheck",
     "CargoTests",

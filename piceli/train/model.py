@@ -23,15 +23,25 @@ if TYPE_CHECKING:
 
 #: Changed paths (globs, relative to the repository root) that make an
 #: :class:`Impact` selection test every package: the workspace manifest, the
-#: lock file, the toolchain and cargo's configuration.
+#: toolchain and cargo's configuration. (``Cargo.lock`` selects the packages
+#: that use its changed entries: ``Impact(lockfile="packages")``.)
 DEFAULT_ROOTS: tuple[str, ...] = (
     "Cargo.toml",
-    "Cargo.lock",
     "rust-toolchain",
     "rust-toolchain.toml",
     ".cargo/config",
     ".cargo/config.toml",
 )
+
+#: Files outside every package that no build reads (globs; ``*`` crosses
+#: ``/``): with ``Impact(outside="all")`` they still select nothing.
+DEFAULT_IGNORE: tuple[str, ...] = ("*.md", "docs/*")
+#: ``Impact(lockfile=)``: a ``Cargo.lock`` change selects the packages that
+#: use its changed entries, or every package.
+LOCKFILE_MODES = ("packages", "all")
+#: ``Impact(outside=)``: a file outside every package selects every package,
+#: or none.
+OUTSIDE_MODES = ("all", "none")
 
 #: Seconds a step may run before it is stopped (its verdict is ``timeout``).
 DEFAULT_TIMEOUT = 3600.0
@@ -91,12 +101,22 @@ class Impact:
     The packages whose files changed between the train's head and the commit
     under test, plus every workspace member that depends on them (normal and
     build dependencies, transitively; dev-dependencies for direct users).
-    A changed path matching one of ``roots`` selects every package. Files
-    outside every package that match no root select nothing (documentation,
-    scripts: other steps check those).
+    A changed path matching one of ``roots`` selects every package.
 
     :param roots: Globs (``fnmatch``, relative to the repository root) whose
         change tests everything. Default :data:`DEFAULT_ROOTS`.
+    :param lockfile: ``"packages"`` (default): a ``Cargo.lock`` change
+        selects the members that use its added or changed entries (by name
+        and version, transitively, from ``cargo metadata``'s resolved
+        graph), and their dependents; a toolchain change, a ``[patch]``
+        change or a lock that cannot be read still selects everything.
+        ``"all"``: any ``Cargo.lock`` change selects everything.
+    :param outside: ``"all"`` (default): a changed file outside every
+        package (a script, a fixture a build reads) selects every package;
+        ``"none"``: it selects nothing (other steps check it).
+    :param ignore: Globs of the files outside every package that select
+        nothing even with ``outside="all"``. Default
+        :data:`DEFAULT_IGNORE` (documentation).
     :param dev_targets: Narrow the members that reach a selected package
         only through a dev-dependency: instead of every test of such a
         member, only its integration test targets (``tests/*.rs``) whose
@@ -107,16 +127,30 @@ class Impact:
 
     roots: tuple[str, ...] = DEFAULT_ROOTS
     dev_targets: bool = False
+    lockfile: Literal["packages", "all"] = "packages"
+    outside: Literal["all", "none"] = "all"
+    ignore: tuple[str, ...] = DEFAULT_IGNORE
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "roots", _strings(self.roots, "Impact roots"))
+        object.__setattr__(self, "ignore", _strings(self.ignore, "Impact ignore"))
         if not isinstance(self.dev_targets, bool):
             raise _invalid("Impact dev_targets is True or False")
+        if self.lockfile not in LOCKFILE_MODES:
+            raise _invalid('Impact lockfile is "packages" or "all"')
+        if self.outside not in OUTSIDE_MODES:
+            raise _invalid('Impact outside is "all" or "none"')
 
     def to_dict(self) -> dict[str, Any]:
         body: dict[str, Any] = {"roots": list(self.roots)}
         if self.dev_targets:
             body["dev_targets"] = True
+        if self.lockfile != "packages":
+            body["lockfile"] = self.lockfile
+        if self.outside != "all":
+            body["outside"] = self.outside
+        if self.ignore != DEFAULT_IGNORE:
+            body["ignore"] = list(self.ignore)
         return {"impact": body}
 
 
@@ -138,9 +172,13 @@ def _selection_dict(value: Selection) -> Any:
 def _selection_from(value: Any) -> Selection:
     if value == "all":
         return "all"
+    body = value["impact"]
     return Impact(
-        roots=tuple(value["impact"]["roots"]),
-        dev_targets=bool(value["impact"].get("dev_targets", False)),
+        roots=tuple(body["roots"]),
+        dev_targets=bool(body.get("dev_targets", False)),
+        lockfile=body.get("lockfile", "packages"),
+        outside=body.get("outside", "all"),
+        ignore=tuple(body.get("ignore", DEFAULT_IGNORE)),
     )
 
 

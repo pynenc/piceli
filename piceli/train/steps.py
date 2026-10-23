@@ -16,8 +16,10 @@ Importing this module is side-effect free.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
+import subprocess
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -278,30 +280,109 @@ def _selection(
     if select == "all":
         return None, {"selection": "all"}, None
     assert isinstance(select, Impact)
-    done: Completed = run(
-        ["cargo", "metadata", "--format-version", "1", "--no-deps"], stdout=True
-    )
-    if not done.ok:
-        return (
-            None,
-            {},
-            "cargo metadata failed" + (f" ({done.error})" if done.error else ""),
-        )
-    try:
-        metadata = json.loads(done.output)
-    except ValueError:
-        return None, {}, "cargo metadata printed no JSON"
     reasons: list[str] = []
+    users: dict[str, str] | None = None
+    if (
+        select.lockfile == "packages"
+        and impact.LOCKFILE in ctx.changed
+        and not any(fnmatch.fnmatchcase(impact.LOCKFILE, r) for r in select.roots)
+    ):
+        found = _lock_impact(ctx, run)
+        if isinstance(found, str):
+            _log_reasons(log, [f"impact: every package: {found}"])
+            return None, {"selection": "all"}, None
+        users, metadata = found
+    else:
+        done: Completed = run(
+            ["cargo", "metadata", "--format-version", "1", "--no-deps"], stdout=True
+        )
+        if not done.ok:
+            return (
+                None,
+                {},
+                "cargo metadata failed" + (f" ({done.error})" if done.error else ""),
+            )
+        try:
+            metadata = json.loads(done.output)
+        except ValueError:
+            return None, {}, "cargo metadata printed no JSON"
     selected = impact.select(
         ctx.changed,
         metadata,
         select.roots,
         reasons.append,
         dev_targets=select.dev_targets,
+        lockfile=select.lockfile,
+        lock_users=users,
+        outside=select.outside,
+        ignore=select.ignore,
     )
+    _log_reasons(log, reasons)
+    return selected, {"selection": "all" if selected is None else selected}, None
+
+
+def _log_reasons(log: Path, reasons: list[str]) -> None:
+    log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("a", encoding="utf-8") as handle:
         handle.write("\n".join(reasons) + ("\n" if reasons else ""))
-    return selected, {"selection": "all" if selected is None else selected}, None
+
+
+def _show(checkout: Path, rev: str, path: str) -> str | None:
+    """The text of ``path`` at ``rev`` (``None`` when it is not there)."""
+    try:
+        done = subprocess.run(
+            ["git", "show", f"{rev}:{path}"],
+            cwd=checkout,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def _lock_impact(
+    ctx: StepContext, run: Any
+) -> tuple[dict[str, str], dict[str, Any]] | str:
+    """The members that use the ``Cargo.lock`` entries changed between the
+    trial's base and the merged tree, with the resolved metadata; or the
+    reason to select everything (a toolchain or ``[patch]`` change, a lock
+    that cannot be read, a graph that cannot be resolved)."""
+    for path in ctx.changed:
+        if path in impact.TOOLCHAIN:
+            return f"{path} changed with {impact.LOCKFILE}"
+    for path in impact.PATCH_FILES:
+        if path in ctx.changed and impact.patch_changed(
+            _show(ctx.checkout, ctx.base, path), _show(ctx.checkout, ctx.head, path)
+        ):
+            return f"[patch] changed in {path}"
+    changed = impact.lock_diff(
+        _show(ctx.checkout, ctx.base, impact.LOCKFILE),
+        _show(ctx.checkout, ctx.head, impact.LOCKFILE),
+    )
+    if isinstance(changed, str):
+        return changed
+    metadata: dict[str, Any] | None = None
+    for extra in (["--offline"], []):  # offline first, as warm builds do
+        done: Completed = run(
+            ["cargo", "metadata", "--format-version", "1", "--locked", *extra],
+            stdout=True,
+        )
+        if done.ok:
+            try:
+                metadata = json.loads(done.output)
+            except ValueError:
+                metadata = None
+            if metadata is not None:
+                break
+    if metadata is None:
+        return "cargo metadata could not resolve the dependencies"
+    try:
+        return impact.lock_users(changed, metadata), metadata
+    except (KeyError, TypeError):
+        return "cargo metadata printed no resolved graph"
 
 
 def _cargo_check(step: CargoCheck, selected: list[str] | None, run: Any) -> _Outcome:
