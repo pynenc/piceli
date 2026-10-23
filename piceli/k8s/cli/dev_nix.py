@@ -856,25 +856,29 @@ def s3_secret(
         ),
     ] = False,
 ) -> None:
-    """Store a bucket's S3 access keys (an access key id and its secret)."""
-    from piceli.infra.machines.credentials import save_credential
-    from piceli.k8s.cli.infra import _guard, _no_secret_arguments, _read_secret
+    """Store a bucket's S3 access keys, part by part (never printed).
+
+    Asks for the S3 access key id (echoed: an identifier), then the S3 secret
+    access key (not echoed); piped, one per line. Each part is checked before
+    anything is stored (not empty, no space around it, no ':' inside), and
+    they are stored under their own names. Running it again replaces them.
+    """
+    from piceli.infra.machines.credential_parts import SHAPES
+    from piceli.infra.machines.credentials import credential_present, save_parts
+    from piceli.k8s.cli.infra import _ask_parts, _guard, _no_secret_arguments
 
     _no_secret_arguments(context)
     if not prompt:
         reject("infra-prompt-required", "pass --prompt: the keys are read from stdin")
+    shape = SHAPES["s3"]
     with _guard():
-        access = _read_secret("S3 access key id: ").strip()
-        secret = _read_secret("S3 secret access key (not echoed): ").strip()
-        if not access or ":" in access or not secret:
-            reject(
-                "infra-credential-invalid",
-                "give the access key id, then the secret, on two lines",
-            )
-        save_credential(name, "s3-keys", f"{access}:{secret}")
-        del secret
-    say(f"stored credential {name} (s3-keys); the secret was not printed")
-    emit_json({"state": "stored", "name": name, "kind": "s3-keys"})
+        replaced = credential_present(name)
+        save_parts(name, "s3", _ask_parts(shape, from_env=False))
+    say(
+        f"stored credential {name} (s3-keys): {shape.names()}; the secret was not printed"
+    )
+    emit_json({"state": "stored", "name": name, "kind": "s3-keys",
+               "parts": shape.keys, "replaced": replaced})  # fmt: skip
 
 
 def register(dev_app: typer.Typer) -> None:

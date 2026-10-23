@@ -47,6 +47,7 @@ __all__ = [
     "SCHEMA",
     "backup",
     "config_path",
+    "incomplete_credentials",
     "parse_archive",
     "parse_recipients",
     "plan_restore",
@@ -242,6 +243,14 @@ def staleness() -> dict[str, Any]:
     }
 
 
+def incomplete_credentials() -> list[dict[str, Any]]:
+    """The stored credentials that lack a part (a Porkbun key pair stored as
+    one value), as :func:`~.credential_parts.credential_report` gives them."""
+    from piceli.infra.machines.credential_parts import credential_reports
+
+    return [report for report in credential_reports() if not report["complete"]]
+
+
 def _label(entry: Entry) -> str:
     return entry.name if entry.area == "credentials" else f"profile:{entry.name}"
 
@@ -407,6 +416,7 @@ def backup(
         "skipped": skipped,
         "config": str(config_path()),
         "staleness": staleness(),
+        "incomplete": incomplete_credentials(),
     }
 
 

@@ -392,8 +392,10 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`infra-apply-failed`](#error-infra-apply-failed) | infra | no |
 | [`infra-backend-changed`](#error-infra-backend-changed) | infra | no |
 | [`infra-credential-exists`](#error-infra-credential-exists) | infra | no |
+| [`infra-credential-incomplete`](#error-infra-credential-incomplete) | infra | no |
 | [`infra-credential-invalid`](#error-infra-credential-invalid) | infra | no |
 | [`infra-credential-missing`](#error-infra-credential-missing) | infra | no |
+| [`infra-credential-part-invalid`](#error-infra-credential-part-invalid) | infra | no |
 | [`infra-credential-refused`](#error-infra-credential-refused) | infra | no |
 | [`infra-credential-unsafe`](#error-infra-credential-unsafe) | infra | no |
 | [`infra-dns-api-disabled`](#error-infra-dns-api-disabled) | infra | no |
@@ -6346,10 +6348,18 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Keep the existing key, or pass `--replace` if the state it protected is gone.
 - **Retry-safe:** no
 
+(error-infra-credential-incomplete)=
+### `infra-credential-incomplete`
+
+**Credential lacks a part.** A stored credential holds fewer parts than its provider needs (one part of a Porkbun API key pair, an OpenStack application credential or S3 keys), or another provider's parts. It was refused before any API call.
+
+- **Fix:** Run the command in the message (`piceli secrets provider NAME --prompt`); it replaces the stored credential without a separate delete.
+- **Retry-safe:** no
+
 (error-infra-credential-invalid)=
 ### `infra-credential-invalid`
 
-**Invalid credential.** A credential name is not a valid name, its file is damaged or of another kind, or the value read is empty, has control characters, or is a state passphrase shorter than 16 characters, or an OpenStack credential is not `APPLICATION_CREDENTIAL_ID:SECRET` (a Porkbun one not `APIKEY:SECRETKEY`).
+**Invalid credential.** A credential name is not a valid name, its file is damaged or of another kind, or the value read is empty, has control characters, or is a state passphrase shorter than 16 characters, or `--provider` (or `--infra`) does not name one provider.
 
 - **Fix:** Store the credential again with `piceli secrets provider|state-key NAME --prompt`.
 - **Retry-safe:** no
@@ -6362,12 +6372,20 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Store it: `piceli secrets provider NAME --prompt` for a token, `piceli secrets state-key NAME --generate` (or `--prompt`) for a state passphrase.
 - **Retry-safe:** no
 
+(error-infra-credential-part-invalid)=
+### `infra-credential-part-invalid`
+
+**Credential part refused.** One part of a credential (named in `part`: `api_key`, `secret_api_key`, `application_credential_id`, `application_credential_secret`, `access_key_id`, `secret_access_key`, `token`) is empty, has a space around it, holds a `:` (two parts pasted as one `ID:SECRET` line), is not the provider's shape (a Porkbun API key starts with `pk1_`, its secret API key with `sk1_`; an OpenStack application credential ID is 32 hex characters), is the other part pasted in its place, or its variable is not set (`--from-env`). The value is not printed; nothing was stored.
+
+- **Fix:** Run `piceli secrets provider NAME --prompt` (or `piceli secrets s3 NAME --prompt`) again and give each part on its own line, as its prompt names it.
+- **Retry-safe:** no
+
 (error-infra-credential-refused)=
 ### `infra-credential-refused`
 
-**Secret passed the unsafe way.** A secret was given as a command-line argument or in the environment (`HCLOUD_TOKEN`, `OS_APPLICATION_CREDENTIAL_SECRET`, `PORKBUN_API_KEY`, `PORKBUN_SECRET_API_KEY`, `PICELI_PROVIDER_TOKEN`, `PICELI_STATE_KEY`), where it leaks into process listings and logs. It was not stored or echoed.
+**Secret passed the unsafe way.** A secret was given as a command-line argument, or is in the environment (`HCLOUD_TOKEN`, `OS_APPLICATION_CREDENTIAL_SECRET`, `PORKBUN_API_KEY`, `PORKBUN_SECRET_API_KEY`, `PICELI_PROVIDER_TOKEN`, `PICELI_STATE_KEY`) without `--from-env`, where it leaks into process listings and logs. It was not stored or echoed.
 
-- **Fix:** Unset the variable and run `piceli secrets provider|state-key NAME --prompt`, then type the value (or pipe it on stdin).
+- **Fix:** Unset the variable and run `piceli secrets provider|state-key NAME --prompt`, then type the value (or pipe it on stdin); for a script, `piceli secrets provider NAME --from-env` reads the provider's own variables on purpose.
 - **Retry-safe:** no
 
 (error-infra-credential-unsafe)=
@@ -6525,7 +6543,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-infra-prompt-required)=
 ### `infra-prompt-required`
 
-**Secret source not chosen.** `piceli secrets provider` needs `--prompt`; `piceli secrets state-key` needs exactly one of `--prompt` or `--generate`.
+**Secret source not chosen.** `piceli secrets provider` needs exactly one of `--prompt` or `--from-env`; `piceli secrets state-key` needs exactly one of `--prompt` or `--generate`.
 
 - **Fix:** Add `--prompt` (and type the value, or pipe it on stdin) or `--generate`.
 - **Retry-safe:** no

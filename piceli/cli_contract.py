@@ -2076,14 +2076,25 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(infra-k3s-not-ready) when k3s does not answer with a Ready node within --wait.",
         ),
         "secrets provider": _C(
-            "Store a provider API token (or a state backend password) as a local credential.",
-            reads=("stdin (--prompt)",),
+            "Store a provider API credential (or a state backend password) as a "
+            "local credential, part by part.",
+            reads=(
+                "stdin (--prompt)",
+                "the provider's variables (--from-env)",
+                "--infra MODULE:ATTR (which provider uses NAME)",
+            ),
             writes=("$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)",),
             contract="conforms",
             exit_codes=(0, 2),
-            notes="The token is read from stdin only (typed without echo, or piped); "
-            "an argument or HCLOUD_TOKEN in the environment is refused "
-            "(infra-credential-refused) without echoing it. Prints the name, never the value.",
+            notes="0.25.0: a two-part credential (Porkbun API key pair, OpenStack "
+            "application credential) is asked for part by part, each checked before "
+            "anything is stored (infra-credential-part-invalid names the part), and "
+            "stored by part; piped, one part per line. The provider is --provider, "
+            "else --infra's provider using NAME, else the one stored before, else "
+            "the name; otherwise one token. --from-env reads the provider's standard "
+            "variables. An argument, or a token variable without --from-env, is "
+            "refused (infra-credential-refused) without echoing it. Replaces a stored "
+            "credential. Prints the name and the parts' names, never a value.",
         ),
         "secrets nix-cache": _C(
             "Generate or import a Nix binary cache's signing key as a local "
@@ -2119,9 +2130,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             writes=("$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)",),
             contract="conforms",
             exit_codes=(0, 2),
-            notes="0.24.0. Two lines on stdin (typed without echo, or piped); an "
-            "argument is refused (infra-credential-refused) without echoing it. "
-            "Prints the name, never a value.",
+            notes="0.24.0. Two lines on stdin (the key id echoed, the secret not; "
+            "or piped); since 0.25.0 each part is checked before anything is stored "
+            "(infra-credential-part-invalid names the part) and they are stored by "
+            "part. An argument is refused (infra-credential-refused) without "
+            "echoing it. Prints the name and the parts' names, never a value.",
         ),
         "secrets user-data": _C(
             "Store a server's user data (a cloud-config, a script or a bootstrap "

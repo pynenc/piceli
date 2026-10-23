@@ -169,8 +169,9 @@ infra = Infrastructure("web", servers=[host], buckets=[Bucket("my-cache", provid
 
 The credential is an application credential (Horizon: Identity →
 Application Credentials, or `openstack application credential create`),
-stored as `ID:SECRET`: `printf '%s:%s' "$ID" "$SECRET" | piceli secrets
-provider cloud --prompt`. OpenTofu gets it only as
+stored by part: `piceli secrets provider cloud --provider openstack --prompt`
+asks for the application credential ID, then its secret (see
+[Secrets](#secrets): credentials with two parts). OpenTofu gets it only as
 `OS_APPLICATION_CREDENTIAL_ID` and `OS_APPLICATION_CREDENTIAL_SECRET`; both
 are redacted from its output. S3 access to a bucket needs EC2 credentials
 (at Infomaniak the endpoint is `https://s3.pub1.infomaniak.cloud`): declare
@@ -294,8 +295,8 @@ infra = Infrastructure("web", servers=[host], records=[
   the record follows it in the same apply. No address is written in the
   configuration.
 - **Credentials.** An API key pair (Porkbun: Account → API Access), stored
-  as `APIKEY:SECRETKEY`: `printf '%s:%s' "$KEY" "$SECRET" | piceli secrets
-  provider porkbun --prompt`. OpenTofu gets it only as `PORKBUN_API_KEY`
+  by part: `piceli secrets provider porkbun --prompt` asks for the API key
+  (`pk1_…`), then the secret API key (`sk1_…`). OpenTofu gets it only as `PORKBUN_API_KEY`
   and `PORKBUN_SECRET_API_KEY`; both are redacted from its output.
 - **API access per domain.** Turn it on for each domain (Domain Management
   → Details → API Access). A plan that changes records at Porkbun asks its
@@ -425,11 +426,68 @@ profiles: `piceli secrets provider NAME --prompt` reads the token from stdin
 (`0600`). A token given as an argument or in `HCLOUD_TOKEN` (or
 `OS_APPLICATION_CREDENTIAL_SECRET`, `PORKBUN_API_KEY`,
 `PORKBUN_SECRET_API_KEY`) is refused
-(`infra-credential-refused`) without echoing it, and a credential file other
-users can read is refused (`infra-credential-unsafe`). Piceli passes the token
-to OpenTofu in its environment only (`HCLOUD_TOKEN`), never as an argument,
-closes OpenTofu's stdin, passes no `TF_LOG`, and redacts every token and the
-passphrase from OpenTofu's output before it is shown.
+(`infra-credential-refused`) without echoing it, unless you pass
+`--from-env` to read the provider's own variables on purpose (scripts). A
+credential file other users can read is refused (`infra-credential-unsafe`).
+Piceli passes the token to OpenTofu in its environment only
+(`HCLOUD_TOKEN`), never as an argument, closes OpenTofu's stdin, passes no
+`TF_LOG`, and redacts every token and the passphrase from OpenTofu's output
+before it is shown.
+
+### Credentials with two parts
+
+A Porkbun API key pair and an OpenStack application credential (Infomaniak
+included) have two parts. `piceli secrets provider` asks for each by the name
+the provider's console gives it, says where to find it, and checks it before
+anything is stored:
+
+```console
+$ piceli secrets provider porkbun --prompt
+Step 1 of 2: Porkbun API key (pk1_…). Where: porkbun.com > Account > API Access > Create API Key; …
+Porkbun API key (pk1_…): pk1_…
+Step 2 of 2: Porkbun secret API key (sk1_…). Where: …
+Porkbun secret API key (sk1_…, not echoed):
+stored credential porkbun (provider-token, Porkbun API key pair): API key and secret API key; no value was printed
+```
+
+| Provider | Parts, in order | `--from-env` |
+| --- | --- | --- |
+| `porkbun` | Porkbun API key (`pk1_…`), Porkbun secret API key (`sk1_…`) | `PORKBUN_API_KEY`, `PORKBUN_SECRET_API_KEY` |
+| `openstack` (`infomaniak`) | Application credential ID (32 hex), Application credential secret | `OS_APPLICATION_CREDENTIAL_ID`, `OS_APPLICATION_CREDENTIAL_SECRET` |
+| `hetzner` (`hcloud`) | Hetzner Cloud API token | `HCLOUD_TOKEN` |
+| `token` | Provider API token | `PICELI_PROVIDER_TOKEN` |
+
+- **Which provider.** `--provider porkbun|openstack|infomaniak|hetzner|token`;
+  else `--infra MODULE:ATTR`, whose provider with `credentials=NAME` tells;
+  else the provider stored under NAME before; else the name, alone or
+  before a dash (`porkbun`, `porkbun-dns`, `infomaniak`, `hcloud`).
+  Otherwise it is one API token.
+- **Each part is checked as it is entered**, never printed: not empty, no
+  space around it, no `:` inside, and the known shape (Porkbun's `pk1_` and
+  `sk1_`, an application credential ID of 32 hex characters). A wrong part
+  (a swapped pair, a single `KEY:SECRET` line, only one of the two) is
+  refused with `infra-credential-part-invalid`, whose `part` names it
+  (`api_key`, `secret_api_key`, …), and nothing is stored. Identifiers
+  are echoed as you type them; secrets are not.
+- **Piped**, for scripts and tests: one part per line, in the order above:
+  `printf '%s\n%s\n' "$KEY" "$SECRET" | piceli secrets provider porkbun --prompt`.
+- **Stored by part**: `{"provider": "porkbun", "parts": {"api_key": …,
+  "secret_api_key": …}}`. The `stored` line and its JSON name the parts
+  (`"parts": ["api_key", "secret_api_key"]`), never their values. A
+  credential stored as one `ID:SECRET` value by an earlier version still
+  reads.
+- **One part stored earlier?** Every plan checks the credentials its
+  providers use before any API call and refuses one that lacks a part
+  (`infra-credential-incomplete`), with the command to run: "porkbun: one
+  part of two stored, re-run `piceli secrets provider porkbun --prompt`".
+  Running that command
+  replaces the credential; no delete is needed.
+  `piceli.infra.machines.credential_parts.credential_reports()` reports
+  every stored credential's completeness (names and counts, never values);
+  `secrets backup --json` lists the incomplete ones in `incomplete`.
+
+`piceli secrets s3 NAME --prompt` does the same for a bucket's S3 keys: the
+S3 access key id (echoed), then the S3 secret access key, stored by part.
 
 ## Back the secret store up
 
@@ -535,7 +593,7 @@ the command line with their approvals.
 | `piceli infra status REF [--json]` | Read-only status | 0, 2 |
 | `piceli infra install REF SERVER [--approve DIGEST]` | Run the install hook | 0, 1 `infra-install-failed`, 2, 3 |
 | `piceli infra register REF SERVER [--kubeconfig F] [--approve DIGEST]` | Register the server's k3s | 0, 1 `infra-k3s-not-ready`, 2, 3 |
-| `piceli secrets provider NAME --prompt` | Store a provider token | 0, 2 |
+| `piceli secrets provider NAME --prompt\|--from-env [--provider P] [--infra REF]` | Store a provider credential, part by part | 0, 2 |
 | `piceli secrets state-key NAME --generate\|--prompt` | Store the state passphrase | 0, 2 |
 | `piceli secrets delete NAME [--kind KIND] [--yes]` | Delete a stored credential (asks first; never printed) | 0, 2, 3 |
 | `piceli secrets backup --to PATH [--recipient R] [--force]` | Back the store up, encrypted with age | 0, 1, 2 |

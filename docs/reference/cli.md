@@ -149,9 +149,9 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli secrets delete`](#cli-secrets-delete) | Delete a stored credential (a spent bootstrap key, an old token); never printed. | none | yes |
 | [`piceli secrets git`](#cli-secrets-git) | Store the Git token the controller and cluster builds use (read from stdin, never printed). | writes | no |
 | [`piceli secrets nix-cache`](#cli-secrets-nix-cache) | A Nix binary cache's signing key: generate or import it; print its public key. | none | no |
-| [`piceli secrets provider`](#cli-secrets-provider) | Store a provider API token (read from stdin, never printed). | none | no |
+| [`piceli secrets provider`](#cli-secrets-provider) | Store a provider's API credential, part by part (never printed). | none | no |
 | [`piceli secrets restore`](#cli-secrets-restore) | Restore the secret store from an encrypted backup (plans first when not empty). | none | yes |
-| [`piceli secrets s3`](#cli-secrets-s3) | Store a bucket's S3 access keys (an access key id and its secret). | none | no |
+| [`piceli secrets s3`](#cli-secrets-s3) | Store a bucket's S3 access keys, part by part (never printed). | none | no |
 | [`piceli secrets state-key`](#cli-secrets-state-key) | Store the passphrase that encrypts an infrastructure's OpenTofu state. | none | no |
 | [`piceli secrets user-data`](#cli-secrets-user-data) | Store a server's user data (a cloud-config, a script or a bootstrap key). | none | no |
 | [`piceli state export`](#cli-state-export) | Write the release's state to one file (secret material excluded unless asked). | reads | no |
@@ -3491,23 +3491,26 @@ A Nix binary cache's signing key: generate or import it; print its public key.
 (cli-secrets-provider)=
 ### `piceli secrets provider`
 
-Store a provider API token (read from stdin, never printed).
+Store a provider's API credential, part by part (never printed).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `NAME` | text | required |  |
-| `--prompt` | boolean | `False` | Read the value from stdin (typed without echo, or piped) |
+| `--prompt` | boolean | `False` | Ask for each part on stdin (typed: an identifier echoed, a secret not; piped: one part per line, in order) |
+| `--provider` | text |  | Whose credential it is: porkbun, openstack (or infomaniak), hetzner (or hcloud), or token (one API token) |
+| `--infra` | text |  | MODULE:ATTR of the Infrastructure whose provider uses credentials=NAME: it tells which provider NAME is for |
+| `--from-env` | boolean | `False` | Read the parts from the provider's standard variables instead of stdin (for scripts) |
 
 **Contract**
 
-- **Reads:** stdin (--prompt)
+- **Reads:** stdin (--prompt), the provider's variables (--from-env), --infra MODULE:ATTR (which provider uses NAME)
 - **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)
 - **Cluster:** none
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** The token is read from stdin only (typed without echo, or piped); an argument or HCLOUD_TOKEN in the environment is refused (infra-credential-refused) without echoing it. Prints the name, never the value.
+- **Notes:** 0.25.0: a two-part credential (Porkbun API key pair, OpenStack application credential) is asked for part by part, each checked before anything is stored (infra-credential-part-invalid names the part), and stored by part; piped, one part per line. The provider is --provider, else --infra's provider using NAME, else the one stored before, else the name; otherwise one token. --from-env reads the provider's standard variables. An argument, or a token variable without --from-env, is refused (infra-credential-refused) without echoing it. Replaces a stored credential. Prints the name and the parts' names, never a value.
 
 (cli-secrets-restore)=
 ### `piceli secrets restore`
@@ -3535,7 +3538,7 @@ Restore the secret store from an encrypted backup (plans first when not empty).
 (cli-secrets-s3)=
 ### `piceli secrets s3`
 
-Store a bucket's S3 access keys (an access key id and its secret).
+Store a bucket's S3 access keys, part by part (never printed).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -3551,7 +3554,7 @@ Store a bucket's S3 access keys (an access key id and its secret).
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.24.0. Two lines on stdin (typed without echo, or piped); an argument is refused (infra-credential-refused) without echoing it. Prints the name, never a value.
+- **Notes:** 0.24.0. Two lines on stdin (the key id echoed, the secret not; or piped); since 0.25.0 each part is checked before anything is stored (infra-credential-part-invalid names the part) and they are stored by part. An argument is refused (infra-credential-refused) without echoing it. Prints the name and the parts' names, never a value.
 
 (cli-secrets-state-key)=
 ### `piceli secrets state-key`

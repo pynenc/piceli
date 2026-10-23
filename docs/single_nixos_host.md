@@ -154,16 +154,18 @@ after installing Tailscale.
 
    ```sh
    piceli secrets state-key web-1-state --generate        # encrypts the OpenTofu state
-   printf '%s:%s' "$ID" "$SECRET" | piceli secrets provider infomaniak --prompt
-   printf '%s:%s' "$KEY" "$SECRET" | piceli secrets provider porkbun --prompt
+   piceli secrets provider infomaniak --prompt            # application credential ID, then secret
+   piceli secrets provider porkbun --prompt               # API key (pk1_…), then secret API key (sk1_…)
    piceli secrets nix-cache example-cache-1 --generate    # prints example-cache-1:<base64>
    piceli secrets s3 nix-cache-write --prompt              # key id, then secret: put and delete
    piceli secrets age web-1-age --generate                 # prints age1...: the host's sops key
    piceli secrets user-data web-1-boot --prompt           # the tailnet key, just before step 2
    ```
 
-   The Infomaniak credential is an application credential (`ID:SECRET`),
-   Porkbun's an API key pair with API access turned on for `example.org`.
+   The Infomaniak credential is an application credential (its ID, then its
+   secret), Porkbun's an API key pair (API key, then secret API key) with API
+   access turned on for `example.org`; each part is asked for, checked and
+   stored on its own (piped: one per line).
    The S3 keys are EC2 credentials (`openstack ec2 credentials create`).
    Put the printed cache public key in `NixCache(...)` and the `age1...`
    key in your `.sops.yaml`. The host's own secrets do not go into Piceli:

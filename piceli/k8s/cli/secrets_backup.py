@@ -60,6 +60,8 @@ def backup_secrets(
     )
     for item in result["skipped"]:
         say(f"  skipped {item['area']}/{item['path']}: {item['why']}")
+    for report in result["incomplete"]:
+        say(f"  incomplete: {report['message']}")
     if len(result["recipients"]) < 2:
         say(
             "  one recipient: add a second (a hardware key) so one lost key is not fatal"

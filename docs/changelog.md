@@ -147,6 +147,32 @@ environment and host in one view.
 - **`piceli.infra.machines.keys.needed_secrets(...)`** lists every secret
   a declaration (`Infrastructure`, `Bucket`, `NixCache`, `NixHost`) needs:
   name, kind, who creates it (`infra-apply` or `operator`) and the command.
+- **Two-part credentials are asked for, checked and stored by part.**
+  `piceli secrets provider NAME --prompt` asks for a Porkbun API key pair
+  as "Porkbun API key (pk1_…)", then "Porkbun secret API key (sk1_…)", and
+  an OpenStack (Infomaniak) application credential as "Application
+  credential ID", then "Application credential secret", each with where to
+  find it; identifiers are echoed, secrets are not. Each part is checked
+  before anything is stored (not empty, no space around it, no `:` inside,
+  `pk1_`/`sk1_`, 32 hex for the ID): a wrong one is refused with
+  `infra-credential-part-invalid`, whose `part` names it, so a pasted
+  secret alone or a swapped pair is caught at once, not at apply. Parts are
+  stored under their own names; the `stored` line and JSON name them
+  (`"parts": [...]`, `"provider"`, `"replaced"`), never their values.
+  Piped input is one part per line; `--from-env` reads the provider's
+  standard variables (`PORKBUN_API_KEY`, `PORKBUN_SECRET_API_KEY`,
+  `OS_APPLICATION_CREDENTIAL_ID`, `OS_APPLICATION_CREDENTIAL_SECRET`,
+  `HCLOUD_TOKEN`). The provider comes from `--provider`, `--infra
+  MODULE:ATTR`, the credential stored before, or the name (`porkbun`,
+  `infomaniak`, `hcloud`, alone or before a dash); otherwise one token.
+  `piceli secrets s3 NAME --prompt` checks and stores its two keys by part
+  too. A credential stored as one `A:B` value still reads; one that lacks a
+  part is refused by every plan before any API call
+  (`infra-credential-incomplete`: "porkbun: one part of two stored, re-run
+  `piceli secrets provider porkbun --prompt`"), and re-running that command
+  replaces it. `piceli.infra.machines.credential_parts.credential_reports()`
+  reports every stored credential's completeness; `secrets backup --json`
+  lists the incomplete ones (`incomplete`).
 
 ## Version 0.24.0
 

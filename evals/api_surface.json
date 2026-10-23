@@ -12869,7 +12869,10 @@
      "name"
     ],
     "flags": [
-     "--prompt"
+     "--from-env",
+     "--infra",
+     "--prompt",
+     "--provider"
     ],
     "subcommands": []
    },
@@ -13553,8 +13556,10 @@
    "infra-apply-failed",
    "infra-backend-changed",
    "infra-credential-exists",
+   "infra-credential-incomplete",
    "infra-credential-invalid",
    "infra-credential-missing",
+   "infra-credential-part-invalid",
    "infra-credential-refused",
    "infra-credential-unsafe",
    "infra-dns-api-disabled",
@@ -15749,6 +15754,7 @@
   "piceli.infra.contract",
   "piceli.infra.controller",
   "piceli.infra.machines",
+  "piceli.infra.machines.credential_parts",
   "piceli.infra.machines.credentials",
   "piceli.infra.machines.hetzner",
   "piceli.infra.machines.images",

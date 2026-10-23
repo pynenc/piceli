@@ -139,9 +139,16 @@ def _known(ws: Workspace | None, diagnostics: list[str]) -> InfraError | None:
 
 @contextmanager
 def workspace(infra: Infrastructure, *, tofu: str | None = None) -> Iterator[Workspace]:
-    """Lock the state directory, render the configuration and ``tofu init``."""
+    """Lock the state directory, render the configuration and ``tofu init``.
+
+    A provider credential that lacks a part (one part of a key pair) is
+    refused first (``infra-credential-incomplete``), before any API call."""
+    from piceli.infra.machines.credential_parts import require_complete
     from piceli.infra.machines.credentials import load_credential
 
+    for provider in infra.providers():
+        if provider.token_env() is not None and provider.credentials is not None:
+            require_complete(provider.credentials, provider.name)
     directory = state_dir(infra.name, infra.state_dir)
     with locked(directory):
         binary = locate(tofu)
