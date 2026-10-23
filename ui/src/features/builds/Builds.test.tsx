@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -71,16 +71,16 @@ it('approves the exact digest after review, cancels and builds now', async () =>
   expect(confirm.disabled).toBe(true);
   await user.click(within(review).getByRole('checkbox'));
   await user.click(confirm);
-  await vi.waitFor(() => expect(calls.some(call => call.url.endsWith('/composition/builds/web-1/approve') && call.body?.includes(DIGEST))).toBe(true));
+  await waitFor(() => expect(calls.some(call => call.url.endsWith('/composition/builds/web-1/approve') && call.body?.includes(DIGEST))).toBe(true));
 
   await user.click(within(screen.getByRole('region', { name: `Build ${page.builds[1].id}` })).getByRole('button', { name: 'Cancel build' }));
-  await vi.waitFor(() => expect(calls.some(call => call.url.endsWith('/composition/builds/main/cancel'))).toBe(true));
+  await waitFor(() => expect(calls.some(call => call.url.endsWith('/composition/builds/main/cancel'))).toBe(true));
 
   const form = screen.getByRole('region', { name: 'Build now' });
   await user.selectOptions(within(form).getByLabelText('Target'), 'web-1');
   await user.type(within(form).getByLabelText('Tag or commit'), 'web-v1.1.0');
   await user.click(within(form).getByRole('button', { name: 'Build now' }));
-  await vi.waitFor(() => expect(calls.some(call => call.method === 'POST' && call.url.endsWith('/composition/builds') && call.body === JSON.stringify({ target: 'web-1', ref: 'web-v1.1.0' }))).toBe(true));
+  await waitFor(() => expect(calls.some(call => call.method === 'POST' && call.url.endsWith('/composition/builds') && call.body === JSON.stringify({ target: 'web-1', ref: 'web-v1.1.0' }))).toBe(true));
 });
 
 it('offers no actions without the deploy capability, and says when no controller runs', async () => {

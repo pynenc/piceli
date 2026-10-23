@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -73,7 +73,9 @@ describe('exact-plan delivery', () => {
   it('plans rollback from an archived release without declaring it executed', async () => {
     open('/applications/shop/changes?intent=rollback');
     const user = userEvent.setup();
-    await user.selectOptions(await screen.findByLabelText('Archived release'), 'release-1');
+    const archived = await screen.findByLabelText('Archived release');
+    await within(archived).findByRole('option', { name: /release-1/ }); // the releases load after the select
+    await user.selectOptions(archived, 'release-1');
     await user.click(screen.getByRole('button', { name: 'Prepare source preview' }));
     expect(await screen.findByRole('button', { name: 'Approve source evaluation' })).toBeTruthy();
     expect(requests[0].body).toEqual({ intent: 'rollback', release: 'release-1' });
