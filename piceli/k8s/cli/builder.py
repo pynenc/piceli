@@ -49,13 +49,14 @@ def serve(
         ),
     ] = None,
     publish_only: Annotated[
-        bool,
+        bool | None,
         typer.Option(
-            "--publish-only",
+            "--publish-only/--no-publish-only",
             help="Claim only the --publish NixReleases, never an image build, "
-            "whatever the host's kind (a docker host that only publishes)",
+            "whatever the host's kind (a docker host that only publishes); "
+            "default: on for a host declared runs=False, else off",
         ),
-    ] = False,
+    ] = None,
     image: Annotated[
         str | None,
         typer.Option(
@@ -111,13 +112,31 @@ def serve(
     hosts = [
         item for item in (dev.hosts if dev is not None else ()) if item.kind in kinds
     ]
-    chosen = next((item for item in hosts if host in (None, item.name)), None)
+    # 0.25.0: the default host of image builds is never one declared
+    # runs=False (it only publishes); --host names it.
+    chosen = next(
+        (
+            item
+            for item in hosts
+            if item.name == host or (host is None and (item.runs or publish))
+        ),
+        None,
+    )
     if chosen is None:
         reject(
             "dev-host-unknown",
             f"no docker build host {host or ''} is declared: add "
             "DevBuilds(hosts=[BuildHost.docker(...)])",
         )
+    if not chosen.runs and (publish_only is False or not publish):
+        reject(
+            "dev-host-publish-only",
+            f"build host {chosen.name} is declared runs=False: it only publishes "
+            "Nix releases. Run builder serve on it with --publish MODULE:ATTR "
+            "(it then implies --publish-only), and build images on another host",
+        )
+    if publish_only is None:
+        publish_only = not chosen.runs
     publisher = _publisher(publish or [], dev, chosen) if publish else None
     # 0.25.0: --publish-only claims no image build on any kind of host.
     images = chosen.kind == "docker" and not publish_only

@@ -1777,7 +1777,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "those publishes on any kind of host, never an image build (said "
             "once), and needs no cluster registry: a remote publisher is a "
             "docker host with an SSH context to itself, since a native host is "
-            "the machine running Piceli.",
+            "the machine running Piceli. A host declared runs=False implies "
+            "--publish-only and is refused without --publish or with "
+            "--no-publish-only (dev-host-publish-only); without --host it is "
+            "never the default.",
         ),
         "dev hosts": _C(
             "Show each declared build host: up or down (and why), its platforms, "

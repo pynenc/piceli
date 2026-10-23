@@ -36,6 +36,14 @@ environment and host in one view.
   registry: a remote machine that only publishes is a docker host with an
   SSH context to itself (`BuildHost.native` is the machine running Piceli),
   so a publisher never changes who builds a cluster's images.
+- **A build host that only publishes.** `BuildHost(..., runs=False)`
+  (docker or native) declares a host that only publishes Nix releases: it
+  is in the plan (`runs: false`, only when declared, so other hashes stay)
+  and `piceli dev hosts` shows it (`runs` in `--json`). `piceli dev run`,
+  `piceli dev nix build` and `builder serve` never pick it without
+  `--host`, so an agent's runs never land on the publisher. `builder serve`
+  on it implies `--publish-only` and is refused without `--publish` or with
+  `--no-publish-only` (`dev-host-publish-only`).
 - **A promotion gate and `piceli promote HOST --from ENV`.**
   `NixRelease(..., gate=Promotion(input="app", environment="main"))`
   (`Promotion` is new in `piceli.infra`) publishes only a commit whose

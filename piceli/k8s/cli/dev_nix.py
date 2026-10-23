@@ -125,13 +125,14 @@ def _profile(dev: Any, name: str | None) -> Any:
 
 
 def _host(dev: Any, name: str | None) -> Any:
-    """``--host``, else the first docker or native host: the plan names it."""
+    """``--host``, else the first docker or native host that takes runs
+    (0.25.0: not ``runs=False``): the plan names it."""
     if name is not None:
         chosen = dev.host(name)
         if chosen is None:
             reject("dev-host-unknown", f"no build host {name!r} is declared")
     else:
-        chosen = next((h for h in dev.hosts if h.kind != "cluster"), None)
+        chosen = next((h for h in dev.hosts if h.kind != "cluster" and h.runs), None)
         if chosen is None:
             reject(
                 "dev-nix-host-unsupported",

@@ -1183,6 +1183,7 @@
     "quarantine_after",
     "quarantine_policy",
     "quarantine_window",
+    "runs",
     "slots",
     "state_dir"
    ],
@@ -1198,6 +1199,7 @@
     "platforms",
     "quarantine_after",
     "quarantine_window",
+    "runs",
     "slots",
     "state_dir"
    ],
@@ -11040,6 +11042,7 @@
      "--image",
      "--json",
      "--namespace",
+     "--no-publish-only",
      "--once",
      "--poll",
      "--publish",
@@ -13213,6 +13216,7 @@
    "deploy-stage-unknown",
    "dev-cache-clear-failed",
    "dev-command-failed",
+   "dev-host-publish-only",
    "dev-host-unavailable",
    "dev-host-unknown",
    "dev-isolation-not-enforced",

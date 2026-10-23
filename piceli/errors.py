@@ -5772,6 +5772,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "dev",
     ),
     _E(
+        "dev-host-publish-only",
+        "The build host only publishes",
+        "`piceli builder serve` ran on a build host declared `BuildHost(..., runs=False)` (0.25.0) without `--publish MODULE:ATTR`, or with `--no-publish-only`: such a host only publishes Nix releases and never takes an image build.",
+        "Run `piceli builder serve --host NAME --publish MODULE:ATTR` on it (`--publish-only` is implied), and serve image builds from another host; or declare it without `runs=False`.",
+        False,
+        "dev",
+    ),
+    _E(
         "dev-host-unknown",
         "No such build host",
         "`--host` names a host `DevBuilds(hosts=[...])` does not declare (0.20.0).",

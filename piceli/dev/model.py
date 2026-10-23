@@ -227,6 +227,11 @@ class BuildHost:
         serve`` on it stops claiming builds until ``piceli dev release-host``.
         ``None``: never quarantined.
     :param quarantine_window: How far back events count (``24h``).
+    :param runs: ``False`` (0.25.0; docker or native): the host only
+        publishes Nix releases (``piceli builder serve --publish``, which
+        then implies ``--publish-only``). ``dev run``, ``dev nix build`` and
+        ``builder serve`` never pick it by default; ``--host`` still names
+        it.
     """
 
     name: str
@@ -242,6 +247,7 @@ class BuildHost:
     image: str | None = None
     quarantine_after: int | None = QUARANTINE_AFTER
     quarantine_window: str = QUARANTINE_WINDOW
+    runs: bool = True
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _LABEL.fullmatch(self.name):
@@ -268,6 +274,13 @@ class BuildHost:
             raise _invalid(
                 f"host {self.name}: context is ssh://user@host, a socket URL or "
                 "a CLI context name (docker hosts only)"
+            )
+        if not isinstance(self.runs, bool):
+            raise _invalid(f"host {self.name}: runs is True or False")
+        if not self.runs and self.kind == "cluster":
+            raise _invalid(
+                f"host {self.name}: runs=False is for docker and native hosts "
+                "(a host that only publishes Nix releases)"
             )
         if not _CLI.fullmatch(self.cli):
             raise _invalid(f"host {self.name}: cli is an executable name")
@@ -314,31 +327,38 @@ class BuildHost:
         return cls(name, "cluster", node=node or name, **options)
 
     def describe(self) -> dict[str, Any]:
-        return {
-            key: value
-            for key, value in {
-                "name": self.name,
-                "kind": self.kind,
-                "context": self.context,
-                "cli": self.cli if self.kind == "docker" else None,
-                "node": self.node,
-                "slots": self.slots,
-                "cpu": self.cpu,
-                "memory": self.memory,
-                "platforms": list(self.platforms),
-                "state_dir": self.state_dir,
-                "image": self.image,
-                # 0.22.0: only when changed, so earlier declarations keep
-                # their hashes.
-                "quarantine_after": self.quarantine_after
-                if self.quarantine_after != QUARANTINE_AFTER
-                else _DEFAULT,
-                "quarantine_window": self.quarantine_window
-                if self.quarantine_window != QUARANTINE_WINDOW
-                else _DEFAULT,
-            }.items()
-            if value not in (None, []) and value is not _DEFAULT
-        } | ({"quarantine_after": None} if self.quarantine_after is None else {})
+        return (
+            {
+                key: value
+                for key, value in {
+                    "name": self.name,
+                    "kind": self.kind,
+                    "context": self.context,
+                    "cli": self.cli if self.kind == "docker" else None,
+                    "node": self.node,
+                    "slots": self.slots,
+                    "cpu": self.cpu,
+                    "memory": self.memory,
+                    "platforms": list(self.platforms),
+                    "state_dir": self.state_dir,
+                    "image": self.image,
+                    # 0.22.0: only when changed, so earlier declarations keep
+                    # their hashes.
+                    "quarantine_after": self.quarantine_after
+                    if self.quarantine_after != QUARANTINE_AFTER
+                    else _DEFAULT,
+                    "quarantine_window": self.quarantine_window
+                    if self.quarantine_window != QUARANTINE_WINDOW
+                    else _DEFAULT,
+                }.items()
+                if value not in (None, []) and value is not _DEFAULT
+            }
+            | ({"quarantine_after": None} if self.quarantine_after is None else {})
+            | (
+                # 0.25.0: only when False, so earlier declarations keep their hashes.
+                {} if self.runs else {"runs": False}
+            )
+        )
 
     def quarantine_policy(self) -> tuple[int | None, int]:
         """``(events, window seconds)`` that quarantine this host."""

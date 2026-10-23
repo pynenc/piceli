@@ -190,6 +190,11 @@ BuildHost.native("macos", quarantine_after=None)   # never quarantined
 The in-cluster builder node's health is the GitOps controller's: see
 {doc}`gitops` (`piceli gitops hosts`, `piceli gitops release-host`).
 
+A host declared `runs=False` (0.25.0) only publishes Nix releases with
+`piceli builder serve --publish` (see {doc}`gitops`): `dev run` and
+`dev nix build` never pick it unless `--host` names it, and `piceli dev
+hosts` shows it as publishing only.
+
 ### The toolchain the source pins
 
 When the source has a `rust-toolchain.toml` (or a legacy `rust-toolchain`)

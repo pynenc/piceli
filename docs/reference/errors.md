@@ -190,6 +190,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`deploy-stage-unknown`](#error-deploy-stage-unknown) | cli | no |
 | [`dev-cache-clear-failed`](#error-dev-cache-clear-failed) | dev | yes |
 | [`dev-command-failed`](#error-dev-command-failed) | dev | yes |
+| [`dev-host-publish-only`](#error-dev-host-publish-only) | dev | no |
 | [`dev-host-unavailable`](#error-dev-host-unavailable) | dev | no |
 | [`dev-host-unknown`](#error-dev-host-unknown) | dev | no |
 | [`dev-isolation-not-enforced`](#error-dev-isolation-not-enforced) | dev | no |
@@ -5086,6 +5087,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Read `log_tail` (or `piceli dev logs RUN`), fix the code, run again.
 - **Retry-safe:** yes
+
+(error-dev-host-publish-only)=
+### `dev-host-publish-only`
+
+**The build host only publishes.** `piceli builder serve` ran on a build host declared `BuildHost(..., runs=False)` (0.25.0) without `--publish MODULE:ATTR`, or with `--no-publish-only`: such a host only publishes Nix releases and never takes an image build.
+
+- **Fix:** Run `piceli builder serve --host NAME --publish MODULE:ATTR` on it (`--publish-only` is implied), and serve image builds from another host; or declare it without `runs=False`.
+- **Retry-safe:** no
 
 (error-dev-host-unavailable)=
 ### `dev-host-unavailable`

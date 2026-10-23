@@ -15,10 +15,10 @@ The GitOps controller can also publish them itself when a tag appears
 (0.25.0, a `NixRelease`): the build and the keys stay on a build host. See
 [Nix host releases](#gitops-nix-releases) in {doc}`gitops`. A remote
 machine that only publishes is declared as a docker host with an SSH
-context to itself, `BuildHost.docker("nix-builder",
-context="ssh://builder@builder-1.example.org")`, and runs `piceli builder
-serve --host nix-builder --publish MODULE:ATTR --publish-only` (0.25.0):
-it claims no image build. `BuildHost.native` would be wrong there: it means
+context to itself and `runs=False`, `BuildHost.docker("nix-builder",
+context="ssh://builder@builder-1.example.org", runs=False)`, and runs
+`piceli builder serve --host nix-builder --publish MODULE:ATTR` (0.25.0):
+it claims no image build, and no development run lands on it. `BuildHost.native` would be wrong there: it means
 whichever machine runs Piceli.
 
 {doc}`single_nixos_host` takes one host from nothing to its first release

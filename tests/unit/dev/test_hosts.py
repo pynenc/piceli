@@ -180,6 +180,38 @@ def test_candidates_skip_down_hosts_and_prefer_a_free_slot() -> None:
     )
 
 
+def test_a_publish_only_host_takes_no_run_unless_named() -> None:
+    from piceli.infra.cluster import ClusterError
+    from piceli.k8s.cli.dev_nix import _host
+
+    publisher = BuildHost.docker(
+        "nix-builder", context="ssh://builder@builder-1.example.org", runs=False
+    )
+    laptop = BuildHost.docker("laptop")
+    dev = _dev(publisher, laptop)
+    states = {"nix-builder": _state(publisher), "laptop": _state(laptop, running=1)}
+    probe = lambda h: states[h.name]  # noqa: E731
+    assert [s.host.name for s in candidates(dev, probe=probe)] == ["laptop"]
+    named = candidates(dev, requested="nix-builder", probe=probe)
+    assert [s.host.name for s in named] == ["nix-builder"]
+    with pytest.raises(DevError) as none:
+        candidates(_dev(publisher), probe=probe)
+    assert none.value.code == "dev-host-unavailable"
+    # dev nix build's default host skips it too; --host still names it.
+    assert _host(dev, None).name == "laptop"
+    assert _host(dev, "nix-builder").name == "nix-builder"
+    # Declared: in the plan (only when False, so other hashes stay) and in
+    # dev hosts.
+    assert publisher.describe()["runs"] is False
+    assert "runs" not in laptop.describe()
+    assert _state(publisher).describe()["runs"] is False
+    assert _state(laptop).describe()["runs"] is True
+    with pytest.raises(ClusterError):
+        BuildHost.cluster("builder-1", runs=False)
+    with pytest.raises(ClusterError):
+        BuildHost.docker("laptop", runs="no")  # type: ignore[arg-type]
+
+
 # ------------------------------------------------------------------ native
 
 

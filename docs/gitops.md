@@ -654,8 +654,8 @@ builds images as before, unless `--publish-only` (0.25.0) is given.
 context to itself.** `BuildHost.native` means the machine running Piceli:
 every machine that loads the composition (a laptop running `dev run`, the
 owner's `piceli dev nix build`) would take it for itself, so it cannot name
-a remote machine. Declare the publisher as a docker host reached over SSH,
-and run `builder serve` on that machine with `--publish-only`:
+a remote machine. Declare the publisher as a docker host reached over SSH
+with `runs=False` (0.25.0), and run `builder serve` on that machine:
 
 ```python
 from piceli.infra import BuildHost, DevBuilds, DevProfile
@@ -664,21 +664,32 @@ dev = DevBuilds(
     node=None,
     image="ghcr.io/pynenc/piceli-builder@sha256:<digest>",
     profiles=[DevProfile.for_nix()],
-    hosts=[BuildHost.docker("nix-builder",
-                            context="ssh://builder@builder-1.example.org")],
+    hosts=[
+        BuildHost.docker("nix-builder", runs=False,  # it only publishes
+                         context="ssh://builder@builder-1.example.org"),
+        BuildHost.docker("laptop"),
+    ],
 )
 ```
 
 ```sh
 # on builder-1, with the cache's keys in its own piceli secrets
 piceli builder serve --cluster infra.py:my_cluster --host nix-builder \
-  --publish infra.py:cache --publish-only
+  --publish infra.py:cache
 ```
 
 `--publish-only` claims only the `nix-publish` builds of its caches,
 whatever the host's kind: it never claims an image build (it says so once),
 so who builds the cluster's images does not change, and it needs no
 cluster registry. Without `--publish` it is refused (`dev-nix-invalid`).
+
+`runs=False` makes the host's role part of the declaration (and of the
+plans and `piceli dev hosts`, which shows it as publishing only):
+`builder serve` on it implies `--publish-only` and refuses to start
+without `--publish` or with `--no-publish-only` (`dev-host-publish-only`);
+`piceli dev run`, `piceli dev nix build` and `builder serve` without
+`--host` never pick it, so an agent's runs never land on the publisher.
+`--host nix-builder` still names it.
 
 What happens when a tag appears in the source:
 

@@ -592,7 +592,11 @@ def test_a_publish_only_host_never_claims_an_image_build_and_says_so_once(
 
 
 def _serve_cli(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *args: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *args: str,
+    runs: bool = True,
+    host: str | None = "nix-builder",
 ) -> tuple[Any, dict[str, Any]]:
     """Run ``builder serve`` on a docker host of a cluster with an in-cluster
     registry, up to the worker it starts (no cluster, no docker)."""
@@ -605,6 +609,7 @@ def _serve_cli(
     import piceli.infra.builder_serve as serve_module
     import piceli.k8s.cli.builder as builder_cli
     import piceli.profiles as profiles
+    from piceli.dev.hosts import ContainerCli
     from piceli.dev.model import BuildHost, DevBuilds, DevProfile
     from piceli.infra import Cluster
     from piceli.k8s.cli import app
@@ -613,8 +618,9 @@ def _serve_cli(
     dev = DevBuilds(
         node=None, image="ghcr.io/example/builder@sha256:" + "a" * 64,
         profiles=[DevProfile.for_nix()],
-        hosts=[BuildHost.docker("nix-builder",
-                                context="ssh://builder@builder-1.example.org")],
+        hosts=[BuildHost.docker("nix-builder", runs=runs,
+                                context="ssh://builder@builder-1.example.org"),
+               BuildHost.docker("laptop")],
     )  # fmt: skip
     cluster = Cluster(
         "c", api="https://10.255.0.1:6443", credentials="c", dev=dev,
@@ -640,13 +646,16 @@ def _serve_cli(
         lambda *_a: contextlib.nullcontext(SimpleNamespace(client=None)),
     )
     monkeypatch.setattr(serve_module, "BuilderServe", Worker)
+    monkeypatch.setattr(serve_module, "ensure_image", lambda *_a: None)
+    monkeypatch.setattr(serve_module, "prepare_cache", lambda *_a: None)
+    monkeypatch.setattr(ContainerCli, "platform", lambda _self: "linux/amd64")
     monkeypatch.setattr(health.Health, "of", classmethod(lambda *_a: None))
     monkeypatch.setattr(
         profiles, "resolve", lambda _p: SimpleNamespace(kubeconfig=None, context=None)
     )
     result = CliRunner().invoke(
-        app, ["builder", "serve", "--cluster", "infra.py:c", "--host", "nix-builder",
-              "--once", *args],
+        app, ["builder", "serve", "--cluster", "infra.py:c", "--once",
+              *(("--host", host) if host else ()), *args],
     )  # fmt: skip
     return result, started
 
@@ -670,3 +679,26 @@ def test_builder_serve_publish_only_needs_publish(
     assert result.exit_code == 2, result.stdout + result.stderr
     assert json.loads(result.stdout)["reason"] == "dev-nix-invalid"
     assert not started
+
+
+def test_a_host_declared_runs_false_only_publishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # --publish-only is implied.
+    result, started = _serve_cli(
+        tmp_path, monkeypatch, "--publish", "infra.py:cache", runs=False
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert started["host"] == "nix-builder" and started["images"] is False
+    # It takes no image build: without --publish, or told to build images,
+    # it is refused.
+    for args in ((), ("--publish", "infra.py:cache", "--no-publish-only")):
+        refused, nothing = _serve_cli(tmp_path, monkeypatch, *args, runs=False)
+        assert refused.exit_code == 2, refused.stdout + refused.stderr
+        assert json.loads(refused.stdout)["reason"] == "dev-host-publish-only"
+        assert "runs=False" in refused.stderr
+        assert not nothing
+    # The default host of image builds is never it.
+    plain, other = _serve_cli(tmp_path, monkeypatch, runs=False, host=None)
+    assert plain.exit_code == 0, plain.stdout + plain.stderr
+    assert other["host"] == "laptop" and other["images"] is True

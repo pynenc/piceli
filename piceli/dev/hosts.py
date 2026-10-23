@@ -969,6 +969,8 @@ class HostState:
             "waiting": self.waiting,
             "quarantined": self.quarantined is not None,
             "health": self.health,
+            # 0.25.0: False: the host only publishes Nix releases.
+            "runs": self.host.runs,
         }
 
 
@@ -1031,21 +1033,30 @@ def candidates(
     probe: Callable[[BuildHost], HostState] = probe,
 ) -> list[HostState]:
     """The hosts to try for a run, best first: the requested one only, else
-    every host that is up, not quarantined (0.22.0) and builds ``platform``,
-    one with a free slot first, then by declaration order.
+    every host that is up, not quarantined (0.22.0), builds ``platform`` and
+    takes runs (0.25.0: not ``runs=False``), one with a free slot first,
+    then by declaration order.
 
     :raises DevError: ``dev-host-unknown`` (no such host), ``dev-host-unavailable``
         (none is up for the platform).
     """
-    hosts = list(dev.hosts)
+    # 0.25.0: a host that only publishes is never a default choice.
+    hosts = [item for item in dev.hosts if item.runs]
     if requested is not None:
-        hosts = [item for item in hosts if item.name == requested]
+        hosts = [item for item in dev.hosts if item.name == requested]
         if not hosts:
             raise DevError(
                 "dev-host-unknown",
                 f"no build host {requested!r}; declared: "
                 + ", ".join(item.name for item in dev.hosts),
             )
+    if not hosts:
+        raise DevError(
+            UNAVAILABLE,
+            "every declared build host only publishes Nix releases (runs=False: "
+            + ", ".join(item.name for item in dev.hosts)
+            + "); name one with --host, or declare a host that takes runs",
+        )
     states = [probe(item) for item in hosts]
     usable = [
         state
