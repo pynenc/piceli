@@ -1092,6 +1092,15 @@ def status(
             )
         elif release.get("state") == "failed":
             line += f" ({(release.get('failure') or {}).get('reason')})"
+        elif release.get("state") == "rejected":
+            refusal = release.get("refusal") or {}
+            line += f" ({release.get('reason')}: {refusal.get('message')})"
+        if pinned := release.get("pinned"):
+            line += (
+                f"; pinned {pinned.get('input')} {str(pinned.get('commit'))[:12]} "
+                f"verified on {pinned.get('environment')} "
+                f"(run {pinned.get('verified_run')})"
+            )
         say(line)
     if as_json:
         emit_json(body)
@@ -1465,13 +1474,58 @@ def promote(
     namespace: NamespaceOption = "piceli-system",
     state_dir: StateDirOption = None,
     transport: TransportOption = "https",
+    from_env: Annotated[
+        str | None,
+        typer.Option(
+            "--from",
+            help="0.24.0: TARGET is a NixRelease's host; pin the newest commit "
+            "this environment (its gate's) ran with passed release checks in "
+            "the flake's flake.lock, commit, tag and push (plan, then --approve)",
+            show_default=False,
+        ),
+    ] = None,
+    composition: Annotated[
+        Path,
+        typer.Option(
+            "--composition",
+            "--infra",
+            help="With --from: the composition module declaring the NixRelease",
+        ),
+    ] = Path("infra.py"),
+    repo: Annotated[
+        Path, typer.Option("--repo", help="With --from: the flake's working copy")
+    ] = Path("."),
+    bump: Annotated[
+        str, typer.Option("--bump", help="With --from: major, minor or patch")
+    ] = "patch",
+    approve: Annotated[
+        str | None,
+        typer.Option("--approve", help="With --from: the promotion plan's digest"),
+    ] = None,
+    as_json: JsonOption = False,
 ) -> None:
-    """Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV.
+    """Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV;
+    with --from, pin a verified commit in a NixRelease's flake and tag it.
 
     ``piceli promote wp-1@abc1234`` targets main; ``piceli promote rc
     main@abc1234`` targets the named environment ``rc`` (it must follow
-    ``Promote()``).
+    ``Promote()``). ``piceli promote web --from main`` (0.24.0) plans the
+    pin of the newest commit ``main`` verified for the host ``web``'s
+    gated NixRelease.
     """
+    if from_env is not None:
+        from piceli.k8s.cli.promote import promote_host
+
+        if source is not None:
+            reject("promote-invalid", "--from takes the host alone, not BRANCH@SHA")
+        promote_host(
+            target, from_env, composition=composition, repo=repo, bump=bump,
+            approve=approve, kubeconfig=kubeconfig, context=context,
+            state_dir=state_dir, namespace=namespace, as_json=as_json,
+        )  # fmt: skip
+        return
+    if approve is not None:
+        reject("promote-invalid", "--approve approves a --from promotion plan")
     from piceli.gitops.state import promote_request
 
     env = target if source is not None else None

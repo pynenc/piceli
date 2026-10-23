@@ -550,7 +550,17 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`profile-conflict`](#error-profile-conflict) | target | no |
 | [`profile-invalid`](#error-profile-invalid) | target | no |
 | [`profile-not-found`](#error-profile-not-found) | target | no |
+| [`promote-dirty`](#error-promote-dirty) | gitops | yes |
+| [`promote-git-failed`](#error-promote-git-failed) | gitops | yes |
+| [`promote-invalid`](#error-promote-invalid) | gitops | no |
+| [`promote-lock-failed`](#error-promote-lock-failed) | gitops | yes |
+| [`promote-not-in-sync`](#error-promote-not-in-sync) | gitops | yes |
+| [`promote-plan-changed`](#error-promote-plan-changed) | gitops | no |
+| [`promote-push-failed`](#error-promote-push-failed) | gitops | yes |
 | [`promote-refused`](#error-promote-refused) | observe | no |
+| [`promotion-history-unreachable`](#error-promotion-history-unreachable) | gitops | yes |
+| [`promotion-input-missing`](#error-promotion-input-missing) | gitops | no |
+| [`promotion-not-verified`](#error-promotion-not-verified) | gitops | yes |
 | [`provider-error`](#error-provider-error) | kubernetes | yes |
 | [`publish-failed`](#error-publish-failed) | publish | yes |
 | [`publish-input-changed`](#error-publish-input-changed) | publish | no |
@@ -4497,6 +4507,86 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Create a new token and update the `password` of the credentials Secret (`--credentials-secret`, in the controller's namespace) before `expires_at`; the controller reads it on its next poll.
 - **Retry-safe:** no
+
+(error-promote-dirty)=
+### `promote-dirty`
+
+**Working copy has changes.** The flake's working copy has uncommitted changes to tracked files; the promotion commits `flake.lock` alone and refuses to mix them.
+
+- **Fix:** Commit or stash the changes, then plan again.
+- **Retry-safe:** yes
+
+(error-promote-git-failed)=
+### `promote-git-failed`
+
+**Git failed in the working copy.** A Git command in the flake's working copy failed (a fetch from its remote, a commit, a tag).
+
+- **Fix:** Run the same Git operation by hand to see Git's message (remote access, hooks, signing), fix it and retry.
+- **Retry-safe:** yes
+
+(error-promote-invalid)=
+### `promote-invalid`
+
+**Promotion request invalid.** `piceli promote` names a host with no NixRelease in the composition, a NixRelease without `gate=Promotion(...)`, an environment other than the gate's (`--from`), or an unknown `--bump`.
+
+- **Fix:** Name the NixRelease's host, give `--from` the gate's environment and `--bump` major, minor or patch.
+- **Retry-safe:** no
+
+(error-promote-lock-failed)=
+### `promote-lock-failed`
+
+**flake.lock not pinned.** Pinning the input failed: `nix flake lock --override-input` failed, or (without nix) the input could not be cloned, has no such commit, is not a git, github or gitlab input, has submodules or export rules in `.gitattributes`; or the new lock does not pin the commit.
+
+- **Fix:** Install nix (preferred), or give this machine Git access to the input; check that the commit exists in the input's repository.
+- **Retry-safe:** yes
+
+(error-promote-not-in-sync)=
+### `promote-not-in-sync`
+
+**Working copy not in sync with its remote.** The flake's branch is behind, ahead of or diverged from its upstream after a fetch, or it has no upstream (or HEAD is detached). Pushing would lose or publish commits the plan does not show.
+
+- **Fix:** Pull or push until the branch equals its upstream (`git status`), or set one with `git push -u REMOTE BRANCH`, then plan again.
+- **Retry-safe:** yes
+
+(error-promote-plan-changed)=
+### `promote-plan-changed`
+
+**Promotion plan changed.** The `--approve` digest is not the digest of the promotion plan computed now: the environment passed a newer commit, the branch or tags moved, or the computed lock differs.
+
+- **Fix:** Run `piceli promote` without `--approve`, review the new plan and approve its digest.
+- **Retry-safe:** no
+
+(error-promote-push-failed)=
+### `promote-push-failed`
+
+**Promotion push failed.** The commit and the tag were created locally but the atomic push of both to the remote failed (access, a branch protection, a tag that already exists there). The remote is unchanged.
+
+- **Fix:** Fix the remote access and run the `git push --atomic` the message names, or delete the local tag, reset the commit and plan again.
+- **Retry-safe:** yes
+
+(error-promotion-history-unreachable)=
+### `promotion-history-unreachable`
+
+**Environment history unreadable.** The promotion gate could not read the controller's history (`piceli-gitops-history`): the cluster or its credential profile is unreachable, the controller published no history yet, or the document is not `piceli.gitops-history.v1`. The gate fails closed: nothing is published or promoted.
+
+- **Fix:** Check that `piceli gitops status` reaches the controller with the same options (`--kubeconfig`/`--context`, `--state-dir`, or `piceli login` for the composition's cluster), then retry.
+- **Retry-safe:** yes
+
+(error-promotion-input-missing)=
+### `promotion-input-missing`
+
+**Flake input not locked.** The release commit has no `flake.lock`, or its root inputs have no input with the gate's name, or that input is locked to no Git commit (`locked.rev`).
+
+- **Fix:** Fix `Promotion(input=)` to name the input as `flake.nix` does, or commit a `flake.lock` that locks it (`nix flake lock`).
+- **Retry-safe:** no
+
+(error-promotion-not-verified)=
+### `promotion-not-verified`
+
+**Commit not verified by the environment.** A NixRelease with `gate=Promotion(input=, environment=)` was asked to publish a commit whose `flake.lock` pins the input to a commit the environment never ran with its release checks passed (a run that failed, degraded or rolled back does not count, nor one without checks). The controller leaves the release `rejected` and checks again on every poll; a hand-run `dev nix build --publish --release` refuses before any build; `piceli promote` refuses when the environment passed no commit.
+
+- **Fix:** Pin a verified commit: `piceli promote HOST --from ENV` pins the newest commit the environment passed (the refusal's `newest_passed`), or wait until the environment runs the pinned commit with its checks passing.
+- **Retry-safe:** yes
 
 (error-rollout-stopped)=
 ### `rollout-stopped`

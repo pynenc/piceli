@@ -468,11 +468,16 @@ def manifest(
     key: str,
     image: Mapping[str, Any] | None = None,
     now: _dt.datetime | None = None,
+    pinned: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The build manifest, unsigned (:func:`sign_manifest` adds ``signature``)."""
+    """The build manifest, unsigned (:func:`sign_manifest` adds ``signature``).
+
+    ``pinned`` (0.24.0, a gated release): the promotion gate's result. The
+    field is present only then, so older manifests verify unchanged."""
     moment = (now or _dt.datetime.now(_dt.UTC)).strftime("%Y-%m-%dT%H:%M:%SZ")
     closure = published.get("closure_size")
-    return {
+    extra = {"pinned": dict(pinned)} if pinned is not None else {}
+    return extra | {
         "schema": MANIFEST_SCHEMA,
         "name": name,
         "commit": commit,
@@ -776,7 +781,7 @@ def publish_closure(
         manifest(
             name=plan["name"], commit=plan["commit"], tag=plan["tag"],
             target=plan["attribute"], published=outcome, host=host,
-            key=cache.key_name, image=image,
+            key=cache.key_name, image=image, pinned=plan.get("pinned"),
         ),
         secret,
     )  # fmt: skip

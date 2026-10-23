@@ -713,13 +713,114 @@ deploy the published build on their own, as {doc}`nix_hosts` describes.
 
 `state` is `idle` (no matching tag), `baseline`, `approval-required` (with
 `approve_command`), `waiting-build`, `publishing` (with `claimed`),
-`published` or `failed` (with `failure`: `host`, `reason`, `log_tail`).
+`published` or `failed` (with `failure`: `host`, `reason`, `log_tail`),
+or `rejected` by a promotion gate (below).
 The history (`piceli-gitops-history`) keeps each attempt under
 `nix_releases.<name>.runs` (newest first; the tag, commit, state, trigger,
 approval, stages, build host and manifest digest), and the controller's
 telemetry sends each as a trace `PUBLISH <name> <tag>` with a span per
 stage and the event `piceli.nix.release.finished` (see
 {doc}`opentelemetry`).
+
+#### A promotion gate and `piceli promote` (0.24.0)
+
+A host often runs a product from another repository, pinned as a flake
+input (`inputs.app.url = "git+https://git.example.org/org/app.git"`). A
+`Promotion` gate lets a release publish only a product commit one of the
+composition's environments ran with its release checks passed:
+
+```python
+from piceli.infra import NixRelease, Promotion
+
+app = Source("https://git.example.org/org/app.git")
+environments = [Environment("main", follow={app: "main"}, namespace="shop-main",
+                            stack=full, cluster=cluster)]
+web_release = NixRelease(web, source=hosts, builder="mini",
+                         gate=Promotion(input="app", environment="main"))
+```
+
+`input` is the input's name in `flake.lock`; `environment` an
+`Environment` of the same composition that follows the input's source
+(`source=`, default: the source named like the input). The composition
+refuses a gate naming another environment or a source it does not follow.
+The gate lives on the `NixRelease`, not on the `NixHost`: it is a rule of
+who publishes, checked against an environment of the same composition, and
+the host itself never reads the controller's history.
+
+**The rule.** At plan time the gate reads `flake.lock` at the release
+commit and takes the input's `locked.rev`. The commit qualifies when the
+environment's history (`piceli-gitops-history`) has a run of it in state
+`deployed` whose checks ran (at least one) and all passed, without a
+rollback. A run that failed, degraded or rolled back does not count, nor an
+environment without checks.
+
+- **The controller** checks a new tag's commit before it plans the publish.
+  Refused, the release is `rejected` with `reason`
+  `promotion-not-verified` and `refusal` (the input, the commit, the
+  environment and `newest_passed`, the newest commit it did pass); nothing
+  is asked of a build host. It checks again on every poll, so the tag
+  publishes once the environment passed that commit. A flake without the
+  input is `promotion-input-missing`.
+- **A hand-run publish** runs the same gate with `--release HOST
+  --composition infra.py`: `piceli dev nix build ATTR --ref web-v1.4.0
+  --publish infra.py:cache --release web-1 --composition infra.py`. It
+  reads the history as `piceli gitops status` does (`--state-dir`,
+  `--kubeconfig FILE --context NAME`, else the composition cluster's
+  credential profile from `piceli login`, `--namespace`) and refuses before
+  any build. A history it cannot read refuses too
+  (`promotion-history-unreachable`): the gate fails closed.
+
+The result goes into the release plan (so the approval covers it), into
+the signed build manifest (an optional field: older manifests verify
+unchanged) and into `piceli gitops status` under the release:
+
+```json
+"pinned": {"input": "app", "commit": "9b1e…", "environment": "main",
+           "verified_run": "20261023T101500Z-3f2c9a10", "verified_at": "2026-10-23T10:20:00Z"}
+```
+
+`verified_run` is the newest qualifying run of that commit and
+`verified_at` when it finished.
+
+**`piceli promote HOST --from ENV`** writes the pin for you:
+
+```sh
+piceli promote web-1 --from main --composition infra.py --repo ../hosts
+# plan, exit 3; then the same command with --approve sha256:<digest>
+```
+
+It takes the newest commit `ENV` passed, computes in the flake's working
+copy the `flake.lock` that pins the input to exactly it, the next tag of
+the host's pattern (a patch bump of the highest release; `--bump major|minor`)
+and prints the plan with its digest (`piceli.promote.v1`):
+
+```json
+{"schema": "piceli.promote.v1", "state": "approval-required",
+ "digest": "sha256:…", "approve_command": "piceli promote web-1 --from main … --approve sha256:…",
+ "plan": {"schema": "piceli.promote-plan.v1", "host": "web-1",
+          "pinned": {"input": "app", "commit": "9b1e…", "environment": "main",
+                     "verified_run": "…", "verified_at": "…"},
+          "change": {"file": "flake.lock", "input": "app", "from": "41d0…",
+                     "to": "9b1e…", "method": "nix", "lock_sha256": "…"},
+          "commit_message": "promote app to 9b1e… from main\n\n…",
+          "base": "c0ff…", "remote": "origin", "branch": "main",
+          "tag": "web-v1.4.1", "previous_tag": "web-v1.4.0", "bump": "patch"}}
+```
+
+`--approve` recomputes the plan (`promote-plan-changed` when anything
+moved), commits `flake.lock` alone, creates an annotated tag and pushes the
+branch and the tag with `git push --atomic` (`promote-push-failed`, exit
+1, leaves both local). With `nix` on the `PATH` the lock comes from `nix
+flake lock --override-input` in a temporary worktree; without it the input's
+node is edited (`rev`, `lastModified`, `revCount`, and the `narHash`
+computed from a temporary bare clone of the input; a `git`, `github` or
+`gitlab` input without submodules or export rules). It refuses a working
+copy with uncommitted changes to tracked files (`promote-dirty`) and a
+branch without an upstream, or behind, ahead of or diverged from it
+(`promote-not-in-sync`). When the lock already pins the commit the state is
+`current` (exit 0): with a tag of the pattern at `HEAD` there is nothing to
+do; without one the plan only tags `HEAD`, and `--approve` tags and pushes
+the tag.
 
 ### Removed objects are deleted (pruning)
 

@@ -1646,7 +1646,15 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "failed, no output (dev-nix-no-output), dev-nix-publish-failed, "
             "dev-nix-manifest-failed. --tag-pattern GLOB (a NixHost's Tag "
             "pattern) points the highest version tag of that pattern at the "
-            "commit; a --ref tag of another pattern is refused (dev-nix-invalid).",
+            "commit; a --ref tag of another pattern is refused (dev-nix-invalid). "
+            "--release HOST --composition MODULE runs the NixRelease's promotion "
+            "gate at plan time: the commit's flake.lock must pin the gate's input "
+            "to a commit its environment ran with passed release checks "
+            "(promotion-not-verified, promotion-input-missing); the history is "
+            "read as gitops status reads it (--state-dir, --kubeconfig/--context, "
+            "else the composition cluster's profile) and an unreadable one "
+            "refuses (promotion-history-unreachable). The plan, and the signed "
+            "manifest, carry pinned.",
         ),
         "dev nix gc": _C(
             "Remove the builds of old commits from a Nix cache: keep the manifests "
@@ -2124,7 +2132,9 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "starting, down. gitops-not-installed without a controller. 0.24.0: "
             "nix_releases lists each NixRelease (latest tag, state, plan digest "
             "and approve_command, stages with times, the published manifest's "
-            "sha256, failure).",
+            "sha256, failure). A gated release shows pinned (input, commit, "
+            "environment, verified_run, verified_at), or state rejected with its "
+            "reason and refusal.",
         ),
         "gitops wait": _C(
             "Wait until an environment runs a commit: deployed, failed (the "
@@ -2185,17 +2195,46 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "promote": _C(
             "Ask the GitOps controller to deploy BRANCH@SHA to the main "
             "branch's environment, or to a named environment (promote ENV "
-            "BRANCH@SHA).",
-            reads=("kubeconfig or --state-dir",),
-            writes=("--state-dir requests (local controller)",),
+            "BRANCH@SHA); with --from ENV, pin the newest commit ENV ran with "
+            "passed release checks in a NixRelease's flake.lock, commit it, tag "
+            "the next version of the host's Tag pattern and push both (0.24.0).",
+            reads=(
+                "kubeconfig or --state-dir",
+                "with --from: the composition module (--composition; the "
+                "NixRelease and its gate), the controller's history (--state-dir, "
+                "--kubeconfig/--context, or the composition cluster's credential "
+                "profile), the flake's working copy (--repo) and its remote (git "
+                "fetch), nix when on the PATH, else the input's repository (git "
+                "clone into a temporary directory)",
+            ),
+            writes=(
+                "--state-dir requests (local controller)",
+                "with --from --approve: flake.lock, one commit and one annotated "
+                "tag in the working copy; the branch and the tag on the remote, "
+                "pushed atomically",
+            ),
             cluster="writes",
+            approval_required=True,
             contract="conforms",
-            exit_codes=(0, 2),
+            exit_codes=(0, 1, 2, 3),
             notes="Writes a request; the controller accepts only a commit it "
             "saw on that branch (gitops-promote-unknown otherwise), a named "
             "environment only when it follows Promote() "
             "(gitops-promote-not-allowed), and the environment then waits for "
-            "gitops approve of its plan hash.",
+            "gitops approve of its plan hash. 0.24.0, promote HOST --from ENV: "
+            "without --approve it prints the plan (pinned, the lock change old "
+            "rev -> new rev, the commit message, the tag, the remote and branch) "
+            "with its digest and exits 3. A lock that already pins the commit "
+            "exits 0 with state current: with a tag of the pattern at HEAD there "
+            "is nothing to do; without one the plan only tags HEAD and --approve "
+            "tags and pushes the tag. --approve recomputes the plan "
+            "(promote-plan-changed when it differs), commits flake.lock alone, "
+            "tags and pushes with git push --atomic (promote-push-failed exits "
+            "1; the commit and tag stay local). Refuses a dirty working copy "
+            "(promote-dirty), one behind, ahead of or diverged from its upstream "
+            "(promote-not-in-sync), an environment without a passed run "
+            "(promotion-not-verified) and an unreadable history "
+            "(promotion-history-unreachable).",
         ),
         "doctor": _C(
             "Check free disk and memory against the next build's needs, and "

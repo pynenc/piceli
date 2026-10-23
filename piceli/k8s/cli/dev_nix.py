@@ -253,6 +253,41 @@ def build(
         str | None,
         typer.Option("--approve", help="The publish plan's digest"),
     ] = None,
+    release: Annotated[
+        str | None,
+        typer.Option(
+            "--release",
+            help="With --publish: the host of a NixRelease with gate=Promotion(...) "
+            "in --composition; the publish needs its promotion gate to pass",
+        ),
+    ] = None,
+    composition: Annotated[
+        Path,
+        typer.Option(
+            "--composition", help="The composition module declaring --release"
+        ),
+    ] = Path("infra.py"),
+    gitops_kubeconfig: Annotated[
+        Path | None,
+        typer.Option(
+            "--kubeconfig",
+            help="With --release: reach the controller with this kubeconfig "
+            "(default: the composition's cluster's credential profile)",
+        ),
+    ] = None,
+    gitops_context: Annotated[
+        str | None, typer.Option("--context", help="With --kubeconfig: its context")
+    ] = None,
+    gitops_state_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--state-dir", help="With --release: a local controller's state directory"
+        ),
+    ] = None,
+    gitops_namespace: Annotated[
+        str,
+        typer.Option("--namespace", help="With --release: the controller's namespace"),
+    ] = "piceli-system",
     artifacts_dir: Annotated[
         Path, typer.Option("--artifacts-dir", help="Where an image lands (RUN/)")
     ] = Path("piceli-dev-artifacts"),
@@ -315,6 +350,8 @@ def build(
     chosen = _host(dev, host)
     cache = load_cache(publish) if publish is not None else None
     plan: dict[str, Any] | None = None
+    if release is not None and cache is None:
+        reject("dev-nix-invalid", "--release gates a --publish")
     if cache is not None:
         if rev is None:
             reject("dev-nix-invalid", "--publish builds a commit: give --ref")
@@ -333,9 +370,23 @@ def build(
             )  # fmt: skip
         except DevError as error:
             reject(error.code, str(error))
+        gated = ""
+        if release is not None:
+            plan["pinned"] = _gate(
+                release, composition, target, root_dir, str(rev),
+                kubeconfig=gitops_kubeconfig, context=gitops_context,
+                state_dir=gitops_state_dir, namespace=gitops_namespace,
+            )  # fmt: skip
+            gated = f" --release {release} --composition {composition}" + (
+                f" --state-dir {gitops_state_dir}"
+                if gitops_state_dir is not None
+                else f" --kubeconfig {gitops_kubeconfig} --context {gitops_context}"
+                if gitops_kubeconfig is not None
+                else ""
+            )
         digest = plan_digest(plan)
         if approve is None:
-            command = f"piceli dev nix build {target} --cluster {cluster} --ref {ref} --publish {publish} --host {chosen.name}"
+            command = f"piceli dev nix build {target} --cluster {cluster} --ref {ref} --publish {publish} --host {chosen.name}{gated}"
             if name:
                 command += f" --name {name}"
             if image:
@@ -348,6 +399,10 @@ def build(
             say(f"  signed by {cache.key_name}; manifest {plan['manifest']}")
             for key in plan["pointers"]:
                 say(f"  pointer {key}")
+            if plan.get("pinned"):
+                pinned = plan["pinned"]
+                say(f"  pinned {pinned['input']} {pinned['commit'][:12]} verified on "
+                    f"{pinned['environment']} (run {pinned['verified_run']})")  # fmt: skip
             say("approve with:")
             say(f"  {command} --approve {digest}")
             emit_json(
@@ -444,6 +499,46 @@ def build(
     body["state"] = "published" if body["publish"] else "built"
     if as_json:
         emit_json(body)
+
+
+def _gate(
+    release: str,
+    composition: Path,
+    target: str,
+    root: Path,
+    rev: str,
+    **reach: Any,
+) -> dict[str, Any]:
+    """The promotion gate of a hand-run publish: ``flake.lock`` at ``rev``
+    pins the input to a commit the environment verified (else a refusal;
+    an unreadable history refuses too)."""
+    import subprocess
+
+    from piceli.infra.promotion import LOCK_FILE, PromotionError, locked_rev, verify
+    from piceli.k8s.cli.promote import gated_release, read_history
+
+    found, owner = gated_release(composition, release)
+    if found.attribute != target:
+        reject(
+            "dev-nix-invalid",
+            f"--release {release} builds {found.attribute}, not {target}",
+        )
+    history = read_history(owner, **reach)
+    shown = subprocess.run(
+        ["git", "show", f"{rev}:{LOCK_FILE}"],
+        cwd=root, capture_output=True, check=False,
+    )  # fmt: skip
+    try:
+        return verify(
+            found.gate,
+            locked_rev(
+                shown.stdout if shown.returncode == 0 else None, found.gate.input
+            ),
+            history,
+            host=release,
+        )
+    except PromotionError as error:
+        reject(error.code, str(error), **error.detail)
 
 
 def _image_sidecar(

@@ -3197,7 +3197,7 @@ class CompositionController:
             return self._publish()
         self._requests()
         self._desired()
-        self.nix.poll(self.composition.nix_releases, self.refs)
+        self.nix.poll(self.composition.nix_releases, self.refs, gate=self._promotion)
         if not self.swept and not failed:  # only on a complete view of the sources
             self.swept = True
             try:
@@ -3937,6 +3937,34 @@ class CompositionController:
             )
             | ({"requested_at": str(at)[:32]} if at else {}),
         )
+
+    def _promotion(self, target: Any, commit: str) -> dict[str, Any]:
+        """A gated NixRelease's commit checked against this controller's own
+        history (0.24.0, :mod:`piceli.infra.promotion`): its ``flake.lock``
+        from the source's mirror, the environment's runs.
+
+        :raises PromotionError: refused, or unreadable (never a pass)."""
+        from piceli.gitops import history
+        from piceli.infra import promotion
+
+        gate, key = target.gate, target.source.key
+        try:
+            self.sources.fetch(key)
+            lock = self.sources.read(key, commit, promotion.LOCK_FILE)
+        except GitOpsError:
+            raise promotion.PromotionError(
+                "promotion-input-missing",
+                f"{promotion.LOCK_FILE} of {key} at {commit[:12]} could not be read",
+                {"input": gate.input},
+            ) from None
+        rev = promotion.locked_rev(lock, gate.input)
+        try:
+            if self._runs is None:
+                self._runs = history.RunReader()
+            document = self._history_document()
+        except (GitOpsError, OSError, ValueError):
+            document = None
+        return promotion.verify(gate, rev, document, host=target.name)
 
     def _history_document(self) -> dict[str, Any]:
         """``piceli.gitops-history.v1``: an environment on several clusters

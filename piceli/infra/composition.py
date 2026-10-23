@@ -109,6 +109,21 @@ class Composition:
                 "name either"
             )
         named = [item for item in self.environments if isinstance(item, Environment)]
+        for release in self.nix_releases:  # 0.24.0: a promotion gate
+            gate = getattr(release, "gate", None)
+            if gate is None:
+                continue
+            env = next((i for i in named if i.name == gate.environment), None)
+            if env is None:
+                raise _invalid(
+                    f"NixRelease {release.name!r}: gate environment "
+                    f"{gate.environment!r} is no Environment of the composition"
+                )
+            if gate.source_key not in {source.key for source, _ in env.sources}:
+                raise _invalid(
+                    f"NixRelease {release.name!r}: environment {env.name!r} does "
+                    f"not follow the gate's source {gate.source_key!r}"
+                )
         spaces = [item.namespace for item in named]
         if len(set(spaces)) != len(spaces):
             raise _invalid("two environments share a namespace")

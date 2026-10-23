@@ -151,6 +151,24 @@ and rollback.
   is `failed` with its tail (`gitops-nix-release-failed`) until a newer tag
   or `gitops sync`; tags present at first sight are the baseline. A
   composition may now hold releases and no environment.
+- **A promotion gate and `piceli promote HOST --from ENV`.**
+  `NixRelease(..., gate=Promotion(input="app", environment="main"))`
+  (`Promotion` is new in `piceli.infra`) publishes only a commit whose
+  `flake.lock` pins the input to a commit the environment ran with its
+  release checks passed (deployed, every check passed, no rollback). The
+  controller leaves another tag `rejected` (`promotion-not-verified`, with
+  the newest passed commit) and checks it again on every poll; `dev nix
+  build --publish --release HOST --composition MODULE` runs the same gate
+  and refuses an unreadable history (`promotion-history-unreachable`). The
+  result, `pinned` (input, commit, environment, verified_run, verified_at),
+  is in the release plan, the signed manifest (an optional field) and
+  `gitops status`. `piceli promote web-1 --from main` plans the pin of the
+  newest passed commit in the flake's working copy (`nix flake lock
+  --override-input`, or a direct edit with the computed narHash without
+  nix), the commit and the next tag of the host's pattern, and with
+  `--approve DIGEST` commits, tags and pushes atomically; it refuses a
+  dirty working copy or one out of sync with its upstream. New codes
+  `promotion-*` and `promote-*`; see `docs/gitops.md`.
 - **Tag prefixes per host.** `Tag("web-v*")` orders tags by the version
   after the pattern's literal prefix (`Tag.prefix`, `Tag.version(tag)`):
   `web-v1.10.0` is above `web-v1.9.0`, and two hosts released from one

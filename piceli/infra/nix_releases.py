@@ -72,6 +72,7 @@ STATES = (
     "publishing",  # a build host claimed it
     "published",
     "failed",
+    "rejected",  # the promotion gate refused the tag's commit (0.24.0)
 )
 FAILED = "gitops-nix-release-failed"
 _LABEL = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
@@ -113,12 +114,16 @@ class NixRelease:
         the cache's keys in its own Piceli secrets.
     :param auto_approve: Publish a new tag without waiting for ``piceli
         gitops approve``.
+    :param gate: A :class:`~piceli.infra.Promotion`: publish only a commit
+        whose ``flake.lock`` pins its input to a commit its environment ran
+        with passed release checks (:mod:`piceli.infra.promotion`).
     """
 
     host: Any
     source: Any
     builder: str
     auto_approve: bool = False
+    gate: Any = None
 
     def __post_init__(self) -> None:
         from piceli.hosts.model import NixHost, Tag
@@ -138,6 +143,10 @@ class NixRelease:
             raise _invalid("NixRelease(builder=) is a build host's name")
         if not isinstance(self.auto_approve, bool):
             raise _invalid("NixRelease(auto_approve=) is True or False")
+        from piceli.infra.promotion import Promotion
+
+        if self.gate is not None and not isinstance(self.gate, Promotion):
+            raise _invalid("NixRelease(gate=) is a piceli.infra.Promotion")
 
     @property
     def name(self) -> str:
@@ -156,6 +165,7 @@ class NixRelease:
             auto_approve=self.auto_approve,
             store_url=self.host.cache.store_url,
             public_key=self.host.cache.public_key,
+            gate=self.gate,
         )
 
 
@@ -173,9 +183,12 @@ class ReleaseTarget:
     auto_approve: bool
     store_url: str
     public_key: str
+    #: 0.24.0: the :class:`~piceli.infra.Promotion` gate, or ``None``.
+    gate: Any = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        gate = {"gate": self.gate.to_dict()} if self.gate is not None else {}
+        return gate | {
             "name": self.name,
             "build": self.build,
             "attribute": self.attribute,
@@ -195,6 +208,7 @@ class ReleaseTarget:
         from piceli.dev.model import DevError
         from piceli.dev.nix import check_public_key, installable
         from piceli.hosts.model import HostError, Tag
+        from piceli.infra.promotion import Promotion
 
         try:
             follow = value["follow"]
@@ -210,6 +224,7 @@ class ReleaseTarget:
                 auto_approve=value.get("auto_approve") is True,
                 store_url=str(value["cache"]["store_url"]),
                 public_key=check_public_key(str(value["cache"]["public_key"])),
+                gate=Promotion.from_dict(value["gate"]) if value.get("gate") else None,
             )
         except (KeyError, TypeError, HostError, DevError) as error:
             raise _invalid(f"a nix release is invalid: {error}") from None
@@ -239,12 +254,19 @@ class ReleaseTarget:
         return tag, str(tags[tag])
 
 
-def release_plan(target: ReleaseTarget, commit: str, tag: str) -> dict[str, Any]:
+def release_plan(
+    target: ReleaseTarget,
+    commit: str,
+    tag: str,
+    pinned: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """What publishing ``tag`` does; its digest (:func:`digest`) is what the
-    owner approves and what the build host publishes, nothing else."""
+    owner approves and what the build host publishes, nothing else.
+    ``pinned``: the promotion gate's result (only for a gated release)."""
     from piceli.dev.nix import manifest_key, pointer_key
 
-    return {
+    extra = {"pinned": dict(pinned)} if pinned is not None else {}
+    return extra | {
         "schema": PLAN_SCHEMA,
         "release": target.name,
         "attribute": target.attribute,
@@ -287,6 +309,9 @@ def check_plan(plan: Any) -> dict[str, Any]:
         or list(plan.get("pointers") or ()) != [pointer_key(name, "tag", tag)]
     ):
         raise ValueError("the plan names another build, commit, tag or pointer")
+    from piceli.infra.promotion import check_pinned
+
+    check_pinned(plan.get("pinned"))
     return dict(plan)
 
 
@@ -320,6 +345,7 @@ class Releases:
         self.clock = clock
         self.log = log
         self.telemetry = telemetry
+        self._gate: Callable[[ReleaseTarget, str], dict[str, Any]] | None = None
 
     def records(self) -> dict[str, dict[str, Any]]:
         found: dict[str, dict[str, Any]] = self.state.setdefault(STATE_KEY, {})
@@ -332,8 +358,20 @@ class Releases:
         return found
 
     # ------------------------------------------------------------ poll
-    def poll(self, targets: Sequence[ReleaseTarget], refs: Mapping[str, Any]) -> None:
-        """Follow each release's tags and move it on (one poll)."""
+    def poll(
+        self,
+        targets: Sequence[ReleaseTarget],
+        refs: Mapping[str, Any],
+        *,
+        gate: Callable[[ReleaseTarget, str], dict[str, Any]] | None = None,
+    ) -> None:
+        """Follow each release's tags and move it on (one poll).
+
+        ``gate(target, commit)`` checks a gated release's commit: the
+        ``pinned`` field, or :class:`~piceli.infra.promotion.PromotionError`.
+        A rejected tag is checked again on every poll, so it publishes once
+        its environment verified the pinned commit."""
+        self._gate = gate
         records = self.records()
         forced = self.state.setdefault("nix_forced", {})
         names = {target.name for target in targets}
@@ -359,7 +397,14 @@ class Releases:
                 if latest is not None:
                     if not record.get("seen") and why is None:
                         record.update(state="baseline", tag=latest[0], commit=latest[1])
-                    elif why is not None or self._newer(target, latest[0], record):
+                    elif (
+                        why is not None
+                        or self._newer(target, latest[0], record)
+                        or (
+                            record.get("state") == "rejected"
+                            and record.get("tag") == latest[0]
+                        )
+                    ):
                         self._attempt(target, record, latest, why or f"tag {latest[0]}")
                 record["seen"] = True
             self._advance(target, record)
@@ -380,12 +425,27 @@ class Releases:
         trigger: str,
     ) -> None:
         tag, commit = latest
+        pinned = None
+        if target.gate is not None:
+            from piceli.infra.promotion import PromotionError
+
+            try:
+                if self._gate is None:
+                    raise PromotionError(
+                        "promotion-history-unreachable", "no history to check"
+                    )
+                pinned = self._gate(target, commit)
+            except PromotionError as error:
+                self._refuse(target, record, latest, trigger, error)
+                return
         self._drop_wanted(record)
-        plan = release_plan(target, commit, tag)
+        plan = release_plan(target, commit, tag, pinned)
         approved = record.get("approved_digest")
-        for key in ("failure", "claimed", "published_now", "approval", "stages"):
+        for key in ("failure", "claimed", "published_now", "approval", "stages",
+                    "refusal"):  # fmt: skip
             record.pop(key, None)
         record.update(
+            pinned=pinned,
             state="pending",
             tag=tag,
             commit=commit,
@@ -401,6 +461,49 @@ class Releases:
             approved_digest=approved,
         )
         self.log(f"nix release {target.name}: {trigger} -> {tag}@{commit[:12]}")
+
+    def _refuse(
+        self,
+        target: ReleaseTarget,
+        record: dict[str, Any],
+        latest: tuple[str, str],
+        trigger: str,
+        error: Any,
+    ) -> None:
+        """The gate refused the tag's commit: nothing is planned or asked for;
+        the refusal is remembered once (the history, the log)."""
+        tag, commit = latest
+        again = (
+            record.get("state") == "rejected"
+            and record.get("tag") == tag
+            and record.get("reason") == error.code
+        )
+        self._drop_wanted(record)
+        for key in ("failure", "claimed", "approval", "stages", "approve_command",
+                    "approval_required_since"):  # fmt: skip
+            record.pop(key, None)
+        record.update(
+            state="rejected",
+            tag=tag,
+            commit=commit,
+            trigger=record.get("trigger") if again else trigger,
+            reason=error.code,
+            refusal={"message": str(error), **error.detail},
+            pinned=None,
+            plan=None,
+            plan_digest=None,
+            build_id=None,
+        )
+        if again:
+            return
+        now = _iso(self.clock())
+        record.update(requested_at=now, started_at=None, finished_at=now, seconds=0.0)
+        events = self.state.setdefault(HISTORY_KEY, {})
+        events[target.name] = [
+            *(events.get(target.name) or [])[-(MAX_EVENTS - 1) :],
+            self.event(target.name, record),
+        ]
+        self.log(f"nix release {target.name}: {tag} refused ({error.code}): {error}")
 
     def _advance(self, target: ReleaseTarget, record: dict[str, Any]) -> None:
         now = self.clock()
@@ -577,6 +680,7 @@ class Releases:
             ("commit", plan["commit"]),
             ("tag", plan["tag"]),
             ("attribute", plan["attribute"]),
+            ("pinned", plan.get("pinned")),
         ):
             if manifest.get(key) != expected:
                 raise GitOpsError(
@@ -708,6 +812,9 @@ class Releases:
             "manifest_sha256": published.get("manifest_sha256"),
             "store_path": published.get("store_path"),
             "log_tail": str(failure.get("log_tail") or "")[-2000:] or None,
+            # 0.24.0: the promotion gate's result, or why it refused.
+            "pinned": record.get("pinned"),
+            "refusal": record.get("refusal"),
         }
 
     # ------------------------------------------------------------ documents

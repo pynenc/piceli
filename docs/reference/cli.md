@@ -122,7 +122,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli operator serve`](#cli-operator-serve) | Launch the Piceli Operator dashboard and unified REST API. | reads | no |
 | [`piceli operator status`](#cli-operator-status) | Print classified operator inventory: managed, unmanaged, unknown, and releases. | reads | no |
 | [`piceli profiles`](#cli-profiles) | List the stored credential profiles (references only, never secrets). | none | no |
-| [`piceli promote`](#cli-promote) | Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV. | writes | no |
+| [`piceli promote`](#cli-promote) | Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV; with --from, pin a verified commit in a NixRelease's flake and tag it. | writes | yes |
 | [`piceli publish`](#cli-publish) | Push the rendered manifests as a Flux OCI artifact (needs --approve DIGEST). | none | yes |
 | [`piceli registry forward`](#cli-registry-forward) | Keep a loopback port-forward to the registry open for pushes from here. | reads | no |
 | [`piceli registry install`](#cli-registry-install) | Install the in-cluster registry and its node mirror (plan first; --approve HASH installs). | writes | yes |
@@ -1109,6 +1109,12 @@ Build a flake output on a Nix build host; with --publish, sign and push it.
 | `--tag-pattern` | text |  | With --publish: the pointer names the highest version tag at the commit matching this NixHost Tag pattern (web-v*), compared after its prefix (default: --ref when it is a tag, else the first tag at the commit) |
 | `--branch` | text |  | With --publish: also point refs/heads/BRANCH at this build (default: --ref when it names a branch) |
 | `--approve` | text |  | The publish plan's digest |
+| `--release` | text |  | With --publish: the host of a NixRelease with gate=Promotion(...) in --composition; the publish needs its promotion gate to pass |
+| `--composition` | path | `infra.py` | The composition module declaring --release |
+| `--kubeconfig` | path |  | With --release: reach the controller with this kubeconfig (default: the composition's cluster's credential profile) |
+| `--context` | text |  | With --kubeconfig: its context |
+| `--state-dir` | path |  | With --release: a local controller's state directory |
+| `--namespace` | text | `piceli-system` | With --release: the controller's namespace |
 | `--artifacts-dir` | path | `piceli-dev-artifacts` | Where an image lands (RUN/) |
 | `--queue-timeout` | integer | `3600` | Seconds to wait for a slot |
 | `--quiet` | boolean | `False` | Do not stream the build's log |
@@ -1123,7 +1129,7 @@ Build a flake output on a Nix build host; with --publish, sign and push it.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** 0.24.0. Without --publish it is a development run (no approval; covered like dev run). With --publish it prints the plan (commit, output, host, cache, key) and exits 3; --approve DIGEST builds, then a separate step on the same host receives the signing key and S3 keys on stdin only (never the build), pushes with nix copy and the client uploads the manifest. Prints the store path, the image's sha256 and the public key, never a secret. Exit 1: the build failed, no output (dev-nix-no-output), dev-nix-publish-failed, dev-nix-manifest-failed. --tag-pattern GLOB (a NixHost's Tag pattern) points the highest version tag of that pattern at the commit; a --ref tag of another pattern is refused (dev-nix-invalid).
+- **Notes:** 0.24.0. Without --publish it is a development run (no approval; covered like dev run). With --publish it prints the plan (commit, output, host, cache, key) and exits 3; --approve DIGEST builds, then a separate step on the same host receives the signing key and S3 keys on stdin only (never the build), pushes with nix copy and the client uploads the manifest. Prints the store path, the image's sha256 and the public key, never a secret. Exit 1: the build failed, no output (dev-nix-no-output), dev-nix-publish-failed, dev-nix-manifest-failed. --tag-pattern GLOB (a NixHost's Tag pattern) points the highest version tag of that pattern at the commit; a --ref tag of another pattern is refused (dev-nix-invalid). --release HOST --composition MODULE runs the NixRelease's promotion gate at plan time: the commit's flake.lock must pin the gate's input to a commit its environment ran with passed release checks (promotion-not-verified, promotion-input-missing); the history is read as gitops status reads it (--state-dir, --kubeconfig/--context, else the composition cluster's profile) and an unreadable one refuses (promotion-history-unreachable). The plan, and the signed manifest, carry pinned.
 
 (cli-dev-nix-gc)=
 ### `piceli dev nix gc`
@@ -1737,7 +1743,7 @@ Controller health, repository, last poll and every branch's state.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** Read-only. Reads the ConfigMap piceli-gitops-status and the controller Deployment (or a local --state-dir). Health: healthy, degraded (last poll failed), stale (no poll for 3 intervals), starting, down. gitops-not-installed without a controller. 0.24.0: nix_releases lists each NixRelease (latest tag, state, plan digest and approve_command, stages with times, the published manifest's sha256, failure).
+- **Notes:** Read-only. Reads the ConfigMap piceli-gitops-status and the controller Deployment (or a local --state-dir). Health: healthy, degraded (last poll failed), stale (no poll for 3 intervals), starting, down. gitops-not-installed without a controller. 0.24.0: nix_releases lists each NixRelease (latest tag, state, plan digest and approve_command, stages with times, the published manifest's sha256, failure). A gated release shows pinned (input, commit, environment, verified_run, verified_at), or state rejected with its reason and refusal.
 
 (cli-gitops-suspects)=
 ### `piceli gitops suspects`
@@ -2769,7 +2775,7 @@ List the stored credential profiles (references only, never secrets).
 (cli-promote)=
 ### `piceli promote`
 
-Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV.
+Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV; with --from, pin a verified commit in a NixRelease's flake and tag it.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -2780,17 +2786,23 @@ Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV.
 | `--namespace` | text | `piceli-system` | The controller's namespace |
 | `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
 | `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--from` | text |  | 0.24.0: TARGET is a NixRelease's host; pin the newest commit this environment (its gate's) ran with passed release checks in the flake's flake.lock, commit, tag and push (plan, then --approve) |
+| `--composition`, `--infra` | path | `infra.py` | With --from: the composition module declaring the NixRelease |
+| `--repo` | path | `.` | With --from: the flake's working copy |
+| `--bump` | text | `patch` | With --from: major, minor or patch |
+| `--approve` | text |  | With --from: the promotion plan's digest |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
 
 **Contract**
 
-- **Reads:** kubeconfig or --state-dir
-- **Writes:** --state-dir requests (local controller)
+- **Reads:** kubeconfig or --state-dir, with --from: the composition module (--composition; the NixRelease and its gate), the controller's history (--state-dir, --kubeconfig/--context, or the composition cluster's credential profile), the flake's working copy (--repo) and its remote (git fetch), nix when on the PATH, else the input's repository (git clone into a temporary directory)
+- **Writes:** --state-dir requests (local controller), with --from --approve: flake.lock, one commit and one annotated tag in the working copy; the branch and the tag on the remote, pushed atomically
 - **Cluster:** writes
-- **Approval required:** no
+- **Approval required:** yes
 - **Safe to retry:** yes
-- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Writes a request; the controller accepts only a commit it saw on that branch (gitops-promote-unknown otherwise), a named environment only when it follows Promote() (gitops-promote-not-allowed), and the environment then waits for gitops approve of its plan hash.
+- **Notes:** Writes a request; the controller accepts only a commit it saw on that branch (gitops-promote-unknown otherwise), a named environment only when it follows Promote() (gitops-promote-not-allowed), and the environment then waits for gitops approve of its plan hash. 0.24.0, promote HOST --from ENV: without --approve it prints the plan (pinned, the lock change old rev -> new rev, the commit message, the tag, the remote and branch) with its digest and exits 3. A lock that already pins the commit exits 0 with state current: with a tag of the pattern at HEAD there is nothing to do; without one the plan only tags HEAD and --approve tags and pushes the tag. --approve recomputes the plan (promote-plan-changed when it differs), commits flake.lock alone, tags and pushes with git push --atomic (promote-push-failed exits 1; the commit and tag stay local). Refuses a dirty working copy (promote-dirty), one behind, ahead of or diverged from its upstream (promote-not-in-sync), an environment without a passed run (promotion-not-verified) and an unreadable history (promotion-history-unreachable).
 
 (cli-publish)=
 ### `piceli publish`

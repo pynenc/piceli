@@ -24,6 +24,7 @@ FIRST_ARGUMENT = {
     "_Diagnosed",
     "RegistryError",
     "GitOpsError",
+    "PromotionError",
     "ChartError",
     "_input",
     "SecretError",
