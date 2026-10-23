@@ -750,6 +750,23 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`timed-out`](#error-timed-out) | artifacts-delivery | yes |
 | [`too-many-redirects`](#error-too-many-redirects) | artifacts-registry | yes |
 | [`tool-pin-mismatch`](#error-tool-pin-mismatch) | artifacts-input | no |
+| [`train-branch-unknown`](#error-train-branch-unknown) | train | no |
+| [`train-branches-required`](#error-train-branches-required) | train | no |
+| [`train-busy`](#error-train-busy) | train | yes |
+| [`train-checkout-dirty`](#error-train-checkout-dirty) | train | yes |
+| [`train-git-failed`](#error-train-git-failed) | train | yes |
+| [`train-invalid`](#error-train-invalid) | train | no |
+| [`train-load-failed`](#error-train-load-failed) | train | no |
+| [`train-merge-conflict`](#error-train-merge-conflict) | train | no |
+| [`train-not-fast-forward`](#error-train-not-fast-forward) | train | no |
+| [`train-not-found`](#error-train-not-found) | train | no |
+| [`train-publish-failed`](#error-train-publish-failed) | train | yes |
+| [`train-push-failed`](#error-train-push-failed) | train | yes |
+| [`train-push-needs-promote`](#error-train-push-needs-promote) | train | no |
+| [`train-repo-invalid`](#error-train-repo-invalid) | train | no |
+| [`train-spec-invalid`](#error-train-spec-invalid) | train | no |
+| [`train-step-failed`](#error-train-step-failed) | train | no |
+| [`train-step-timeout`](#error-train-step-timeout) | train | yes |
 | [`transport-error`](#error-transport-error) | kubernetes | yes |
 | [`ui-access-failed`](#error-ui-access-failed) | access | yes |
 | [`ui-access-port-conflict`](#error-ui-access-port-conflict) | access | no |
@@ -7085,3 +7102,142 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Pass `--composition MODULE` (environments and NixReleases), `--infra MODULE` (NixHosts and their servers) and, to read another controller than the composition's home cluster's (its `piceli login` profile), `--kubeconfig FILE --context NAME` or `--state-dir`.
 - **Retry-safe:** no
+
+
+## The pre-merge train (`piceli.train.Train`, `piceli train`)
+
+(error-train-branch-unknown)=
+### `train-branch-unknown`
+
+**Unknown candidate branch.** A candidate does not name a commit, is named twice, or is the train's base or tested branch.
+
+- **Fix:** Pass existing feature branches, each once.
+- **Retry-safe:** no
+
+(error-train-branches-required)=
+### `train-branches-required`
+
+**No candidate branches.** `piceli train` needs at least one branch to merge.
+
+- **Fix:** Name the branches: `piceli train APP --branches a b c`.
+- **Retry-safe:** no
+
+(error-train-busy)=
+### `train-busy`
+
+**Train already running.** Another run of the same train holds its lock in the state directory.
+
+- **Fix:** Wait for that run to finish, then run the train again.
+- **Retry-safe:** yes
+
+(error-train-checkout-dirty)=
+### `train-checkout-dirty`
+
+**Branch checked out with changes.** The base or tested branch is checked out in a worktree with uncommitted changes, so it cannot be fast-forwarded there. Nothing was tagged or moved.
+
+- **Fix:** Commit or stash the changes in that worktree, then run the train again.
+- **Retry-safe:** yes
+
+(error-train-git-failed)=
+### `train-git-failed`
+
+**Git command failed.** A Git command the train needed failed (a worktree, a ref update, a diff).
+
+- **Fix:** Run `git status` and `git worktree prune` in the repository, then run the train again.
+- **Retry-safe:** yes
+
+(error-train-invalid)=
+### `train-invalid`
+
+**Train declaration invalid.** The `Train(...)` or one of its steps is invalid: a name that is not a DNS label, two steps with one name, no test step, a tag without `{n}`, an empty argv.
+
+- **Fix:** Fix the declaration as the message says.
+- **Retry-safe:** no
+
+(error-train-load-failed)=
+### `train-load-failed`
+
+**Train module failed to load.** Importing the train's spec module raised an exception or took too long.
+
+- **Fix:** Run `python path/to/module.py` to see the error, fix the module, then run the train again.
+- **Retry-safe:** no
+
+(error-train-merge-conflict)=
+### `train-merge-conflict`
+
+**Branch conflicts with the train.** Merging the branch onto the train's head (the base plus the branches already joined) conflicts. The train never resolves a conflict.
+
+- **Fix:** Merge or rebase the branch on the base, resolve the conflict, then queue it again.
+- **Retry-safe:** no
+
+(error-train-not-fast-forward)=
+### `train-not-fast-forward`
+
+**Promotion is not a fast-forward.** The base or tested branch moved outside the train during the run (or was never an ancestor of the train's head), so moving it to the head would drop commits. Nothing was tagged or moved.
+
+- **Fix:** Bring the branch back onto the train's history (merge it into the base by the train), then run the train again.
+- **Retry-safe:** no
+
+(error-train-not-found)=
+### `train-not-found`
+
+**Train not found.** The module given to `piceli train` cannot be imported, has no such attribute, the attribute is not a `piceli.train.Train`, or the module declares no Train or several.
+
+- **Fix:** Pass `MODULE:ATTR` or `path/to/file.py:ATTR` naming one `Train`.
+- **Retry-safe:** no
+
+(error-train-publish-failed)=
+### `train-publish-failed`
+
+**Publish step failed.** The promotion happened (the tag and branches moved), but a publish step exited non-zero.
+
+- **Fix:** Read the publish step's log and run the publish script by hand for the tag.
+- **Retry-safe:** yes
+
+(error-train-push-failed)=
+### `train-push-failed`
+
+**Train push failed.** `git push --atomic` of the tag, tested and the base was refused or failed; nothing was pushed. The local promotion stands.
+
+- **Fix:** Fetch, check whether the remote's base moved, then push the tag and branches, or run the train again.
+- **Retry-safe:** yes
+
+(error-train-push-needs-promote)=
+### `train-push-needs-promote`
+
+**--push without --promote.** `--push` pushes a promotion (the tag, tested and the base), so it needs `--promote`.
+
+- **Fix:** Add `--promote`, or leave out `--push`.
+- **Retry-safe:** no
+
+(error-train-repo-invalid)=
+### `train-repo-invalid`
+
+**Train repository invalid.** The train's `repo` is not a Git repository, or its base branch does not exist.
+
+- **Fix:** Point `Train(repo=...)` at the repository (relative to the spec module) and create the base branch.
+- **Retry-safe:** no
+
+(error-train-spec-invalid)=
+### `train-spec-invalid`
+
+**Spec of the merged tree invalid.** The train's spec module is missing from the merged tree, or fails to import there, or no longer declares the Train.
+
+- **Fix:** Fix the spec module on the branch (it is read from the commit under test).
+- **Retry-safe:** no
+
+(error-train-step-failed)=
+### `train-step-failed`
+
+**A train step failed.** A step of the merged tree's spec exited non-zero (a failed build, a test that failed again on its retry, a check). The result names the step, its log and an output tail.
+
+- **Fix:** Read the step's log, fix the branch on top of the current base, then queue it again.
+- **Retry-safe:** no
+
+(error-train-step-timeout)=
+### `train-step-timeout`
+
+**A train step timed out.** A step ran longer than its `timeout` and was stopped with its process group.
+
+- **Fix:** Find what hangs in the step's log, or raise the step's `timeout`.
+- **Retry-safe:** yes

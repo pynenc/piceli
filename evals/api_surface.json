@@ -1458,6 +1458,94 @@
     "mount": "CacheMount"
    }
   },
+  "CargoCheck": {
+   "attr_types": {
+    "select": "Impact"
+   },
+   "attrs": [
+    "args",
+    "command",
+    "env",
+    "kind",
+    "name",
+    "phase",
+    "publish",
+    "select",
+    "timeout",
+    "to_dict"
+   ],
+   "init": [
+    "args",
+    "env",
+    "name",
+    "select",
+    "timeout"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "env",
+     "name",
+     "timeout"
+    ],
+    "publish": [
+     "argv",
+     "env",
+     "name",
+     "timeout"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "command": "CommandStep",
+    "publish": "PublishStep"
+   }
+  },
+  "CargoTests": {
+   "attr_types": {
+    "select": "Impact"
+   },
+   "attrs": [
+    "args",
+    "command",
+    "env",
+    "kind",
+    "name",
+    "phase",
+    "publish",
+    "retry",
+    "select",
+    "timeout",
+    "to_dict"
+   ],
+   "init": [
+    "args",
+    "env",
+    "name",
+    "retry",
+    "select",
+    "timeout"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "env",
+     "name",
+     "timeout"
+    ],
+    "publish": [
+     "argv",
+     "env",
+     "name",
+     "timeout"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "command": "CommandStep",
+    "publish": "PublishStep"
+   }
+  },
   "CheckContext": {
    "attrs": [
     "api_client",
@@ -1908,6 +1996,44 @@
    ],
    "methods": {
     "to_dict": []
+   }
+  },
+  "CommandStep": {
+   "attrs": [
+    "argv",
+    "command",
+    "env",
+    "kind",
+    "name",
+    "phase",
+    "publish",
+    "timeout",
+    "to_dict"
+   ],
+   "init": [
+    "argv",
+    "env",
+    "name",
+    "timeout"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "env",
+     "name",
+     "timeout"
+    ],
+    "publish": [
+     "argv",
+     "env",
+     "name",
+     "timeout"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "command": "CommandStep",
+    "publish": "PublishStep"
    }
   },
   "Component": {
@@ -4952,6 +5078,18 @@
    "methods": {},
    "pydantic": true
   },
+  "Impact": {
+   "attrs": [
+    "roots",
+    "to_dict"
+   ],
+   "init": [
+    "roots"
+   ],
+   "methods": {
+    "to_dict": []
+   }
+  },
   "ImportSecretSpec": {
    "attr_types": {
     "secret": "LiveSecretKey"
@@ -7854,6 +7992,44 @@
     "from_dict": "Promotion"
    }
   },
+  "PublishStep": {
+   "attrs": [
+    "argv",
+    "command",
+    "env",
+    "kind",
+    "name",
+    "phase",
+    "publish",
+    "timeout",
+    "to_dict"
+   ],
+   "init": [
+    "argv",
+    "env",
+    "name",
+    "timeout"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "env",
+     "name",
+     "timeout"
+    ],
+    "publish": [
+     "argv",
+     "env",
+     "name",
+     "timeout"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "command": "CommandStep",
+    "publish": "PublishStep"
+   }
+  },
   "PythonCheck": {
    "attrs": [
     "call",
@@ -10152,6 +10328,42 @@
    "methods": {},
    "pydantic": true
   },
+  "Step": {
+   "attrs": [
+    "command",
+    "env",
+    "kind",
+    "name",
+    "phase",
+    "publish",
+    "timeout",
+    "to_dict"
+   ],
+   "init": [
+    "env",
+    "name",
+    "timeout"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "env",
+     "name",
+     "timeout"
+    ],
+    "publish": [
+     "argv",
+     "env",
+     "name",
+     "timeout"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "command": "CommandStep",
+    "publish": "PublishStep"
+   }
+  },
   "StreamedOciRegistryClient": {
    "attrs": [
     "authenticate",
@@ -10506,6 +10718,62 @@
    },
    "returns": {
     "capture": "ToolPin"
+   }
+  },
+  "Train": {
+   "attr_types": {
+    "steps": "Step"
+   },
+   "attrs": [
+    "base",
+    "from_dict",
+    "name",
+    "publish_steps",
+    "remote",
+    "repo",
+    "steps",
+    "tag",
+    "tag_name",
+    "test_steps",
+    "tested",
+    "to_dict"
+   ],
+   "init": [
+    "base",
+    "name",
+    "remote",
+    "repo",
+    "steps",
+    "tag",
+    "tested"
+   ],
+   "methods": {
+    "from_dict": [
+     "data"
+    ],
+    "tag_name": [
+     "date",
+     "n"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "from_dict": "Train"
+   }
+  },
+  "TrainError": {
+   "attrs": [
+    "add_note",
+    "args",
+    "with_traceback"
+   ],
+   "init": [
+    "code",
+    "message"
+   ],
+   "methods": {
+    "add_note": null,
+    "with_traceback": null
    }
   },
   "Ui": {
@@ -10955,6 +11223,7 @@
      "status",
      "support-bundle",
      "targets",
+     "train",
      "ui",
      "watch"
     ]
@@ -13143,6 +13412,20 @@
     ],
     "subcommands": []
    },
+   "train": {
+    "arguments": [
+     "app",
+     "branches"
+    ],
+    "flags": [
+     "--branches",
+     "--json",
+     "--promote",
+     "--push",
+     "--state-dir"
+    ],
+    "subcommands": []
+   },
    "ui": {
     "arguments": [],
     "flags": [],
@@ -14055,6 +14338,23 @@
    "timed-out",
    "too-many-redirects",
    "tool-pin-mismatch",
+   "train-branch-unknown",
+   "train-branches-required",
+   "train-busy",
+   "train-checkout-dirty",
+   "train-git-failed",
+   "train-invalid",
+   "train-load-failed",
+   "train-merge-conflict",
+   "train-not-fast-forward",
+   "train-not-found",
+   "train-publish-failed",
+   "train-push-failed",
+   "train-push-needs-promote",
+   "train-repo-invalid",
+   "train-spec-invalid",
+   "train-step-failed",
+   "train-step-timeout",
    "transport-error",
    "ui-access-failed",
    "ui-access-port-conflict",
@@ -14399,6 +14699,7 @@
    "telemetry": {},
    "tempfiles": {},
    "testing": {},
+   "train": {},
    "utils": {},
    "version": {
     "params": null
@@ -15773,6 +16074,33 @@
      "url"
     ]
    }
+  },
+  "piceli.train": {
+   "CargoCheck": {
+    "class": "CargoCheck"
+   },
+   "CargoTests": {
+    "class": "CargoTests"
+   },
+   "CommandStep": {
+    "class": "CommandStep"
+   },
+   "DEFAULT_ROOTS": {},
+   "Impact": {
+    "class": "Impact"
+   },
+   "PublishStep": {
+    "class": "PublishStep"
+   },
+   "Step": {
+    "class": "Step"
+   },
+   "Train": {
+    "class": "Train"
+   },
+   "TrainError": {
+    "class": "TrainError"
+   }
   }
  },
  "modules": [
@@ -15976,6 +16304,7 @@
   "piceli.k8s.cli.secrets_status",
   "piceli.k8s.cli.state",
   "piceli.k8s.cli.targets",
+  "piceli.k8s.cli.train",
   "piceli.k8s.cli.ui",
   "piceli.k8s.cli.ui_forward",
   "piceli.k8s.cli.ui_remote",
@@ -16140,6 +16469,16 @@
   "piceli.testing.fake_api",
   "piceli.testing.infra",
   "piceli.testing.pytest_plugin",
+  "piceli.train",
+  "piceli.train.cargo",
+  "piceli.train.engine",
+  "piceli.train.git",
+  "piceli.train.impact",
+  "piceli.train.model",
+  "piceli.train.runner",
+  "piceli.train.spec",
+  "piceli.train.state",
+  "piceli.train.steps",
   "piceli.utils"
  ],
  "pydantic_attrs": [

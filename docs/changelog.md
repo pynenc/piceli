@@ -4,6 +4,48 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.26.0
+
+- **A pre-merge train: `piceli train`.** Declare a `Train` in Python
+  (`piceli.train`: `Train(name, steps=[...], base="main", tested="tested",
+  tag="tested/{date}.{n}", remote="origin")`) with `Step.command`,
+  `CargoCheck`, `CargoTests(select=Impact())` and `Step.publish` steps, then
+  run `piceli train MODULE[:ATTR] --branches a b c`. Each candidate set is
+  merged with `git merge --no-ff` onto the train's current head (the base
+  plus the branches already joined) in a temporary worktree, and judged by
+  the steps of the merged tree: the spec module is loaded from that tree in
+  a fresh process, so a branch meets the base's newest rules and its own.
+  The first trial merges every candidate; a failing set is bisected, and
+  each failing branch is ejected with the step, an output tail and its log
+  (`train-step-failed`, `train-step-timeout`, `train-spec-invalid`; a
+  conflict is never resolved: `train-merge-conflict`). See {doc}`train`.
+- **Impact selection and flaky tests.** `Impact()` tests the cargo packages
+  with changed files plus their dependents (from `cargo metadata`), and
+  every package when a root file changes (`Cargo.toml`, `Cargo.lock`, the
+  toolchain and cargo configuration by default; configurable).
+  `CargoTests` runs every test binary, then retries **only the failed
+  tests**, by exact name; a test that passes on the retry joins and is
+  recorded as flaky with its failure output.
+- **Promote and push, only when asked.** `--promote` tags `tested/<date>.N`
+  and moves `tested` and the base by fast-forward only (refused with
+  `train-not-fast-forward` or `train-checkout-dirty`, before anything
+  moves), then runs the publish steps; `--push` (with `--promote`) pushes
+  the tag and both branches atomically. Without them no ref changes and
+  nothing is pushed.
+- **History.** Each run's result (`piceli.train.v1`: every branch's
+  verdict, every step's start, duration, host, verdict and log) is kept in
+  `$XDG_STATE_HOME/piceli/train/<name>/runs/`, with an append-only flaky
+  registry (`flaky.jsonl`: count, first and last seen, last failure tail).
+  Steps run through a runner interface and report to an event sink, for
+  build hosts and observability later.
+- New error codes in the `train` area: `train-not-found`,
+  `train-load-failed`, `train-invalid`, `train-repo-invalid`,
+  `train-branches-required`, `train-branch-unknown`,
+  `train-push-needs-promote`, `train-busy`, `train-merge-conflict`,
+  `train-step-failed`, `train-step-timeout`, `train-spec-invalid`,
+  `train-not-fast-forward`, `train-checkout-dirty`, `train-publish-failed`,
+  `train-push-failed`, `train-git-failed`.
+
 ## Version 0.25.3
 
 - **The Infomaniak preset refuses `S3Key`.** Infomaniak's API lets only the

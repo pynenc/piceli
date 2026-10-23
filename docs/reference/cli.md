@@ -164,6 +164,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli status`](#cli-status) | Say whether the app is up and how to reach it. Read-only. | reads | no |
 | [`piceli support-bundle`](#cli-support-bundle) | Collect a read-only, redacted snapshot of a namespace (no Secrets, no env values). | reads | no |
 | [`piceli targets`](#cli-targets) | Every environment and NixHost: commit or tag, pinned product commit, checks, state. | reads | no |
+| [`piceli train`](#cli-train) | Merge branches onto the base one tested merge at a time; eject failures. | none | yes |
 | [`piceli ui backup`](#cli-ui-backup) | Back up an offline UI control store and its release journal. | none | no |
 | [`piceli ui cluster-observe`](#cli-ui-cluster-observe) | Serve OIDC-scoped cluster observation and configured delivery. | writes | yes |
 | [`piceli ui cluster-serve`](#cli-ui-cluster-serve) | Serve OIDC-scoped cluster observation and configured delivery. | writes | yes |
@@ -3840,6 +3841,32 @@ Every environment and NixHost: commit or tag, pinned product commit, checks, sta
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** 0.25.0. Read-only; safe to retry. --json prints one piceli.targets.v1 object. An unreachable controller or host never fails the view: its rows say unreachable with the reason (host rows still work with the home cluster down; a missing login profile of the home cluster shows profile-not-found with a piceli login hint). Exit 0: every target reachable, none failed; 1: a target failed, rolled back, is unreachable or its checks failed; 2: no module and no controller named (targets-input-required) or a module that does not load.
+
+(cli-train)=
+### `piceli train`
+
+Merge branches onto the base one tested merge at a time; eject failures.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `APP` | text | required |  |
+| `BRANCHES` | text |  |  |
+| `--branches` | boolean | `False` | Starts the list of candidate branches |
+| `--promote` | boolean | `False` | Tag the joined head and move tested and the base by fast-forward only, then run the publish steps |
+| `--push` | boolean | `False` | Push the tag, tested and the base (needs --promote) |
+| `--json` | boolean | `False` | Print the result object on stdout |
+| `--state-dir` | path |  | Train state root (default $XDG_STATE_HOME/piceli/train, else ~/.local/state/piceli/train) |
+
+**Contract**
+
+- **Reads:** the train spec module (MODULE[:ATTR]), then the same module in each merged tree, the Git repository (branches, base, tested), the steps' tools (cargo, scripts of the merged tree)
+- **Writes:** temporary worktrees of the repository (removed), unreferenced merge commits, $XDG_STATE_HOME/piceli/train/<name> (run records, logs, flaky.jsonl), --promote: the tag, tested and the base (fast-forward only), publish steps, --push: the remote's tag, tested and base
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. Runs the train's steps, which run code: the explicit branch list is the approval, and --promote/--push the approval to move refs and push. Without --promote no ref changes; nothing is pushed without --push (which needs --promote). Each candidate set is merged with git merge --no-ff onto the train's head in a temporary worktree; its steps come from the merged tree's spec. A failing set is bisected. --json prints one piceli.train.v1 object. Exit 0: every branch joined (or was already in) and the promotion and push asked for succeeded; 1: a branch was ejected (train-step-failed, train-step-timeout, train-merge-conflict, train-spec-invalid), the promotion was refused (train-not-fast-forward, train-checkout-dirty), a publish step or the push failed; 2: rejected before anything ran (train-not-found, train-branch-unknown, train-busy, ...).
 
 (cli-ui-backup)=
 ### `piceli ui backup`

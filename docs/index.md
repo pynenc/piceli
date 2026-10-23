@@ -218,6 +218,7 @@ pre_rollout_checks
 deploy_events
 opentelemetry
 ci
+train
 gitops
 ui
 ui_cluster_install
