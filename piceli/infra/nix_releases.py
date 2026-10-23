@@ -171,7 +171,7 @@ class NixRelease:
             builder=self.builder,
             auto_approve=self.auto_approve,
             store_url=self.host.cache.store_url,
-            public_key=self.host.cache.public_key,
+            public_key=self.host.cache.trusted_key(),
             gate=self.gate,
         )
 
@@ -940,8 +940,9 @@ def cache_keys(cache: Any) -> tuple[str, tuple[str, str] | None]:
 
     if cache is None:
         raise DevError("dev-nix-cache-invalid", "no such cache on this host")
+    trusted = cache.trusted_key()
     secret = load_credential(cache.signing_credential, "nix-signing-key")
-    if public_key(secret) != cache.public_key:
+    if public_key(secret) != trusted:
         raise DevError(
             "dev-nix-key-mismatch",
             f"credential {cache.signing_credential} is not the key of "

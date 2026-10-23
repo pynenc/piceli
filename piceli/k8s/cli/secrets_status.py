@@ -82,7 +82,8 @@ def secrets_status(ref: RefArgument, as_json: JsonOption = False) -> None:
     piceli: --generate; owner: --prompt, only you have it); the exact next
     command; what it is for and where else it must live. Then the backup's
     state and warnings. Never prints a value. Exit 0: every secret stored
-    and complete; 1: something missing, incomplete or damaged.
+    and complete; 1: something missing, incomplete or damaged, or a signing
+    key whose public key still has to go into NixCache(public_key=) (copy).
     """
     from piceli.infra.machines.secrets_status import table
 
@@ -217,6 +218,16 @@ def _generate(walk: _Walk, item: Item, key_names: Mapping[str, list[str]]) -> No
     from piceli.infra.machines.credentials import generate_passphrase, save_credential
 
     secret = item.secret
+    if item.state == "copy":
+        # Stored; the declaration names the key alone (key_name=) and waits
+        # for its public key.
+        from piceli.infra.machines.credentials import load_credential
+
+        stored = public_key(load_credential(secret.name, secret.kind))
+        say(f"  {secret.name}: stored; public key: {stored}")
+        say("  put it in NixCache(public_key=...) in your declaration")
+        walk.result(item, "copy", public_key=stored)
+        return
     if item.detail == MISMATCH:
         # The key is sound; the declaration names another. Replacing it would
         # not help: its public key goes into the declaration.

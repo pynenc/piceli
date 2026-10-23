@@ -835,13 +835,19 @@ def composition_from(module: Any, *, default_name: str = "composition") -> Compo
         name = (
             re.sub(r"[^a-z0-9]+", "-", default_name.lower()).strip("-") or "composition"
         )
+    from piceli.dev.model import DevError
+
+    try:
+        targets = tuple(item.target() for item in releases)
+    except DevError as error:  # a release's cache without its public key
+        raise CompositionError(error.code, str(error)) from None
     return Composition(
         name=name,
         environments=items,
         components=tuple(components),
         cluster=home,
         clusters=tuple(clusters.values()),
-        nix_releases=tuple(item.target() for item in releases),
+        nix_releases=targets,
     )
 
 

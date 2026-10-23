@@ -189,7 +189,16 @@ class NixCache:
     cache that cannot be published to).
 
     :param public_key: ``NAME:base64``: what hosts trust
-        (``piceli secrets nix-cache NAME --generate`` prints it).
+        (``piceli secrets setup MODULE`` or ``piceli secrets nix-cache NAME
+        --generate`` prints it).
+    :param key_name: The key's name alone, for a cache whose key does not
+        exist yet (0.25.0): ``NixCache(key_name="cache-1", bucket=...)``.
+        ``piceli secrets status`` and ``setup`` work with it, and so does
+        ``piceli infra plan`` of the bucket; publishing, ``dev nix gc``, a
+        host's module and a ``NixRelease`` refuse
+        (``dev-nix-cache-key-unset``) until the public key ``setup`` prints
+        is in ``public_key=``. Given with ``public_key=``, it must be that
+        key's name.
     :param signing_key: The local credential holding the secret key
         (default: the key's name).
     :param write_credentials: The local credential with S3 access keys
@@ -205,19 +214,17 @@ class NixCache:
     :param region: The S3 region signatures name.
     """
 
-    public_key: str
+    public_key: str | None = None
     bucket: Any = None
     url: str | None = None
     endpoint: str | None = None
     region: str = "us-east-1"
     signing_key: str | None = None
     write_credentials: str | None = None
+    key_name: str | None = None
 
     def __post_init__(self) -> None:
-        try:
-            object.__setattr__(self, "public_key", check_public_key(self.public_key))
-        except DevError:
-            raise _invalid("NixCache(public_key=) is NAME:base64 of 32 bytes") from None
+        self._check_key()
         if (self.bucket is None) == (self.url is None):
             raise _invalid("NixCache: give one of bucket= or url=")
         if self.bucket is not None:
@@ -255,6 +262,44 @@ class NixCache:
                 "NixCache: an s3 cache needs write_credentials= (S3 keys that put)"
             )
 
+    def _check_key(self) -> None:
+        if self.public_key is None:
+            if self.key_name is None or not _KEY_NAME.fullmatch(str(self.key_name)):
+                raise _invalid(
+                    "NixCache: give public_key= (NAME:base64), or key_name= "
+                    "(letters, digits, . _ + -) until piceli secrets setup "
+                    "prints the public key"
+                )
+            return
+        try:
+            object.__setattr__(self, "public_key", check_public_key(self.public_key))
+        except DevError:
+            raise _invalid("NixCache(public_key=) is NAME:base64 of 32 bytes") from None
+        name = key_name(self.public_key)
+        if self.key_name is not None and self.key_name != name:
+            raise _invalid("NixCache(key_name=) is the name of public_key=")
+        object.__setattr__(self, "key_name", name)
+
+    @property
+    def key_set(self) -> bool:
+        """Whether the declaration holds the public key (not only its name)."""
+        return self.public_key is not None
+
+    def trusted_key(self) -> str:
+        """The public key hosts trust.
+
+        :raises DevError: ``dev-nix-cache-key-unset``: the declaration names
+            the key (``key_name=``) without its public key yet."""
+        if self.public_key is None:
+            raise DevError(
+                "dev-nix-cache-key-unset",
+                f"NixCache {self.key_name} has no public key yet: run piceli "
+                "secrets setup MODULE (or piceli secrets nix-cache "
+                f"{self.signing_credential} --generate) and put the public key "
+                "it prints into NixCache(public_key=)",
+            )
+        return self.public_key
+
     def _check_url(self, url: str) -> None:
         parsed = urllib.parse.urlsplit(url)
         if parsed.scheme == "file":
@@ -290,10 +335,6 @@ class NixCache:
         return None
 
     @property
-    def key_name(self) -> str:
-        return key_name(self.public_key)
-
-    @property
     def read_credentials(self) -> str | None:
         """The credential of the bucket's ``S3Key(access="read")`` that
         ``piceli infra apply`` creates (``None``: hosts get keys another way)."""
@@ -310,7 +351,7 @@ class NixCache:
 
     @property
     def signing_credential(self) -> str:
-        return self.signing_key or self.key_name
+        return self.signing_key or str(self.key_name)
 
     @property
     def store_url(self) -> str:
@@ -334,7 +375,7 @@ class NixCache:
     def describe(self) -> dict[str, Any]:
         return {
             "store_url": self.store_url,
-            "public_key": self.public_key,
+            "public_key": self.trusted_key(),
             "signing_key": self.signing_credential,
             "write_credentials": self.write_credentials,
             **(
@@ -807,7 +848,7 @@ def publish_closure(
         manifest(
             name=plan["name"], commit=plan["commit"], tag=plan["tag"],
             target=plan["attribute"], published=outcome, host=host,
-            key=cache.key_name, image=image, pinned=plan.get("pinned"),
+            key=str(cache.key_name), image=image, pinned=plan.get("pinned"),
         ),
         secret,
     )  # fmt: skip
@@ -820,7 +861,7 @@ def publish_closure(
         say(f"  {body['ref']} -> {str(body['commit'])[:12]} ({body['published_at']})")
     return {
         "cache": cache.store_url,
-        "public_key": cache.public_key,
+        "public_key": cache.trusted_key(),
         "nar_hash": outcome["nar_hash"],
         "nar_size": outcome["nar_size"],
         "signatures": outcome.get("signatures") or [],

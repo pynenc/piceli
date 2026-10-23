@@ -155,6 +155,7 @@ def _secrets(cache: Any) -> tuple[str, tuple[str, str] | None]:
     from piceli.infra.machines.model import InfraError
 
     try:
+        trusted = cache.trusted_key()
         secret = load_credential(cache.signing_credential, "nix-signing-key")
         keys = (
             load_credential(cache.write_credentials, "s3-keys")
@@ -164,7 +165,7 @@ def _secrets(cache: Any) -> tuple[str, tuple[str, str] | None]:
         derived = public_key(secret)
     except (InfraError, DevError) as error:
         reject(error.code, str(error))
-    if derived != cache.public_key:
+    if derived != trusted:
         reject(
             "dev-nix-key-mismatch",
             f"credential {cache.signing_credential} is not the key of "
@@ -710,6 +711,7 @@ def gc(
 
     cache = load_cache(cache_ref)
     try:
+        cache.trusted_key()  # a cache without its public key has no builds
         patterns = tuple(tag_pattern or ())
         for pattern in patterns:
             from piceli.hosts.model import HostError, Tag

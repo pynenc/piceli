@@ -195,6 +195,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`dev-host-unknown`](#error-dev-host-unknown) | dev | no |
 | [`dev-isolation-not-enforced`](#error-dev-isolation-not-enforced) | dev | no |
 | [`dev-nix-cache-invalid`](#error-dev-nix-cache-invalid) | dev | no |
+| [`dev-nix-cache-key-unset`](#error-dev-nix-cache-key-unset) | dev | no |
 | [`dev-nix-crypto-unavailable`](#error-dev-nix-crypto-unavailable) | dev | no |
 | [`dev-nix-gc-failed`](#error-dev-nix-gc-failed) | dev | yes |
 | [`dev-nix-host-unsupported`](#error-dev-nix-host-unsupported) | dev | no |
@@ -5143,9 +5144,17 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-dev-nix-cache-invalid)=
 ### `dev-nix-cache-invalid`
 
-**Nix cache declaration refused.** `NixCache` needs a public key `NAME:base64`, one of `bucket=` or `url=` (`s3://`, `file://`, or a read-only `https://`), an S3 endpoint and `credentials=` for an S3 cache; or `--publish` did not name a `NixCache`, or names a read-only cache.
+**Nix cache declaration refused.** `NixCache` needs a public key `NAME:base64` (or `key_name=` until it exists), one of `bucket=` or `url=` (`s3://`, `file://`, or a read-only `https://`), an S3 endpoint and `credentials=` for an S3 cache; or `--publish` did not name a `NixCache`, or names a read-only cache.
 
 - **Fix:** Fix the declaration; publish to the cache's `s3://` or `file://` URL.
+- **Retry-safe:** no
+
+(error-dev-nix-cache-key-unset)=
+### `dev-nix-cache-key-unset`
+
+**Nix cache public key not declared yet.** The `NixCache` names its key with `key_name=` alone (the key does not exist yet), and publishing, `dev nix gc`, a host's module and a `NixRelease` need the public key hosts trust.
+
+- **Fix:** Run `piceli secrets setup MODULE` (or `piceli secrets nix-cache NAME --generate`) and put the public key it prints into `NixCache(public_key=)`.
 - **Retry-safe:** no
 
 (error-dev-nix-crypto-unavailable)=

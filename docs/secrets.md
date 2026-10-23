@@ -491,6 +491,20 @@ identity, its first-boot user data and the cache's S3 key pairs. Two
 commands set them up from the declaration itself (0.25.0). Neither prints a
 value.
 
+The cache's signing key does not exist before `setup` makes it, so a new
+declaration names the key without its public key:
+
+```python
+cache = NixCache(key_name="example-cache-1", bucket=nix_bucket)
+```
+
+`secrets status`, `secrets setup` and `infra plan` (the bucket and its S3
+pairs need no signing key) work with it. Whatever needs the public key
+refuses with `dev-nix-cache-key-unset` until it is declared: publishing
+(`dev nix build --publish`, a `NixRelease`), `dev nix gc` and `host
+module`. Step 3 puts the key `setup` prints in its place:
+`NixCache("example-cache-1:<base64>", bucket=nix_bucket)`.
+
 1. **See what the declaration needs.**
 
    ```console
@@ -528,6 +542,7 @@ value.
    | `missing` | Not stored. A pair `infra apply` already created but this store lacks: the next `infra plan` stores it again from the state. |
    | `incomplete` | A credential that lacks a part (a Porkbun key pair stored as one value). |
    | `damaged` | Unreadable, readable by other users, of another kind, or a signing key whose public key is not `NixCache(public_key=)`. |
+   | `copy` | A signing key stored for a cache declared with `key_name=` alone: `put example-cache-1:<base64> into NixCache(public_key=)`; `NEXT` prints the public key again. |
    | `not-needed` | The user data of a server that exists: a plan reads it only to create the server again. |
 
    `BY` says who makes it: `owner` (only you have it: you type it with
@@ -536,7 +551,7 @@ value.
    command. The backup line tells whether a backup exists and is newer than
    every secret (`stale` names the newer ones). Exit 0 means every secret
    is stored and complete, or pending; 1 that something is missing,
-   incomplete or damaged. `--json` prints the same as one `piceli.secrets-status.v1`
+   incomplete, damaged or waits for its public key to be copied. `--json` prints the same as one `piceli.secrets-status.v1`
    object (`secrets`, each with `state`, `created_by`, `next`, `purpose`,
    `where`, `build_host`, `detail`; `counts`, `complete`, `backup`,
    `warnings`).
@@ -597,9 +612,17 @@ value.
    user data, the pairs `infra apply` makes); 1 that something still needs
    you.
 
-3. **Copy the public keys** into the declaration and `.sops.yaml`, and run
-   `piceli secrets status web_1.py` again: the signing key is `damaged`
-   until `NixCache(public_key=)` names it.
+3. **Copy the public keys** into the declaration and `.sops.yaml`: replace
+   `key_name="example-cache-1"` with the printed key
+   (`NixCache("example-cache-1:SRm8gJ5/...", bucket=nix_bucket)`). Until
+   then `piceli secrets status web_1.py` shows the signing key `copy`:
+
+   ```console
+   example-cache-1  nix-signing-key  copy     piceli       piceli secrets nix-cache example-cache-1
+   ```
+
+   and `present` once the declaration names it. A declaration that names
+   another key shows it `damaged`.
 
 4. **Right before the first apply**, store the user data (`piceli secrets
    user-data web-1-boot --prompt`), then plan and apply: `infra apply`

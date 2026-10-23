@@ -6038,8 +6038,16 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "dev-nix-cache-invalid",
         "Nix cache declaration refused",
-        "`NixCache` needs a public key `NAME:base64`, one of `bucket=` or `url=` (`s3://`, `file://`, or a read-only `https://`), an S3 endpoint and `credentials=` for an S3 cache; or `--publish` did not name a `NixCache`, or names a read-only cache.",
+        "`NixCache` needs a public key `NAME:base64` (or `key_name=` until it exists), one of `bucket=` or `url=` (`s3://`, `file://`, or a read-only `https://`), an S3 endpoint and `credentials=` for an S3 cache; or `--publish` did not name a `NixCache`, or names a read-only cache.",
         "Fix the declaration; publish to the cache's `s3://` or `file://` URL.",
+        False,
+        "dev",
+    ),
+    _E(
+        "dev-nix-cache-key-unset",
+        "Nix cache public key not declared yet",
+        "The `NixCache` names its key with `key_name=` alone (the key does not exist yet), and publishing, `dev nix gc`, a host's module and a `NixRelease` need the public key hosts trust.",
+        "Run `piceli secrets setup MODULE` (or `piceli secrets nix-cache NAME --generate`) and put the public key it prints into `NixCache(public_key=)`.",
         False,
         "dev",
     ),

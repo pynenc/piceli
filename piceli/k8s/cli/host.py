@@ -49,15 +49,18 @@ InfraOption = Annotated[
 def load_host(ref: str) -> Any:
     """The ``NixHost`` that ``ref`` (``MODULE:ATTR``) names."""
     from piceli.app.render import load_target
-    from piceli.cli_contract import describe_user_error
+    from piceli.cli_contract import describe_user_error, error_code
     from piceli.hosts.model import HostError, NixHost
 
     try:
         value = load_target(ref, Path.cwd())
     except HostError as error:
         reject(error.code, str(error))
-    except Exception as error:
-        reject("host-not-found", f"loading {ref} failed: {describe_user_error(error)}")
+    except Exception as error:  # a declaration refused: its own code
+        reject(
+            error_code(error, "host-not-found"),
+            f"loading {ref} failed: {describe_user_error(error)}",
+        )
     if not isinstance(value, NixHost):
         reject("host-not-found", f"{ref} is not a piceli.infra.NixHost")
     return value
@@ -73,16 +76,24 @@ def _is_ref(text: str) -> bool:
 
 
 def load_module_of(ref: str) -> Any:
-    """The module that ``ref`` (``MODULE`` or ``MODULE:ATTR``) names."""
-    from piceli.app.render import load_module
-    from piceli.cli_contract import describe_user_error
+    """The module that ``ref`` (``MODULE`` or ``MODULE:ATTR``) names.
+
+    A module that is not found refuses ``infra-not-found``; one that raises
+    while importing (a declaration refused) refuses with the error's own
+    registered code (``dev-nix-cache-invalid``, ``infra-invalid``...), else
+    ``infra-load-failed``."""
+    from piceli.app.render import RenderError, load_module
+    from piceli.cli_contract import describe_user_error, error_code
 
     module = ref.rpartition(":")[0] if _is_ref(ref) else ref
     try:
         return load_module(module, Path.cwd())
-    except Exception as error:
+    except RenderError as error:
+        reject("infra-not-found", f"loading {module} failed: {error}")
+    except Exception as error:  # the module raised while importing
         reject(
-            "infra-not-found", f"loading {module} failed: {describe_user_error(error)}"
+            error_code(error, "infra-load-failed"),
+            f"importing {module} failed: {describe_user_error(error)}",
         )
 
 
@@ -188,10 +199,14 @@ def module(
     """Render the NixOS module that installs the host agent (commit it, import it)."""
     import hashlib
 
+    from piceli.dev.model import DevError
     from piceli.hosts.module import render_module
 
     host = load_host(ref)
-    text = render_module(host, ref)
+    try:
+        text = render_module(host, ref)
+    except DevError as error:  # the cache's public key is not declared yet
+        reject(error.code, str(error))
     if output is None:
         typer.echo(text, nl=False)
         return

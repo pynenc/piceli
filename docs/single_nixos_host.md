@@ -78,7 +78,10 @@ web = Server(
 # (builds, gc). The host reads it with separate keys, in sops-nix.
 nix_bucket = Bucket("example-nix-cache", provider=cloud, protect=True)
 cache = NixCache(
-    "example-cache-1:jXbGkEMPpvXtlVqGBrqfsnU8Jyn1cZB9u0QhGhvsKP0=",
+    # The key does not exist yet: name it. Step 1's `piceli secrets setup`
+    # generates it and prints its public key; then replace this line with
+    # it: NixCache("example-cache-1:<base64>", bucket=..., ...).
+    key_name="example-cache-1",
     bucket=nix_bucket,
     write_credentials="nix-cache-write",
 )
@@ -123,9 +126,12 @@ builds = DevBuilds(
 The flake has a `nixosConfigurations.web-1` (nginx, your service, a
 `/healthz`) and two outputs of it: `config.system.build.toplevel`, the
 system the host switches to, and `config.system.build.openstackImage`, the
-disk image it first boots. Replace the public key, the SSH key, the tailnet
-name and the builder image's digest with yours; the commands below say
-where each comes from.
+disk image it first boots. Replace the SSH key, the tailnet name and the
+builder image's digest with yours; the commands below say where each comes
+from. The cache names its key with `key_name=` until step 1 creates it:
+`secrets status` and `setup` and `infra plan` work meanwhile, while
+publishing, `dev nix gc` and `host module` refuse
+(`dev-nix-cache-key-unset`) until the public key is in the declaration.
 
 The system joins the tailnet on its first boot with the key in its user
 data. NixOS's OpenStack image fetches the user data to
@@ -170,8 +176,10 @@ after installing Tailscale.
    access turned on for `example.org`; each part is asked for, checked and
    stored on its own (piped: one per line).
    The S3 keys are EC2 credentials (`openstack ec2 credentials create`).
-   Put the printed cache public key in `NixCache(...)` and the `age1...`
-   key in your `.sops.yaml`. The host's own secrets do not go into Piceli:
+   Put the printed cache public key in the declaration, in place of
+   `key_name="example-cache-1"` (`NixCache("example-cache-1:<base64>",
+   bucket=nix_bucket, ...)`: `secrets status` shows it `copy` until
+   then), and the `age1...` key in your `.sops.yaml`. The host's own secrets do not go into Piceli:
    step 3 puts them in sops-nix.
 
    The user data is a Tailscale auth key you mint just before the first

@@ -487,7 +487,7 @@ def agent_config(host: NixHost) -> dict[str, Any]:
         "follow": host.follow.describe(),
         "cache": {
             "store_url": host.cache.store_url,
-            "public_key": host.cache.public_key,
+            "public_key": host.cache.trusted_key(),
             "objects": _objects(host.cache),
         },
         "read_credentials_file": host.read_credentials_file,

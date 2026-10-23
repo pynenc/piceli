@@ -5988,6 +5988,7 @@
     "describe",
     "endpoint",
     "key_name",
+    "key_set",
     "manifest_url",
     "public_key",
     "read_credentials",
@@ -5996,12 +5997,14 @@
     "signing_credential",
     "signing_key",
     "store_url",
+    "trusted_key",
     "url",
     "write_credentials"
    ],
    "init": [
     "bucket",
     "endpoint",
+    "key_name",
     "public_key",
     "region",
     "signing_key",
@@ -6016,7 +6019,8 @@
     "manifest_url": [
      "commit",
      "name"
-    ]
+    ],
+    "trusted_key": []
    }
   },
   "NixHost": {
@@ -13394,6 +13398,7 @@
    "dev-host-unknown",
    "dev-isolation-not-enforced",
    "dev-nix-cache-invalid",
+   "dev-nix-cache-key-unset",
    "dev-nix-crypto-unavailable",
    "dev-nix-gc-failed",
    "dev-nix-host-unsupported",

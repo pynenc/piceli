@@ -211,6 +211,21 @@ environment and host in one view.
   for right before `infra apply` by default), the S3 pairs (left to `infra
   apply`) and a backup. It never replaces a stored key without a typed
   confirmation; `--json` prints one object per step. Never prints a value.
+- **A cache declared before its key exists: `NixCache(key_name=)`.**
+  `NixCache(key_name="cache-1", bucket=...)` names the signing key without
+  its public key (`NixCache("cache-1:base64...", ...)` still works), so
+  `piceli secrets status` and `setup` load the module that the key does not
+  exist for yet, and `infra plan` of the bucket works. `status` shows the
+  key `missing`, then, once generated, `copy` with "put `cache-1:...` into
+  NixCache(public_key=)" (blocking: exit 1); `setup` generates it and
+  prints the public key to copy. Publishing (`dev nix build --publish`, a
+  `NixRelease` in a composition), `dev nix gc`, `host module` and the
+  agent's configuration refuse with `dev-nix-cache-key-unset`, naming
+  `piceli secrets setup MODULE`. A module whose declaration raises while
+  loading is now reported under the declaration's own code (for example
+  `dev-nix-cache-invalid`), else `infra-load-failed`, not `infra-not-found`
+  with a hint about an `Infrastructure` attribute; `host` commands do the
+  same.
 - **`needed_secrets()`** also takes `NixRelease` (its cache's signing and
   write keys are needed on its build host too) and `DevBuilds`, and each
   `NeededSecret` carries `provider`, `where` and `build_host` (the

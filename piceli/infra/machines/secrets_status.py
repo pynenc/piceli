@@ -10,7 +10,9 @@ need (:func:`~piceli.infra.machines.keys.needed_secrets`), each with:
 - its state: ``present``, ``missing``, ``incomplete`` (a credential that
   lacks a part: :func:`~piceli.infra.machines.credential_parts.credential_report`),
   ``damaged`` (unreadable, readable by others, another kind, or a Nix
-  signing key whose public key is not the declared one), or ``not-needed``
+  signing key whose public key is not the declared one), ``copy`` (a Nix
+  signing key stored for a cache declared with ``key_name=`` alone: its
+  public key goes into ``NixCache(public_key=)``), or ``not-needed``
   (the user data of a server that exists: read only to create it again);
 - who creates it: ``infra-apply`` (``piceli infra apply``), ``piceli``
   (``--generate``) or ``owner`` (``--prompt``: only the owner has it);
@@ -49,7 +51,9 @@ __all__ = [
 STATUS_SCHEMA = "piceli.secrets-status.v1"
 #: Kinds ``piceli secrets ... --generate`` creates: no one has to type them.
 GENERATED = frozenset({"state-key", "nix-signing-key", "age-identity"})
-STATES = ("present", "pending", "missing", "incomplete", "damaged", "not-needed")
+STATES = (
+    "present", "pending", "missing", "incomplete", "damaged", "copy", "not-needed",
+)  # fmt: skip
 #: The order ``setup`` walks them in: what the owner types, what Piceli
 #: generates, the user data (right before apply), the S3 pairs.
 GROUPS = ("provider", "profile", "generated", "user-data", "s3")
@@ -87,7 +91,7 @@ class Item:
 
     @property
     def blocking(self) -> bool:
-        return self.state in ("missing", "incomplete", "damaged")
+        return self.state in ("missing", "incomplete", "damaged", "copy")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -279,6 +283,11 @@ def _profile_state(name: str) -> tuple[str, str | None]:
     return "present", None
 
 
+def copy_detail(public: str) -> str:
+    """What a ``copy`` state says: the public key goes into the declaration."""
+    return f"put {public} into NixCache(public_key=)"
+
+
 def _value_state(
     secret: NeededSecret, body: Mapping[str, Any], index: _Index
 ) -> tuple[str, str | None]:
@@ -296,9 +305,13 @@ def _value_state(
             return "damaged", "not a Nix secret key"
         finally:
             del value
-        declared = [c.public_key for c in index.caches.get(secret.name, ())]
+        caches = index.caches.get(secret.name, ())
+        declared = [c.public_key for c in caches if c.public_key is not None]
         if declared and public not in declared:
             return "damaged", MISMATCH
+        if any(c.public_key is None for c in caches):
+            # Declared with key_name= alone: the declaration waits for it.
+            return "copy", copy_detail(public)
     elif secret.kind == "age-identity":
         from piceli.hosts.age import AgeError, check_identity
 
@@ -404,6 +417,8 @@ def _next(
             f"piceli secrets delete {secret.name} --kind s3 --yes",
             f"{detail}; then {plan} stores it again from the state",
         )
+    if state == "copy":
+        return f"piceli secrets nix-cache {secret.name}", detail
     command = _setup(secret)
     if detail == MISMATCH:
         # The key is fine; the declaration names another one.
