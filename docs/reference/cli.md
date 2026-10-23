@@ -166,6 +166,8 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli targets`](#cli-targets) | Every environment and NixHost: commit or tag, pinned product commit, checks, state. | reads | no |
 | [`piceli train`](#cli-train) | Merge branches onto the base one tested merge at a time; eject failures. | none | yes |
 | [`piceli train-prune`](#cli-train-prune) | Bound what a train keeps: worktrees, cargo targets, the content store, runs. | none | no |
+| [`piceli train-wait`](#cli-train-wait) | Wait until a train run ends; exit with its verdict. | none | no |
+| [`piceli trains`](#cli-trains) | The trains: the run in progress, recent runs, step trends, flaky tests, deployed by which run. | reads | no |
 | [`piceli ui backup`](#cli-ui-backup) | Back up an offline UI control store and its release journal. | none | no |
 | [`piceli ui cluster-observe`](#cli-ui-cluster-observe) | Serve OIDC-scoped cluster observation and configured delivery. | writes | yes |
 | [`piceli ui cluster-serve`](#cli-ui-cluster-serve) | Serve OIDC-scoped cluster observation and configured delivery. | writes | yes |
@@ -3893,6 +3895,59 @@ Bound what a train keeps: worktrees, cargo targets, the content store, runs.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** 0.26.0. Never removes what a running trial holds, the newest runs (keep_runs) or flaky.jsonl. --dry-run removes nothing. Every train run prunes the same way at its end. --json prints one piceli.train-prune.v1 object (removed: path, kind, bytes, why; sizes and limits).
+
+(cli-train-wait)=
+### `piceli train-wait`
+
+Wait until a train run ends; exit with its verdict.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `RUN` | text | required |  |
+| `--timeout` | float | `0.0` | Seconds to wait (0: no limit) |
+| `--interval` | float | `2.0` | Seconds between checks |
+| `--state-dir` | path |  | Train state root (default $XDG_STATE_HOME/piceli/train, else ~/.local/state/piceli/train) |
+| `--json` | boolean | `False` | Print the run's piceli.train.summary.v1 on stdout |
+
+**Contract**
+
+- **Reads:** $XDG_STATE_HOME/piceli/train/<name>/runs/<run>/run.json and the train's lock (every --interval)
+- **Writes:** nothing (read-only)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. Read-only; safe to retry. RUN is a run id or a train's name (its running run, else its newest). --json prints the run's piceli.train.summary.v1. Exit 0: the run ended ok; 1: a branch was ejected, the promotion or push failed, the run was killed (train-interrupted) or --timeout ran out (train-wait-timeout); 2: no such run (train-run-not-found).
+
+(cli-trains)=
+### `piceli trains`
+
+The trains: the run in progress, recent runs, step trends, flaky tests, deployed by which run.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text |  |  |
+| `--runs` | integer | `10` | Recent runs to show |
+| `--trend` | integer | `10` | Executions per step a trend's median uses |
+| `--follow` | boolean | `False` | Stream the running step's log until the run ends (needs NAME or a single train) |
+| `--composition` | text |  | Also show what each environment and NixHost runs and the run that produced it (as piceli targets reads them) |
+| `--infra` | text |  | MODULE declaring NixHosts (as piceli targets) |
+| `--timeout` | float | `20.0` | Seconds to wait for each host |
+| `--interval` | float | `1.0` | Seconds between --follow polls |
+| `--state-dir` | path |  | Train state root (default $XDG_STATE_HOME/piceli/train, else ~/.local/state/piceli/train) |
+| `--json` | boolean | `False` | Print one piceli.trains.v1 object on stdout |
+
+**Contract**
+
+- **Reads:** $XDG_STATE_HOME/piceli/train/<name> (run records, events.jsonl, step logs, flaky.jsonl, the lock's owner), --composition/--infra: what piceli targets reads (the controller, hosts over ssh)
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. Read-only; safe to retry; never takes a train's lock. --json prints one piceli.trains.v1 object. --follow streams the running step's log until the run ends. A record still running with no live process holding the lock shows as interrupted. Reads a cluster only with --composition/--infra. Exit 2: an unknown train name (train-unknown).
 
 (cli-ui-backup)=
 ### `piceli ui backup`

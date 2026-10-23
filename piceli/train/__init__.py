@@ -45,6 +45,7 @@ from piceli.train.model import (
     Train,
     TrainError,
 )
+from piceli.train.notify import Notify
 
 __all__ = [
     "DEFAULT_ROOTS",
@@ -52,6 +53,7 @@ __all__ = [
     "CargoTests",
     "CommandStep",
     "Impact",
+    "Notify",
     "PublishStep",
     "Retention",
     "Step",

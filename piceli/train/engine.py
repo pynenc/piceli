@@ -35,7 +35,7 @@ import json
 import re
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -54,7 +54,8 @@ from piceli.train.runner import (
 )
 from piceli.train.spec import LoadedSpec, load
 from piceli.train.state import RUN_SCHEMA, TrainState, new_run_id
-from piceli.train.steps import StepContext, StepResult, run_step
+from piceli.train.steps import StepContext, StepResult, log_path, run_step
+from piceli.train.summary import summarize
 
 
 @dataclass
@@ -158,6 +159,14 @@ class TrainRun:
         steps then come from ``spec``).
     :param runner: Where commands run (default :class:`LocalRunner`).
     :param events: Receives one dict per event (:mod:`piceli.train.runner`).
+        Every event is also appended to ``runs/<id>/events.jsonl``.
+    :param observe: Attach the train's own observers: its telemetry
+        (:mod:`piceli.train.telemetry`) and, when the run ends, its
+        notifications (:mod:`piceli.train.notify`).
+    :param warn: Prints an observer's warning line (default: nowhere).
+
+    An observer (an event sink, the telemetry, a notifier) that fails never
+    changes the run.
     """
 
     def __init__(
@@ -175,6 +184,8 @@ class TrainRun:
         environment: Mapping[str, str] | None = None,
         store: Store | None = None,
         images: Any = None,
+        observe: bool = True,
+        warn: Callable[[str], None] = lambda _message: None,
     ) -> None:
         if push and not promote:
             raise TrainError("train-push-needs-promote", "--push needs --promote")
@@ -221,6 +232,10 @@ class TrainRun:
         self.last: dict[str, Any] | None = None
         self.promoted_from: str | None = None
         self.pruned: dict[str, Any] | None = None
+        self.observe = observe
+        self.warn = warn
+        self.observers: list[EventSink] = []
+        self.notified: list[dict[str, Any]] = []
 
     # ----------------------------------------------------------- the run
 
@@ -259,43 +274,72 @@ class TrainRun:
     def run(self) -> dict[str, Any]:
         """Run the train; returns the result (also written as the run record)."""
         self.prepare()
-        with self.state.lock():
+        with self.state.lock(self.run_id):
             self.state.run_dir(self.run_id)
-            self.emit(
-                "run-started",
-                run=self.run_id,
-                train=self.train.name,
-                base=self.start,
-                branches=self.branches,
-            )
-            pending = []
-            for candidate in self.candidates:
-                if self.git.is_ancestor(candidate.tip, self.head):
-                    candidate.verdict = "included"
-                    self.emit("branch-included", branch=candidate.branch)
-                else:
-                    pending.append(candidate)
-            self.head = self._resolve(self.head, pending)
-            if self.head != self.start:
-                self.git.set_ref(self.last_ref, self.head)
-                self.last = {"ref": self.last_ref, "head": self.head}
-            if self.promote_requested:
-                self.promotion = self._promote()
-                if self.push_requested and self.promotion.get("state") in {
-                    "promoted",
-                    "publish-failed",
-                }:
-                    self.pushed = self._push(self.promotion["tag"])
-            self.finished = time.time()
-            at = now_iso(self.finished)
-            self.flakes = self.state.record_flakes(
-                self._observed_flakes(), self.run_id, at
-            )
-            result = self._finish()
-            self.emit(
-                "run-finished", state=result["state"], duration=result["duration"]
-            )
-            return result
+            telemetry = None
+            if self.observe:
+                from piceli.train.telemetry import telemetry_for
+
+                telemetry = telemetry_for(self.train.telemetry, self.warn)
+                if telemetry is not None:
+                    self.observers.append(telemetry)
+            try:
+                return self._run()
+            finally:
+                if telemetry is not None:
+                    telemetry.close()
+
+    def _run(self) -> dict[str, Any]:
+        self.emit(
+            "run-started",
+            run=self.run_id,
+            train=self.train.name,
+            base=self.start,
+            branches=self.branches,
+        )
+        pending = []
+        for candidate in self.candidates:
+            if self.git.is_ancestor(candidate.tip, self.head):
+                candidate.verdict = "included"
+                self.emit("branch-included", branch=candidate.branch)
+            else:
+                pending.append(candidate)
+        self.head = self._resolve(self.head, pending)
+        if self.head != self.start:
+            self.git.set_ref(self.last_ref, self.head)
+            self.last = {"ref": self.last_ref, "head": self.head}
+        if self.promote_requested:
+            self.promotion = self._promote()
+            if self.push_requested and self.promotion.get("state") in {
+                "promoted",
+                "publish-failed",
+            }:
+                self.pushed = self._push(self.promotion["tag"])
+        self.finished = time.time()
+        at = now_iso(self.finished)
+        self.flakes = self.state.record_flakes(self._observed_flakes(), self.run_id, at)
+        return self._conclude(self._finish())
+
+    def _conclude(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Emit ``run-finished`` with the summary and send the notifications."""
+        summary = summarize(result)
+        self.emit(
+            "run-finished",
+            state=result["state"],
+            ok=result["ok"],
+            duration=result["duration"],
+            summary=summary,
+        )
+        if self.observe and self.train.notify:
+            from piceli.train.notify import send_all
+
+            self.notified = send_all(self.train.notify, summary, self.warn)
+            for outcome in self.notified:
+                if outcome["state"] == "failed":
+                    self.emit("notify-failed", **outcome)
+            result = self.result()
+            self.state.write_record(self.run_id, result)
+        return result
 
     def _finish(self) -> dict[str, Any]:
         """Write the record, prune what the train keeps (never failing the
@@ -474,6 +518,7 @@ class TrainRun:
         self.emit(
             "trial-finished",
             trial=trial.id,
+            branches=trial.branches,
             verdict=trial.verdict,
             step=trial.failed_step,
             duration=round(trial.duration, 3),
@@ -548,18 +593,10 @@ class TrainRun:
             origin={"train": self.train.name, "run": self.run_id, "trial": trial.id},
         )
         for step in train.test_steps:
-            self.emit("step-started", trial=trial.id, step=step.name, kind=step.kind)
+            self._step_started(trial.id, step.name, step.kind, ctx)
             result = run_step(step, ctx)
             trial.steps.append(result)
-            self.emit(
-                "step-finished",
-                trial=trial.id,
-                step=step.name,
-                verdict=result.verdict,
-                duration=round(result.duration, 3),
-                host=result.host,
-                log=result.log,
-            )
+            self.emit("step-finished", **self._step_fields(trial.id, result, ctx))
             if not result.passed:
                 trial.verdict, trial.failed_step = "failed", step.name
                 trial.reason = (
@@ -569,6 +606,47 @@ class TrainRun:
                 )
                 return
         trial.verdict = "passed"
+
+    def _step_started(
+        self, trial: int | None, step: str, kind: str, ctx: StepContext
+    ) -> None:
+        self.emit(
+            "step-started",
+            trial=trial,
+            step=step,
+            kind=kind,
+            host=self.runner.host,
+            branches=list(ctx.branches),
+            log=str(log_path(ctx, step)),
+        )
+
+    @staticmethod
+    def _step_fields(
+        trial: int | None, result: StepResult, ctx: StepContext
+    ) -> dict[str, Any]:
+        """A finished step's event fields: what status views, telemetry and
+        notifications read (no output beyond the failing tail)."""
+        fields: dict[str, Any] = {
+            "trial": trial,
+            "step": result.name,
+            "kind": result.kind,
+            "verdict": result.verdict,
+            "started": now_iso(result.started),
+            "duration": round(result.duration, 3),
+            "host": result.host,
+            "log": result.log,
+            "branches": list(ctx.branches),
+        }
+        if "selection" in result.detail:
+            fields["selection"] = result.detail["selection"]
+        if result.flaky:
+            fields["flaky"] = [
+                {"target": item["target"], "test": item["test"]}
+                for item in result.flaky
+            ]
+        if result.tail and not result.passed:
+            fields["tail"] = result.tail
+        return fields
 
     def _own_env(
         self, base: str, head: str, branches: Sequence[str], **extra: str
@@ -696,7 +774,7 @@ class TrainRun:
             if restored:
                 self.emit("outputs-restored", steps=restored)
             for step in train.publish_steps:
-                self.emit("step-started", trial=None, step=step.name, kind=step.kind)
+                self._step_started(None, step.name, step.kind, ctx)
                 if isinstance(step, ImagesStep):
                     from piceli.train.images import run_images_step
 
@@ -706,10 +784,7 @@ class TrainRun:
                 results.append(result)
                 self.emit(
                     "published" if result.passed else "publish-failed",
-                    step=step.name,
-                    verdict=result.verdict,
-                    duration=round(result.duration, 3),
-                    log=result.log,
+                    **self._step_fields(None, result, ctx),
                 )
                 if not result.passed:
                     break
@@ -777,18 +852,26 @@ class TrainRun:
         ]
 
     def emit(self, event: str, **fields: Any) -> None:
-        with self._lock:
-            self._events(
-                {"event": event, "at": now_iso(), "run": self.run_id, **fields}
-            )
+        """Record one event (``events.jsonl``) and hand it to every sink; a
+        sink that raises never stops the run."""
+        self.emit_raw({"event": event, "at": now_iso(), "run": self.run_id, **fields})
 
     @property
     def events(self) -> EventSink:
         return self.emit_raw
 
     def emit_raw(self, event: Mapping[str, Any]) -> None:
+        """Record an event a step made (already shaped) as :meth:`emit` does."""
         with self._lock:
-            self._events(event)
+            try:
+                self.state.append_event(self.run_id, event)
+            except OSError:
+                pass
+            for sink in (self._events, *self.observers):
+                try:
+                    sink(event)
+                except Exception:  # an observer never changes the run
+                    pass
 
     def ejected(self) -> list[Candidate]:
         return [c for c in self.candidates if c.verdict == "ejected"]
@@ -851,6 +934,7 @@ class TrainRun:
             **({"last": self.last} if self.last else {}),
             **({"promoted_from": self.promoted_from} if self.promoted_from else {}),
             **({"prune": self.pruned} if self.pruned else {}),
+            **({"notify": self.notified} if self.notified else {}),
         }
 
     # ------------------------------------------------- promote a past run
@@ -874,7 +958,7 @@ class TrainRun:
                 f"({head[:12]}) is no fast-forward of {self.train.base} "
                 f"({(base_now or '?')[:12]}); run the train again",
             )
-        with self.state.lock():
+        with self.state.lock(self.run_id):
             self.state.run_dir(self.run_id)
             self.promoted_from = str(record.get("run"))
             self.start, self.head = base_now, head
@@ -882,19 +966,36 @@ class TrainRun:
                 candidate = Candidate(str(item["branch"]), str(item.get("tip") or ""))
                 candidate.verdict = str(item.get("verdict") or "pending")
                 self.candidates.append(candidate)
-            self.emit("run-started", run=self.run_id, promote_run=self.promoted_from)
-            self.promotion = self._promote()
-            if self.push_requested and self.promotion.get("state") in {
-                "promoted",
-                "publish-failed",
-            }:
-                self.pushed = self._push(self.promotion["tag"])
-            self.finished = time.time()
-            result = self._finish()
-            self.emit(
-                "run-finished", state=result["state"], duration=result["duration"]
-            )
-            return result
+            telemetry = None
+            if self.observe:
+                from piceli.train.telemetry import telemetry_for
+
+                telemetry = telemetry_for(self.train.telemetry, self.warn)
+                if telemetry is not None:
+                    self.observers.append(telemetry)
+            try:
+                return self._promote_run()
+            finally:
+                if telemetry is not None:
+                    telemetry.close()
+
+    def _promote_run(self) -> dict[str, Any]:
+        self.emit(
+            "run-started",
+            run=self.run_id,
+            train=self.train.name,
+            base=self.start,
+            branches=[c.branch for c in self.candidates],
+            promote_run=self.promoted_from,
+        )
+        self.promotion = self._promote()
+        if self.push_requested and self.promotion.get("state") in {
+            "promoted",
+            "publish-failed",
+        }:
+            self.pushed = self._push(self.promotion["tag"])
+        self.finished = time.time()
+        return self._conclude(self._finish())
 
     def _record_of(self, run: str) -> dict[str, Any]:
         if run == "last":

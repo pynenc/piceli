@@ -110,6 +110,15 @@ noted.
   composition's home cluster, with its `piceli login` profile) and each
   host over SSH in parallel. Exit 1 when a target failed, rolled back or is unreachable.
   See {doc}`nix_hosts`.
+- `piceli trains [NAME] [--follow] [--composition MODULE] --json` and
+  `piceli train-wait RUN [--timeout S] --json` (0.26.0): read a merge
+  train's state directory (never take its lock). `trains` shows the run in
+  progress (branches, step, host, elapsed, log tail), recent runs, step
+  trends, flaky tests and, with `--composition`, which run produced what
+  each target runs (`piceli.trains.v1`). `train-wait` blocks until a run
+  (an id, or a train's name) ends: exit 0 ok, 1 ejected, failed,
+  `train-interrupted` or `train-wait-timeout`; it prints the run's
+  `piceli.train.summary.v1`. Use it instead of polling. See {doc}`train`.
 - `piceli profiles [--json]`: lists the stored credential profiles (names,
   contexts, kubeconfig paths; never secrets). `piceli login NAME --kubeconfig
   F --context C` and `piceli logout NAME` only write or remove the local

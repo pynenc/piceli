@@ -273,6 +273,7 @@ def train(
         promote=promote or promote_run is not None,
         push=push,
         events=fan_out(_human),
+        warn=say,
     )
     if promote_run is not None:
         try:

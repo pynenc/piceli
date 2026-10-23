@@ -55,7 +55,8 @@ train = Train(
 `Train(name, *, steps, repo=".", base="main", tested="tested",
 tag="tested/{date}.{n}", remote="origin", builds=None, hosts=("local",),
 local_slots=1, fallback="local", target_dir="auto", sccache="auto",
-parallel="auto", cache=None)`:
+parallel="auto", cache=None, retention=Retention(), telemetry=None,
+notify=())`:
 
 - `name` is a DNS label. It names the run history and the merge commits.
 - `repo` is the Git repository, relative to the module's directory.
@@ -72,9 +73,13 @@ parallel="auto", cache=None)`:
 - `cache`: where slot locks, shared target directories, trial worktrees
   and the content store live (default `$XDG_CACHE_HOME/piceli/train`,
   else `~/.cache/piceli/train`).
+- `telemetry` exports each run as an OpenTelemetry trace
+  ({ref}`train-telemetry`); `notify` sends a notification when a run ends
+  ({ref}`train-notify`). Both come from the spec you run, never from a
+  merged tree.
 
-The train's identity and where it runs come from the spec you run; the
-steps come from the commit under test.
+The train's identity, where it runs and how it is observed come from the
+spec you run; the steps come from the commit under test.
 
 The steps:
 
@@ -282,11 +287,14 @@ Each train keeps, under its state directory
   run that was killed leaves its last state, `"state": "running"`);
 - `runs/<run>/<trial>-<step>.log`: every step's output (a step on a build
   host: the dev run's output and progress);
+- `runs/<run>/events.jsonl`: append-only, every event of the run as it
+  happens (what `piceli trains` reads for the step in progress);
 - `flaky.jsonl`: append-only, one line per flaky test per run that saw it,
   with its running totals (`count`, `first_seen`, `last_seen`,
   `last_tail`); the last line of a test is its current state;
 - `lock`: held while a run is active; a second run is refused with
-  `train-busy`.
+  `train-busy`. While held, it names the run and the process holding it,
+  so status views read it without taking it.
 
 ## Where steps run
 
@@ -538,14 +546,224 @@ It prints the sizes per kind with their limits and each path that goes
 (`--json`: one `piceli.train-prune.v1` object), and exits `0` (`2` when the
 name is neither a train name nor a spec).
 
-## Hooks for later
+## Seeing a train
+
+```sh
+piceli trains                      # every train on this machine
+piceli trains shop --follow        # stream the running step's log until the run ends
+piceli trains shop --composition shop/composition.py --json
+piceli train-wait shop --json      # block until the run ends; exit with its verdict
+```
+
+`piceli trains [NAME]` reads the train's state directory only (it never
+takes the lock, never loads the spec) and shows:
+
+- **the run in progress**: its branches and their verdicts so far, the
+  trial, the steps done and the running step with its start, elapsed time,
+  host and the last lines of its log (`--follow` streams the log);
+- **recent runs** (`--runs N`, default 10): state, duration, tag, push and
+  each branch's verdict (with the failing step), and the seconds each step
+  took, summed over the run's trials. A record still `running` while no
+  live process holds the lock was killed: `interrupted`;
+- **step trends** (`--trend N`, default 10): per step, the median of its
+  last N executions and the last one against it: `slower` above 125 %,
+  `faster` below 80 %, else `steady`;
+- **flaky tests**: count, first and last seen, the branches of the last
+  sighting and the output of the last first failure;
+- **deployed by train**, with `--composition MODULE` and/or `--infra
+  MODULE` (read as `piceli targets` reads them): each environment and
+  NixHost with the run that produced what it runs, matched by its tag
+  (`tag`), its commit being a promoted head (`commit`), or the product
+  commit it pins being one (`pinned`).
+
+```text
+train shop: running 20261023T101500Z-3f2a1c for 2.1 min (trials)
+  branches: feat-a=pending fix-c=pending
+  trial 1: feat-a fix-c
+    merge          passed   0.1 s on local
+    spec           passed   0.6 s on local
+    cargo-check    passed   52 s on local
+    cargo-test     running  41 s on local (started 10:16:02Z)
+      log ~/.local/state/piceli/train/shop/runs/20261023T101500Z-3f2a1c/01-cargo-test.log
+      | test api::search::case_031 ... ok
+  recent runs:
+    20261022T090000Z-a1b2c3 ejected      6.9 min tested/2026-10-22.1 pushed  feat-x joined, fix-y ejected (fitness)
+      cargo-check 54 s · cargo-test 2.0 min · fitness 3.2 s
+  step trends (median of the last runs, last against it):
+    cargo-test       median     81 s  last  2.0 min  slower (n=6)
+  flaky tests:
+      2x -p api --test http retries_once (last 2026-10-22T09:05:00Z, run 20261022T090000Z-a1b2c3)
+deployed:
+  environment main: 999999999999 deployed <- train shop run 20261022T090000Z-a1b2c3 (pinned)
+```
+
+`--json` prints one `piceli.trains.v1` object:
+
+```json
+{
+  "schema": "piceli.trains.v1",
+  "trains": [{
+    "train": "shop",
+    "state": "running",
+    "current": {
+      "run": "20261023T101500Z-3f2a1c", "started": "…", "elapsed": 125.0, "phase": "trials",
+      "branches": ["feat-a", "fix-c"], "verdicts": {"feat-a": "pending", "fix-c": "pending"},
+      "trial": {"id": 1, "branches": ["feat-a", "fix-c"], "base": "…", "started": "…"},
+      "step": {"trial": 1, "name": "cargo-test", "kind": "cargo-test", "host": "local",
+               "started": "…", "elapsed": 41.0, "log": "…/01-cargo-test.log", "tail": "…"},
+      "done": [{"trial": 1, "name": "cargo-check", "verdict": "passed", "duration": 52.4, "host": "local"}],
+      "pid": 4242
+    },
+    "runs": [{"run": "…", "state": "ejected", "ok": false, "started": "…", "duration": 412.7,
+              "branches": [{"branch": "fix-y", "verdict": "ejected", "step": "fitness", "reason": "train-step-failed"}],
+              "trials": 3, "steps": {"cargo-test": 120.4, "fitness": 3.2}, "tag": "tested/2026-10-22.1",
+              "promote": "promoted", "push": "pushed", "flaky": 1}],
+    "trends": [{"step": "cargo-test", "samples": 6, "median": 80.5, "last": 120.4, "last_run": "…", "ratio": 1.5, "trend": "slower"}],
+    "flaky": [{"key": "-p api --test http retries_once", "count": 2, "first_seen": "…", "last_seen": "…", "last_tail": "…"}]
+  }],
+  "deployed": [{"kind": "environment", "name": "main", "state": "deployed",
+                "revision": {"commit": "…", "tag": null}, "pinned": "…",
+                "train": {"train": "shop", "run": "…", "tag": "tested/2026-10-22.1", "head": "…", "joined": ["feat-x"], "pushed": true},
+                "matched": "pinned"}]
+}
+```
+
+`deployed` is `null` without `--composition`/`--infra`.
+
+`piceli train-wait RUN` takes a run id, or a train's name (its running
+run, else its newest), waits (`--timeout S`, `--interval S`) and prints the
+run's summary (below) with `--json`. Exit 0: the run ended ok; 1: a branch
+was ejected, the promotion or push failed, the run was killed
+(`train-interrupted`) or the timeout ran out (`train-wait-timeout`); 2: no
+such run (`train-run-not-found`). A session that started a train in the
+background uses it instead of polling.
+
+The UI shows the same document, live: `piceli ui serve --trains` (and
+`--train-composition MODULE` for the deployed-by-train join) adds a
+**Trains** page (see {doc}`ui`).
+
+```{image} _static/ui/trains.webp
+:alt: The Trains page: the running step with its live log, recent runs, step durations, flaky tests and the targets each run produced
+:width: 720px
+```
+
+(train-telemetry)=
+## OpenTelemetry
+
+```python
+from piceli.infra import Otlp
+
+train = Train("shop", steps=[...], telemetry=Otlp("http://localhost:4318", protocol="http/protobuf"))
+```
+
+Each run is one trace, sent over OTLP/HTTP (JSON) to `/v1/traces` and
+`/v1/logs` of the endpoint, so the product's own Logs & Traces shows a train
+like any other request:
+
+```text
+piceli.dev.train                     run: train, run id, branches; at the end state, ok, joined,
+│                                    ejected (branch=step), tag, promote, push, flaky, duration
+│  events: branch-joined, branch-ejected, branch-included, promoted, promote-rejected, pushed, push-failed
+├─ piceli.dev.train.trial            trial, branches, verdict, failing step, duration
+│  ├─ piceli.dev.train.step          step, kind, phase=test, host, verdict, duration, branches, selection
+│  │     events: piceli.dev.train.flaky (test, target)
+│  └─ …
+└─ piceli.dev.train.step             phase=publish (publish steps hang off the root)
+logs: piceli.dev.train.step          one per step, body = the last 20 lines of its output, on its span
+      piceli.dev.train.finished      the run's headline and summary attributes, on the root span
+```
+
+Attributes are named `piceli.train.*`. A failed step, trial or run has
+status `ERROR`. Spans are sent as they end, so a long run is visible while
+it runs.
+
+Without `telemetry=`, the standard variables apply, as for `piceli
+deploy`: `OTEL_EXPORTER_OTLP_ENDPOINT` (or the per-signal ones),
+`OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME`,
+`OTEL_RESOURCE_ATTRIBUTES`; `OTEL_SDK_DISABLED=true` turns it off. A
+train runs outside the cluster, so `Otlp(protocol="grpc")`,
+`headers_secret=` and `ca_secret=` are refused (`train-invalid`): put
+headers in `OTEL_EXPORTER_OTLP_HEADERS`. A composition's `Otlp` can be
+reused when it is an HTTP endpoint this machine reaches.
+
+A collector that is down never slows or fails a train: requests go
+through a bounded queue to a background thread, each with a 2 s timeout;
+a full queue drops, three failures in a row stop the exporter, and the end
+of the run waits at most the timeout for the queue to drain. The first
+failure prints one warning (`train-telemetry-failed`).
+
+Step output goes to your collector in the step log records: steps should
+not print secrets.
+
+(train-notify)=
+## Notifications
+
+```python
+from piceli.train import Notify
+
+train = Train(
+    "shop",
+    steps=[...],
+    notify=[
+        Notify.desktop(),
+        Notify.webhook(url_env="SHOP_TRAIN_HOOK", headers_env={"Authorization": "SHOP_HOOK_TOKEN"}),
+        Notify.command(["scripts/train_done.sh"], when="failure"),
+    ],
+)
+```
+
+When a run ends, its notifiers run one after the other, each within its
+`timeout` (default 10 s):
+
+| Notifier | Sends |
+| --- | --- |
+| `Notify.command(argv, when="always", timeout=10)` | runs `argv` with the summary JSON on stdin; exit 0 is success |
+| `Notify.webhook(url=None, *, url_env=None, headers_env=None, when="always", timeout=10)` | `POST`s the summary JSON; the URL is given or read from `url_env` (a webhook URL that is a secret stays out of the spec), each header from the variable `headers_env` names; a 2xx is success |
+| `Notify.desktop(when="always", timeout=10)` | a desktop notification with the headline: `osascript` on macOS, `notify-send` elsewhere; skipped when neither exists |
+
+`when="failure"` sends only for a run that is not ok. The summary
+(`piceli.train.summary.v1`) is also the `piceli.dev.train.finished`
+OpenTelemetry event and what `piceli train-wait --json` prints:
+
+```json
+{
+  "schema": "piceli.train.summary.v1",
+  "train": "shop",
+  "run": "20261023T101500Z-3f2a1c",
+  "state": "ejected",
+  "ok": false,
+  "joined": ["feat-a"],
+  "included": [],
+  "ejected": [{"branch": "fix-c", "step": "fitness", "reason": "train-step-failed"}],
+  "promoted": true,
+  "tag": "tested/2026-10-23.1",
+  "pushed": true,
+  "promote": "promoted",
+  "push": "pushed",
+  "head": "<commit>",
+  "duration": 412.7,
+  "flaky": [{"key": "-p api --test http retries_once", "count": 3}],
+  "record": "…/runs/<run>/run.json"
+}
+```
+
+It carries names, commits, step names and fixed reason codes, never step
+output. A failing notifier never changes the run's result: it prints one
+warning (`train-notify-failed`), appends a `notify-failed` event, and the
+run record's `notify` list says what each notifier did (`sent`,
+`skipped`, `not-wanted`, `failed`).
+
+## Hooks
 
 Commands run through a runner (`piceli.train.runner.Runner`: one command
 in, exit status, start, duration, host and output out; `LocalRunner` runs
 them here in a slot, `piceli.train.hosts.HostRunner` places them on the
 train's hosts), and the run reports each step and verdict to an event sink
-(`run-started`, `trial-started`, `step-started`, `step-finished`,
-`trial-finished`, `halves-parallel`, `trial-discarded`, `branch-joined`,
-`branch-ejected`, `outputs-restored`, `promoted`, `published`, `pushed`,
-`run-finished`). Status views, OpenTelemetry spans and notifications
-attach there.
+(`run-started`, `trial-started`, `step-started` (with host and log),
+`step-finished` (with kind, verdict, duration, the host it ran on, log,
+selection, flaky tests and a failing tail), `trial-finished`,
+`halves-parallel`, `trial-discarded`, `branch-joined`, `branch-ejected`,
+`branch-included`, `outputs-restored`, `promoted`, `promote-rejected`,
+`published`, `publish-failed`, `pushed`, `push-failed`, `pruned`,
+`run-finished` (with the summary), `notify-failed`). Every event is also
+appended to `events.jsonl`. A sink that raises never stops the run.

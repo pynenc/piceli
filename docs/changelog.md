@@ -38,6 +38,44 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   registry (`flaky.jsonl`: count, first and last seen, last failure tail).
   Steps run through a runner interface and report to an event sink, for
   build hosts and observability later.
+- **See a train: `piceli trains [NAME]`.** One view of the trains on this
+  machine (`piceli.trains.v1`, `--json`): the run in progress with its
+  branches, the steps done and the running step's start, elapsed time, host
+  and log tail (`--follow` streams the log until the run ends); recent runs
+  with their verdicts and seconds per step; per-step trends (median of the
+  last N executions, the last one against it: `slower`, `faster`,
+  `steady`); flaky tests with their counts and last failure; and, with
+  `--composition`/`--infra`, which run produced what each environment and
+  NixHost runs (its tag, its commit or the product commit it pins, matched
+  to a run's promoted tag or head). A killed run shows as `interrupted`.
+  Every event of a run is appended to `runs/<id>/events.jsonl`, and the
+  lock names the run and process holding it, so the view never takes it.
+- **`piceli train-wait RUN`.** Blocks until a run (its id, or a train's
+  name) ends and exits with its verdict, printing the run's summary
+  (`piceli.train.summary.v1`): `train-interrupted` for a killed run,
+  `train-wait-timeout` after `--timeout`, `train-run-not-found`.
+- **A train is a trace.** `Train(telemetry=Otlp(url,
+  protocol="http/protobuf"))`, or the standard `OTEL_EXPORTER_OTLP_*`
+  variables, exports each run over OTLP/HTTP: a root span
+  `piceli.dev.train`, a span per trial and per step
+  (`piceli.dev.train.trial`, `piceli.dev.train.step`: branches, step, kind,
+  host, verdict, duration, impact selection), span events for verdicts,
+  promotion, push and flaky tests, a log record with each step's output
+  tail and the event `piceli.dev.train.finished`. Spans go out as they end,
+  through a bounded queue with a 2 s timeout: a collector that is down
+  never slows or fails a run (one `train-telemetry-failed` warning).
+- **Notifications when a train ends.** `Train(notify=[Notify.command(argv),
+  Notify.webhook(url or url_env=, headers_env=), Notify.desktop()])`, each
+  `when="always"` or `"failure"`: the command gets the summary JSON on
+  stdin, the webhook a `POST` of it, the desktop a headline (`osascript`,
+  `notify-send`). The summary names the joined and ejected branches (with
+  step and reason), the promotion, tag and push, the duration and the flaky
+  tests, never step output. A failing notifier never changes the result: one
+  `train-notify-failed` warning, and the run record's `notify` list.
+- **The UI's Trains view.** `piceli ui serve --trains` (with
+  `--train-composition MODULE` for the deployed-by-train join) shows the
+  same document, live.
+- **Fix:** the UI's breadcrumb named the Machines page "Page not found".
 - New error codes in the `train` area: `train-not-found`,
   `train-load-failed`, `train-invalid`, `train-repo-invalid`,
   `train-branches-required`, `train-branch-unknown`,

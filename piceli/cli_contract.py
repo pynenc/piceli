@@ -1407,6 +1407,43 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "piceli.train-prune.v1 object (removed: path, kind, bytes, why; "
             "sizes and limits).",
         ),
+        "trains": _C(
+            "Show the trains: the run in progress (branches, step, start, elapsed, "
+            "host, log tail), recent runs with step durations, per-step trends, "
+            "flaky tests, and which run produced what each target runs.",
+            reads=(
+                "$XDG_STATE_HOME/piceli/train/<name> (run records, events.jsonl, "
+                "step logs, flaky.jsonl, the lock's owner)",
+                "--composition/--infra: what piceli targets reads (the controller, "
+                "hosts over ssh)",
+            ),
+            cluster="reads",
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.26.0. Read-only; safe to retry; never takes a train's lock. "
+            "--json prints one piceli.trains.v1 object. --follow streams the "
+            "running step's log until the run ends. A record still running "
+            "with no live process holding the lock shows as interrupted. Reads "
+            "a cluster only with --composition/--infra. Exit 2: an unknown "
+            "train name (train-unknown).",
+        ),
+        "train-wait": _C(
+            "Wait until a train run ends and exit with its verdict.",
+            reads=(
+                "$XDG_STATE_HOME/piceli/train/<name>/runs/<run>/run.json and the "
+                "train's lock (every --interval)",
+            ),
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.26.0. Read-only; safe to retry. RUN is a run id or a "
+            "train's name (its running run, else its newest). --json prints "
+            "the run's piceli.train.summary.v1. Exit 0: the run ended ok; 1: "
+            "a branch was ejected, the promotion or push failed, the run was "
+            "killed (train-interrupted) or --timeout ran out "
+            "(train-wait-timeout); 2: no such run (train-run-not-found).",
+        ),
         "host wait": _C(
             "Wait until a Nix host runs a commit or tag with its checks passed.",
             reads=(

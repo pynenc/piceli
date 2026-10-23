@@ -15,7 +15,11 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, field
-from typing import Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
+
+if TYPE_CHECKING:
+    from piceli.infra import Otlp
+    from piceli.train.notify import Notify
 
 #: Changed paths (globs, relative to the repository root) that make an
 #: :class:`Impact` selection test every package: the workspace manifest, the
@@ -599,11 +603,19 @@ class Train:
         ``~/.cache/piceli/train``).
     :param retention: How much of it, and of the run history, is kept
         (:class:`Retention`; pruned at the end of each run).
+    :param telemetry: Export each run as one OpenTelemetry trace (spans
+        ``piceli.dev.train``, ``.trial``, ``.step``) with logs, over OTLP/HTTP:
+        ``Otlp("http://localhost:4318", protocol="http/protobuf")``. Without
+        it, the standard ``OTEL_EXPORTER_OTLP_*`` variables apply, as for
+        ``piceli deploy``. A collector that is down never slows or fails a run.
+    :param notify: Notifications sent when a run ends
+        (:class:`~piceli.train.notify.Notify`): a command, a webhook, the desktop.
 
     The train's identity (``name``, ``repo``, ``base``, ``tested``, ``tag``,
-    ``remote``) and where it runs (``builds``, ``hosts``, ``local_slots``,
-    ``fallback``, ``target_dir``, ``sccache``, ``parallel``, ``cache``) come
-    from the spec you run; the steps come from the commit under test.
+    ``remote``), where it runs (``builds``, ``hosts``, ``local_slots``,
+    ``fallback``, ``target_dir``, ``sccache``, ``parallel``, ``cache``) and
+    how it is observed (``telemetry``, ``notify``) come from the spec you run;
+    the steps come from the commit under test.
     """
 
     name: str
@@ -623,8 +635,11 @@ class Train:
     parallel: str = "auto"
     cache: str | None = None
     retention: Retention = field(default_factory=Retention)
+    telemetry: Otlp | None = None
+    notify: Sequence[Notify] = ()
 
     def __post_init__(self) -> None:
+        self._check_observers()
         if not isinstance(self.name, str) or not _NAME.fullmatch(self.name):
             raise _invalid(f"train name {self.name!r} is not a DNS label")
         for label, value in (
@@ -708,6 +723,29 @@ class Train:
             names |= {host.name for host in self.builds.hosts}
         return names
 
+    def _check_observers(self) -> None:
+        from piceli.infra import Otlp
+        from piceli.train.notify import Notify
+
+        if self.telemetry is not None:
+            if not isinstance(self.telemetry, Otlp):
+                raise _invalid("telemetry must be Otlp(...) or None")
+            if self.telemetry.protocol != "http/protobuf":
+                raise _invalid(
+                    'a train exports over OTLP/HTTP: Otlp(..., protocol="http/protobuf")'
+                )
+            if self.telemetry.headers_secret or self.telemetry.ca_secret:
+                raise _invalid(
+                    "a train runs outside the cluster: Otlp headers_secret and "
+                    "ca_secret are cluster Secrets; set OTEL_EXPORTER_OTLP_HEADERS instead"
+                )
+        if isinstance(self.notify, Notify) or not isinstance(self.notify, Sequence):
+            raise _invalid("notify must be a list of Notify objects")
+        notify = tuple(self.notify)
+        if not all(isinstance(item, Notify) for item in notify):
+            raise _invalid("notify must be a list of Notify objects")
+        object.__setattr__(self, "notify", notify)
+
     @property
     def test_steps(self) -> tuple[Step, ...]:
         return tuple(step for step in self.steps if step.phase == "test")
@@ -730,6 +768,8 @@ class Train:
             "remote": self.remote,
             "steps": [step.to_dict() for step in self.steps],
             **self._run_fields(),
+            "telemetry": self.telemetry.to_dict() if self.telemetry else None,
+            "notify": [item.to_dict() for item in self.notify],
         }
 
     def _run_fields(self) -> dict[str, Any]:
@@ -758,6 +798,10 @@ class Train:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Train:
+        from piceli.infra import Otlp
+        from piceli.train.notify import notify_from_dict
+
+        telemetry = data.get("telemetry")
         return cls(
             data["name"],
             steps=[step_from_dict(item) for item in data["steps"]],
@@ -775,6 +819,8 @@ class Train:
             parallel=data.get("parallel", "auto"),
             cache=data.get("cache"),
             retention=Retention(**(data.get("retention") or {})),
+            telemetry=Otlp.from_dict(telemetry) if telemetry else None,
+            notify=[notify_from_dict(item) for item in data.get("notify") or ()],
         )
 
 

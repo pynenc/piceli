@@ -757,19 +757,25 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`train-git-failed`](#error-train-git-failed) | train | yes |
 | [`train-host-unavailable`](#error-train-host-unavailable) | train | yes |
 | [`train-images-failed`](#error-train-images-failed) | train | yes |
+| [`train-interrupted`](#error-train-interrupted) | train | no |
 | [`train-invalid`](#error-train-invalid) | train | no |
 | [`train-load-failed`](#error-train-load-failed) | train | no |
 | [`train-merge-conflict`](#error-train-merge-conflict) | train | no |
 | [`train-not-fast-forward`](#error-train-not-fast-forward) | train | no |
 | [`train-not-found`](#error-train-not-found) | train | no |
+| [`train-notify-failed`](#error-train-notify-failed) | train | yes |
 | [`train-publish-failed`](#error-train-publish-failed) | train | yes |
 | [`train-push-failed`](#error-train-push-failed) | train | yes |
 | [`train-push-needs-promote`](#error-train-push-needs-promote) | train | no |
 | [`train-repo-invalid`](#error-train-repo-invalid) | train | no |
+| [`train-run-not-found`](#error-train-run-not-found) | train | no |
 | [`train-run-unknown`](#error-train-run-unknown) | train | no |
 | [`train-spec-invalid`](#error-train-spec-invalid) | train | no |
 | [`train-step-failed`](#error-train-step-failed) | train | no |
 | [`train-step-timeout`](#error-train-step-timeout) | train | yes |
+| [`train-telemetry-failed`](#error-train-telemetry-failed) | train | yes |
+| [`train-unknown`](#error-train-unknown) | train | no |
+| [`train-wait-timeout`](#error-train-wait-timeout) | train | yes |
 | [`transport-error`](#error-transport-error) | kubernetes | yes |
 | [`ui-access-failed`](#error-ui-access-failed) | access | yes |
 | [`ui-access-port-conflict`](#error-ui-access-port-conflict) | access | no |
@@ -7165,6 +7171,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Read the images step's log; check the composition, the build host and the cluster's registry, then run `piceli train APP --promote-run last` again or let the controller build.
 - **Retry-safe:** yes
 
+(error-train-interrupted)=
+### `train-interrupted`
+
+**Train run stopped before it finished.** The run's record still says running but no process holds the train's lock: the run was killed.
+
+- **Fix:** Read its last state with `piceli trains NAME`, then run the train again.
+- **Retry-safe:** no
+
 (error-train-invalid)=
 ### `train-invalid`
 
@@ -7205,6 +7219,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Pass `MODULE:ATTR` or `path/to/file.py:ATTR` naming one `Train`.
 - **Retry-safe:** no
 
+(error-train-notify-failed)=
+### `train-notify-failed`
+
+**Train notification failed.** A notifier of the train (a command, a webhook or the desktop) failed or ran past its timeout. The run's result is unchanged.
+
+- **Fix:** Check the notifier's command, URL or environment variables; the run's outcome is in `piceli train-wait RUN` and `piceli trains`.
+- **Retry-safe:** yes
+
 (error-train-publish-failed)=
 ### `train-publish-failed`
 
@@ -7237,6 +7259,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Point `Train(repo=...)` at the repository (relative to the spec module) and create the base branch.
 - **Retry-safe:** no
 
+(error-train-run-not-found)=
+### `train-run-not-found`
+
+**No such train run.** No train under the state root has a run with that id, and no train has that name.
+
+- **Fix:** Take the run id from `piceli train --json` or `piceli trains`, and pass the --state-dir the train used.
+- **Retry-safe:** no
+
 (error-train-run-unknown)=
 ### `train-run-unknown`
 
@@ -7267,4 +7297,28 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **A train step timed out.** A step ran longer than its `timeout` and was stopped with its process group.
 
 - **Fix:** Find what hangs in the step's log, or raise the step's `timeout`.
+- **Retry-safe:** yes
+
+(error-train-telemetry-failed)=
+### `train-telemetry-failed`
+
+**Train telemetry not exported.** The OTLP collector was unreachable, slow or refused the spans, or the telemetry configuration is unusable. The run is unaffected.
+
+- **Fix:** Check that the collector listens on the configured OTLP/HTTP endpoint and OTEL_EXPORTER_OTLP_* settings.
+- **Retry-safe:** yes
+
+(error-train-unknown)=
+### `train-unknown`
+
+**No such train.** No train of that name has run with this state root, so it has no state directory.
+
+- **Fix:** Run `piceli trains` to list the trains, or pass the --state-dir the train used.
+- **Retry-safe:** no
+
+(error-train-wait-timeout)=
+### `train-wait-timeout`
+
+**Train run still running.** The run had not ended when the --timeout of `piceli train-wait` ran out.
+
+- **Fix:** Wait again (`piceli train-wait RUN`), or follow it with `piceli trains NAME --follow`.
 - **Retry-safe:** yes

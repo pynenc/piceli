@@ -2048,6 +2048,57 @@
     "to_dict": []
    }
   },
+  "CommandNotify": {
+   "attrs": [
+    "argv",
+    "command",
+    "desktop",
+    "kind",
+    "label",
+    "send",
+    "timeout",
+    "to_dict",
+    "wanted",
+    "webhook",
+    "when"
+   ],
+   "init": [
+    "argv",
+    "timeout",
+    "when"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "timeout",
+     "when"
+    ],
+    "desktop": [
+     "timeout",
+     "when"
+    ],
+    "label": [],
+    "send": [
+     "summary"
+    ],
+    "to_dict": [],
+    "wanted": [
+     "summary"
+    ],
+    "webhook": [
+     "headers_env",
+     "timeout",
+     "url",
+     "url_env",
+     "when"
+    ]
+   },
+   "returns": {
+    "command": "CommandNotify",
+    "desktop": "DesktopNotify",
+    "webhook": "WebhookNotify"
+   }
+  },
   "CommandStep": {
    "attrs": [
     "argv",
@@ -3022,6 +3073,55 @@
     "create": "DeploymentSessionArchive",
     "from_json": "DeploymentSessionArchive",
     "inputs": "SecretVersionRef"
+   }
+  },
+  "DesktopNotify": {
+   "attrs": [
+    "command",
+    "desktop",
+    "kind",
+    "label",
+    "send",
+    "timeout",
+    "to_dict",
+    "wanted",
+    "webhook",
+    "when"
+   ],
+   "init": [
+    "timeout",
+    "when"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "timeout",
+     "when"
+    ],
+    "desktop": [
+     "timeout",
+     "when"
+    ],
+    "label": [],
+    "send": [
+     "summary"
+    ],
+    "to_dict": [],
+    "wanted": [
+     "summary"
+    ],
+    "webhook": [
+     "headers_env",
+     "timeout",
+     "url",
+     "url_env",
+     "when"
+    ]
+   },
+   "returns": {
+    "command": "CommandNotify",
+    "desktop": "DesktopNotify",
+    "webhook": "WebhookNotify"
    }
   },
   "DevBuilds": {
@@ -6766,6 +6866,55 @@
    },
    "returns": {
     "parse": "NodeTarget"
+   }
+  },
+  "Notify": {
+   "attrs": [
+    "command",
+    "desktop",
+    "kind",
+    "label",
+    "send",
+    "timeout",
+    "to_dict",
+    "wanted",
+    "webhook",
+    "when"
+   ],
+   "init": [
+    "timeout",
+    "when"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "timeout",
+     "when"
+    ],
+    "desktop": [
+     "timeout",
+     "when"
+    ],
+    "label": [],
+    "send": [
+     "summary"
+    ],
+    "to_dict": [],
+    "wanted": [
+     "summary"
+    ],
+    "webhook": [
+     "headers_env",
+     "timeout",
+     "url",
+     "url_env",
+     "when"
+    ]
+   },
+   "returns": {
+    "command": "CommandNotify",
+    "desktop": "DesktopNotify",
+    "webhook": "WebhookNotify"
    }
   },
   "ObservedResource": {
@@ -10943,10 +11092,6 @@
    }
   },
   "Train": {
-   "attr_types": {
-    "retention": "Retention",
-    "steps": "Step"
-   },
    "attrs": [
     "base",
     "builds",
@@ -10956,17 +11101,16 @@
     "host_names",
     "hosts",
     "local_slots",
-    "name",
+    "notify",
     "parallel",
     "publish_steps",
     "remote",
     "repo",
-    "retention",
     "sccache",
-    "steps",
     "tag",
     "tag_name",
     "target_dir",
+    "telemetry",
     "test_steps",
     "tested",
     "to_dict"
@@ -10979,6 +11123,7 @@
     "hosts",
     "local_slots",
     "name",
+    "notify",
     "parallel",
     "remote",
     "repo",
@@ -10987,6 +11132,7 @@
     "steps",
     "tag",
     "target_dir",
+    "telemetry",
     "tested"
    ],
    "methods": {
@@ -11329,6 +11475,61 @@
    "methods": {},
    "pydantic": true
   },
+  "WebhookNotify": {
+   "attrs": [
+    "command",
+    "desktop",
+    "headers_env",
+    "kind",
+    "label",
+    "send",
+    "timeout",
+    "to_dict",
+    "url",
+    "url_env",
+    "wanted",
+    "webhook",
+    "when"
+   ],
+   "init": [
+    "headers_env",
+    "timeout",
+    "url",
+    "url_env",
+    "when"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "timeout",
+     "when"
+    ],
+    "desktop": [
+     "timeout",
+     "when"
+    ],
+    "label": [],
+    "send": [
+     "summary"
+    ],
+    "to_dict": [],
+    "wanted": [
+     "summary"
+    ],
+    "webhook": [
+     "headers_env",
+     "timeout",
+     "url",
+     "url_env",
+     "when"
+    ]
+   },
+   "returns": {
+    "command": "CommandNotify",
+    "desktop": "DesktopNotify",
+    "webhook": "WebhookNotify"
+   }
+  },
   "Workload": {
    "attr_types": {
     "security": "Security"
@@ -11468,6 +11669,8 @@
      "targets",
      "train",
      "train-prune",
+     "train-wait",
+     "trains",
      "ui",
      "watch"
     ]
@@ -13683,6 +13886,35 @@
     ],
     "subcommands": []
    },
+   "train-wait": {
+    "arguments": [
+     "run"
+    ],
+    "flags": [
+     "--interval",
+     "--json",
+     "--state-dir",
+     "--timeout"
+    ],
+    "subcommands": []
+   },
+   "trains": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--composition",
+     "--follow",
+     "--infra",
+     "--interval",
+     "--json",
+     "--runs",
+     "--state-dir",
+     "--timeout",
+     "--trend"
+    ],
+    "subcommands": []
+   },
    "ui": {
     "arguments": [],
     "flags": [],
@@ -14602,19 +14834,25 @@
    "train-git-failed",
    "train-host-unavailable",
    "train-images-failed",
+   "train-interrupted",
    "train-invalid",
    "train-load-failed",
    "train-merge-conflict",
    "train-not-fast-forward",
    "train-not-found",
+   "train-notify-failed",
    "train-publish-failed",
    "train-push-failed",
    "train-push-needs-promote",
    "train-repo-invalid",
+   "train-run-not-found",
    "train-run-unknown",
    "train-spec-invalid",
    "train-step-failed",
    "train-step-timeout",
+   "train-telemetry-failed",
+   "train-unknown",
+   "train-wait-timeout",
    "transport-error",
    "ui-access-failed",
    "ui-access-port-conflict",
@@ -16349,6 +16587,9 @@
    "Impact": {
     "class": "Impact"
    },
+   "Notify": {
+    "class": "Notify"
+   },
    "PublishStep": {
     "class": "PublishStep"
    },
@@ -16568,6 +16809,7 @@
   "piceli.k8s.cli.state",
   "piceli.k8s.cli.targets",
   "piceli.k8s.cli.train",
+  "piceli.k8s.cli.trains",
   "piceli.k8s.cli.ui",
   "piceli.k8s.cli.ui_forward",
   "piceli.k8s.cli.ui_remote",
@@ -16741,12 +16983,16 @@
   "piceli.train.impact",
   "piceli.train.local",
   "piceli.train.model",
+  "piceli.train.notify",
   "piceli.train.prune",
   "piceli.train.reuse",
   "piceli.train.runner",
   "piceli.train.spec",
   "piceli.train.state",
+  "piceli.train.status",
   "piceli.train.steps",
+  "piceli.train.summary",
+  "piceli.train.telemetry",
   "piceli.utils"
  ],
  "pydantic_attrs": [
