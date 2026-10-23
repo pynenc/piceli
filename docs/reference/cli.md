@@ -2118,6 +2118,7 @@ Apply the plan whose hash is --approve (without it: plan, exit 3).
 | `REF` | text | required |  |
 | `--approve` | text |  | The plan hash (or digest) to execute |
 | `--tofu` | text |  | The tofu binary (default: $PICELI_TOFU, else tofu on PATH) |
+| `--verbose` | boolean | `False` | When OpenTofu fails, print its whole output (redacted) on stderr |
 
 **Contract**
 
@@ -2140,6 +2141,7 @@ Destroy what Piceli created for it, with approval of the destroy plan's hash.
 | `REF` | text | required |  |
 | `--approve` | text |  | The plan hash (or digest) to execute |
 | `--tofu` | text |  | The tofu binary (default: $PICELI_TOFU, else tofu on PATH) |
+| `--verbose` | boolean | `False` | When OpenTofu fails, print its whole output (redacted) on stderr |
 
 **Contract**
 
@@ -2183,6 +2185,7 @@ Plan the declared machines with OpenTofu; print the changes, estimate and plan h
 | --- | --- | --- | --- |
 | `REF` | text | required |  |
 | `--tofu` | text |  | The tofu binary (default: $PICELI_TOFU, else tofu on PATH) |
+| `--verbose` | boolean | `False` | When OpenTofu fails, print its whole output (redacted) on stderr |
 
 **Contract**
 

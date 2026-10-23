@@ -377,6 +377,16 @@ for the change that errored); stderr lists the same. The state keeps what
 was applied: plan again, and the next plan shows what remains. A failure
 before anything changed keeps its code and exit status.
 
+When OpenTofu fails (`infra-tofu-failed`, `infra-apply-failed`), the error
+names the resource or data source it failed on, from OpenTofu's JSON
+diagnostics: the message says `tofu plan failed on
+data.openstack_networking_network_v2.public-network`, `failed_on` lists the
+addresses, and each `tofu:` line on stderr starts with its address. Its
+whole output, redacted like everything else, is kept in
+`tofu-<command>.log` in the state directory (`tofu_log`, readable by you
+only; removed when that command next succeeds); `--verbose` on `infra
+plan`, `apply` and `destroy` prints it on stderr.
+
 `piceli infra apply --approve HASH` plans again and applies that plan file
 only when its hash is the approved one (`infra-plan-changed` otherwise):
 what runs is what was reviewed, also when something changed at the provider

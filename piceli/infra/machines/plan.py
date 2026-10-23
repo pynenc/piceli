@@ -84,6 +84,8 @@ INVENTORY = "inventory.json"
 BACKEND = "backend.json"
 CONFIG = "main.tf.json"
 LOCK = ".terraform.lock.hcl"
+#: The redacted output of the last failed ``tofu <command>``.
+TOFU_LOG = "tofu-{}.log"
 INVENTORY_SCHEMA = "piceli.infra.inventory.v1"
 PLAN_SCHEMA = "piceli.infra.plan.v1"
 #: Plan JSON keys that change between two identical plans.
@@ -118,14 +120,46 @@ class Workspace:
 
 
 def _check(
-    result: TofuResult, code: str, what: str, ws: Workspace | None = None
+    result: TofuResult, code: str, what: str, ws: Workspace, *, known: bool = True
 ) -> TofuResult:
     if result.code != 0:
-        diagnostics = result.diagnostics()
-        raise _known(ws, diagnostics) or InfraError(
-            code, f"tofu {what} failed", diagnostics
-        )
+        raise tofu_failure(result, code, what, ws, known=known)
+    (ws.directory / TOFU_LOG.format(what)).unlink(missing_ok=True)
     return result
+
+
+def tofu_failure(
+    result: TofuResult,
+    code: str,
+    what: str,
+    ws: Workspace,
+    *,
+    known: bool = True,
+    secrets: Sequence[str] = (),
+) -> InfraError:
+    """The error of a failed ``tofu`` run: it names the resources or data
+    sources it failed on (``failed_on``) and keeps the whole output, redacted,
+    in ``tofu-<what>.log`` in the state directory (``tofu_log``)."""
+    from piceli.infra.machines.tofu import redact
+
+    diagnostics = [redact(line, secrets) for line in result.diagnostics()]
+    failed_on: list[str] = []
+    for error in result.errors():
+        address = error.get("address")
+        if address and address not in failed_on:
+            failed_on.append(address)
+    log = ws.directory / TOFU_LOG.format(what)
+    _write(log, redact(result.log_text(), secrets))
+    fields: dict[str, Any] = {"failed_on": failed_on, "tofu_log": str(log)}
+    error = (_known(ws, diagnostics) if known else None) or InfraError(
+        code,
+        f"tofu {what} failed"
+        + (f" on {', '.join(failed_on)}" if failed_on else "")
+        + f" (its full output: {log})",
+        diagnostics,
+    )
+    error.fields.update(fields)
+    return error
 
 
 def _known(ws: Workspace | None, diagnostics: list[str]) -> InfraError | None:
@@ -216,6 +250,8 @@ def workspace(infra: Infrastructure, *, tofu: str | None = None) -> Iterator[Wor
             ws.run("init", "-input=false", "-no-color", "-lockfile=readonly"),
             "infra-tofu-failed",
             "init",
+            ws,
+            known=False,
         )
         if not recorded:
             write_record(directory, BACKEND, backend)
@@ -485,7 +521,9 @@ def user_data_digest(value: str) -> str:
 
 def _plan_document(ws: Workspace, args: list[str], file: Path) -> dict[str, Any]:
     _check(ws.run(*args), "infra-tofu-failed", "plan", ws)
-    shown = _check(ws.run("show", "-json", str(file)), "infra-tofu-failed", "show")
+    shown = _check(
+        ws.run("show", "-json", str(file)), "infra-tofu-failed", "show", ws, known=False
+    )
     try:
         document = json.loads(shown.stdout)
     except ValueError:
@@ -623,26 +661,24 @@ def apply(
         finally:
             unstage_images(ws.directory)
         from piceli.infra.machines.keys import store_keys
-        from piceli.infra.machines.tofu import redact
 
         if result.code == 0:
+            (ws.directory / TOFU_LOG.format("apply")).unlink(missing_ok=True)
             store_keys(ws)
             return fresh, refresh_inventory(ws, prices=fresh.estimate)
         try:
             fresh_values = store_keys(ws)
         except InfraError:
             fresh_values = []
-        diagnostics = [redact(line, fresh_values) for line in result.diagnostics()]
-        error = _known(ws, diagnostics) or InfraError(
-            "infra-apply-failed", "tofu apply failed", diagnostics
+        error = tofu_failure(
+            result, "infra-apply-failed", "apply", ws, secrets=fresh_values
         )
-        error.fields.update(
-            progress(result, fresh.changes, hidden=lambda a: _hides_id(ws, a))
-        )
+        partial = progress(result, fresh.changes, hidden=lambda a: _hides_id(ws, a))
+        error.fields.update(partial)
         try:
             refresh_inventory(ws, prices=fresh.estimate)
         except InfraError:
-            if not error.fields:
+            if not partial:
                 raise
         raise error
 
@@ -715,7 +751,9 @@ def refresh_inventory(
     ws: Workspace, *, prices: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     """Rewrite ``inventory.json`` from the state (``tofu show -json``)."""
-    shown = _check(ws.run("show", "-json"), "infra-tofu-failed", "show")
+    shown = _check(
+        ws.run("show", "-json"), "infra-tofu-failed", "show", ws, known=False
+    )
     try:
         document = json.loads(shown.stdout) if shown.stdout.strip() else {}
     except ValueError:

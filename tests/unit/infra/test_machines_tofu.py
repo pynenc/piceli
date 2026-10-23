@@ -462,3 +462,56 @@ def test_a_partial_apply_exits_1_with_what_was_applied(homes: Path) -> None:
     result, again = piceli("infra", "plan", module)
     assert result.exit_code == 3, result.output
     assert [c["address"] for c in again["changes"]] == [record]
+
+
+FAILING_LOOKUP = """
+from pathlib import Path
+
+from piceli.infra import Infrastructure, PrimaryIp, Server
+from piceli.infra.machines.provider import Resource
+from piceli.testing.infra import FakeProvider
+
+
+class Lookup(FakeProvider):
+    def data_sources(self):
+        # A built-in data source that fails while planning, as a cloud's
+        # network lookup that finds nothing does.
+        return [Resource("terraform_remote_state", "public-network", {
+            "backend": "local", "workspace": "missing",
+            "config": {"path": "nothing-here/missing.tfstate"},
+        })]
+
+
+fake = Lookup(addresses={"edge-1": "127.0.0.1"})
+edge_1 = Server("edge-1", provider=fake, type="t1", image="img",
+                ipv4=PrimaryIp("edge-1-v4"))
+infra = Infrastructure("edge", servers=[edge_1],
+                       state_dir=Path(__file__).parent / "state")
+"""
+
+
+def test_a_failed_plan_names_the_data_source_and_keeps_the_log(homes: Path) -> None:
+    """Real OpenTofu: the error names the address; the full output is in a log."""
+    credentials.save_credential("edge-state", "state-key", PASSPHRASE)
+    (homes / "lookup.py").write_text(FAILING_LOOKUP)
+    module = f"{homes / 'lookup.py'}:infra"
+    address = "data.terraform_remote_state.public-network"
+    result, failed = piceli("infra", "plan", module)
+    assert result.exit_code == 2, result.output
+    assert failed["reason"] == "infra-tofu-failed"
+    assert address in failed["failed_on"]
+    assert f"tofu plan failed on {address}" in failed["message"]
+    log = Path(failed["tofu_log"])
+    assert log.parent == homes / "state" and log.is_file()
+    assert log.stat().st_mode & 0o077 == 0
+    assert str(log) in failed["message"]
+    assert f"tofu: {address}: Unable to find remote state" in result.stderr
+    text = log.read_text()
+    assert "Unable to find remote state" in text and address in text
+    assert "--verbose" in result.stderr  # how to see it
+    assert "tofu log:" not in result.stderr
+    verbose, _ = piceli("infra", "plan", module, "--verbose")
+    assert verbose.exit_code == 2
+    assert "tofu log:" in verbose.stderr
+    assert "Unable to read remote state" in verbose.stderr
+    _no_secret_anywhere(homes, result.output, verbose.output, text)

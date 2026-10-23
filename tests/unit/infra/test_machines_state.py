@@ -242,3 +242,46 @@ def test_the_tofu_child_cannot_read_stdin(tmp_path: Path) -> None:
     result = tofu.run(["plan"], cwd=tmp_path, env={})
     assert result.stdout.strip() == "read:"
     assert subprocess.DEVNULL  # documented: stdin is closed
+
+
+#: A real ``tofu plan -json`` error: a data source lookup that found nothing.
+LOOKUP_FAILED = {
+    "type": "diagnostic",
+    "diagnostic": {
+        "severity": "error",
+        "summary": "Your query returned no results. Please change your search "
+        "criteria and try again.",
+        "detail": "",
+        "address": "data.openstack_networking_network_v2.public-network",
+        "range": {
+            "filename": "main.tf.json",
+            "start": {"line": 3, "column": 96, "byte": 321},
+            "end": {"line": 3, "column": 97, "byte": 322},
+        },
+        "snippet": {"context": "data.openstack_networking_network_v2.public-network"},
+    },
+}
+
+
+def test_errors_name_the_address_they_failed_on() -> None:
+    result = TofuResult(1, json.dumps(LOOKUP_FAILED), "")
+    assert result.errors() == [
+        {
+            "summary": LOOKUP_FAILED["diagnostic"]["summary"],
+            "detail": "",
+            "address": "data.openstack_networking_network_v2.public-network",
+            "file": "main.tf.json",
+            "line": 3,
+        }
+    ]
+    assert result.diagnostics() == [
+        "data.openstack_networking_network_v2.public-network: Your query returned "
+        "no results. Please change your search criteria and try again."
+    ]
+    # A summary that already starts with its address is not prefixed twice.
+    named = {"type": "diagnostic", "diagnostic": {
+        "severity": "error", "summary": "data.x.y: Unable to read", "address": "data.x.y",
+    }}  # fmt: skip
+    assert TofuResult(1, json.dumps(named), "").diagnostics() == [
+        "data.x.y: Unable to read"
+    ]

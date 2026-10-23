@@ -20,9 +20,10 @@ import re
 import shutil
 import signal
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from piceli.infra.machines.model import InfraError
 from piceli.infra.machines.render import MIN_TOFU
@@ -65,32 +66,90 @@ def redact(text: str, secrets: Sequence[str]) -> str:
     return text
 
 
+def _json_lines(text: str) -> Iterator[dict[str, Any]]:
+    for line in text.splitlines():
+        try:
+            item = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(item, dict):
+            yield item
+
+
 @dataclass(frozen=True)
 class TofuResult:
     code: int
     stdout: str
     stderr: str
+    #: The arguments it ran with (for the failure log).
+    args: tuple[str, ...] = ()
+
+    def errors(self) -> list[dict[str, Any]]:
+        """Error diagnostics of ``-json`` output (already redacted): ``summary``,
+        ``detail`` and, when OpenTofu gives them, the ``address`` of the
+        resource or data source it failed on and the configuration ``file``
+        and ``line``."""
+        found: list[dict[str, Any]] = []
+        for item in _json_lines(self.stdout):
+            diagnostic = item.get("diagnostic")
+            if item.get("type") != "diagnostic" or not isinstance(diagnostic, dict):
+                continue
+            if diagnostic.get("severity") != "error":
+                continue
+            entry: dict[str, Any] = {
+                "summary": str(diagnostic.get("summary") or ""),
+                "detail": str(diagnostic.get("detail") or ""),
+            }
+            if isinstance(diagnostic.get("address"), str):
+                entry["address"] = diagnostic["address"]
+            where = diagnostic.get("range")
+            if isinstance(where, dict) and isinstance(where.get("filename"), str):
+                entry["file"] = where["filename"]
+                line = (where.get("start") or {}).get("line")
+                if isinstance(line, int):
+                    entry["line"] = line
+            found.append(entry)
+        return found
 
     def diagnostics(self) -> list[str]:
-        """Error summaries from ``-json`` output (already redacted)."""
+        """Error summaries from ``-json`` output (already redacted), each
+        prefixed with the address it failed on; else the tail of stderr."""
         found: list[str] = []
-        for line in self.stdout.splitlines():
-            try:
-                item = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(item, dict) and item.get("type") == "diagnostic":
-                diagnostic = item.get("diagnostic") or {}
-                if diagnostic.get("severity") == "error":
-                    found.append(
-                        " ".join(
-                            str(diagnostic.get(k) or "") for k in ("summary", "detail")
-                        ).strip()
-                    )
+        for error in self.errors():
+            text = f"{error['summary']} {error['detail']}".strip()
+            address = error.get("address")
+            if address and not text.startswith(address):
+                text = f"{address}: {text}"
+            found.append(text)
         if not found and self.code != 0:
             tail = [line for line in self.stderr.splitlines() if line.strip()][-8:]
             found.extend(tail)
         return found
+
+    def log_text(self) -> str:
+        """The whole run as text for a failure log (already redacted):
+        each ``-json`` line's message, each error in full, then stderr."""
+        lines = [f"$ tofu {' '.join(self.args)}".rstrip(), f"exit {self.code}"]
+        for item in _json_lines(self.stdout):
+            message = item.get("@message")
+            if isinstance(message, str):
+                lines.append(f"[{item.get('@level') or 'info'}] {message}")
+            diagnostic = item.get("diagnostic")
+            if item.get("type") == "diagnostic" and isinstance(diagnostic, dict):
+                if diagnostic.get("address"):
+                    lines.append(f"  address: {diagnostic['address']}")
+                where = diagnostic.get("range")
+                if isinstance(where, dict) and where.get("filename"):
+                    start = (where.get("start") or {}).get("line")
+                    lines.append(f"  at: {where['filename']}:{start}")
+                for row in str(diagnostic.get("detail") or "").splitlines():
+                    lines.append(f"  {row}")
+        plain = [line for line in self.stdout.splitlines() if not line.startswith("{")]
+        if plain:
+            lines += ["--- stdout", *plain]
+        if self.stderr.strip():
+            lines += ["--- stderr", *self.stderr.splitlines()]
+        return "\n".join(lines) + "\n"
 
 
 @dataclass
@@ -161,10 +220,11 @@ class Tofu:
                 pass
             process.wait()
             raise
+        ran = tuple(args)
         if not redacted:
-            return TofuResult(process.returncode, stdout, redact(stderr, secrets))
+            return TofuResult(process.returncode, stdout, redact(stderr, secrets), ran)
         return TofuResult(
-            process.returncode, redact(stdout, secrets), redact(stderr, secrets)
+            process.returncode, redact(stdout, secrets), redact(stderr, secrets), ran
         )
 
 

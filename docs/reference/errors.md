@@ -6342,7 +6342,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-infra-apply-failed)=
 ### `infra-apply-failed`
 
-**OpenTofu apply failed.** `tofu apply` of the approved plan exited with an error. When part of it was applied, the output has `partially_applied` and lists what was applied (address, action, the provider's id) and what was not; the next plan shows what remains.
+**OpenTofu apply failed.** `tofu apply` of the approved plan exited with an error. When part of it was applied, the output has `partially_applied` and lists what was applied (address, action, the provider's id) and what was not; the next plan shows what remains. `failed_on` names the resources it failed on and `tofu_log` holds OpenTofu's whole output, redacted.
 
 - **Fix:** Read the `tofu:` lines on stderr, fix the cause, then plan again (`piceli infra plan MODULE:ATTR`) and approve the new hash.
 - **Retry-safe:** no
@@ -6638,9 +6638,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-infra-tofu-failed)=
 ### `infra-tofu-failed`
 
-**OpenTofu command failed.** `tofu init`, `plan` or `show` exited with an error (a provider download, a provider API refusal, a wrong state passphrase, an unreachable state backend). Nothing was applied. Its diagnostics are on stderr, with secrets redacted.
+**OpenTofu command failed.** `tofu init`, `plan` or `show` exited with an error (a provider download, a provider API refusal, a data source lookup that found nothing, a wrong state passphrase, an unreachable state backend). Nothing was applied. Its diagnostics are on stderr, each with the address of the resource or data source it failed on (also in `failed_on`), with secrets redacted; OpenTofu's whole output, redacted, is in `tofu_log` in the state directory.
 
-- **Fix:** Read the `tofu:` lines on stderr, fix the cause, and run the command again.
+- **Fix:** Read the `tofu:` lines on stderr (or the file in `tofu_log`, or run again with `--verbose`), fix the cause, and run the command again.
 - **Retry-safe:** yes
 
 (error-infra-tofu-missing)=

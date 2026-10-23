@@ -14,6 +14,14 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   default, as before) only a `router:external` network, `False` only one
   that is not, `None` the name alone. The plan hash of an Infomaniak
   declaration changes (its lookup changed).
+- **An OpenTofu failure names what it failed on.** `infra-tofu-failed` and
+  `infra-apply-failed` say which resource or data source failed (from
+  OpenTofu's JSON diagnostics: `tofu plan failed on
+  data.openstack_networking_network_v2.public-network`), list the addresses
+  in `failed_on`, and start each `tofu:` line on stderr with its address.
+  OpenTofu's whole output, redacted, is kept in `tofu-<command>.log` in the
+  state directory (`tofu_log`); `piceli infra plan|apply|destroy --verbose`
+  prints it.
 
 ## Version 0.25.0
 
