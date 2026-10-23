@@ -4,7 +4,7 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
-## Version 0.25.1
+## Version 0.25.2
 
 - **Infomaniak's public network is found by name.** `Infomaniak()` looked
   `ext-net1` up as a `router:external` network; it is a shared network that
@@ -22,6 +22,15 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   OpenTofu's whole output, redacted, is kept in `tofu-<command>.log` in the
   state directory (`tofu_log`); `piceli infra plan|apply|destroy --verbose`
   prints it.
+
+## Version 0.25.1
+
+- **A reaped forward is stopped only once its exit is confirmed.** The
+  reaper of `piceli access` forwards took a process whose fingerprint no
+  longer matched as gone, but an exiting process reads as unknown for a
+  moment (its command line is released before it becomes a zombie). It now
+  reports a forward stopped only when its pid no longer exists, is a
+  zombie, or is held by another process on two reads in a row.
 
 ## Version 0.25.0
 

@@ -175,7 +175,7 @@ class OpenStack(Provider):
     :param region: The region every resource goes into (also the servers'
         default location; one region per declaration).
     :param public_network: The public network's name (looked up) or id.
-    :param public_network_external: How the name is matched (0.25.1):
+    :param public_network_external: How the name is matched (0.25.2):
         ``True`` (the default) only a ``router:external`` network, ``False``
         only one that is not, ``None`` the name alone. A cloud whose servers
         attach to a shared provider network that is not ``router:external``
@@ -641,7 +641,7 @@ class Infomaniak(OpenStack):
     ``auth_url`` is Infomaniak's Keystone, ``public_network`` its shared
     public network ``ext-net1`` (a public IPv4 and IPv6 per port), found by
     its name alone: it is not ``router:external``
-    (``public_network_external=None``; 0.25.1), ``region``
+    (``public_network_external=None``; 0.25.2), ``region``
     ``dc3-a`` by default (``dc4-a`` is the other), prices in CHF, and
     ``flavors`` its smallest, ``a1-ram2-disk20-perf1`` (1 vCPU, 2 GB, 20 GB):
     a bigger one must be listed.
