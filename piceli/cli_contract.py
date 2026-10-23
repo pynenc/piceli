@@ -1398,10 +1398,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         ),
         "host secrets": _C(
             "Put a Nix host's age identity (its sops-nix key) and the cache's "
-            "read keys Piceli created on the host: plan, then --approve DIGEST.",
+            "read keys on the host: plan, then --approve DIGEST.",
             reads=(
                 "MODULE:ATTR (piceli.infra.NixHost with age_identity= or a cache "
-                "bucket with S3Key(access='read'))",
+                "with a read pair: the bucket's S3Key(access='read') or "
+                "NixCache(read_credentials=))",
                 "$PICELI_CREDENTIALS_DIR/NAME.json (age-identity, s3-keys)",
                 "the host's key file and cache.env, by fingerprint only (ssh)",
             ),
@@ -1422,7 +1423,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "0.25.0: with a bucket S3Key(access='read') the plan's cache lists the "
             "read pair (credential, short digest, same/different/absent); it is "
             "written without --replace and needs no activation (the agent reads "
-            "it each poll).",
+            "it each poll). 0.25.3: an owner-made pair, NixCache(read_credentials="
+            "NAME), is planned, digested, compared and written the same way; "
+            "missing, it is refused infra-credential-missing with the command "
+            "that stores it (piceli secrets s3 NAME --prompt).",
         ),
         "gitops enable": _C(
             "Plan and, with --approve HASH, install the GitOps controller that "
@@ -1969,7 +1973,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "Porkbun records checks API access for each domain (infra-dns-api-disabled; "
             "infra-dns-check-failed when it cannot) and records it in checks. Tokens and "
             "the state passphrase reach tofu through its environment only; its output "
-            "is redacted.",
+            "is redacted. 0.25.3: a Bucket(keys=[S3Key(...)]) at a provider that "
+            "cannot create S3 keys (the Infomaniak preset) is refused before "
+            "anything runs (infra-s3-keys-unsupported), with the commands that "
+            "make and store each pair by hand.",
         ),
         "infra apply": _C(
             "Apply a declared Infrastructure: plan again and apply that plan only "
@@ -2210,7 +2217,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             exit_codes=(0, 1, 2),
             notes="0.25.0. Read-only; safe to retry; never prints a value. For each "
             "secret: state (present, pending: a pair the next infra apply "
-            "creates, missing, incomplete, damaged, or not-needed: the user data "
+            "creates, or an S3 pair the owner makes by hand and has not stored "
+            "(0.25.3; next: piceli secrets s3 NAME --prompt, detail: how to make "
+            "it, e.g. openstack ec2 credentials create signed in as the project's "
+            "user), missing, incomplete, damaged, or not-needed: the user data "
             "of a server that exists), created_by (infra-apply, "
             "piceli: --generate, owner: --prompt), next (the exact command), "
             "purpose and where else it must live; then the backup's state "

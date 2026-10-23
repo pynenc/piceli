@@ -147,7 +147,8 @@ Infomaniak Public Cloud's values: `auth_url`
 `ext-net1` (a public IPv4 and IPv6 per port), found by its name alone
 (`public_network_external=None`: it is not `router:external`), prices in
 CHF, and `flavors=["a1-ram2-disk20-perf1"]`, its smallest (1 vCPU, 2 GB);
-`dc4-a` is the other region.
+`dc4-a` is the other region. It creates no S3 keys (0.25.3): see
+[pairs you make yourself](#s3-pairs-you-make-yourself).
 
 ```python
 from piceli.infra import Bucket, Image, Infomaniak, Infrastructure, PrimaryIp, Rule, Server
@@ -181,8 +182,9 @@ asks for the application credential ID, then its secret (see
 `OS_APPLICATION_CREDENTIAL_ID` and `OS_APPLICATION_CREDENTIAL_SECRET`; both
 are redacted from its output. S3 access to a bucket needs EC2 credentials
 (at Infomaniak the endpoint is `https://s3.pub1.infomaniak.cloud`): declare
-them as `S3Key`s (below), or create them yourself (`openstack ec2
-credentials create`) and store them with `piceli secrets s3 NAME --prompt`.
+them as `S3Key`s (below; not at Infomaniak), or create them yourself
+(`openstack ec2 credentials create`) and store them with `piceli secrets s3
+NAME --prompt`.
 OpenStack has no price API here: `prices=` (monthly net per flavor) and
 `ip_prices=` (`{"ipv4": …}`) are your own table, shown as the plan's
 estimate. One region per declaration; `ipv4=False` and `ipv6=PrimaryIp` are
@@ -268,6 +270,48 @@ keys yourself), and a `reader`-only identity may not either.
 **Rotation** is not a command yet: remove the key, apply, add it back and
 apply (a new pair, stored over the old one), then run `piceli host secrets`
 again for a read key.
+
+(s3-pairs-you-make-yourself)=
+**S3 pairs you make yourself** (0.25.3). Infomaniak's API lets only the
+account's own user create EC2 credentials, never an application
+credential, restricted or not. The `Infomaniak` preset therefore creates
+no S3 keys (`supports_s3_keys` is false), and a `Bucket(keys=[...])` there
+is refused when the module loads, before any plan:
+
+```text
+infra-s3-keys-unsupported: Bucket my-cache: Piceli cannot create S3 keys at
+infomaniak: its API lets only the account's own user create S3 credentials,
+not an application credential. Remove keys= and make each pair by hand,
+signed in as the project's user: openstack ec2 credentials create; store
+it: piceli secrets s3 cache-write --prompt (write), piceli secrets s3
+cache-read --prompt (read); then declare NixCache(bucket=...,
+write_credentials="cache-write", read_credentials="cache-read")
+```
+
+Make each pair signed in as the project's user (the OpenStack CLI with
+that user's password, not an application credential), store it, and
+name both in the cache:
+
+```sh
+openstack ec2 credentials create        # once for the build host, once for the hosts
+piceli secrets s3 cache-write --prompt  # access key id, then secret
+piceli secrets s3 cache-read --prompt
+```
+
+```python
+nix_bucket = Bucket("my-cache", provider=cloud)   # no keys=
+cache = NixCache("cache-1:…", bucket=nix_bucket,
+                 write_credentials="cache-write", read_credentials="cache-read")
+```
+
+`piceli secrets status` lists both `pending`, created by `owner`, with
+`piceli secrets s3 NAME --prompt` as the next command, until they are
+stored; `piceli host secrets` installs the read pair on the host exactly as
+it installs a bucket's read key (see {doc}`nix_hosts`). Both pairs have
+the user's project roles: the read pair is separate, not read-only, as
+described above. `read_credentials=` and a bucket's `S3Key(access="read")`
+are alternatives (giving both is refused), and it may not name the write
+pair.
 
 To move to a newer OpenStack provider, change `OPENSTACK_PIN` in
 `piceli/infra/machines/openstack.py` and take its hashes from `tofu

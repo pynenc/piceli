@@ -118,7 +118,15 @@ class Provider(ABC):
     #: Whether ``Server(user_data=UserData(...))`` is passed at creation.
     supports_user_data: bool = False
     #: Whether ``Bucket(keys=[S3Key(...)])`` pairs are created here (0.25.0).
+    #: A bucket that declares keys at a provider that cannot is refused
+    #: (``infra-s3-keys-unsupported``, 0.25.3).
     supports_s3_keys: bool = False
+    #: Why this provider's pairs cannot be created by Piceli, for that
+    #: refusal (``None``: no reason known).
+    s3_keys_refused_because: str | None = None
+    #: The command the account's own user runs to make an S3 key pair by
+    #: hand (``None``: not known), for that refusal and ``secrets status``.
+    s3_keys_by_hand: str | None = None
     #: The TTL of a ``DnsRecord`` that gives none, and the shortest accepted.
     default_ttl: int = 300
     min_ttl: int = 60

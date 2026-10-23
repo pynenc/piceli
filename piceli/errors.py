@@ -5548,6 +5548,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "infra",
     ),
     _E(
+        "infra-s3-keys-unsupported",
+        "Provider cannot create S3 keys",
+        "The declaration has `Bucket(keys=[S3Key(...)])` at a provider where Piceli cannot create S3 key pairs. At Infomaniak the API lets only the account's own user create S3 (EC2) credentials, never an application credential, restricted or not (0.25.3).",
+        "Remove `keys=` and make each pair by hand: signed in as the project's user (not an application credential), run `openstack ec2 credentials create`; store it with `piceli secrets s3 NAME --prompt`; then declare `NixCache(bucket=..., write_credentials=WRITE, read_credentials=READ)`. `piceli host secrets` installs the read pair on the host, and `piceli secrets status` lists both until they are stored.",
+        False,
+        "infra",
+    ),
+    _E(
         "infra-credential-unsafe",
         "Credential readable by others",
         "A credential file is readable or writable by other users.",

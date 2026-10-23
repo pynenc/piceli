@@ -319,6 +319,11 @@ def _user_data(walk: _Walk, item: Item) -> None:
 
 
 def _step(walk: _Walk, item: Item, key_names: Mapping[str, list[str]]) -> None:
+    if item.state == "pending" and item.created_by == "owner":
+        # An S3 pair the owner made by hand (0.25.3): stored here if given.
+        say(f"  {item.secret.name}: {item.secret.purpose}; {item.detail}")
+        _prompt_credential(walk, item)
+        return
     if item.state == "pending":
         say(
             f"  {item.secret.name}: {item.secret.purpose}, {item.detail}; nothing "
@@ -453,12 +458,14 @@ def secrets_setup(
        confirm it on a terminal;
     3. user data: offered on a terminal, skipped by default (store a
        short-lived key right before infra apply);
-    4. S3 key pairs: infra apply makes them; nothing is created here;
+    4. S3 key pairs: infra apply makes them; a pair you made by hand
+       (openstack ec2 credentials create) is asked for part by part;
     5. a backup, offered when none is current.
 
     Without a terminal, --yes generates; prompts read piped input. Never
     prints a value. Exit 0 when everything is stored except what is left
-    for later on purpose (user data, the pairs infra apply makes); 1 when
+    for later on purpose (user data, the pairs infra apply makes, pairs you
+    make by hand and have not stored); 1 when
     something is still missing, incomplete or damaged.
     """
     from piceli.infra.machines.secrets_status import items_of, ordered

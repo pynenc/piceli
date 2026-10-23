@@ -203,8 +203,17 @@ class NixCache:
         the ``S3Key(access="write")`` of ``bucket=``, which ``piceli infra
         apply`` creates and stores. Hosts read with separate keys: the
         bucket's ``S3Key(access="read")``, which ``piceli host secrets``
-        puts on the host (0.25.0), or keys in sops-nix on the host
-        (``NixHost(read_credentials_file=)``).
+        puts on the host (0.25.0), ``read_credentials=``, or keys in
+        sops-nix on the host (``NixHost(read_credentials_file=)``).
+    :param read_credentials: The local credential with S3 access keys the
+        hosts read with, made by the owner (0.25.3): at a provider whose
+        API lets only the account's own user create S3 credentials
+        (Infomaniak), make the pair by hand (``openstack ec2 credentials
+        create``, signed in as the project's user) and store it (``piceli
+        secrets s3 NAME --prompt``). ``piceli host secrets`` puts it on the
+        host exactly as it puts a bucket's read key. Default: the bucket's
+        ``S3Key(access="read")``; giving both, or naming the write pair or
+        another key of the bucket, is refused. Only for an ``s3://`` cache.
     :param endpoint: The S3 endpoint host (``s3.example.net``).
     :param region: The S3 region signatures name.
     """
@@ -217,6 +226,7 @@ class NixCache:
     signing_key: str | None = None
     write_credentials: str | None = None
     key_name: str | None = None
+    read_credentials: str | None = None
 
     def __post_init__(self) -> None:
         self._check_key()
@@ -230,6 +240,21 @@ class NixCache:
             write = self.bucket.key("write")
             if self.write_credentials is None and write is not None:
                 object.__setattr__(self, "write_credentials", write.name)
+            read = self.bucket.key("read")
+            if self.read_credentials is None and read is not None:
+                object.__setattr__(self, "read_credentials", read.name)
+            elif self.read_credentials is not None and (
+                read is not None
+                or (
+                    self.read_credentials != self.write_credentials
+                    and self.creates(self.read_credentials)
+                )
+            ):
+                raise _invalid(
+                    "NixCache: give one of read_credentials= (a pair you made) "
+                    "or the bucket's S3Key(access='read'), never another of "
+                    "its keys"
+                )
             endpoint = self.endpoint or S3_ENDPOINTS.get(
                 str(getattr(self.bucket.provider, "preset", "") or "")
             )
@@ -242,7 +267,7 @@ class NixCache:
             raise _invalid("NixCache(endpoint=) is a host name (and port)")
         if not _REGION.fullmatch(self.region):
             raise _invalid("NixCache(region=) is a region name")
-        for value in (self.signing_key, self.write_credentials):
+        for value in (self.signing_key, self.write_credentials, self.read_credentials):
             if value is not None:
                 from piceli.profiles import ProfileError, check_name
 
@@ -256,6 +281,14 @@ class NixCache:
             raise _invalid(
                 "NixCache: an s3 cache needs write_credentials= (S3 keys that put)"
             )
+        if self.read_credentials is not None:
+            if self.scheme != "s3":
+                raise _invalid("NixCache(read_credentials=) is for an s3 cache")
+            if self.read_credentials == self.write_credentials:
+                raise _invalid(
+                    "NixCache(read_credentials=) names the write pair: hosts "
+                    "read with a pair of their own"
+                )
 
     def _check_key(self) -> None:
         if self.public_key is None:
@@ -328,15 +361,6 @@ class NixCache:
         if self.scheme == "s3":
             return urllib.parse.urlsplit(str(self.url)).netloc
         return None
-
-    @property
-    def read_credentials(self) -> str | None:
-        """The credential of the bucket's ``S3Key(access="read")`` that
-        ``piceli infra apply`` creates (``None``: hosts get keys another way)."""
-        if self.bucket is None:
-            return None
-        found = self.bucket.key("read")
-        return found.name if found is not None else None
 
     def creates(self, credential: str) -> bool:
         """Whether ``piceli infra apply`` creates ``credential`` (a bucket key)."""

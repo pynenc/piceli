@@ -573,9 +573,7 @@ class Bucket:
         if len({key.name for key in keys}) != len(keys):
             raise _invalid(f"Bucket {self.name}: two keys have the same name")
         if keys and not self.provider.supports_s3_keys:
-            raise _invalid(
-                f"Bucket {self.name}: Piceli creates no S3 keys at {self.provider.name}"
-            )
+            raise _keys_unsupported(self.name, self.provider, keys)
         object.__setattr__(self, "keys", keys)
 
     def key(self, access: str) -> S3Key | None:
@@ -592,6 +590,36 @@ class Bucket:
         if self.keys:
             body["keys"] = [key.describe() for key in self.keys]
         return body
+
+
+def _keys_unsupported(
+    bucket: str, provider: Provider, keys: tuple[S3Key, ...]
+) -> InfraError:
+    """``infra-s3-keys-unsupported``: why, and the commands that make and
+    store each pair by hand and name it in the cache (0.25.3)."""
+    where = getattr(provider, "preset", None) or provider.name
+    why = provider.s3_keys_refused_because or "it has no API Piceli uses for them"
+    by_hand = provider.s3_keys_by_hand
+    make = (
+        f"signed in as the project's user: {by_hand}"
+        if by_hand
+        else "with the provider's console or API"
+    )
+    store = ", ".join(
+        f"piceli secrets s3 {key.name} --prompt ({key.access})" for key in keys
+    )
+    names = {key.access: key.name for key in keys}
+    declared = ", ".join(
+        f'{access}_credentials="{names[access]}"'
+        for access in ("write", "read")
+        if access in names
+    )
+    return InfraError(
+        "infra-s3-keys-unsupported",
+        f"Bucket {bucket}: Piceli cannot create S3 keys at {where}: {why}. "
+        f"Remove keys= and make each pair by hand, {make}; store it: {store}; "
+        f"then declare NixCache(bucket=..., {declared})",
+    )
 
 
 def _family(value: object, what: str) -> bool | PrimaryIp:

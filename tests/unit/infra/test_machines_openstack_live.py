@@ -4,9 +4,12 @@ Skipped unless ``PICELI_OPENSTACK_LIVE=1``. Everything it creates is named
 ``piceli-live-<random>``: an image (a small CirrOS, if its download is
 reachable), a security group with TCP, UDP, port-range and ICMP rules, a
 persistent port on the public network, a key pair, a server on that port
-with secret user data, a bucket and, if the application credential may,
-the bucket's two S3 key pairs (``S3Key`` write and read, 0.25.0) through
-``piceli infra apply``. It checks:
+with secret user data, a bucket and, if the provider creates them and the
+application credential may, the bucket's two S3 key pairs (``S3Key`` write
+and read, 0.25.0) through ``piceli infra apply``. The Infomaniak preset
+creates none (0.25.3): the test checks that the declaration is refused
+(``infra-s3-keys-unsupported``); ``test_s3_owner_pair_live.py`` checks an
+owner-made pair instead. It checks:
 
 - the smallest flavor's real name, and that the plan refuses no other;
 - the server on the port; a replaced server re-attaches the same port and
@@ -469,8 +472,21 @@ def test_infomaniak_end_to_end(
     ])  # fmt: skip
     write_key, read_key = f"{prefix}-write", f"{prefix}-read"
     plain = Bucket(f"{prefix}-bucket", provider=cloud)
-    keyed = Bucket(plain.name, provider=cloud,
-                   keys=[S3Key(write_key), S3Key(read_key, access="read")])  # fmt: skip
+    pairs = [S3Key(write_key), S3Key(read_key, access="read")]
+    keyed: Bucket | None = None
+    if cloud.supports_s3_keys:
+        keyed = Bucket(plain.name, provider=cloud, keys=pairs)
+    else:
+        # The Infomaniak preset (0.25.3): its API refuses EC2 credentials to
+        # every application credential, so the declaration says so first.
+        with pytest.raises(InfraError) as refused:
+            Bucket(plain.name, provider=cloud, keys=pairs)
+        assert refused.value.code == "infra-s3-keys-unsupported"
+        verified["s3_keys_refused"] = "infra-s3-keys-unsupported at declaration"
+        skipped["s3"] = (
+            "the preset creates no S3 keys: test_s3_owner_pair_live.py checks an "
+            "owner-made pair (PICELI_OPENSTACK_LIVE_S3)"
+        )
     bucket = plain
 
     def declare(key: str) -> Infrastructure:
@@ -561,9 +577,11 @@ def test_infomaniak_end_to_end(
         # ---------------------------------------------------- S3 keys
         # A second apply adds the bucket's two key pairs (so a refusal
         # leaves the rest of the run intact).
-        bucket = keyed
+        bucket = keyed or plain
         keyed_infra = declare(first.servers[0].ssh_keys[0])
         try:
+            if keyed is None:
+                raise InfraError("infra-s3-keys-unsupported", "the preset")
             with workspace(keyed_infra) as ws:
                 with_keys = plan(ws, prices=False)
                 listed = {k["name"]: k for k in with_keys.to_dict()["s3_keys"]}
@@ -575,11 +593,14 @@ def test_infomaniak_end_to_end(
                 }
                 apply(ws, with_keys.plan_hash)
         except InfraError as error:
-            if error.code != "infra-s3-key-refused":
+            if error.code == "infra-s3-keys-unsupported" and keyed is None:
+                pass  # recorded above
+            elif error.code != "infra-s3-key-refused":
                 raise
-            skipped["s3"] = (
-                "EC2 credentials refused: a restricted application credential"
-            )
+            else:
+                skipped["s3"] = (
+                    "EC2 credentials refused: a restricted application credential"
+                )
             bucket = plain
         else:
             infra = keyed_infra

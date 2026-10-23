@@ -4,6 +4,38 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.25.3
+
+- **The Infomaniak preset refuses `S3Key`.** Infomaniak's API lets only the
+  account's own user create S3 (EC2) credentials, never an application
+  credential, restricted or not: `infra apply` failed with a 403 on
+  `OS-EC2`. `Infomaniak` now creates no S3 keys (`supports_s3_keys` is
+  false), and `Bucket(keys=[S3Key(...)])` there is refused when the module
+  loads, before any plan, with the new code `infra-s3-keys-unsupported`.
+  Its message gives the commands for each pair: `openstack ec2 credentials
+  create` signed in as the project's user, `piceli secrets s3 NAME
+  --prompt`, and the `NixCache(write_credentials=, read_credentials=)` to
+  declare. A generic `OpenStack` still creates them.
+- **`NixCache(read_credentials=NAME)` names a read pair you made.** It is
+  the alternative to the bucket's `S3Key(access="read")` (giving both, or
+  naming the write pair or another key of the bucket, is refused; only for
+  an `s3://` cache). `NixHost` and `piceli host secrets` install it exactly
+  as they install a bucket's read key: `/var/lib/piceli-host/cache.env` by
+  default, the same plan, digest and comparison; while it is not stored,
+  `host secrets` refuses with `infra-credential-missing` and the command
+  that stores it. `write_credentials=` works without `keys=` as before.
+- **`secrets status` lists owner-made pairs `pending`.** Both pairs are
+  reported with `created_by: "owner"`, state `pending` until stored (exit
+  0, like the pairs the next `infra apply` creates), next command `piceli
+  secrets s3 NAME --prompt`, and a detail naming how to make them
+  (`openstack ec2 credentials create`, signed in as the project's user);
+  `where` names the build host of a `NixRelease` for the write pair and
+  the host for the read pair. `needed_secrets()` rows gain `hint`. `secrets
+  setup` asks for them (piped: one part per line). The owner-made read pair
+  gets the same `s3-read-not-enforced` warning as a bucket's read key. An
+  `s3://` cache's own `write_credentials=` is now `pending` by `owner` too,
+  instead of `missing`.
+
 ## Version 0.25.2
 
 - **Infomaniak's public network is found by name.** `Infomaniak()` looked

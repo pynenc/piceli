@@ -267,9 +267,14 @@ after installing Tailscale.
    access="read")])`, drop `write_credentials=` and `piceli secrets s3`,
    and leave `piceli/cache.env` out of sops. `infra apply` creates and
    stores both pairs, and `piceli host secrets` also writes the read pair
-   to `/var/lib/piceli-host/cache.env`. At Infomaniak that pair is separate
-   but not read-only (see {doc}`infrastructure`), and the application
-   credential must be unrestricted to create it.
+   to `/var/lib/piceli-host/cache.env`. That needs a cloud that lets an
+   application credential create EC2 credentials: the `Infomaniak` preset
+   does not (0.25.3, `infra-s3-keys-unsupported`). There, make the read
+   pair by hand too, store it with `piceli secrets s3 nix-cache-read
+   --prompt`, and declare `NixCache(..., write_credentials="nix-cache-write",
+   read_credentials="nix-cache-read")`: `piceli host secrets` writes it to
+   the same file, and `piceli/cache.env` can leave sops. Either pair is
+   separate but not read-only (see {doc}`infrastructure`).
 
 4. **The agent's module, into the flake.**
 

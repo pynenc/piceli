@@ -419,6 +419,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`infra-prompt-required`](#error-infra-prompt-required) | infra | no |
 | [`infra-register-changed`](#error-infra-register-changed) | infra | yes |
 | [`infra-s3-key-refused`](#error-infra-s3-key-refused) | infra | yes |
+| [`infra-s3-keys-unsupported`](#error-infra-s3-keys-unsupported) | infra | no |
 | [`infra-server-unknown`](#error-infra-server-unknown) | infra | no |
 | [`infra-ssh-missing`](#error-infra-ssh-missing) | infra | no |
 | [`infra-ssh-unreachable`](#error-infra-ssh-unreachable) | infra | yes |
@@ -6560,6 +6561,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Create an unrestricted application credential and store it (`piceli secrets provider NAME --prompt`), then plan again; or remove `keys=`, create the keys yourself (`openstack ec2 credentials create`) and store them with `piceli secrets s3 NAME --prompt`.
 - **Retry-safe:** yes
+
+(error-infra-s3-keys-unsupported)=
+### `infra-s3-keys-unsupported`
+
+**Provider cannot create S3 keys.** The declaration has `Bucket(keys=[S3Key(...)])` at a provider where Piceli cannot create S3 key pairs. At Infomaniak the API lets only the account's own user create S3 (EC2) credentials, never an application credential, restricted or not (0.25.3).
+
+- **Fix:** Remove `keys=` and make each pair by hand: signed in as the project's user (not an application credential), run `openstack ec2 credentials create`; store it with `piceli secrets s3 NAME --prompt`; then declare `NixCache(bucket=..., write_credentials=WRITE, read_credentials=READ)`. `piceli host secrets` installs the read pair on the host, and `piceli secrets status` lists both until they are stored.
+- **Retry-safe:** no
 
 (error-infra-server-unknown)=
 ### `infra-server-unknown`

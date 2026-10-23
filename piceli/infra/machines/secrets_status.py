@@ -7,7 +7,9 @@ module's values (``Infrastructure``, ``Bucket``, ``NixCache``, ``NixHost``,
 credentials are a ``piceli login`` profile); :func:`report` lists what they
 need (:func:`~piceli.infra.machines.keys.needed_secrets`), each with:
 
-- its state: ``present``, ``missing``, ``incomplete`` (a credential that
+- its state: ``present``, ``pending`` (a pair the next ``infra apply``
+  creates, or, 0.25.3, an S3 pair the owner makes by hand and has not
+  stored yet), ``missing``, ``incomplete`` (a credential that
   lacks a part: :func:`~piceli.infra.machines.credential_parts.credential_report`),
   ``damaged`` (unreadable, readable by others, another kind, or a Nix
   signing key whose public key is not the declared one), ``copy`` (a Nix
@@ -59,6 +61,8 @@ STATES = (
 GROUPS = ("provider", "profile", "generated", "user-data", "s3")
 _REPLACE = {"state-key", "nix-signing-key", "age-identity"}
 PENDING = "created by the next infra apply"
+#: An S3 pair the owner makes by hand (0.25.3), after its ``hint``.
+BY_HAND = "Piceli cannot create it; store it with the next command"
 MISMATCH = (
     "its public key is not NixCache(public_key=): put the stored key's public "
     "key (the next command prints it) in the declaration, or restore the key "
@@ -355,6 +359,8 @@ def _state(secret: NeededSecret, index: _Index) -> tuple[str, str | None]:
     if body is None:
         if secret.created_by == "infra-apply" and not _applied(secret.name, index):
             return "pending", PENDING
+        if secret.created_by == "owner":
+            return "pending", f"{secret.hint}; {BY_HAND}" if secret.hint else BY_HAND
         if secret.kind == "user-data" and secret.name in index.user_data:
             infra, server = index.user_data[secret.name]
             if _created(infra, server):
@@ -502,7 +508,7 @@ def backup_state() -> dict[str, Any]:
 
 def _warnings(decls: list[Any], items: list[Item]) -> list[dict[str, str]]:
     from piceli.infra import Infrastructure
-    from piceli.infra.machines.model import Bucket
+    from piceli.infra.machines.model import Bucket, S3Key
 
     found: list[dict[str, str]] = []
     buckets: dict[int, Any] = {}
@@ -530,6 +536,26 @@ def _warnings(decls: list[Any], items: list[Item]) -> list[dict[str, str]]:
                     "it, but the cloud lets it write",
                     "how": str(limits.get("how") or ""),
                 })  # fmt: skip
+    for value in decls:
+        cache = getattr(getattr(value, "host", value), "cache", value)
+        read = getattr(cache, "read_credentials", None)
+        bucket = getattr(cache, "bucket", None)
+        if not read or not isinstance(bucket, Bucket) or cache.creates(read):
+            continue
+        # An owner-made read pair (0.25.3): limited as the bucket's own
+        # read key would be.
+        limits = bucket.provider.s3_key_enforcement(S3Key(read, access="read"))
+        if not limits.get("read_only_enforced") and all(
+            w["name"] != read for w in found
+        ):
+            found.append({
+                "kind": "s3-read-not-enforced",
+                "name": read,
+                "message": f"S3 key {read} (bucket {bucket.name}) is not "
+                f"read-only at {bucket.provider.name}: hosts only read with "
+                "it, but the cloud lets it write",
+                "how": str(limits.get("how") or ""),
+            })  # fmt: skip
     for item in items:
         if item.secret.kind == "user-data" and item.state == "present":
             found.append({

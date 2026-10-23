@@ -41,7 +41,13 @@ What each declared object becomes:
   revocable on its own, not one the cloud limits to reading
   (``read_only_enforced: false`` in the plan). Since Keystone's
   OSSA-2026-005 fix, a *restricted* application credential may not create
-  EC2 credentials at all (``infra-s3-key-refused``).
+  EC2 credentials at all (``infra-s3-key-refused``). The ``Infomaniak``
+  preset creates none (0.25.3): its API refuses EC2 credentials to every
+  application credential, restricted or not, so a ``Bucket(keys=...)``
+  there is refused at declaration (``infra-s3-keys-unsupported``) and the
+  owner makes the pairs by hand (``openstack ec2 credentials create``,
+  signed in as the project's user) for ``NixCache(write_credentials=,
+  read_credentials=)``.
 
 Ownership labels: server metadata and container metadata, tags on ports,
 security groups and images, the description of security group rules; key
@@ -210,6 +216,7 @@ class OpenStack(Provider):
     supports_dns = False
     supports_user_data = True
     supports_s3_keys = True
+    s3_keys_by_hand = "openstack ec2 credentials create"
 
     def __init__(
         self,
@@ -650,9 +657,20 @@ class Infomaniak(OpenStack):
     ``dc3-a`` by default (``dc4-a`` is the other), prices in CHF, and
     ``flavors`` its smallest, ``a1-ram2-disk20-perf1`` (1 vCPU, 2 GB, 20 GB):
     a bigger one must be listed.
+
+    It creates no S3 keys (0.25.3): Infomaniak's API lets only the
+    account's own user create EC2 credentials, never an application
+    credential, so ``Bucket(keys=[S3Key(...)])`` is refused
+    (``infra-s3-keys-unsupported``); make each pair by hand and name it in
+    ``NixCache(write_credentials=, read_credentials=)``.
     """
 
     preset = "infomaniak"
+    supports_s3_keys = False
+    s3_keys_refused_because = (
+        "its API lets only the account's own user create S3 credentials, "
+        "not an application credential"
+    )
 
     def __init__(
         self,

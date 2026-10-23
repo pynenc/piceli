@@ -61,7 +61,7 @@ web = NixHost(
 | `checks=` | `HostCheck.unit(UNIT)`, `HostCheck.http(URL)` (2xx), `HostCheck.command(ARG, ...)` (exit 0); each tried every 2 s until its `timeout=` (60 s) |
 | `report=` | `HostReport(endpoint, headers_file=None, insecure=False)`: OTLP/HTTP logs |
 | `build=` | The manifests' name, `--name` of the publish (`NAME` of `.#NAME`, else the host's name) |
-| `read_credentials_file=` | The host's file with the cache's read S3 keys. When the cache's bucket declares `S3Key(access="read")` (0.25.0): `/var/lib/piceli-host/cache.env`, which `piceli host secrets` writes. Otherwise a sops-nix secret (`/run/secrets/piceli/cache.env` for an `s3://` cache, none otherwise). A path you give is your own file: `host secrets` leaves it alone |
+| `read_credentials_file=` | The host's file with the cache's read S3 keys. When the cache's bucket declares `S3Key(access="read")` (0.25.0) or the cache names a pair you made, `NixCache(read_credentials=)` (0.25.3): `/var/lib/piceli-host/cache.env`, which `piceli host secrets` writes. Otherwise a sops-nix secret (`/run/secrets/piceli/cache.env` for an `s3://` cache, none otherwise). A path you give is your own file: `host secrets` leaves it alone |
 | `poll_seconds=`, `history=` | How often the agent polls (300) and how many attempts the status keeps (20) |
 | `generations=` | How many system generations the host keeps (5, at least 2: a rollback needs the previous one); see [Old systems](#old-systems) |
 | `age_identity=`, `age_key_file=` | The local credential with the host's age identity, and where `piceli host secrets` puts it (`/var/lib/sops-nix/key.txt`, sops-nix's `sops.age.keyFile`) |
@@ -172,6 +172,16 @@ not read-only at OpenStack (the plan of `infra apply` says
 and how to limit it. The sops-nix path below still works: give
 `read_credentials_file=` the path of your sops secret, and keys you created
 yourself.
+
+**A read pair you made yourself** (0.25.3). Where Piceli cannot create the
+keys (Infomaniak lets only the account's own user create them), make the
+pair by hand (`openstack ec2 credentials create`, signed in as the
+project's user), store it with `piceli secrets s3 cache-read --prompt` and
+name it: `NixCache(..., write_credentials="cache-write",
+read_credentials="cache-read")`. `piceli host secrets` then puts it at
+`/var/lib/piceli-host/cache.env` with the same plan, digest and
+comparison as a bucket's read key; while it is not stored it refuses
+with `infra-credential-missing` and that command.
 
 Declare the secrets in the host's configuration, encrypted to that public
 key:
