@@ -438,6 +438,17 @@ def _read_json(path: str) -> dict[str, Any]:
 # ------------------------------------------------------------------ agent
 
 
+#: The fields of a promotion gate's pin the status keeps.
+PINNED_KEYS = ("input", "commit", "environment", "verified_run", "verified_at")
+
+
+def _pinned(value: Any) -> dict[str, Any] | None:
+    """A manifest's ``pinned`` (its known fields), or ``None``."""
+    if not isinstance(value, Mapping) or not value.get("commit"):
+        return None
+    return {key: value.get(key) for key in PINNED_KEYS}
+
+
 class Agent:
     """One host's agent; :meth:`run_once` is one poll."""
 
@@ -1018,6 +1029,9 @@ class Agent:
             "checks": [],
             "rollback": None,
             "prune": None,
+            # 0.24.0: the promotion gate's pin of the build (a rollback's: the
+            # one recorded when it was deployed; else the verified manifest's).
+            "pinned": _pinned(pointer.get("pinned")) if local else None,
         }
         started = self.monotonic()
         trace = attempt["trace_id"]
@@ -1034,6 +1048,7 @@ class Agent:
                 manifest = self._stage(
                     attempt, "verify", lambda: self.verify(cache, pointer)
                 )
+                attempt["pinned"] = _pinned(manifest.get("pinned"))
                 self._stage(attempt, "realise", lambda: self.realise(manifest))
             switched = True
             self._stage(
@@ -1078,7 +1093,7 @@ class Agent:
                 "store_path": pointer["store_path"], "commit": pointer.get("commit"),
                 "tag": attempt["tag"], "ref": pointer.get("ref"),
                 "published_at": pointer.get("published_at"),
-                "since": now_text(self.clock()),
+                "since": now_text(self.clock()), "pinned": attempt["pinned"],
             }  # fmt: skip
         attempt["ended_at"] = now_text(self.clock())
         attempt["seconds"] = round(self.monotonic() - started, 3)

@@ -177,6 +177,12 @@ and rollback.
   without that verified pin (`host-promotion-missing`); its `NixRelease`
   takes the host's gate. New codes `promotion-*`, `promote-*`; see
   `docs/gitops.md`.
+- **A host reports the pin it runs.** The host agent copies the
+  deployed manifest's `pinned` into its status: `current.pinned`
+  (`previous.pinned`) and each attempt's `pinned`; a rollback restores
+  the previous build's. `piceli host status --json` shows it, and
+  `piceli targets` prefers it (`facts.pinned: host-agent`) over the
+  controller's release. Status files without the field still read.
 - **One status view of every target.** `piceli targets [--composition
   MODULE] [--infra MODULE] [--json]` lists each GitOps environment and each
   NixHost with its commit or tag, the product commit it pins (a promotion

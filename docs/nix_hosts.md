@@ -290,8 +290,11 @@ collection freed.
 
 The agent writes `/var/lib/piceli-host/status.json` (`0644`, no secret,
 `schema: piceli.nix-host-status.v1`). It holds `current` and `previous`
-(store path, commit, tag, ref, `published_at`, `since`), `poll` (the last
-poll's state and reason), `last_attempt` (its stages with `seconds`, the
+(store path, commit, tag, ref, `published_at`, `since`, and `pinned`: the
+promotion gate's pin of that build from its signed manifest, `input`,
+`commit`, `environment`, `verified_run`, `verified_at`, or `null` for a
+build published without a gate; a rollback restores the previous build's), `poll` (the last
+poll's state and reason), `last_attempt` (its `pinned`, its stages with `seconds`, the
 check results, the `rollback`, the `prune`), `history` (the newest
 attempts), `prune` (the last one), the ignored tags, the `hold` (or `null`)
 and the report's state.
@@ -357,10 +360,12 @@ runs), `checks` (`passed`, `failed`, `running` or `none`, with `at`),
   source a promotion gate verified in it, else its only source. Without
   either, `pinned.source` is `null` and `pinned.commits` lists every
   source's commit.
-- A NixHost's `pinned` is the `pinned` field (`input`, `commit`,
-  `environment`, `verified_run`, `verified_at`) of its release in the
-  controller's status, when the host runs that release's commit; `null`
-  without a gate or for older releases.
+- A NixHost's `pinned` is the host agent's own `current.pinned` (the pin
+  in the manifest of the build it runs; `facts.pinned` is `host-agent`).
+  From an agent before that field, or when the host is not read, it is
+  the `pinned` (`input`, `commit`, `environment`, `verified_run`,
+  `verified_at`) of its release in the controller's status, when the host
+  runs that release's latest commit; `null` without a gate.
 
 The controller is read once, as `gitops status` reads it: from the
 composition's home `Cluster` with its `piceli login` profile, as `gitops
