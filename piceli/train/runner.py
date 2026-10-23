@@ -5,7 +5,9 @@ touching the train's logic:
 
 - :class:`Runner` runs one :class:`Command` and returns a :class:`Completed`
   (exit status, start, duration, host, output). :class:`LocalRunner` runs it
-  here (host ``local``). A remote build host implements the same protocol.
+  here (host ``local``), in one of this machine's slots
+  (:mod:`piceli.train.local`); :class:`piceli.train.hosts.HostRunner`
+  spreads commands over the train's build hosts.
 - An :data:`EventSink` receives one dict per event (``run-started``,
   ``trial-started``, ``step-started``, ``step-finished``, ``trial-finished``,
   ``branch-joined``, ``branch-ejected``, ``promoted``, ``published``,
@@ -66,7 +68,16 @@ class Command:
     :param timeout: Seconds before the process group is stopped.
     :param stdout: Return standard output alone in :attr:`Completed.output`
         (machine output such as ``cargo metadata``); standard error still
-        goes to the log.
+        goes to the log. Such a command always runs here, in no slot.
+    :param hosts: Where it may run, in order of preference (empty: the
+        runner's default).
+    :param cargo: It runs cargo: a local run gets the shared target
+        directory and the compiler cache.
+    :param outputs: Paths (relative to ``cwd``; ``target/...`` is the cargo
+        target directory) the command produces: after it, they are in
+        ``cwd`` wherever it ran.
+    :param step_env: The variables the train and the step set (a subset of
+        ``env``): what a remote host gets, never the caller's environment.
     """
 
     argv: Sequence[str]
@@ -75,6 +86,10 @@ class Command:
     env: Mapping[str, str] = field(default_factory=dict)
     timeout: float | None = None
     stdout: bool = False
+    hosts: tuple[str, ...] = ()
+    cargo: bool = False
+    outputs: tuple[str, ...] = ()
+    step_env: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -82,7 +97,9 @@ class Completed:
     """What one :class:`Command` did.
 
     ``exit_code`` is ``None`` when it was stopped at its timeout or could not
-    start (``error`` says which).
+    start (``error`` says which: ``timeout``, ``not-started``, or
+    ``unavailable`` when its host turned out down). ``notes`` say how it was
+    placed (a host skipped, the target directory used).
     """
 
     exit_code: int | None
@@ -91,6 +108,7 @@ class Completed:
     host: str
     output: str
     error: str | None = None
+    notes: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -106,11 +124,58 @@ class Runner(Protocol):
 
 
 class LocalRunner:
-    """Run commands on this machine, each in its own process group."""
+    """Run commands on this machine, each in its own process group.
+
+    :param slots: This machine's slots (:class:`piceli.train.local.Slots`):
+        a command waits for a free one, so the machine keeps its limit across
+        every train on it. ``None``: no limit.
+    :param cargo: The environment of a cargo command in slot ``n``
+        (:class:`piceli.train.local.CargoCache`): the shared target directory
+        and the compiler cache. ``None``: the caller's.
+    """
 
     host = "local"
 
+    def __init__(self, slots: Any = None, cargo: Any = None) -> None:
+        self.slots = slots
+        self.cargo = cargo
+
+    def state(self) -> tuple[bool, int, str]:
+        """``(up, free slots, detail)``."""
+        free = 1 if self.slots is None else self.slots.free()
+        return True, free, ""
+
     def run(self, command: Command) -> Completed:
+        if command.stdout or self.slots is None:
+            return self._placed(command, None)
+        with self.slots.take() as slot:
+            return self._placed(command, slot)
+
+    def _placed(self, command: Command, slot: int | None) -> Completed:
+        notes: list[str] = []
+        target: Path | None = None
+        if command.cargo and self.cargo is not None and not command.stdout:
+            extra, target = self.cargo.environment(slot or 0, command.env, command.cwd)
+            if extra:
+                command = Command(
+                    command.argv, command.cwd, command.log,
+                    {**command.env, **extra}, command.timeout, command.stdout,
+                    command.hosts, command.cargo, command.outputs, command.step_env,
+                )  # fmt: skip
+                notes += [f"{key}={value}" for key, value in sorted(extra.items())]
+        done = self._run(command)
+        if target is not None and command.outputs:
+            from piceli.train.local import bring_outputs
+
+            bring_outputs(target, command.cwd, command.outputs)
+        if notes:
+            done = Completed(
+                done.exit_code, done.started, done.duration, done.host,
+                done.output, done.error, (*done.notes, *notes),
+            )  # fmt: skip
+        return done
+
+    def _run(self, command: Command) -> Completed:
         command.log.parent.mkdir(parents=True, exist_ok=True)
         started = time.time()
         clock = time.monotonic()

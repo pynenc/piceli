@@ -11,7 +11,9 @@ Importing this module is side-effect free.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
+import threading
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -52,6 +54,8 @@ class Git:
 
     def __init__(self, repo: Path) -> None:
         self.repo = repo
+        # Worktrees are added and removed one at a time (parallel trials).
+        self._worktrees = threading.Lock()
 
     def run(
         self, *args: str, cwd: Path | None = None, check: bool = True
@@ -100,17 +104,60 @@ class Git:
         return self.out("tag", "--list", pattern).splitlines()
 
     @contextmanager
-    def worktree(self, commit: str, purpose: str = "train") -> Iterator[Path]:
-        """A detached worktree at ``commit`` in a temporary directory, removed
-        (with its Git administrative files) when the block exits."""
+    def worktree(
+        self, commit: str, purpose: str = "train", path: Path | None = None
+    ) -> Iterator[Path]:
+        """A detached worktree at ``commit`` in a temporary directory (or at
+        ``path``, a stable place the caller holds), removed (with its Git
+        administrative files) when the block exits."""
+        if path is not None:
+            with self._at(commit, path) as checkout:
+                yield checkout
+            return
         with temporary_directory(purpose) as scratch:
             checkout = scratch / "checkout"
-            self.run("worktree", "add", "--detach", "--quiet", str(checkout), commit)
+            with self._worktrees:
+                self.run(
+                    "worktree", "add", "--detach", "--quiet", str(checkout), commit
+                )
             try:
                 yield checkout
             finally:
-                self.run("worktree", "remove", "--force", str(checkout), check=False)
-                self.run("worktree", "prune", check=False)
+                with self._worktrees:
+                    self.run(
+                        "worktree", "remove", "--force", str(checkout), check=False
+                    )
+                    self.run("worktree", "prune", check=False)
+
+    @contextmanager
+    def _at(self, commit: str, checkout: Path) -> Iterator[Path]:
+        checkout.parent.mkdir(parents=True, exist_ok=True)
+        with self._worktrees:
+            self._drop(checkout)
+            self.run("worktree", "add", "--detach", "--quiet", str(checkout), commit)
+        try:
+            yield checkout
+        finally:
+            with self._worktrees:
+                self._drop(checkout)
+
+    def _drop(self, checkout: Path) -> None:
+        """Remove a worktree at ``checkout`` (and what a crash left there)."""
+        self.run("worktree", "remove", "--force", str(checkout), check=False)
+        shutil.rmtree(checkout, ignore_errors=True)
+        self.run("worktree", "prune", check=False)
+
+    def merged(
+        self, head: str, candidates: Sequence[tuple[str, str]], train: str
+    ) -> Merged:
+        """The commit of ``candidates`` merged onto ``head`` (made in a
+        temporary worktree, which goes; the commit stays in the object store)."""
+        with self.worktree(head) as checkout:
+            return self.merge(checkout, candidates, train)
+
+    def set_ref(self, ref: str, commit: str) -> None:
+        """Point ``ref`` (a full name outside ``refs/heads``) at ``commit``."""
+        self.run("update-ref", ref, commit)
 
     def merge(
         self, checkout: Path, candidates: Sequence[tuple[str, str]], train: str

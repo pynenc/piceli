@@ -2,9 +2,14 @@
 
 :func:`run_step` turns a :class:`~piceli.train.model.Step` into commands for
 the :class:`~piceli.train.runner.Runner` and a :class:`StepResult`: verdict
-(``passed``, ``failed``, ``timeout`` or ``skipped``), start, duration, host,
-log path, an output tail, details (the impact selection, the failed and
-flaky tests) and the flaky tests seen.
+(``passed``, ``failed``, ``timeout``, ``skipped`` or ``reused``), start,
+duration, the host it ran on, log path, an output tail, details (the impact
+selection, the failed and flaky tests, the content key, where it was
+placed) and the flaky tests seen.
+
+A step with ``inputs`` is looked up in the content store first
+(:mod:`piceli.train.reuse`): a key that passed before is ``reused``, its
+outputs restored, nothing run.
 
 Importing this module is side-effect free.
 """
@@ -21,6 +26,7 @@ from typing import Any
 
 from piceli.train import cargo, impact
 from piceli.train.model import CargoCheck, CargoTests, CommandStep, Impact, Step
+from piceli.train.reuse import Store, step_key
 from piceli.train.runner import Command, Completed, EventSink, Runner, now_iso
 
 #: Lines of a failed step's output kept in the result.
@@ -45,7 +51,7 @@ class StepResult:
 
     @property
     def passed(self) -> bool:
-        return self.verdict in {"passed", "skipped"}
+        return self.verdict in {"passed", "skipped", "reused"}
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -75,6 +81,11 @@ class StepContext:
         ``PICELI_TRAIN_*`` variables).
     :param log_dir: Where step logs go.
     :param prefix: Log file name prefix (the trial).
+    :param own_env: The ``PICELI_TRAIN_*`` variables (what a build host gets
+        with the step's own ``env``).
+    :param store: The content store (``None``: no reuse).
+    :param origin: Who runs it (``train``, ``run``, ``trial``), recorded with
+        a passed step's key.
     """
 
     checkout: Path
@@ -87,6 +98,9 @@ class StepContext:
     prefix: str
     runner: Runner
     events: EventSink
+    own_env: Mapping[str, str] = field(default_factory=dict)
+    store: Store | None = None
+    origin: Mapping[str, Any] = field(default_factory=dict)
 
 
 def log_path(ctx: StepContext, step: str) -> Path:
@@ -103,39 +117,131 @@ class _Budget:
         return max(1.0, self.deadline - time.monotonic())
 
 
+class _Placement:
+    """Where a step's commands ran: the last host, and the notes."""
+
+    def __init__(self, default: str) -> None:
+        self.host = default
+        self.notes: list[str] = []
+
+    def saw(self, done: Completed) -> None:
+        self.host = done.host
+        for note in done.notes:
+            if note not in self.notes:
+                self.notes.append(note)
+
+
 def run_step(step: Step, ctx: StepContext) -> StepResult:
     """Run ``step`` in ``ctx.checkout``; never raises for a failing step."""
     started = time.time()
     clock = time.monotonic()
     log = log_path(ctx, step.name)
     env = {**ctx.env, **dict(step.env)}  # type: ignore[arg-type]
+    own = {**ctx.own_env, **dict(step.env)}  # type: ignore[arg-type]
     budget = _Budget(step.timeout)
+    placed = _Placement(ctx.runner.host)
 
-    def run(argv: Sequence[str], *, stdout: bool = False) -> Completed:
-        return ctx.runner.run(
-            Command(tuple(argv), ctx.checkout, log, env, budget.left(), stdout=stdout)
+    def run(
+        argv: Sequence[str], *, stdout: bool = False, outputs: Sequence[str] = ()
+    ) -> Completed:
+        done = ctx.runner.run(
+            Command(
+                tuple(argv), ctx.checkout, log, env, budget.left(), stdout=stdout,
+                hosts=step.hosts, cargo=step.cargo, outputs=tuple(outputs),
+                step_env=own,
+            )
+        )  # fmt: skip
+        if not stdout:
+            placed.saw(done)
+        return done
+
+    def finish(
+        verdict: str, tail: str, detail: dict[str, Any], flaky: list[dict[str, Any]]
+    ) -> StepResult:
+        if placed.notes:
+            detail = {**detail, "placement": placed.notes}
+        return StepResult(
+            step.name,
+            step.kind,
+            verdict,
+            started,
+            time.monotonic() - clock,
+            placed.host,
+            str(log) if log.exists() else None,
+            tail,
+            detail,
+            [
+                {**item, "step": step.name, "branches": list(ctx.branches)}
+                for item in flaky
+            ],
         )
 
+    selected: list[str] | None = None
+    base: dict[str, Any] = {}
+    if isinstance(step, CargoCheck | CargoTests):
+        selected, base, error = _selection(step.select, ctx, run, log)
+        if error:
+            return finish("failed", error, base, [])
+        if selected == []:
+            return finish("skipped", "", {**base, "why": "no package changed"}, [])
+    key: str | None = None
+    if step.inputs and ctx.store is not None:
+        extra = (
+            {"selection": selected} if isinstance(step, CargoCheck | CargoTests) else {}
+        )
+        key, count = step_key(step.to_dict(), step.inputs, ctx.checkout, extra)
+        base = {**base, "key": key, "inputs": count}
+        found = ctx.store.lookup(key)
+        if found is not None:
+            restored = ctx.store.restore(found, ctx.checkout)
+            origin = {
+                k: found.get(k)
+                for k in ("train", "run", "trial", "host", "at", "head")
+                if found.get(k) is not None
+            }
+            with log.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    f"reused {key} from run {origin.get('run')} "
+                    f"(trial {origin.get('trial')}, host {origin.get('host')})\n"
+                )
+            placed.host = str(found.get("host") or placed.host)
+            return finish(
+                "reused",
+                "",
+                {
+                    **base,
+                    "reused": origin,
+                    **({"outputs": restored} if restored else {}),
+                },
+                [],
+            )
     if isinstance(step, CommandStep):
         verdict, tail, detail, flaky = _command(step, run)
     elif isinstance(step, CargoCheck):
-        verdict, tail, detail, flaky = _cargo_check(step, ctx, run, log)
+        verdict, tail, detail, flaky = _cargo_check(step, selected, run)
     elif isinstance(step, CargoTests):
-        verdict, tail, detail, flaky = _cargo_tests(step, ctx, run, log)
+        verdict, tail, detail, flaky = _cargo_tests(step, selected, run)
     else:  # pragma: no cover - every kind is handled above
         raise TypeError(f"unknown step {step!r}")
-    return StepResult(
-        step.name,
-        step.kind,
-        verdict,
-        started,
-        time.monotonic() - clock,
-        ctx.runner.host,
-        str(log) if log.exists() else None,
-        tail,
-        detail,
-        [{**item, "step": step.name, "branches": list(ctx.branches)} for item in flaky],
-    )
+    detail = {**base, **detail}
+    if key is not None and verdict == "passed" and ctx.store is not None:
+        record = ctx.store.save(
+            key,
+            ctx.checkout,
+            step.outputs,
+            {
+                **dict(ctx.origin),
+                "step": step.name,
+                "host": placed.host,
+                "head": ctx.head,
+                "at": now_iso(),
+            },
+        )
+        if record is None:
+            detail["stored"] = "an output is missing: not kept"
+        else:
+            detail["stored"] = len(record.get("outputs") or ())
+    return finish(verdict, tail, detail, flaky)
 
 
 _Outcome = tuple[str, str, dict[str, Any], list[dict[str, Any]]]
@@ -152,7 +258,7 @@ def _verdict(done: Completed) -> str:
 
 
 def _command(step: CommandStep, run: Any) -> _Outcome:
-    done: Completed = run(step.argv)
+    done: Completed = run(step.argv, outputs=step.outputs)
     detail = {"exit_code": done.exit_code} if not done.ok else {}
     return _verdict(done), _tail(done.output), detail, []
 
@@ -178,54 +284,62 @@ def _selection(
     except ValueError:
         return None, {}, "cargo metadata printed no JSON"
     reasons: list[str] = []
-    selected = impact.select(ctx.changed, metadata, select.roots, reasons.append)
+    selected = impact.select(
+        ctx.changed,
+        metadata,
+        select.roots,
+        reasons.append,
+        dev_targets=select.dev_targets,
+    )
     with log.open("a", encoding="utf-8") as handle:
         handle.write("\n".join(reasons) + ("\n" if reasons else ""))
     return selected, {"selection": "all" if selected is None else selected}, None
 
 
-def _cargo_check(step: CargoCheck, ctx: StepContext, run: Any, log: Path) -> _Outcome:
-    selected, detail, error = _selection(step.select, ctx, run, log)
-    if error:
-        return "failed", error, detail, []
-    if selected == []:
-        return "skipped", "", {**detail, "why": "no package changed"}, []
+def _cargo_check(step: CargoCheck, selected: list[str] | None, run: Any) -> _Outcome:
+    detail: dict[str, Any] = {}
     done: Completed = run(
-        ["cargo", "check", *impact.cargo_arguments(selected), *step.args]
+        ["cargo", "check", *impact.cargo_arguments(selected), *step.args],
+        outputs=step.outputs,
     )
     if not done.ok:
         detail["exit_code"] = done.exit_code
     return _verdict(done), _tail(done.output), detail, []
 
 
-def _cargo_tests(step: CargoTests, ctx: StepContext, run: Any, log: Path) -> _Outcome:
-    selected, detail, error = _selection(step.select, ctx, run, log)
-    if error:
-        return "failed", error, detail, []
-    if selected == []:
-        return "skipped", "", {**detail, "why": "no package changed"}, []
+def _cargo_tests(step: CargoTests, selected: list[str] | None, run: Any) -> _Outcome:
+    detail: dict[str, Any] = {}
     cargo_args, binary_args = cargo.split_args(step.args)
-    argv = [
-        "cargo",
-        "test",
-        "--no-fail-fast",
-        *impact.cargo_arguments(selected),
-        *cargo_args,
-    ]
-    if binary_args:
-        argv += ["--", *binary_args]
-    done: Completed = run(argv)
-    if done.ok:
+    report = cargo.CargoReport()
+    outputs: list[str] = []
+    failed_any = False
+    invocations = impact.cargo_test_arguments(selected)
+    for index, arguments in enumerate(invocations):
+        argv = ["cargo", "test", "--no-fail-fast", *arguments, *cargo_args]
+        if binary_args:
+            argv += ["--", *binary_args]
+        last = index + 1 == len(invocations)
+        done: Completed = run(argv, outputs=step.outputs if last else ())
+        if done.ok:
+            continue
+        if done.error:
+            return _verdict(done), _tail(done.output), detail, []
+        failed_any = True
+        outputs.append(done.output)
+        found = cargo.parse(done.output)
+        if not found.failed:  # failed without naming a target: not retryable
+            found.failed.append(cargo.FailedTarget(" ".join(arguments)))
+        report.failed += found.failed
+        report.output.update(found.output)
+    if not failed_any:
         return "passed", "", detail, []
-    if done.error:
-        return _verdict(done), _tail(done.output), detail, []
-    report = cargo.parse(done.output)
+    text = "\n".join(outputs)
     failed = {item.target: list(item.tests) for item in report.failed}
     detail["failed"] = [
         {"target": target, "tests": tests} for target, tests in failed.items()
     ]
     if step.retry == 0 or not report.retryable:
-        return "failed", _tail(done.output), detail, []
+        return "failed", _tail(text), detail, []
     remaining = {item.target: list(item.tests) for item in report.failed}
     targets = {item.target: item for item in report.failed}
     attempts = 0

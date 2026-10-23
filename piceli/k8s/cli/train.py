@@ -28,16 +28,23 @@ def _human(event: Mapping[str, Any]) -> None:
     if kind == "trial-started":
         say(
             f"trial {event['trial']}: {' '.join(event['branches'])} on {event['base'][:12]}"
+            + (" (speculative, in parallel)" if event.get("speculative") else "")
         )
     elif kind == "step-finished":
         where = (
             f" (log {event['log']})"
-            if event.get("log") and event["verdict"] != "passed"
+            if event.get("log") and event["verdict"] not in {"passed", "reused"}
             else ""
         )
-        say(
-            f"  {event['step']}: {event['verdict']} in {event['duration']:.1f} s{where}"
+        host = (
+            f" on {event['host']}" if event.get("host") not in (None, "local") else ""
         )
+        say(
+            f"  {event['step']}: {event['verdict']} in {event['duration']:.1f} s"
+            f"{host}{where}"
+        )
+    elif kind == "trial-discarded":
+        say(f"  trial {event['trial']} discarded: the left half did not all join")
     elif kind == "trial-finished" and event["verdict"] != "passed":
         say(f"  trial {event['trial']} failed at {event.get('step')}")
     elif kind == "branch-joined":
@@ -121,6 +128,15 @@ def train(
             "~/.local/state/piceli/train)",
         ),
     ] = None,
+    promote_run: Annotated[
+        str | None,
+        typer.Option(
+            "--promote-run",
+            help="Promote the head an earlier run reached (its id, or 'last'), "
+            "without running it again; refused when the base moved in a way "
+            "that is not a fast-forward of that head",
+        ),
+    ] = None,
 ) -> None:
     """Merge branches onto the base one tested merge at a time; eject failures."""
     from piceli.train.engine import TrainRun, locate
@@ -129,11 +145,16 @@ def train(
     from piceli.train.state import TrainState
 
     del branches_flag  # only marks where the branch list starts
-    if not branches:
+    if promote_run is not None and branches:
+        reject(
+            "train-branches-required",
+            "--promote-run promotes an earlier run: name no branches",
+        )
+    if not branches and promote_run is None:
         reject(
             "train-branches-required", "name the candidate branches: --branches a b c"
         )
-    if push and not promote:
+    if push and not promote and promote_run is None:
         reject("train-push-needs-promote", "--push pushes a promotion: add --promote")
     try:
         loaded, repo, spec_path = locate(app, Path.cwd())
@@ -143,12 +164,26 @@ def train(
         loaded,
         repo=repo,
         spec_path=spec_path,
-        branches=branches,
+        branches=branches or [],
         state=TrainState.for_train(loaded.train.name, state_dir),
-        promote=promote,
+        promote=promote or promote_run is not None,
         push=push,
         events=fan_out(_human),
     )
+    if promote_run is not None:
+        try:
+            result = run.promote_run(promote_run)
+        except TrainError as error:
+            reject(error.code, str(error))
+        say(
+            f"train {result['train']}: run {promote_run} promoted as "
+            f"{result['promote'].get('tag') or result['promote']['state']}"
+        )
+        if as_json:
+            emit_json(result)
+        if not result["ok"]:
+            raise typer.Exit(EXIT_FAILED)
+        return
     try:
         run.prepare()
     except TrainError as error:

@@ -132,13 +132,48 @@ def _main(entry: str) -> dict[str, Any]:
         }
     try:
         train, name = _find(module, attr, entry)
+        body = train.to_dict()
+        if isinstance(train.builds, str):
+            body["builds"] = {"dev": _builds(train.builds).describe()}
+            Train.from_dict(body)  # its hosts must name declared build hosts
     except TrainError as error:
         return {"error": error.code, "message": str(error)}
     return {
         "file": getattr(module, "__file__", None),
         "attr": name,
-        "train": train.to_dict(),
+        "train": body,
     }
+
+
+def _builds(entry: str) -> Any:
+    """The ``DevBuilds`` that ``Train(builds="MODULE:ATTR")`` names: one, or
+    a ``Cluster``'s ``dev``."""
+    from piceli.app.render import RenderError, load_module
+    from piceli.cli_contract import describe_user_error
+    from piceli.dev.model import DevBuilds
+
+    target, attr = split_entry(entry)
+    if attr is None:
+        raise TrainError("train-invalid", f"builds {entry!r}: name it as MODULE:ATTR")
+    try:
+        value: Any = load_module(target, Path.cwd())
+        for part in attr.split("."):
+            value = getattr(value, part)
+    except RenderError as error:
+        raise TrainError("train-invalid", f"builds {entry!r}: {error}") from None
+    except AttributeError:
+        raise TrainError("train-invalid", f"builds {entry!r}: no {attr}") from None
+    except Exception as error:
+        raise TrainError(
+            "train-invalid", f"builds {entry!r}: {describe_user_error(error)}"
+        ) from None
+    value = getattr(value, "dev", value)
+    if not isinstance(value, DevBuilds):
+        raise TrainError(
+            "train-invalid",
+            f"builds {entry!r} is neither a DevBuilds nor a Cluster with dev=",
+        )
+    return value
 
 
 def main(argv: list[str] | None = None) -> int:

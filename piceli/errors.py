@@ -6549,6 +6549,30 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         True,
         "train",
     ),
+    _E(
+        "train-host-unavailable",
+        "No host could take a train step",
+        "Every host a step may run on (its hosts, else the train's) was down, quarantined or unavailable at start, and no fallback to this machine applies (Train(fallback=None), or this machine was already tried).",
+        'Check `piceli dev hosts`, release a quarantined host once fixed, or allow the fallback with Train(fallback="local"); then run the train again.',
+        True,
+        "train",
+    ),
+    _E(
+        "train-run-unknown",
+        "No such train run to promote",
+        "`--promote-run` names a run with no record under the train's state directory, one that did not finish, or one that joined nothing.",
+        "Name a finished run that joined branches (its id is in the result and under runs/), or `last`.",
+        False,
+        "train",
+    ),
+    _E(
+        "train-images-failed",
+        "Train images not built or offered",
+        "The images step could not compute the controller's change keys, build an image, push it to the cluster's registry, or offer it to the controller. The promotion stands; the controller builds the images itself as before.",
+        "Read the images step's log; check the composition, the build host and the cluster's registry, then run `piceli train APP --promote-run last` again or let the controller build.",
+        True,
+        "train",
+    ),
 )
 
 

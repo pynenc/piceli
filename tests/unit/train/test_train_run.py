@@ -21,6 +21,8 @@ from tests.train_toy import Toy, make_toy, spec_source
 @pytest.fixture
 def toy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Toy:
     monkeypatch.setenv("TOY_PUBLISH_OUT", str(tmp_path / "published"))
+    # The train's cache (slots, targets, content store) stays in tmp_path.
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     return make_toy(tmp_path)
 
 

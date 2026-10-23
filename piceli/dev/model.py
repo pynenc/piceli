@@ -380,6 +380,7 @@ class BuildHost:
             image=value.get("image"),
             quarantine_after=value.get("quarantine_after", QUARANTINE_AFTER),
             quarantine_window=str(value.get("quarantine_window") or QUARANTINE_WINDOW),
+            runs=bool(value.get("runs", True)),
         )
 
 

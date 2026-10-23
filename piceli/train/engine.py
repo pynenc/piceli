@@ -11,28 +11,42 @@ failing step (or ``train-merge-conflict``) and its output tail. So every
 joined head is a commit whose tree passed every step, and joined branches
 keep the order given.
 
-``--promote`` tags the head and moves ``tested`` and ``base`` by
-fast-forward only, then runs the publish steps; ``--push`` pushes the tag
-and both branches (atomically). Nothing else changes a ref.
+Parallel halves (``Train(parallel=...)``): after a failed trial, the left
+half's merge is made first; the left half is judged on it while the right
+half is judged, at the same time, on top of it (speculating that the whole
+left half joins). When it does, the right half's verdict stands (its trial
+was on exactly the new head); otherwise the speculative trial is discarded
+and the right half is judged again on the head the left half reached. The
+verdicts are those of the sequential order.
+
+Every run that joined something points ``refs/piceli/train/<name>/last`` at
+its head. ``--promote`` tags the head and moves ``tested`` and ``base`` by
+fast-forward only, then runs the publish steps (the outputs of test steps
+that declared them restored first); ``--push`` pushes the tag and both
+branches (atomically). ``--promote-run RUN`` promotes the head of a
+reviewed earlier run without running it again. Nothing else changes a ref.
 
 Importing this module is side-effect free.
 """
 
 from __future__ import annotations
 
+import json
 import re
+import threading
 import time
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from piceli.train.git import Git
-from piceli.train.model import Train, TrainError
+from piceli.train.git import Git, Merged
+from piceli.train.model import ImagesStep, Train, TrainError
+from piceli.train.reuse import Store
 from piceli.train.runner import (
     EventSink,
-    LocalRunner,
     Runner,
     base_environment,
     no_events,
@@ -93,6 +107,10 @@ class Trial:
     files: tuple[str, ...] = ()
     spec: str = "merged-tree"
     duration: float = 0.0
+    #: Judged at the same time as the half before it, on top of it.
+    speculative: bool = False
+    #: A speculative trial whose base the run did not reach (not counted).
+    discarded: bool = False
 
     @property
     def passed(self) -> bool:
@@ -122,6 +140,10 @@ class Trial:
             body["step"] = self.failed_step
         if self.conflict:
             body["conflict"] = {"branch": self.conflict, "files": list(self.files)}
+        if self.speculative:
+            body["speculative"] = True
+        if self.discarded:
+            body["discarded"] = True
         return body
 
 
@@ -151,6 +173,7 @@ class TrainRun:
         runner: Runner | None = None,
         events: EventSink = no_events,
         environment: Mapping[str, str] | None = None,
+        store: Store | None = None,
     ) -> None:
         if push and not promote:
             raise TrainError("train-push-needs-promote", "--push needs --promote")
@@ -162,8 +185,21 @@ class TrainRun:
         self.state = state
         self.promote_requested = promote
         self.push_requested = push
-        self.runner: Runner = runner or LocalRunner()
-        self.events = events
+        if runner is None:
+            from piceli.train.hosts import build_runner
+
+            runner = build_runner(self.train, repo)
+        self.runner: Runner = runner
+        if store is None:
+            from piceli.train.local import cache_root
+
+            store = Store(cache_root(self.train.cache) / "store")
+        self.store = store
+        from piceli.train.local import Checkouts, cache_root
+
+        self.checkouts = Checkouts(cache_root(self.train.cache), self.train.name, repo)
+        self._events = events
+        self._lock = threading.RLock()
         self.environment = dict(
             environment if environment is not None else base_environment()
         )
@@ -178,6 +214,8 @@ class TrainRun:
         self.pushed: dict[str, Any] | None = None
         self.flakes: list[dict[str, Any]] = []
         self.finished: float | None = None
+        self.last: dict[str, Any] | None = None
+        self.promoted_from: str | None = None
 
     # ----------------------------------------------------------- the run
 
@@ -209,6 +247,10 @@ class TrainRun:
                 raise TrainError("train-branch-unknown", f"no branch {branch!r}")
             self.candidates.append(Candidate(branch, tip))
 
+    @property
+    def last_ref(self) -> str:
+        return f"refs/piceli/train/{self.train.name}/last"
+
     def run(self) -> dict[str, Any]:
         """Run the train; returns the result (also written as the run record)."""
         self.prepare()
@@ -229,6 +271,9 @@ class TrainRun:
                 else:
                     pending.append(candidate)
             self.head = self._resolve(self.head, pending)
+            if self.head != self.start:
+                self.git.set_ref(self.last_ref, self.head)
+                self.last = {"ref": self.last_ref, "head": self.head}
             if self.promote_requested:
                 self.promotion = self._promote()
                 if self.push_requested and self.promotion.get("state") in {
@@ -248,10 +293,17 @@ class TrainRun:
             )
             return result
 
-    def _resolve(self, head: str, group: list[Candidate]) -> str:
+    def _resolve(
+        self, head: str, group: list[Candidate], premerged: str | None = None
+    ) -> str:
         if not group:
             return head
-        trial = self._trial(head, group)
+        trial = self._trial(head, group, premerged=premerged)
+        return self._judged(head, group, trial)
+
+    def _judged(self, head: str, group: list[Candidate], trial: Trial) -> str:
+        """Join ``group`` on a passed trial; else eject it (one branch) or
+        bisect it."""
         if trial.passed:
             for candidate in group:
                 candidate.verdict = "joined"
@@ -276,23 +328,86 @@ class TrainRun:
             )
             return head
         middle = (len(group) + 1) // 2
-        head = self._resolve(head, group[:middle])
-        return self._resolve(head, group[middle:])
+        left, right = group[:middle], group[middle:]
+        if self._parallel():
+            merged = self.git.merged(
+                head, [(c.branch, c.tip) for c in left], self.train.name
+            )
+            if merged.head is not None:
+                return self._halves(head, left, right, merged.head)
+        head = self._resolve(head, left)
+        return self._resolve(head, right)
+
+    def _halves(
+        self, head: str, left: list[Candidate], right: list[Candidate], merged: str
+    ) -> str:
+        """Judge ``left`` on ``head`` (its merge made: ``merged``) while
+        ``right`` is judged on ``merged`` (see the module doc)."""
+        self.emit(
+            "halves-parallel",
+            left=[c.branch for c in left],
+            right=[c.branch for c in right],
+            base=merged,
+        )
+        with ThreadPoolExecutor(1, thread_name_prefix="half") as pool:
+            ahead = pool.submit(self._trial, merged, right, speculative=True)
+            reached = self._resolve(head, left, premerged=merged)
+            speculated = ahead.result()
+        if reached == merged:
+            return self._judged(merged, right, speculated)
+        with self._lock:
+            speculated.discarded = True
+        self.emit("trial-discarded", trial=speculated.id, base=merged, reached=reached)
+        return self._resolve(reached, right)
+
+    def _parallel(self) -> bool:
+        mode = self.train.parallel
+        if mode == "off":
+            return False
+        free = getattr(self.runner, "free_slots", None)
+        if mode == "on":
+            count = getattr(self.runner, "host_count", None)
+            return callable(count) and count() >= 2
+        return callable(free) and free() >= 2
 
     # ------------------------------------------------------------ trials
 
-    def _trial(self, head: str, group: list[Candidate]) -> Trial:
-        trial = Trial(
-            len(self.trials) + 1, head, [c.branch for c in group], time.time()
-        )
-        self.trials.append(trial)
+    def _trial(
+        self,
+        head: str,
+        group: list[Candidate],
+        *,
+        premerged: str | None = None,
+        speculative: bool = False,
+    ) -> Trial:
+        with self._lock:
+            trial = Trial(
+                len(self.trials) + 1, head, [c.branch for c in group], time.time()
+            )
+            trial.speculative = speculative
+            self.trials.append(trial)
         clock = time.monotonic()
-        self.emit("trial-started", trial=trial.id, base=head, branches=trial.branches)
+        self.emit(
+            "trial-started",
+            trial=trial.id,
+            base=head,
+            branches=trial.branches,
+            **({"speculative": True} if speculative else {}),
+        )
         log_dir = self.state.run_dir(self.run_id)
-        with self.git.worktree(head) as checkout:
+        with (
+            self.checkouts.take() as place,
+            self.git.worktree(premerged or head, path=place) as checkout,
+        ):
             merge_started, merge_clock = time.time(), time.monotonic()
-            merged = self.git.merge(
-                checkout, [(c.branch, c.tip) for c in group], self.train.name
+            if premerged is not None:
+                self.checkouts.keep_times(checkout)
+            merged = (
+                Merged(premerged)
+                if premerged is not None
+                else self.git.merge(
+                    checkout, [(c.branch, c.tip) for c in group], self.train.name
+                )
             )
             merge = StepResult(
                 "merge",
@@ -319,6 +434,8 @@ class TrainRun:
                 )
             else:
                 trial.head = merged.head
+                if premerged is None:
+                    self.checkouts.keep_times(checkout)
                 self._run_steps(trial, checkout, log_dir)
         trial.duration = time.monotonic() - clock
         self.emit(
@@ -328,7 +445,8 @@ class TrainRun:
             step=trial.failed_step,
             duration=round(trial.duration, 3),
         )
-        self.state.write_record(self.run_id, self.result())
+        with self._lock:
+            self.state.write_record(self.run_id, self.result())
         return trial
 
     def _spec_steps(self, checkout: Path) -> tuple[Train, str]:
@@ -380,17 +498,21 @@ class TrainRun:
                 detail={"source": source, "steps": [s.name for s in train.test_steps]},
             )
         )
+        own = self._own_env(trial.base, trial.head, trial.branches)
         ctx = StepContext(
             checkout=checkout,
             base=trial.base,
             head=trial.head,
             branches=trial.branches,
             changed=self.git.changed(trial.base, trial.head),
-            env=self._step_env(trial.base, trial.head, trial.branches),
+            env={**self.environment, **own},
             log_dir=log_dir,
             prefix=f"{trial.id:02d}-",
             runner=self.runner,
             events=self.events,
+            own_env=own,
+            store=self.store,
+            origin={"train": self.train.name, "run": self.run_id, "trial": trial.id},
         )
         for step in train.test_steps:
             self.emit("step-started", trial=trial.id, step=step.name, kind=step.kind)
@@ -415,11 +537,11 @@ class TrainRun:
                 return
         trial.verdict = "passed"
 
-    def _step_env(
+    def _own_env(
         self, base: str, head: str, branches: Sequence[str], **extra: str
     ) -> dict[str, str]:
+        """The variables the train sets for a step."""
         return {
-            **self.environment,
             "PICELI_TRAIN": self.train.name,
             "PICELI_TRAIN_BASE": base,
             "PICELI_TRAIN_HEAD": head,
@@ -496,7 +618,11 @@ class TrainRun:
 
     def _publish(self, tag: str) -> list[StepResult]:
         results: list[StepResult] = []
-        with self.git.worktree(self.head) as checkout:
+        with (
+            self.checkouts.take() as place,
+            self.git.worktree(self.head, path=place) as checkout,
+        ):
+            self.checkouts.keep_times(checkout)
             started, clock = time.time(), time.monotonic()
             try:
                 train, _source = self._spec_steps(checkout)
@@ -512,26 +638,38 @@ class TrainRun:
                         tail=str(error),
                     )
                 ]
+            own = self._own_env(
+                self.start,
+                self.head,
+                [c.branch for c in self.joined()],
+                PICELI_TRAIN_TAG=tag,
+            )
             ctx = StepContext(
                 checkout=checkout,
                 base=self.start,
                 head=self.head,
                 branches=[c.branch for c in self.joined()],
                 changed=self.git.changed(self.start, self.head),
-                env=self._step_env(
-                    self.start,
-                    self.head,
-                    [c.branch for c in self.joined()],
-                    PICELI_TRAIN_TAG=tag,
-                ),
+                env={**self.environment, **own},
                 log_dir=self.state.run_dir(self.run_id),
                 prefix="publish-",
                 runner=self.runner,
                 events=self.events,
+                own_env=own,
+                store=self.store,
+                origin={"train": self.train.name, "run": self.run_id, "trial": None},
             )
+            restored = self._restore_tested(train, checkout)
+            if restored:
+                self.emit("outputs-restored", steps=restored)
             for step in train.publish_steps:
                 self.emit("step-started", trial=None, step=step.name, kind=step.kind)
-                result = run_step(step, ctx)
+                if isinstance(step, ImagesStep):
+                    from piceli.train.images import run_images_step
+
+                    result = run_images_step(step, ctx, tag=tag)
+                else:
+                    result = run_step(step, ctx)
                 results.append(result)
                 self.emit(
                     "published" if result.passed else "publish-failed",
@@ -543,6 +681,37 @@ class TrainRun:
                 if not result.passed:
                     break
         return results
+
+    def _restore_tested(self, train: Train, checkout: Path) -> list[str]:
+        """Restore, into the publish checkout, the outputs of every test step
+        that declared some and passed on this tree (the tested binaries are
+        the ones published, not a rebuild); the steps restored."""
+        from piceli.train.reuse import step_key
+
+        found = []
+        for step in train.test_steps:
+            if not step.outputs or not step.inputs:
+                continue
+            extra = (
+                {"selection": self._selection_of(step.name)}
+                if step.cargo and step.kind != "command"
+                else {}
+            )
+            key, _count = step_key(step.to_dict(), step.inputs, checkout, extra)
+            record = self.store.lookup(key)
+            if record is not None:
+                self.store.restore(record, checkout)
+                found.append(step.name)
+        return found
+
+    def _selection_of(self, step: str) -> Any:
+        """The impact selection a step of the trial that reached the head used."""
+        for trial in reversed(self.trials):
+            if trial.head == self.head:
+                for result in trial.steps:
+                    if result.name == step:
+                        return result.detail.get("selection")
+        return None
 
     def _push(self, tag: str) -> dict[str, Any]:
         refs = [
@@ -575,7 +744,18 @@ class TrainRun:
         ]
 
     def emit(self, event: str, **fields: Any) -> None:
-        self.events({"event": event, "at": now_iso(), "run": self.run_id, **fields})
+        with self._lock:
+            self._events(
+                {"event": event, "at": now_iso(), "run": self.run_id, **fields}
+            )
+
+    @property
+    def events(self) -> EventSink:
+        return self.emit_raw
+
+    def emit_raw(self, event: Mapping[str, Any]) -> None:
+        with self._lock:
+            self._events(event)
 
     def ejected(self) -> list[Candidate]:
         return [c for c in self.candidates if c.verdict == "ejected"]
@@ -594,6 +774,10 @@ class TrainRun:
 
     def result(self) -> dict[str, Any]:
         """The run's result (``piceli.train.v1``)."""
+        with self._lock:
+            return self._result()
+
+    def _result(self) -> dict[str, Any]:
         trials = {t.id: t.to_dict() for t in self.trials}
         end = self.finished or time.time()
         flaky = self.flakes or [
@@ -631,7 +815,71 @@ class TrainRun:
             "promote": self.promotion or {"state": "not-requested"},
             "push": self.pushed or {"state": "not-requested"},
             "record": str(self.state.runs / self.run_id / "run.json"),
+            **({"last": self.last} if self.last else {}),
+            **({"promoted_from": self.promoted_from} if self.promoted_from else {}),
         }
+
+    # ------------------------------------------------- promote a past run
+
+    def promote_run(self, run: str) -> dict[str, Any]:
+        """Promote the head an earlier run reached, without running it again
+        (``--promote-run``). Refused (``train-run-unknown``,
+        ``train-not-fast-forward``) when the run is unknown, joined nothing,
+        or the base moved in a way that is not a fast-forward of its head."""
+        record = self._record_of(run)
+        head, start = str(record.get("head") or ""), str(record.get("start") or "")
+        if not head or head == start or self.git.commit(head) is None:
+            raise TrainError(
+                "train-run-unknown", f"run {record.get('run')} joined nothing"
+            )
+        base_now = self.git.ref(self.train.base)
+        if base_now is None or not self.git.is_ancestor(base_now, head):
+            raise TrainError(
+                "train-not-fast-forward",
+                f"{self.train.base} moved since run {record.get('run')}: its head "
+                f"({head[:12]}) is no fast-forward of {self.train.base} "
+                f"({(base_now or '?')[:12]}); run the train again",
+            )
+        with self.state.lock():
+            self.state.run_dir(self.run_id)
+            self.promoted_from = str(record.get("run"))
+            self.start, self.head = base_now, head
+            for item in record.get("branches") or ():
+                candidate = Candidate(str(item["branch"]), str(item.get("tip") or ""))
+                candidate.verdict = str(item.get("verdict") or "pending")
+                self.candidates.append(candidate)
+            self.emit("run-started", run=self.run_id, promote_run=self.promoted_from)
+            self.promotion = self._promote()
+            if self.push_requested and self.promotion.get("state") in {
+                "promoted",
+                "publish-failed",
+            }:
+                self.pushed = self._push(self.promotion["tag"])
+            self.finished = time.time()
+            result = self.result()
+            self.state.write_record(self.run_id, result)
+            self.emit(
+                "run-finished", state=result["state"], duration=result["duration"]
+            )
+            return result
+
+    def _record_of(self, run: str) -> dict[str, Any]:
+        if run == "last":
+            for item in self.state.history():
+                if item.get("head") and item.get("head") != item.get("start"):
+                    if item.get("state") in {"joined", "ejected"}:
+                        return item
+            raise TrainError("train-run-unknown", "no earlier run joined anything")
+        if not re.fullmatch(r"[0-9TZ]+-[0-9a-f]+", run):
+            raise TrainError("train-run-unknown", f"{run!r} is not a run id")
+        path = self.state.runs / run / "run.json"
+        try:
+            record = json.loads(path.read_text())
+        except (OSError, ValueError):
+            raise TrainError("train-run-unknown", f"no run {run}") from None
+        if record.get("state") not in {"joined", "ejected"}:
+            raise TrainError("train-run-unknown", f"run {run} did not finish")
+        return dict(record)
 
 
 def locate(entry: str, cwd: Path) -> tuple[LoadedSpec, Path, str | None]:

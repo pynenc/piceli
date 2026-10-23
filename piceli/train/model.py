@@ -34,6 +34,10 @@ DEFAULT_TIMEOUT = 3600.0
 
 _NAME = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
 _STEP = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}")
+#: The host name of this machine in ``hosts=`` (not a build host).
+LOCAL = "local"
+#: How parallel halves run: ``"auto"`` (when more than one host is free).
+PARALLEL = ("auto", "on", "off")
 _TAG_FIELDS = re.compile(r"\{([^{}]*)\}")
 #: Step names the train uses for its own records.
 RESERVED_STEPS = frozenset({"merge", "spec"})
@@ -89,15 +93,27 @@ class Impact:
 
     :param roots: Globs (``fnmatch``, relative to the repository root) whose
         change tests everything. Default :data:`DEFAULT_ROOTS`.
+    :param dev_targets: Narrow the members that reach a selected package
+        only through a dev-dependency: instead of every test of such a
+        member, only its integration test targets (``tests/*.rs``) whose
+        source names the selected library. When other code of the member
+        names it (its unit tests, a module its tests share), the whole
+        member is still tested. ``cargo check`` checks the whole member.
     """
 
     roots: tuple[str, ...] = DEFAULT_ROOTS
+    dev_targets: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "roots", _strings(self.roots, "Impact roots"))
+        if not isinstance(self.dev_targets, bool):
+            raise _invalid("Impact dev_targets is True or False")
 
     def to_dict(self) -> dict[str, Any]:
-        return {"impact": {"roots": list(self.roots)}}
+        body: dict[str, Any] = {"roots": list(self.roots)}
+        if self.dev_targets:
+            body["dev_targets"] = True
+        return {"impact": body}
 
 
 Selection = Impact | Literal["all"]
@@ -118,7 +134,10 @@ def _selection_dict(value: Selection) -> Any:
 def _selection_from(value: Any) -> Selection:
     if value == "all":
         return "all"
-    return Impact(roots=tuple(value["impact"]["roots"]))
+    return Impact(
+        roots=tuple(value["impact"]["roots"]),
+        dev_targets=bool(value["impact"].get("dev_targets", False)),
+    )
 
 
 @dataclass(frozen=True)
@@ -136,16 +155,31 @@ class Step:
     :param name: Unique in the train; names the step in results and logs.
     :param env: Extra environment variables.
     :param timeout: Seconds before the step is stopped (verdict ``timeout``).
+    :param hosts: Where the step may run, in order of preference: ``"local"``
+        (this machine) and the names of the train's build hosts
+        (``Train(builds=...)``). Empty: the train's ``hosts``.
+    :param inputs: Globs of the files (in the tree) the step reads. With
+        inputs, a step whose key (their content, the step's own definition
+        and the toolchain files) passed before is not run again: it is
+        ``reused``, and its ``outputs`` come back from the content store.
+    :param outputs: Paths (files or directories) the step produces, relative
+        to the tree (``target/...``: the cargo target directory). Kept in the
+        content store when the step passes with ``inputs``.
     """
 
     kind: ClassVar[str] = "step"
     #: ``"test"`` steps judge candidates; ``"publish"`` steps run on promote.
     phase: ClassVar[str] = "test"
+    #: Whether the step runs cargo (it gets the shared target directory).
+    uses_cargo: ClassVar[bool] = False
 
     name: str
     _: KW_ONLY
     env: Mapping[str, str] | tuple[tuple[str, str], ...] = ()
     timeout: float = DEFAULT_TIMEOUT
+    hosts: tuple[str, ...] = ()
+    inputs: tuple[str, ...] = ()
+    outputs: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _STEP.fullmatch(self.name):
@@ -158,6 +192,29 @@ class Step:
         if not isinstance(self.timeout, int | float) or self.timeout <= 0:
             raise _invalid(f"step {self.name}: timeout must be a positive number")
         object.__setattr__(self, "timeout", float(self.timeout))
+        hosts = _strings(self.hosts, f"step {self.name} hosts")
+        if not all(host == LOCAL or _NAME.fullmatch(host) for host in hosts):
+            raise _invalid(f"step {self.name}: hosts are 'local' or build host names")
+        object.__setattr__(self, "hosts", hosts)
+        inputs = _strings(self.inputs, f"step {self.name} inputs")
+        outputs = _strings(self.outputs, f"step {self.name} outputs")
+        for path in (*inputs, *outputs):
+            if not path or path.startswith("/") or ".." in path.split("/"):
+                raise _invalid(
+                    f"step {self.name}: inputs and outputs are paths inside the tree"
+                )
+        if outputs and not inputs:
+            raise _invalid(
+                f"step {self.name}: outputs are kept by the inputs that made them: "
+                "declare inputs too"
+            )
+        object.__setattr__(self, "inputs", inputs)
+        object.__setattr__(self, "outputs", outputs)
+
+    @property
+    def cargo(self) -> bool:
+        """Whether this step runs cargo (shared target directory, sccache)."""
+        return self.uses_cargo
 
     @staticmethod
     def command(
@@ -166,13 +223,29 @@ class Step:
         *,
         env: Mapping[str, str] | None = None,
         timeout: float = DEFAULT_TIMEOUT,
+        hosts: Sequence[str] = (),
+        inputs: Sequence[str] = (),
+        outputs: Sequence[str] = (),
+        cargo: bool = False,
     ) -> CommandStep:
         """Run ``argv`` in the merged checkout; exit status 0 passes.
 
         A relative program path (``scripts/check.sh``) is the merged tree's,
-        so the script and the files it reads are the candidate's.
+        so the script and the files it reads are the candidate's. With
+        ``cargo=True`` the command gets the train's shared cargo target
+        directory (``CARGO_TARGET_DIR``) and compiler cache, as the cargo
+        steps do.
         """
-        return CommandStep(name, argv=tuple(argv), env=env or (), timeout=timeout)
+        return CommandStep(
+            name,
+            argv=tuple(argv),
+            env=env or (),
+            timeout=timeout,
+            hosts=tuple(hosts),
+            inputs=tuple(inputs),
+            outputs=tuple(outputs),
+            runs_cargo=cargo,
+        )
 
     @staticmethod
     def publish(
@@ -181,22 +254,70 @@ class Step:
         *,
         env: Mapping[str, str] | None = None,
         timeout: float = DEFAULT_TIMEOUT,
+        hosts: Sequence[str] = (),
+        inputs: Sequence[str] = (),
+        outputs: Sequence[str] = (),
+        cargo: bool = False,
     ) -> PublishStep:
         """Run ``argv`` in a checkout of the promoted head, only on
         ``--promote`` (after the tag and the branches moved). It never judges
-        a candidate. It also gets ``PICELI_TRAIN_TAG``."""
-        return PublishStep(name, argv=tuple(argv), env=env or (), timeout=timeout)
+        a candidate. It also gets ``PICELI_TRAIN_TAG``. The outputs of the
+        test steps that declared them are restored into its checkout first."""
+        return PublishStep(
+            name,
+            argv=tuple(argv),
+            env=env or (),
+            timeout=timeout,
+            hosts=tuple(hosts),
+            inputs=tuple(inputs),
+            outputs=tuple(outputs),
+            runs_cargo=cargo,
+        )
+
+    @staticmethod
+    def images(
+        composition: str,
+        *,
+        name: str = "images",
+        components: Sequence[str] = (),
+        platforms: Sequence[str] = (),
+        timeout: float = DEFAULT_TIMEOUT,
+    ) -> ImagesStep:
+        """On ``--promote``, build the images the GitOps controller of
+        ``composition`` will want for the promoted head, from that commit,
+        push them to the cluster's registry under the controller's own change
+        key, and offer them to the controller (see :mod:`piceli.train.images`).
+
+        :param composition: ``MODULE:ATTR`` of the ``Composition`` (read from
+            the promoted head).
+        :param components: The components to build (default: every component
+            built from a source of this repository).
+        :param platforms: The platforms (default: the controller's).
+        """
+        return ImagesStep(
+            name,
+            composition=composition,
+            components=tuple(components),
+            platforms=tuple(platforms),
+            timeout=timeout,
+        )
 
     def _fields(self) -> dict[str, Any]:
         return {}
 
     def to_dict(self) -> dict[str, Any]:
         """The step as JSON-ready data (:func:`step_from_dict` reads it back)."""
+        optional = {
+            key: list(getattr(self, key))
+            for key in ("hosts", "inputs", "outputs")
+            if getattr(self, key)
+        }
         return {
             "kind": self.kind,
             "name": self.name,
             "env": dict(self.env),  # type: ignore[arg-type]
             "timeout": self.timeout,
+            **optional,
             **self._fields(),
         }
 
@@ -208,6 +329,7 @@ class CommandStep(Step):
     kind: ClassVar[str] = "command"
 
     argv: tuple[str, ...] = ()
+    runs_cargo: bool = False
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -215,9 +337,15 @@ class CommandStep(Step):
         if not argv or not argv[0]:
             raise _invalid(f"step {self.name}: argv is empty")
         object.__setattr__(self, "argv", argv)
+        if not isinstance(self.runs_cargo, bool):
+            raise _invalid(f"step {self.name}: cargo is True or False")
+
+    @property
+    def cargo(self) -> bool:
+        return self.runs_cargo
 
     def _fields(self) -> dict[str, Any]:
-        return {"argv": list(self.argv)}
+        return {"argv": list(self.argv), **({"cargo": True} if self.runs_cargo else {})}
 
 
 @dataclass(frozen=True)
@@ -229,6 +357,44 @@ class PublishStep(CommandStep):
 
 
 @dataclass(frozen=True)
+class ImagesStep(Step):
+    """:meth:`Step.images`: the controller's images, built on promote."""
+
+    kind: ClassVar[str] = "images"
+    phase: ClassVar[str] = "publish"
+
+    composition: str = ""
+    components: tuple[str, ...] = ()
+    platforms: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if not isinstance(self.composition, str) or ":" not in self.composition:
+            raise _invalid(f"step {self.name}: composition is MODULE:ATTR")
+        object.__setattr__(
+            self,
+            "components",
+            _strings(self.components, f"step {self.name} components"),
+        )
+        platforms = _strings(self.platforms, f"step {self.name} platforms")
+        if not all(item in ("linux/amd64", "linux/arm64") for item in platforms):
+            raise _invalid(f"step {self.name}: platforms are linux/amd64, linux/arm64")
+        object.__setattr__(self, "platforms", platforms)
+        if self.inputs or self.outputs:
+            raise _invalid(
+                f"step {self.name}: an images step is keyed by the controller's "
+                "change keys, not inputs"
+            )
+
+    def _fields(self) -> dict[str, Any]:
+        return {
+            "composition": self.composition,
+            "components": list(self.components),
+            "platforms": list(self.platforms),
+        }
+
+
+@dataclass(frozen=True)
 class CargoCheck(Step):
     """``cargo check`` on the selected packages.
 
@@ -237,6 +403,7 @@ class CargoCheck(Step):
     """
 
     kind: ClassVar[str] = "cargo-check"
+    uses_cargo: ClassVar[bool] = True
 
     name: str = "cargo-check"
     _: KW_ONLY
@@ -267,6 +434,7 @@ class CargoTests(Step):
     """
 
     kind: ClassVar[str] = "cargo-test"
+    uses_cargo: ClassVar[bool] = True
 
     name: str = "cargo-test"
     _: KW_ONLY
@@ -292,6 +460,7 @@ class CargoTests(Step):
 _KINDS: Mapping[str, type[Step]] = {
     "command": CommandStep,
     "publish": PublishStep,
+    "images": ImagesStep,
     "cargo-check": CargoCheck,
     "cargo-test": CargoTests,
 }
@@ -305,9 +474,27 @@ def step_from_dict(data: Mapping[str, Any]) -> Step:
     common: dict[str, Any] = {
         "env": dict(data.get("env") or {}),
         "timeout": data.get("timeout", DEFAULT_TIMEOUT),
+        "hosts": tuple(data.get("hosts") or ()),
+        "inputs": tuple(data.get("inputs") or ()),
+        "outputs": tuple(data.get("outputs") or ()),
     }
     if issubclass(kind, CommandStep):
-        return kind(data["name"], argv=tuple(data["argv"]), **common)
+        return kind(
+            data["name"],
+            argv=tuple(data["argv"]),
+            runs_cargo=bool(data.get("cargo", False)),
+            **common,
+        )
+    if kind is ImagesStep:
+        return ImagesStep(
+            data["name"],
+            composition=str(data["composition"]),
+            components=tuple(data.get("components") or ()),
+            platforms=tuple(data.get("platforms") or ()),
+            env=common["env"],
+            timeout=common["timeout"],
+            hosts=common["hosts"],
+        )
     extra: dict[str, Any] = {
         "select": _selection_from(data["select"]),
         "args": tuple(data.get("args") or ()),
@@ -331,10 +518,36 @@ class Train:
     :param tag: The tag of a promoted head; ``{date}`` (UTC, ``YYYY-MM-DD``),
         ``{n}`` (1 + the highest number used that day; required) and ``{name}``.
     :param remote: Where ``--push`` pushes the tag, ``tested`` and ``base``.
+    :param builds: The build hosts steps may run on: a
+        :class:`~piceli.dev.model.DevBuilds`, or ``MODULE:ATTR`` of one or of
+        a ``Cluster`` declaring ``dev=DevBuilds(...)`` (its docker and native
+        hosts; read with the spec). ``None``: every step runs here.
+    :param hosts: Where steps run by default, in order of preference:
+        ``"local"`` and build host names (a step's own ``hosts`` wins).
+    :param local_slots: Commands this machine runs at once, for every train
+        on it (it stays usable).
+    :param fallback: ``"local"``: a step whose hosts are all down or
+        quarantined runs here; ``None``: it fails (``train-host-unavailable``).
+    :param target_dir: The cargo target directory of local cargo steps,
+        shared by every trial (warm builds): ``"auto"`` (a pool of
+        ``local_slots`` directories under Piceli's cache, one per concurrent
+        command; ``CARGO_TARGET_DIR`` in the environment wins), a path, or
+        ``None`` (each trial's own ``target/``, cold).
+    :param sccache: ``"auto"``: local cargo steps use ``sccache`` when it is
+        on ``PATH`` and ``RUSTC_WRAPPER`` is unset; ``True``: always;
+        ``False``: never.
+    :param parallel: ``"auto"``: after a failed joint run, the two halves run
+        at once on two hosts when two are free (the right half speculatively
+        on top of the left one); ``"on"``: whenever there are two hosts;
+        ``"off"``: never.
+    :param cache: Where the shared target directories, the content store and
+        the slot locks live (default ``$XDG_CACHE_HOME/piceli/train``, else
+        ``~/.cache/piceli/train``).
 
     The train's identity (``name``, ``repo``, ``base``, ``tested``, ``tag``,
-    ``remote``) comes from the spec you run; the steps come from the commit
-    under test.
+    ``remote``) and where it runs (``builds``, ``hosts``, ``local_slots``,
+    ``fallback``, ``target_dir``, ``sccache``, ``parallel``, ``cache``) come
+    from the spec you run; the steps come from the commit under test.
     """
 
     name: str
@@ -345,6 +558,14 @@ class Train:
     tested: str = "tested"
     tag: str = "tested/{date}.{n}"
     remote: str = "origin"
+    builds: Any = None
+    hosts: tuple[str, ...] = (LOCAL,)
+    local_slots: int = 1
+    fallback: str | None = LOCAL
+    target_dir: str | None = "auto"
+    sccache: bool | str = "auto"
+    parallel: str = "auto"
+    cache: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _NAME.fullmatch(self.name):
@@ -375,6 +596,58 @@ class Train:
                 "a train needs at least one test step (a branch never joins untested)"
             )
         object.__setattr__(self, "steps", steps)
+        self._check_hosts()
+
+    def _check_hosts(self) -> None:
+        builds = self.builds
+        if builds is not None and not isinstance(builds, str):
+            from piceli.dev.model import DevBuilds
+
+            if not isinstance(builds, DevBuilds):
+                raise _invalid("builds is a DevBuilds or MODULE:ATTR naming one")
+        elif isinstance(builds, str) and ":" not in builds:
+            raise _invalid("builds is a DevBuilds or MODULE:ATTR naming one")
+        hosts = _strings(self.hosts, "hosts")
+        if not hosts:
+            raise _invalid("hosts names at least one host ('local')")
+        if not all(host == LOCAL or _NAME.fullmatch(host) for host in hosts):
+            raise _invalid("hosts are 'local' or build host names")
+        object.__setattr__(self, "hosts", hosts)
+        known = self.host_names()
+        if known is not None:
+            unknown = [host for host in hosts if host not in known]
+            if unknown:
+                raise _invalid(f"hosts: no build host {', '.join(unknown)}")
+        if (
+            type(self.local_slots) is not int
+            or self.local_slots < 1
+            or self.local_slots > 64
+        ):
+            raise _invalid("local_slots is an integer from 1 to 64")
+        if self.fallback not in (LOCAL, None):
+            raise _invalid("fallback is 'local' or None")
+        if self.target_dir is not None and (
+            not isinstance(self.target_dir, str) or not self.target_dir
+        ):
+            raise _invalid('target_dir is "auto", a path or None')
+        if self.sccache not in ("auto", True, False):
+            raise _invalid('sccache is "auto", True or False')
+        if self.parallel not in PARALLEL:
+            raise _invalid('parallel is "auto", "on" or "off"')
+        if self.cache is not None and (
+            not isinstance(self.cache, str) or not self.cache
+        ):
+            raise _invalid("cache is a directory path or None")
+
+    def host_names(self) -> set[str] | None:
+        """``local`` and the build hosts steps may name (``None``: not known
+        yet, ``builds`` is a ``MODULE:ATTR`` read with the spec)."""
+        if isinstance(self.builds, str):
+            return None
+        names = {LOCAL}
+        if self.builds is not None:
+            names |= {host.name for host in self.builds.hosts}
+        return names
 
     @property
     def test_steps(self) -> tuple[Step, ...]:
@@ -397,7 +670,30 @@ class Train:
             "tag": self.tag,
             "remote": self.remote,
             "steps": [step.to_dict() for step in self.steps],
+            **self._run_fields(),
         }
+
+    def _run_fields(self) -> dict[str, Any]:
+        """Where it runs, only what differs from the defaults."""
+        body: dict[str, Any] = {}
+        if isinstance(self.builds, str):
+            body["builds"] = {"ref": self.builds}
+        elif self.builds is not None:
+            body["builds"] = {"dev": self.builds.describe()}
+        defaults = {
+            "hosts": (LOCAL,),
+            "local_slots": 1,
+            "fallback": LOCAL,
+            "target_dir": "auto",
+            "sccache": "auto",
+            "parallel": "auto",
+            "cache": None,
+        }
+        for key, default in defaults.items():
+            value = getattr(self, key)
+            if value != default:
+                body[key] = list(value) if isinstance(value, tuple) else value
+        return body
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Train:
@@ -409,4 +705,22 @@ class Train:
             tested=data.get("tested", "tested"),
             tag=data.get("tag", "tested/{date}.{n}"),
             remote=data.get("remote", "origin"),
+            builds=_builds_from(data.get("builds")),
+            hosts=tuple(data.get("hosts") or (LOCAL,)),
+            local_slots=data.get("local_slots", 1),
+            fallback=data.get("fallback", LOCAL),
+            target_dir=data.get("target_dir", "auto"),
+            sccache=data.get("sccache", "auto"),
+            parallel=data.get("parallel", "auto"),
+            cache=data.get("cache"),
         )
+
+
+def _builds_from(value: Any) -> Any:
+    if not value:
+        return None
+    if "ref" in value:
+        return str(value["ref"])
+    from piceli.dev.model import DevBuilds
+
+    return DevBuilds.from_dict(value["dev"])
