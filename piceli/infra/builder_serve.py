@@ -35,7 +35,8 @@ key's signature over the claim, never a key; it fetches the flake's source
 at the commit, checks that the tag points at it, builds the attribute,
 signs and pushes the closure, uploads the manifest and the tag's pointer and
 answers ``nix-published``. A publish to a cache it has no keys for is never
-claimed.
+claimed. 0.25.0: with ``--publish-only`` it claims only those, whatever the
+host's kind, never an image build (said once), and needs no registry.
 
 0.22.0: each delivered image gets its provenance (host, builder image,
 commits, times; :mod:`piceli.infra.provenance`) pushed as an OCI referrer
@@ -359,9 +360,12 @@ class BuilderServe:
     #: 0.24.0: publishes NixReleases (:class:`piceli.infra.nix_releases.Publisher`)
     #: to the caches it holds the keys of; ``None``: claims no publish.
     publisher: Any = None
-    #: 0.24.0: whether it builds images (a native host only publishes).
+    #: 0.24.0: whether it builds images (a native host only publishes;
+    #: 0.25.0: so does any host with ``--publish-only``).
     images: bool = True
     _refused: set[str] = field(default_factory=set)
+    #: 0.25.0: whether it said that it leaves image builds to other hosts.
+    _skipping_said: bool = False
 
     # ------------------------------------------------------------ choosing
     def wanted(self) -> list[dict[str, Any]]:
@@ -396,6 +400,12 @@ class BuilderServe:
                 if not self._can_publish(entry):
                     continue
             elif not self.images:
+                if not self._skipping_said:
+                    self._skipping_said = True
+                    self.say(
+                        f"builder: {self.host} only publishes NixReleases; "
+                        "it leaves every image build to the other build hosts"
+                    )
                 continue
             claimed = entry.get("claimed") or {}
             if not claimed or claimed.get("host") == self.host:

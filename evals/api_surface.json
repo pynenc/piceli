@@ -11043,6 +11043,7 @@
      "--once",
      "--poll",
      "--publish",
+     "--publish-only",
      "--state-dir",
      "--transport"
     ],

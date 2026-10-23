@@ -36,7 +36,7 @@ def serve(
             "--host",
             help="The docker build host to build on (DevBuilds(hosts=[...]); "
             "default: the first docker host); with --publish also a native "
-            "host, which then only publishes",
+            "host, which then only publishes (as any host with --publish-only)",
         ),
     ] = None,
     publish: Annotated[
@@ -48,6 +48,14 @@ def serve(
             "be in this machine's piceli secrets (checked at start, never sent)",
         ),
     ] = None,
+    publish_only: Annotated[
+        bool,
+        typer.Option(
+            "--publish-only",
+            help="Claim only the --publish NixReleases, never an image build, "
+            "whatever the host's kind (a docker host that only publishes)",
+        ),
+    ] = False,
     image: Annotated[
         str | None,
         typer.Option(
@@ -92,6 +100,11 @@ def serve(
     from piceli.pipeline.backend import Backend, RegistryRoute
     from piceli.profiles import override, resolve
 
+    if publish_only and not publish:
+        reject(
+            "dev-nix-invalid",
+            "--publish-only needs the caches it publishes to: --publish MODULE:ATTR",
+        )
     declared = load_cluster(cluster)
     dev = declared.dev
     kinds = ("docker", "native") if publish else ("docker",)
@@ -106,7 +119,8 @@ def serve(
             "DevBuilds(hosts=[BuildHost.docker(...)])",
         )
     publisher = _publisher(publish or [], dev, chosen) if publish else None
-    images = chosen.kind == "docker"
+    # 0.25.0: --publish-only claims no image build on any kind of host.
+    images = chosen.kind == "docker" and not publish_only
     from piceli.pipeline.model import ClusterRegistry
 
     registry = declared.registry
@@ -139,7 +153,7 @@ def serve(
     backend = Backend()
     push: Any = None
     index: Any = None
-    if isinstance(registry, ClusterRegistry):
+    if images and isinstance(registry, ClusterRegistry):
         route = RegistryRoute(
             push=None,
             node_registry=registry.host,

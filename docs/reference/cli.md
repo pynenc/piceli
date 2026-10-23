@@ -661,8 +661,9 @@ Take the builds the controller publishes, build and deliver them, answer it.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster whose controller to serve |
-| `--host` | text |  | The docker build host to build on (DevBuilds(hosts=[...]); default: the first docker host); with --publish also a native host, which then only publishes |
+| `--host` | text |  | The docker build host to build on (DevBuilds(hosts=[...]); default: the first docker host); with --publish also a native host, which then only publishes (as any host with --publish-only) |
 | `--publish` | text (repeatable) |  | MODULE:ATTR of a piceli.infra.NixCache this host publishes NixReleases to (repeat); its signing key and S3 write keys must be in this machine's piceli secrets (checked at start, never sent) |
+| `--publish-only` | boolean | `False` | Claim only the --publish NixReleases, never an image build, whatever the host's kind (a docker host that only publishes) |
 | `--image` | text |  | The builder image (default: the host's, else DevBuilds(image=)); the same Piceli version as the controller |
 | `--namespace` | text | `piceli-system` | The controller's namespace |
 | `--once` | boolean | `False` | Build at most one wanted build, then exit |
@@ -682,7 +683,7 @@ Take the builds the controller publishes, build and deliver them, answer it.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.21.0. Runs until Ctrl-C (--once: one build). The builder image must be the controller's Piceli version. 0.22.0: each delivered image's provenance is pushed as an OCI referrer when the registry takes it; a build showing a machine-health signature records a health event on the host, and a quarantined host claims nothing (quarantined in --once --json). 0.24.0: --publish MODULE:ATTR (repeatable) also takes the nix-publish builds of the NixReleases that name this host as builder, only for those caches; every key is read at start (infra-credential-missing, dev-nix-key-mismatch refuse it) and never leaves the host: a claim carries the cache key's signature over it. A native host with --publish only publishes. The publish itself was approved by the release's policy or gitops approve of its plan digest.
+- **Notes:** 0.21.0. Runs until Ctrl-C (--once: one build). The builder image must be the controller's Piceli version. 0.22.0: each delivered image's provenance is pushed as an OCI referrer when the registry takes it; a build showing a machine-health signature records a health event on the host, and a quarantined host claims nothing (quarantined in --once --json). 0.24.0: --publish MODULE:ATTR (repeatable) also takes the nix-publish builds of the NixReleases that name this host as builder, only for those caches; every key is read at start (infra-credential-missing, dev-nix-key-mismatch refuse it) and never leaves the host: a claim carries the cache key's signature over it. A native host with --publish only publishes. The publish itself was approved by the release's policy or gitops approve of its plan digest. 0.25.0: --publish-only (needs --publish, else dev-nix-invalid) claims only those publishes on any kind of host, never an image build (said once), and needs no cluster registry: a remote publisher is a docker host with an SSH context to itself, since a native host is the machine running Piceli.
 
 (cli-bundle)=
 ### `piceli bundle`

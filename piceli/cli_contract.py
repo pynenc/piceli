@@ -1772,7 +1772,12 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "dev-nix-key-mismatch refuse it) and never leaves the host: a claim "
             "carries the cache key's signature over it. A native host with "
             "--publish only publishes. The publish itself was approved by the "
-            "release's policy or gitops approve of its plan digest.",
+            "release's policy or gitops approve of its plan digest. 0.25.0: "
+            "--publish-only (needs --publish, else dev-nix-invalid) claims only "
+            "those publishes on any kind of host, never an image build (said "
+            "once), and needs no cluster registry: a remote publisher is a "
+            "docker host with an SSH context to itself, since a native host is "
+            "the machine running Piceli.",
         ),
         "dev hosts": _C(
             "Show each declared build host: up or down (and why), its platforms, "

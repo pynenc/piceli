@@ -30,7 +30,12 @@ environment and host in one view.
   telemetry (`piceli.nix.release.finished`) record each attempt. A failure
   is `failed` with its tail (`gitops-nix-release-failed`) until a newer tag
   or `gitops sync`; tags present at first sight are the baseline. A
-  composition may now hold releases and no environment.
+  composition may now hold releases and no environment. `builder serve
+  --publish MODULE:ATTR --publish-only` claims only those publishes on any
+  kind of host, never an image build (said once), and needs no cluster
+  registry: a remote machine that only publishes is a docker host with an
+  SSH context to itself (`BuildHost.native` is the machine running Piceli),
+  so a publisher never changes who builds a cluster's images.
 - **A promotion gate and `piceli promote HOST --from ENV`.**
   `NixRelease(..., gate=Promotion(input="app", environment="main"))`
   (`Promotion` is new in `piceli.infra`) publishes only a commit whose

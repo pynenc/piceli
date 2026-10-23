@@ -648,7 +648,37 @@ any other. Its claim carries the cache key's signature over the claim
 (`piceli.nix-publish-claim.v1`, the build's id and the host), which the
 controller checks with the cache's public key: the key itself is never
 sent. A native host with `--publish` only publishes; a docker host also
-builds images as before.
+builds images as before, unless `--publish-only` (0.25.0) is given.
+
+**A remote machine that only publishes is a docker host with an SSH
+context to itself.** `BuildHost.native` means the machine running Piceli:
+every machine that loads the composition (a laptop running `dev run`, the
+owner's `piceli dev nix build`) would take it for itself, so it cannot name
+a remote machine. Declare the publisher as a docker host reached over SSH,
+and run `builder serve` on that machine with `--publish-only`:
+
+```python
+from piceli.infra import BuildHost, DevBuilds, DevProfile
+
+dev = DevBuilds(
+    node=None,
+    image="ghcr.io/pynenc/piceli-builder@sha256:<digest>",
+    profiles=[DevProfile.for_nix()],
+    hosts=[BuildHost.docker("nix-builder",
+                            context="ssh://builder@builder-1.example.org")],
+)
+```
+
+```sh
+# on builder-1, with the cache's keys in its own piceli secrets
+piceli builder serve --cluster infra.py:my_cluster --host nix-builder \
+  --publish infra.py:cache --publish-only
+```
+
+`--publish-only` claims only the `nix-publish` builds of its caches,
+whatever the host's kind: it never claims an image build (it says so once),
+so who builds the cluster's images does not change, and it needs no
+cluster registry. Without `--publish` it is refused (`dev-nix-invalid`).
 
 What happens when a tag appears in the source:
 

@@ -558,3 +558,115 @@ def test_builder_serve_refuses_a_publish_cache_it_has_no_key_for(
         app, ["builder", "serve", "--cluster", "infra.py:c", "--host", "mini"]
     )
     assert json.loads(plain.stdout)["reason"] == "dev-host-unknown"
+
+
+class _Wanted:
+    """A controller status with the given ``builds_wanted``."""
+
+    def __init__(self, entries: list[dict[str, Any]]) -> None:
+        self.entries = entries
+
+    def read_status(self) -> dict[str, Any]:
+        return {"controller": {"builds_wanted": self.entries}}
+
+
+def test_a_publish_only_host_never_claims_an_image_build_and_says_so_once(
+    world: dict[str, Any], tmp_path: Path
+) -> None:
+    said: list[str] = []
+    worker, _ = _worker(world, tmp_path, said=said)
+    image_build = {"id": "build-1", "kind": "spec", "claimed": {}}
+    worker.channel = _Wanted([image_build])
+    assert worker.pick() is None
+    assert worker.pick() is None
+    skipped = [line for line in said if "image build" in line]
+    assert len(skipped) == 1, said
+    assert "only publishes" in skipped[0]
+    publish = {"id": "nix-1", "kind": "nix-publish", "builder": "mini",
+               "release": "web-1", "claimed": {},
+               "plan": {"cache": {"store_url": _cache(world).store_url,
+                                  "public_key": PUBLIC}}}  # fmt: skip
+    worker.channel = _Wanted([image_build, publish])
+    assert worker.pick() == publish
+    assert len([line for line in said if "image build" in line]) == 1
+
+
+def _serve_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *args: str
+) -> tuple[Any, dict[str, Any]]:
+    """Run ``builder serve`` on a docker host of a cluster with an in-cluster
+    registry, up to the worker it starts (no cluster, no docker)."""
+    import contextlib
+    from types import SimpleNamespace
+
+    from typer.testing import CliRunner
+
+    import piceli.dev.health as health
+    import piceli.infra.builder_serve as serve_module
+    import piceli.k8s.cli.builder as builder_cli
+    import piceli.profiles as profiles
+    from piceli.dev.model import BuildHost, DevBuilds, DevProfile
+    from piceli.infra import Cluster
+    from piceli.k8s.cli import app
+    from piceli.pipeline.model import Registry
+
+    dev = DevBuilds(
+        node=None, image="ghcr.io/example/builder@sha256:" + "a" * 64,
+        profiles=[DevProfile.for_nix()],
+        hosts=[BuildHost.docker("nix-builder",
+                                context="ssh://builder@builder-1.example.org")],
+    )  # fmt: skip
+    cluster = Cluster(
+        "c", api="https://10.255.0.1:6443", credentials="c", dev=dev,
+        registry=Registry.in_cluster(on="node-a"),
+    )  # fmt: skip
+    started: dict[str, Any] = {}
+
+    class Worker:
+        def __init__(self, **kwargs: Any) -> None:
+            started.update(kwargs)
+            self.quarantine = None
+
+        def once(self) -> None:
+            return None
+
+    monkeypatch.setattr(builder_cli, "load_cluster", lambda _ref: cluster)
+    monkeypatch.setattr(
+        builder_cli, "_publisher", lambda *_a: SimpleNamespace(caches=[])
+    )
+    monkeypatch.setattr(
+        builder_cli,
+        "connect",
+        lambda *_a: contextlib.nullcontext(SimpleNamespace(client=None)),
+    )
+    monkeypatch.setattr(serve_module, "BuilderServe", Worker)
+    monkeypatch.setattr(health.Health, "of", classmethod(lambda *_a: None))
+    monkeypatch.setattr(
+        profiles, "resolve", lambda _p: SimpleNamespace(kubeconfig=None, context=None)
+    )
+    result = CliRunner().invoke(
+        app, ["builder", "serve", "--cluster", "infra.py:c", "--host", "nix-builder",
+              "--once", *args],
+    )  # fmt: skip
+    return result, started
+
+
+def test_builder_serve_publish_only_on_a_docker_host_builds_no_images(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result, started = _serve_cli(
+        tmp_path, monkeypatch, "--publish", "infra.py:cache", "--publish-only"
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert started["images"] is False
+    assert started["push"] is None
+    assert started["publisher"] is not None
+
+
+def test_builder_serve_publish_only_needs_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result, started = _serve_cli(tmp_path, monkeypatch, "--publish-only")
+    assert result.exit_code == 2, result.stdout + result.stderr
+    assert json.loads(result.stdout)["reason"] == "dev-nix-invalid"
+    assert not started
