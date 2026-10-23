@@ -15,7 +15,9 @@ What each declared object becomes:
   (``lifecycle.ignore_changes``); the provider keeps only its SHA-1 in the
   state.
 - ``Server(ipv4=PrimaryIp(...))`` → ``openstack_networking_port_v2`` on the
-  public network, holding the public IPv4 (and the IPv6 the network gives).
+  public network, holding the public IPv4 (and the IPv6 the network gives):
+  the port asks for no address, so Neutron gives it one from an IPv4 subnet
+  and one from a DHCPv6 subnet of that network.
   The server attaches to that port, so a replaced server re-attaches it and
   keeps its addresses without a floating IP. ``protect=True`` renders
   ``lifecycle { prevent_destroy = true }``: a destroy plan fails. A
@@ -172,7 +174,13 @@ class OpenStack(Provider):
     :param auth_url: The identity (Keystone v3) URL.
     :param region: The region every resource goes into (also the servers'
         default location; one region per declaration).
-    :param public_network: The external network's name (looked up) or id.
+    :param public_network: The public network's name (looked up) or id.
+    :param public_network_external: How the name is matched (0.25.1):
+        ``True`` (the default) only a ``router:external`` network, ``False``
+        only one that is not, ``None`` the name alone. A cloud whose servers
+        attach to a shared provider network that is not ``router:external``
+        (Infomaniak's ``ext-net1``) needs ``None``; with ``True`` OpenTofu
+        finds no network.
     :param prices: Monthly net price per flavor, for the plan's estimate.
     :param ip_prices: Monthly net price of a persistent port's address
         (``{"ipv4": ...}``).
@@ -185,6 +193,7 @@ class OpenStack(Provider):
     auth_url: str | None = None
     region: str | None = None
     public_network: str | None = None
+    public_network_external: bool | None = True
     prices_monthly: Mapping[str, float] = field(default_factory=dict)
     ip_prices: Mapping[str, float] = field(default_factory=dict)
     currency: str = "EUR"
@@ -211,6 +220,7 @@ class OpenStack(Provider):
         ip_prices: Mapping[str, float] | None = None,
         currency: str = "EUR",
         flavors: Sequence[str] | None = None,
+        public_network_external: bool | None = True,
     ) -> None:
         set_ = object.__setattr__
         set_(self, "credentials", credentials)
@@ -218,6 +228,7 @@ class OpenStack(Provider):
         set_(self, "region", region)
         set_(self, "location", region)
         set_(self, "public_network", public_network)
+        set_(self, "public_network_external", public_network_external)
         set_(self, "prices_monthly", dict(prices or {}))
         set_(self, "ip_prices", dict(ip_prices or {}))
         set_(self, "currency", currency)
@@ -256,6 +267,11 @@ class OpenStack(Provider):
                 raise InfraError(
                     "infra-invalid", f"{what}({attribute}=) is a name like ext-net"
                 )
+        if self.public_network_external not in (True, False, None):
+            raise InfraError(
+                "infra-invalid",
+                f"{what}(public_network_external=) is True, False or None",
+            )
         for attribute in ("prices_monthly", "ip_prices"):
             for key, value in getattr(self, attribute).items():
                 if (
@@ -304,6 +320,7 @@ class OpenStack(Provider):
             **super().describe(),
             "auth_url": self.auth_url,
             "public_network": self.public_network,
+            "public_network_external": self.public_network_external,
         }
         if self.preset is not None:
             body["preset"] = self.preset
@@ -352,13 +369,10 @@ class OpenStack(Provider):
         assert self.public_network is not None
         if _UUID.fullmatch(self.public_network):
             return []
-        return [
-            Resource(
-                "openstack_networking_network_v2",
-                NETWORK_LOOKUP,
-                {"name": self.public_network, "external": True},
-            )
-        ]
+        lookup: dict[str, Any] = {"name": self.public_network}
+        if self.public_network_external is not None:
+            lookup["external"] = self.public_network_external
+        return [Resource("openstack_networking_network_v2", NETWORK_LOOKUP, lookup)]
 
     @staticmethod
     def _group(firewall: Firewall) -> Resource:
@@ -624,8 +638,10 @@ class OpenStack(Provider):
 class Infomaniak(OpenStack):
     """Infomaniak Public Cloud: :class:`OpenStack` with its documented values.
 
-    ``auth_url`` is Infomaniak's Keystone, ``public_network`` its external
-    network ``ext-net1`` (a public IPv4 and IPv6 per port), ``region``
+    ``auth_url`` is Infomaniak's Keystone, ``public_network`` its shared
+    public network ``ext-net1`` (a public IPv4 and IPv6 per port), found by
+    its name alone: it is not ``router:external``
+    (``public_network_external=None``; 0.25.1), ``region``
     ``dc3-a`` by default (``dc4-a`` is the other), prices in CHF, and
     ``flavors`` its smallest, ``a1-ram2-disk20-perf1`` (1 vCPU, 2 GB, 20 GB):
     a bigger one must be listed.
@@ -643,6 +659,7 @@ class Infomaniak(OpenStack):
         currency: str = "CHF",
         auth_url: str = INFOMANIAK_AUTH_URL,
         flavors: Sequence[str] = INFOMANIAK_FLAVORS,
+        public_network_external: bool | None = None,
     ) -> None:
         super().__init__(
             credentials=credentials,
@@ -653,4 +670,5 @@ class Infomaniak(OpenStack):
             ip_prices=ip_prices,
             currency=currency,
             flavors=flavors,
+            public_network_external=public_network_external,
         )

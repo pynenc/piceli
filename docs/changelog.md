@@ -4,6 +4,17 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.25.1
+
+- **Infomaniak's public network is found by name.** `Infomaniak()` looked
+  `ext-net1` up as a `router:external` network; it is a shared network that
+  is not, so every plan failed with "Your query returned no results". The
+  preset now matches the name alone. `OpenStack(public_network_external=)`
+  chooses how a generic cloud's network name is matched: `True` (the
+  default, as before) only a `router:external` network, `False` only one
+  that is not, `None` the name alone. The plan hash of an Infomaniak
+  declaration changes (its lookup changed).
+
 ## Version 0.25.0
 
 A Nix host's releases need no hand-run publish step: in 0.25.0 the GitOps

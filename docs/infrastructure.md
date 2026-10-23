@@ -132,16 +132,22 @@ created anywhere (see {doc}`testing`).
 ### OpenStack and Infomaniak
 
 `OpenStack(credentials=, auth_url=, region=, public_network=, flavors=,
-prices=, ip_prices=, currency="EUR")` renders for the
+prices=, ip_prices=, currency="EUR", public_network_external=True)` renders for the
 `terraform-provider-openstack/openstack` OpenTofu provider (3.4.0, pinned
 with every platform's hashes). `flavors=` is an allow-list, like
 `Hetzner(server_types=)`: a server with another flavor is refused when it
-is declared. `Infomaniak(credentials=, region="dc3-a")` fills in
+is declared. `public_network=` is a network id, or a name OpenTofu looks
+up: `public_network_external=True` matches only a `router:external`
+network with that name, `False` only one that is not, `None` the name
+alone. A server's port asks for no address: Neutron gives it one from an
+IPv4 subnet and one from a DHCPv6 subnet of the network.
+`Infomaniak(credentials=, region="dc3-a")` fills in
 Infomaniak Public Cloud's values: `auth_url`
-`https://api.pub1.infomaniak.cloud/identity/v3`, the external network
-`ext-net1` (a public IPv4 and IPv6 per port), prices in CHF, and
-`flavors=["a1-ram2-disk20-perf1"]`, its smallest (1 vCPU, 2 GB); `dc4-a`
-is the other region.
+`https://api.pub1.infomaniak.cloud/identity/v3`, the shared public network
+`ext-net1` (a public IPv4 and IPv6 per port), found by its name alone
+(`public_network_external=None`: it is not `router:external`), prices in
+CHF, and `flavors=["a1-ram2-disk20-perf1"]`, its smallest (1 vCPU, 2 GB);
+`dc4-a` is the other region.
 
 ```python
 from piceli.infra import Bucket, Image, Infomaniak, Infrastructure, PrimaryIp, Rule, Server
