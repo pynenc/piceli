@@ -122,8 +122,9 @@ OPENSTACK_PIN = Pin(
 )
 #: Infomaniak Public Cloud's Keystone (its application-credential guide).
 INFOMANIAK_AUTH_URL = "https://api.pub1.infomaniak.cloud/identity/v3"
-#: Infomaniak's smallest flavor; another is refused unless
-#: ``Infomaniak(flavors=...)`` lists it.
+#: Infomaniak's smallest flavor with a local disk (its ``-disk0`` flavors
+#: boot from a volume); another is refused unless ``Infomaniak(flavors=...)``
+#: lists it.
 INFOMANIAK_FLAVORS = ("a1-ram2-disk20-perf1",)
 ID_ENV = "OS_APPLICATION_CREDENTIAL_ID"
 SECRET_ENV = "OS_APPLICATION_CREDENTIAL_SECRET"
@@ -614,6 +615,10 @@ class OpenStack(Provider):
         if type_ == "openstack_networking_secgroup_rule_v2":
             text = values.get("description")
             return _from_pairs(text.split()) if isinstance(text, str) else {}
+        if type_ == "openstack_images_image_v2":
+            # Glance's computed metadata holds the image's properties and
+            # hashes; Piceli's labels are its tags.
+            return _from_pairs(values.get("tags"))
         if type_ == "openstack_compute_keypair_v2":
             # Key pairs carry no labels: their name and the ledger stand in.
             found = _KEY_NAME.fullmatch(str(values.get("name") or ""))

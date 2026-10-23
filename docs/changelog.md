@@ -22,6 +22,10 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   OpenTofu's whole output, redacted, is kept in `tofu-<command>.log` in the
   state directory (`tofu_log`); `piceli infra plan|apply|destroy --verbose`
   prints it.
+- **A destroy removes the images Piceli uploaded to OpenStack.** Glance
+  gives every image a computed `metadata` map, which was read instead of its
+  tags, so `piceli infra destroy` refused Piceli's own image as foreign
+  (`infra-foreign-resource`). An image's labels are now read from its tags.
 - **`cryptography` is a dependency.** Generating keys is core to `piceli
   secrets setup`, `secrets nix-cache` and `secrets age`, which crashed with
   `ModuleNotFoundError` when Piceli was installed without the `crypto` extra.

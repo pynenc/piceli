@@ -372,6 +372,17 @@ def test_ownership_uses_tags_metadata_and_descriptions(tmp_path: Path) -> None:
     assert set(foreign) == set(ours)
 
 
+def test_an_image_is_ours_by_its_tags_not_its_glance_metadata() -> None:
+    """Glance gives every image a computed ``metadata`` map (its properties
+    and hashes); Piceli's labels are in its ``tags``. A live destroy refused
+    its own image as foreign while ``metadata`` was read first."""
+    labels = OS.resource_labels("openstack_images_image_v2", {
+        "metadata": {"os_hash_algo": "sha512", "hw_firmware_type": "uefi"},
+        "tags": ["piceli.io:managed-by=piceli", "piceli.io:infra=web"],
+    })  # fmt: skip
+    assert labels == OURS
+
+
 def test_infomaniak_preset() -> None:
     provider = Infomaniak(credentials="cloud")
     assert provider.auth_url == "https://api.pub1.infomaniak.cloud/identity/v3"
