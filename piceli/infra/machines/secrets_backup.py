@@ -640,10 +640,10 @@ def parse_archive(data: bytes) -> tuple[dict[str, Any], dict[str, tuple[bytes, f
 
 def decrypt(path: Path, identity: Path | None) -> tuple[bytes, str]:
     """The decrypted bytes of ``path`` (in memory) and its sha256."""
-    age = age_binary()
     source = path.expanduser().absolute()
     if not source.is_file():
         raise _invalid("the backup file does not exist")
+    age = age_binary()
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     argv = [age, "--decrypt"]
     if identity is not None:
