@@ -21,6 +21,17 @@ context="ssh://builder@builder-1.example.org", runs=False)`, and runs
 it claims no image build, and no development run lands on it. `BuildHost.native` would be wrong there: it means
 whichever machine runs Piceli.
 
+0.26.0: a `NixRelease` also publishes each new commit of a host that
+follows `Branch("main")` (the branch's pointer, no tag: the host's agent
+follows the branch's pointer as it does for `dev nix build --publish
+--branch`), plans the newest tag or head again on `schedule="daily"` (or a
+cron string), and plans a ref by hand: `piceli gitops build web-1 --ref
+web-v1.4.0` or the UI's **Build now**. Every one of them passes the
+promotion gate (`gate=`) and the approval first. `piceli gitops builds`
+shows each publish with its trigger, build host, stages, log tail and the
+hosts that run it now; `piceli gitops cancel web-1` stops one. See
+[Every build](#gitops-builds) in {doc}`gitops`.
+
 {doc}`single_nixos_host` takes one host from nothing to its first release
 with one complete example, and compares it with a Kubernetes environment.
 

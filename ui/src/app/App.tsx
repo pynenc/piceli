@@ -30,6 +30,7 @@ const ClusterBuild = lazy(async () => ({ default: (await import('../features/con
 const Cluster = lazy(async () => ({ default: (await import('../features/cluster/Cluster')).Cluster }));
 const Machines = lazy(async () => ({ default: (await import('../features/machines/Machines')).Machines }));
 const Trains = lazy(async () => ({ default: (await import('../features/trains/Trains')).Trains }));
+const Builds = lazy(async () => ({ default: (await import('../features/builds/Builds')).Builds }));
 const DevBuilds = lazy(async () => ({ default: (await import('../features/dev/DevBuilds')).DevBuilds }));
 const LogWorkspace = lazy(async () => ({ default: (await import('../features/logs/LogWorkspace')).LogWorkspace }));
 const ForwardsWorkspace = lazy(async () => ({ default: (await import('../features/access/ForwardsWorkspace')).ForwardsWorkspace }));
@@ -63,6 +64,7 @@ export function App() {
           <Route path="/cluster" element={capabilities.data?.actions.cluster_status?.allowed ? <Cluster /> : <Notice title="Cluster unavailable">This session cannot read cluster status.</Notice>} />
           <Route path="/dev-builds" element={capabilities.data?.actions.dev_builds?.allowed ? <DevBuilds /> : <Notice title="Development builds unavailable">This cluster has no development builds, or this session cannot read them.</Notice>} />
           <Route path="/machines" element={capabilities.data?.actions.machines?.allowed ? <Machines /> : <Notice title="Machines unavailable">Start the local UI with --infra MODULE:ATTR to show a declared infrastructure.</Notice>} />
+          <Route path="/builds" element={capabilities.data?.actions.composition?.allowed ? <Builds canChange={capabilities.data.actions.composition_sync?.allowed === true} /> : <Notice title="Builds unavailable">This service has no GitOps controller for this session.</Notice>} />
           <Route path="/trains" element={capabilities.data?.actions.trains?.allowed ? <Trains /> : <Notice title="Trains unavailable">Start the local UI with --trains to show the merge trains of this machine.</Notice>} />
           <Route path="/pipeline" element={capabilities.data?.actions.pipeline?.allowed ? <Pipeline /> : <Notice title="Pipeline unavailable">Start the local UI with a trusted Pipeline definition.</Notice>} />
           <Route path="/cluster-build" element={capabilities.data?.actions.cluster_build?.allowed ? <ClusterBuild /> : <Notice title="Cluster build unavailable">This installed UI has no configured cluster build for this session.</Notice>} />

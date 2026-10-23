@@ -105,6 +105,8 @@ DYNAMIC = {
     "gitops-run-interrupted",
     # infra.nix_releases.FAILED: the reason of a NixRelease a build host failed
     "gitops-nix-release-failed",
+    # infra.nix_releases.CANCELLED: the reason of a build gitops cancel dropped
+    "gitops-build-cancelled",
     # delivery_inputs.discover_tool: f"{name}-tool-required"
     "docker-tool-required",
     "ssh-tool-required",

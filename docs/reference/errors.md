@@ -298,6 +298,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`git-unavailable`](#error-git-unavailable) | inputs | no |
 | [`gitops-approval-stale`](#error-gitops-approval-stale) | gitops | yes |
 | [`gitops-artifact-changed`](#error-gitops-artifact-changed) | gitops | no |
+| [`gitops-build-cancelled`](#error-gitops-build-cancelled) | gitops | yes |
+| [`gitops-build-not-running`](#error-gitops-build-not-running) | gitops | yes |
+| [`gitops-build-ref-unknown`](#error-gitops-build-ref-unknown) | gitops | yes |
 | [`gitops-cluster-failed`](#error-gitops-cluster-failed) | gitops | yes |
 | [`gitops-config-invalid`](#error-gitops-config-invalid) | gitops | no |
 | [`gitops-controller-locked`](#error-gitops-controller-locked) | gitops | yes |
@@ -4347,6 +4350,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Run `piceli publish` without `--approve`, review the new digest and approve it.
 - **Retry-safe:** no
+
+(error-gitops-build-cancelled)=
+### `gitops-build-cancelled`
+
+**Build cancelled.** `piceli gitops cancel NAME` (or the UI's Cancel) dropped the build: unclaimed it was never built; a build host that held it stopped before its next stage and its answer was refused.
+
+- **Fix:** Start it again with `piceli gitops build NAME` (or `piceli gitops sync NAME`); a NixRelease also publishes its next new tag or head.
+- **Retry-safe:** yes
+
+(error-gitops-build-not-running)=
+### `gitops-build-not-running`
+
+**No build to cancel.** `piceli gitops cancel NAME` named a NixRelease with no planned, queued or running publish, or an environment that waits for no build on a build host (an in-cluster build Job runs to its end).
+
+- **Fix:** Run `piceli gitops builds --target NAME --state active` to see what runs; nothing needs cancelling when it lists nothing.
+- **Retry-safe:** yes
+
+(error-gitops-build-ref-unknown)=
+### `gitops-build-ref-unknown`
+
+**Build names an unknown ref.** `piceli gitops build NAME --ref REF` (or the UI's Build now) named a ref the target does not have: a NixRelease builds a tag of its pattern, its followed branch or a full 40-character commit; an environment builds only the commit or ref it follows.
+
+- **Fix:** Run `piceli gitops status` for the tags and heads the controller sees, push the tag first, or promote another commit to the environment with `piceli promote`.
+- **Retry-safe:** yes
 
 (error-gitops-cluster-failed)=
 ### `gitops-cluster-failed`

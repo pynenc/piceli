@@ -62,6 +62,8 @@ REQUEST_KINDS = (
     "nix-published",
     # 0.26.0: a merge train offers images built before they were asked for
     "prebuilt",
+    # 0.26.0: start a build by hand, cancel one, a build host's progress
+    "build", "build-cancel", "build-progress",
 )  # fmt: skip
 #: Env states a status may carry.
 ENV_STATES = (
@@ -427,6 +429,87 @@ def rebuild_request(host: str, since: str | None = None) -> tuple[str, dict[str,
         fields["since"] = since
     fields["at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     return request("rebuild", **fields)
+
+
+def _label(value: Any, what: str) -> str:
+    import re
+
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?", value
+    ):
+        raise GitOpsError("gitops-request-invalid", f"the {what} is not a DNS label")
+    return value
+
+
+def _now() -> str:
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def build_request(
+    name: str,
+    ref: str | None = None,
+    *,
+    via: str = "cli",
+    by: str | None = None,
+    approve: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Start a build of ``name`` by hand (0.26.0, ``piceli gitops build``,
+    the UI's "Build now"): a NixRelease plans ``ref`` (a tag of it, its
+    branch or a full commit; the newest without one), an environment
+    rebuilds its images. Either goes through the gate, plan and approval;
+    ``approve`` approves the plan in one go when its digest is that one."""
+    from piceli.dev.nix import ref_name_ok
+
+    if ref is not None and not (isinstance(ref, str) and ref_name_ok(ref)):
+        raise GitOpsError(
+            "gitops-request-invalid", "the ref is not a tag, branch or commit"
+        )
+    if approve is not None and (
+        not approve.startswith("sha256:") or len(approve) != 71
+    ):
+        raise GitOpsError(
+            "gitops-request-invalid", "the plan digest must be sha256:<64 hex>"
+        )
+    if via not in APPROVAL_VIA:
+        raise GitOpsError("gitops-request-invalid", "unknown request origin")
+    fields: dict[str, Any] = {"name": _label(name, "target"), "via": via, "at": _now()}
+    fields |= {"ref": ref} if ref else {}
+    fields |= {"by": str(by)[:120]} if by else {}
+    fields |= {"approve": approve} if approve else {}
+    return request("build", **fields)
+
+
+def build_cancel_request(
+    name: str, *, via: str = "cli", by: str | None = None
+) -> tuple[str, dict[str, Any]]:
+    """Cancel ``name``'s queued or running build (0.26.0, ``piceli gitops
+    cancel``): unclaimed, it is dropped; claimed, the build host stops at
+    its next stage and its answer is refused."""
+    if via not in APPROVAL_VIA:
+        raise GitOpsError("gitops-request-invalid", "unknown request origin")
+    fields: dict[str, Any] = {"name": _label(name, "target"), "via": via, "at": _now()}
+    fields |= {"by": str(by)[:120]} if by else {}
+    return request("build-cancel", **fields)
+
+
+def build_progress_request(
+    build: str, host: str, stage: str, log_tail: str, at: str
+) -> tuple[str, dict[str, Any]]:
+    """A build host's stage and log tail while it builds (0.26.0)."""
+    import re
+
+    if not re.fullmatch(r"[a-z]{1,16}", stage):
+        raise GitOpsError("gitops-request-invalid", "not a build stage")
+    return request(
+        "build-progress",
+        id=_build_id(build),
+        host=str(host)[:64],
+        stage=stage,
+        log_tail=str(log_tail)[-4000:],
+        at=str(at)[:40],
+    )
 
 
 def host_release_request(host: str) -> tuple[str, dict[str, Any]]:

@@ -184,6 +184,45 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   a run whose build hosts are all gone (`train-host-unavailable`). Pruning
   keeps the queue, the lock, the run in progress, the runs queued requests
   name and the newest promoted runs.
+- **A NixRelease follows a branch, or a schedule.** `NixRelease` accepts a
+  host that follows `Branch("main")`: each new head of the branch is
+  planned with the branch's pointer and no tag, and the build host checks
+  the commit is on the branch before it builds. `schedule="daily"`
+  (`hourly`, `weekly` or five cron fields, UTC) plans the newest tag or
+  head again at that time. Each one goes through the promotion gate, the
+  plan and the approval as a new tag does; the record names its
+  `trigger_kind` (`tag`, `branch`, `schedule`, `sync`, `cli`, `ui`).
+- **Builds started by hand: `piceli gitops build NAME [--ref TAG|COMMIT]
+  [--approve DIGEST]`.** A NixRelease plans that tag, its branch or a full
+  commit (the newest without one); an environment rebuilds every image at
+  the commit it follows. It is recorded as triggered by `cli` with the
+  requester (`--by`, else the user name); `--approve` approves the plan in
+  one go when its digest is that one, otherwise it waits for `piceli gitops
+  approve` as usual. An unknown ref is `gitops-build-ref-unknown`.
+- **`piceli gitops cancel NAME`.** A planned or queued build is dropped; a
+  build host that holds one stops before its next stage and its answer is
+  refused (`gitops-build-cancelled`). A cancelled image build fails its step
+  until `piceli gitops sync`. Nothing to cancel: `gitops-build-not-running`.
+- **Build hosts report their progress.** `piceli builder serve` sends a
+  `build-progress` request at each stage (fetch, build, publish or push)
+  and at most every 15 seconds while it logs: the stage and the last 4000
+  characters of its log, kept on the wanted build in `builds_wanted`. A
+  build that is no longer wanted (cancelled, or superseded by a newer
+  commit) stops at its next stage instead of building on.
+- **One record per build: `piceli gitops builds [--target NAME] [--state
+  STAGE|active] [--json]`.** NixRelease publishes, image builds and train
+  handoffs share one record, `piceli.builds.v1`: the trigger (kind, who,
+  text), the commit, tag and branch, the build host, the stage (from
+  `approval-required` and `queued` through `fetching-inputs`, `building`,
+  `signing` and `uploading` to `published`, `failed`, `cancelled` or
+  `rejected`) with a time for each, the log tail, the duration, the plan
+  digest and the targets that run it now, joined with `piceli targets`.
+- **A Builds page in the UI.** Delivery → Builds lists every build with
+  those fields, filters by target and state, a live log tail polled every
+  three seconds, and approve (the plan and its exact digest, confirmed),
+  retry and cancel buttons for sessions that may sync. "Build now" takes a
+  target and a tag or commit and writes the request `piceli gitops build`
+  writes.
 
 - **Private flake inputs of a Nix build.** A NixRelease (and `piceli dev
   nix build`) whose `flake.lock` pins a private input now builds on a

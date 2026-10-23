@@ -190,8 +190,10 @@ def test_declarations_that_do_not_hold_are_refused(world: dict[str, Any]) -> Non
                   follow=Tag("web-v*"), cache=_cache(world))  # fmt: skip
     branch = NixHost("web-1", server="ssh://root@web-1.example.org",
                      flake=".#web-1", follow=Branch("main"), cache=_cache(world))  # fmt: skip
+    # 0.26.0: a branch's commits are published too.
+    assert NixRelease(branch, source=hosts, builder="mini").target().branch == "main"
     for kwargs, words in (
-        ({"host": branch, "source": hosts, "builder": "mini"}, "publishes tags"),
+        ({"host": web, "source": hosts, "builder": "mini", "schedule": "x"}, "cron"),
         ({"host": web, "source": "hosts", "builder": "mini"}, "Source"),
         ({"host": web, "source": hosts, "builder": "Mini Host"}, "build host"),
         ({"host": web, "source": hosts, "builder": "mini", "auto_approve": 1},

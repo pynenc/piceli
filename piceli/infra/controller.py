@@ -1634,6 +1634,16 @@ class CompositionController:
                     self._rebuild(body)
                 elif kind == "host-release":
                     self._release_host(body)
+                elif kind == "build":  # 0.26.0: started by hand
+                    if not self.nix.request(body):
+                        self._build_env(body)
+                elif kind == "build-cancel":
+                    if not self.nix.cancel(str(body.get("name")), body.get("by")):
+                        self._cancel_env(body)
+                elif kind == "build-progress":
+                    from piceli.infra import remote_builds
+
+                    remote_builds.progress(self.state, body)
                 else:
                     raise GitOpsError("gitops-request-invalid", "unknown request kind")
             except GitOpsError as error:
@@ -1797,6 +1807,83 @@ class CompositionController:
                 rebuild.setdefault(name, [])
                 if component not in rebuild[name]:
                     rebuild[name].append(component)
+
+    def _group_records(self, name: str) -> dict[str, dict[str, Any]]:
+        return {
+            key: record
+            for key, record in self._envs().items()
+            if key == name or record.get("group") == name
+        }
+
+    def _build_env(self, body: Mapping[str, Any]) -> None:
+        """``piceli gitops build ENV`` (0.26.0): rebuild every image of the
+        environment at the commit it follows and deploy it, through its
+        usual plan and approval (``--ref`` may name that commit or ref)."""
+        from piceli.infra import remote_builds
+
+        name = str(body.get("name"))
+        names = {item.group for item in self._instances()}
+        if name not in names:
+            raise GitOpsError(
+                "gitops-request-invalid", "build names no NixRelease or environment"
+            )
+        if body.get("approve"):
+            raise GitOpsError(
+                "gitops-request-invalid",
+                "an environment's plan is approved with piceli gitops approve",
+            )
+        records = self._group_records(name)
+        ref = body.get("ref")
+        if ref:
+            known: set[str] = set()
+            for record in records.values():
+                known |= {str(v) for v in (record.get("revision") or {}).values()}
+                for value in (record.get("refs") or {}).values():
+                    text = str(value)
+                    known |= {text, text.removeprefix("refs/heads/"),
+                              text.removeprefix("refs/tags/")}  # fmt: skip
+            if str(ref) not in known:
+                raise GitOpsError(
+                    "gitops-build-ref-unknown",
+                    f"environment {name} builds the commit it follows, not {ref}: "
+                    "promote another one with piceli promote",
+                )
+        remote_builds.clear_failures(self.state)
+        components = {item.name for item in self.composition.components}
+        for record in records.values():
+            components |= set(record.get("components") or {})
+        via = body.get("via") if body.get("via") in ("cli", "ui") else "cli"
+        by = f" by {str(body['by'])[:120]}" if body.get("by") else ""
+        self.state["forced"][name] = {"trigger": f"{via} build{by}"}
+        rebuild = self.state.setdefault("rebuild", {})
+        rebuild[name] = sorted(set(rebuild.get(name) or ()) | components)
+
+    def _cancel_env(self, body: Mapping[str, Any]) -> None:
+        """``piceli gitops cancel ENV`` (0.26.0): drop the image builds the
+        environment waits for on build hosts (an in-cluster build Job runs
+        to its end)."""
+        from piceli.infra import remote_builds
+
+        name = str(body.get("name"))
+        owners = set(self._group_records(name))
+        if not owners:
+            raise GitOpsError(
+                "gitops-request-invalid", "cancel names no NixRelease or environment"
+            )
+        wanted = self.state.get(remote_builds.STATE_KEY) or {}
+        found = [
+            key
+            for key, entry in wanted.items()
+            if entry.get("owner") in owners and entry.get("kind") != "nix-publish"
+        ]
+        if not found:
+            raise GitOpsError(
+                "gitops-build-not-running",
+                f"environment {name} waits for no build on a build host",
+            )
+        for key in found:
+            remote_builds.cancel(self.state, key, body.get("by"), self.clock())
+        self.log(f"{name}: build cancelled ({len(found)} wanted build(s) dropped)")
 
     # ------------------------------------------------------------ deploy
     def _repository(self, component: str) -> str:

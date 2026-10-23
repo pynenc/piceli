@@ -1,6 +1,6 @@
 import createClient from 'openapi-fetch';
 import type { paths } from './openapi';
-import type { ServiceError, PlanRequest, EvaluationRequest, OperationRequest, RecoveryRequest, CancelRequest, AccessStartRequest, RemoteAccessStartRequest, EnvironmentActionRequest, GitOpsApprovalRequest, GitOpsPromotionRequest, ClusterBuildPlanRequest, ClusterBuildOperationRequest, CompositionSyncRequest, NamedEnvironmentApprovalRequest, NamedEnvironmentPromotionRequest, ProfileSwitchRequest, ProfileScopeRequest } from './generated';
+import type { ServiceError, PlanRequest, EvaluationRequest, OperationRequest, RecoveryRequest, CancelRequest, AccessStartRequest, RemoteAccessStartRequest, EnvironmentActionRequest, GitOpsApprovalRequest, GitOpsPromotionRequest, ClusterBuildPlanRequest, ClusterBuildOperationRequest, CompositionSyncRequest, NamedEnvironmentApprovalRequest, NamedEnvironmentPromotionRequest, ProfileSwitchRequest, ProfileScopeRequest, BuildStartRequest, BuildApprovalRequest } from './generated';
 
 export class ApiError extends Error {
   constructor(public status: number, public detail: ServiceError) { super(detail.message); }
@@ -88,6 +88,11 @@ export const api = {
   machines: (signal?: AbortSignal) => service().GET('/api/v1/machines', { signal }).then(data),
   trains: (signal?: AbortSignal) => service().GET('/api/v1/trains', { signal }).then(data),
   trainsDeployed: (signal?: AbortSignal) => service().GET('/api/v1/trains/deployed', { signal }).then(data),
+  builds: (query: { target?: string; state?: string }, signal?: AbortSignal) => service().GET('/api/v1/composition/builds', { params: { query }, signal }).then(data),
+  startBuild: (body: BuildStartRequest) => service().POST('/api/v1/composition/builds', { body }).then(data),
+  approveBuild: (target: string, body: BuildApprovalRequest) => service().POST('/api/v1/composition/builds/{target}/approve', { params: { path: { target } }, body }).then(data),
+  retryBuild: (target: string) => service().POST('/api/v1/composition/builds/{target}/retry', { params: { path: { target } } }).then(data),
+  cancelBuild: (target: string) => service().POST('/api/v1/composition/builds/{target}/cancel', { params: { path: { target } } }).then(data),
   profiles: (signal?: AbortSignal) => service().GET('/api/v1/profiles', { signal }).then(data),
   switchProfile: (body: ProfileSwitchRequest) => service().POST('/api/v1/profiles/switch', { body }).then(data),
   namedEnvironmentActions: (env: string, signal?: AbortSignal) => service().GET('/api/v1/composition/environments/{env}/actions', { params: { path: { env } }, signal }).then(data),

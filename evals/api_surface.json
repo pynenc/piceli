@@ -6533,6 +6533,7 @@
     "host",
     "inputs",
     "name",
+    "schedule",
     "source",
     "target"
    ],
@@ -6543,6 +6544,7 @@
     "gate",
     "host",
     "inputs",
+    "schedule",
     "source"
    ],
    "methods": {
@@ -9082,11 +9084,14 @@
    "attrs": [
     "attribute",
     "auto_approve",
+    "branch",
     "build",
     "builder",
     "credentials",
+    "describe_follow",
     "from_dict",
     "gate",
+    "head",
     "inputs",
     "key_unset",
     "latest",
@@ -9094,6 +9099,7 @@
     "pattern",
     "prereleases",
     "public_key",
+    "schedule",
     "source",
     "store_url",
     "to_dict",
@@ -9102,6 +9108,7 @@
    "init": [
     "attribute",
     "auto_approve",
+    "branch",
     "build",
     "builder",
     "credentials",
@@ -9112,13 +9119,18 @@
     "pattern",
     "prereleases",
     "public_key",
+    "schedule",
     "source",
     "store_url"
    ],
    "methods": {
+    "describe_follow": [],
     "from_dict": [
      "sources",
      "value"
+    ],
+    "head": [
+     "refs"
     ],
     "latest": [
      "tags"
@@ -12515,7 +12527,10 @@
     "flags": [],
     "subcommands": [
      "approve",
+     "build",
+     "builds",
      "cache",
+     "cancel",
      "disable",
      "enable",
      "hosts",
@@ -12542,6 +12557,36 @@
     ],
     "subcommands": []
    },
+   "gitops build": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--approve",
+     "--by",
+     "--context",
+     "--kubeconfig",
+     "--namespace",
+     "--ref",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops builds": {
+    "arguments": [],
+    "flags": [
+     "--context",
+     "--json",
+     "--kubeconfig",
+     "--namespace",
+     "--state",
+     "--state-dir",
+     "--target",
+     "--transport"
+    ],
+    "subcommands": []
+   },
    "gitops cache": {
     "arguments": [],
     "flags": [],
@@ -12554,6 +12599,20 @@
     "flags": [
      "--context",
      "--crate",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops cancel": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--by",
+     "--context",
      "--kubeconfig",
      "--namespace",
      "--state-dir",
@@ -14426,6 +14485,9 @@
    "git-unavailable",
    "gitops-approval-stale",
    "gitops-artifact-changed",
+   "gitops-build-cancelled",
+   "gitops-build-not-running",
+   "gitops-build-ref-unknown",
    "gitops-cluster-failed",
    "gitops-config-invalid",
    "gitops-controller-locked",
@@ -16790,6 +16852,7 @@
   "piceli.infra",
   "piceli.infra.builder_serve",
   "piceli.infra.builders",
+  "piceli.infra.builds",
   "piceli.infra.cluster",
   "piceli.infra.cluster_init",
   "piceli.infra.composition",
@@ -16992,6 +17055,7 @@
   "piceli.services",
   "piceli.services.access",
   "piceli.services.authority",
+  "piceli.services.builds",
   "piceli.services.cluster_build_control",
   "piceli.services.cluster_evaluation",
   "piceli.services.cluster_status",

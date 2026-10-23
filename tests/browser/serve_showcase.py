@@ -42,6 +42,7 @@ from piceli.services.registration import Registration
 from piceli.services.trains import TrainsControl
 from piceli.testing import fake_cluster
 from tests.browser.preview_navigation import PreviewNavigationBootstrap
+from tests.browser.showcase_builds import live_builds, seed_builds
 from tests.browser.showcase_delivery import showcase_delivery
 from tests.browser.showcase_forwards import FixtureForward
 from tests.browser.showcase_resources import seed_logs, seed_resources
@@ -133,6 +134,10 @@ COMPOSITION_STATUS["nix_releases"] = {
         },
     }
 }
+
+
+# 0.26.0: a publish waiting for its approval and an image build running.
+seed_builds(COMPOSITION_STATUS)
 
 
 def _dev_status() -> dict[str, Any]:
@@ -325,6 +330,7 @@ def main() -> None:
                 )
             with ExitStack() as cleanup:
                 cleanup.enter_context(live_trains(root / "trains"))
+                cleanup.enter_context(live_builds(COMPOSITION_STATUS))
                 if options.preview:
                     address = f"http://127.0.0.1:{options.port}/composition/overview"
                 elif given:

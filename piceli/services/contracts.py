@@ -305,6 +305,19 @@ class CompositionSyncRequest(Record):
     )
 
 
+class BuildStartRequest(Record):
+    """ "Build now" (0.26.0): a NixRelease or environment, and a tag, branch or commit."""
+
+    target: str = Field(pattern=r"^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$")
+    ref: str | None = Field(
+        default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._/+-]{0,249}$"
+    )
+
+
+class BuildApprovalRequest(Record):
+    plan_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
 class NamedEnvironmentApprovalRequest(Record):
     plan_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
 

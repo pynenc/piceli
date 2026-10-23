@@ -429,10 +429,10 @@ def test_a_newer_commit_mid_build_is_what_gets_deployed(
         root=tmp_path / "builder",
         sleep=lambda _s: controller.poll_once(),
     )
-    assert worker.once() == first["id"]  # A, answered after B superseded it
+    # 0.26.0: B superseded A mid-build; the host stops A before its push.
+    assert worker.once() == first["id"]
     status = controller.poll_once()
-    refused = status["rejected_requests"][-1]
-    assert refused["kind"] == "built" and "no such wanted build" in refused["message"]
+    assert not [r for r in status["rejected_requests"] if r["kind"] == "built"]
     (second,) = status["controller"]["builds_wanted"]
     assert second["id"] != first["id"]
     assert worker.once() == second["id"]  # B, once

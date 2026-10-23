@@ -418,6 +418,40 @@ def failed(state: dict[str, Any], body: Mapping[str, Any]) -> None:
     }
 
 
+def progress(state: dict[str, Any], body: Mapping[str, Any]) -> None:
+    """A build host's stage and log tail (0.26.0, ``build-progress``): kept
+    on the wanted build it holds (``progress`` in ``builds_wanted``); one of
+    a build no longer wanted (cancelled, answered) is dropped quietly."""
+    entry = (state.get(STATE_KEY) or {}).get(str(body.get("id")))
+    if entry is None or (entry.get("claimed") or {}).get("host") != body.get("host"):
+        return
+    entry["progress"] = {
+        "stage": str(body.get("stage") or "")[:16],
+        "at": str(body.get("at") or "")[:40],
+        "log_tail": str(body.get("log_tail") or "")[-4000:],
+    }
+
+
+def cancel(state: dict[str, Any], build: str, by: Any, now: float) -> None:
+    """``piceli gitops cancel`` of an image build (0.26.0): it is no longer
+    wanted (a host that holds it stops at its next stage; its answer is
+    refused) and its inputs count as failed, so the waiting step fails with
+    ``cancelled`` instead of asking again, until ``piceli gitops sync``."""
+    wanted = state.get(STATE_KEY) or {}
+    entry = wanted.pop(build, None)
+    if entry is None:
+        return
+    failures = state.setdefault(FAILED_KEY, {})
+    failures[build] = {
+        "host": (entry.get("claimed") or {}).get("host") or "none",
+        "reason": "cancelled" + (f" by {str(by)[:120]}" if by else ""),
+        "log_tail": str((entry.get("progress") or {}).get("log_tail") or ""),
+        "owner": entry.get("owner"),
+        "at": _iso(now),
+        "cancelled": True,
+    }
+
+
 def delivered(
     state: dict[str, Any],
     body: Mapping[str, Any],

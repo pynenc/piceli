@@ -36,6 +36,8 @@ from piceli.services.contracts import (
     AccessStartRequest,
     Application,
     ApplicationPage,
+    BuildApprovalRequest,
+    BuildStartRequest,
     CancelRequest,
     Capabilities,
     Capability,
@@ -846,6 +848,36 @@ def create_app(
     @app.post(f"{api}/composition/sync", status_code=202)
     def composition_sync(body: CompositionSyncRequest) -> dict[str, Any]:
         return composition().sync(body.env, body.component)
+
+    def build_actions() -> Any:
+        from piceli.services.builds import BuildsControl
+
+        return BuildsControl(composition())
+
+    # 0.26.0: the Builds page (piceli gitops build|builds|cancel).
+    @app.get(f"{api}/composition/builds")
+    def composition_builds(
+        target: str | None = None, state: str | None = None
+    ) -> dict[str, Any]:
+        return build_actions().builds(target, state)
+
+    @app.post(f"{api}/composition/builds", status_code=202)
+    def composition_build_start(body: BuildStartRequest) -> dict[str, Any]:
+        return build_actions().start(body.target, body.ref)
+
+    @app.post(f"{api}/composition/builds/{{target}}/approve", status_code=202)
+    def composition_build_approve(
+        target: str, body: BuildApprovalRequest
+    ) -> dict[str, Any]:
+        return build_actions().approve(target, body.plan_hash)
+
+    @app.post(f"{api}/composition/builds/{{target}}/retry", status_code=202)
+    def composition_build_retry(target: str) -> dict[str, Any]:
+        return build_actions().retry(target)
+
+    @app.post(f"{api}/composition/builds/{{target}}/cancel", status_code=202)
+    def composition_build_cancel(target: str) -> dict[str, Any]:
+        return build_actions().cancel(target)
 
     def named_actions() -> NamedEnvironmentActions:
         from piceli.services.named_environment_actions import NamedEnvironmentActions

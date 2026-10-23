@@ -1623,6 +1623,50 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "the controller publishes its newest tag now, with the release's "
             "approval; a sync of every environment also retries failed releases.",
         ),
+        "gitops build": _C(
+            "Ask the GitOps controller to build a NixRelease (--ref: a tag of "
+            "it, its branch or a full commit; the newest without one) or an "
+            "environment's images now, through the same gate, plan and approval.",
+            reads=("kubeconfig or --state-dir",),
+            writes=("--state-dir requests (local controller)",),
+            cluster="writes",
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.26.0. Writes a build request; the controller plans it on its "
+            "next poll, recorded as triggered by cli with the requester (--by, "
+            "else the user name). A NixRelease waits in approval-required unless "
+            "auto_approve or --approve names the plan's digest. An environment "
+            "rebuilds every image at the commit it follows (--ref may name it). "
+            "An unknown target or ref is dropped (gitops-request-invalid or "
+            "gitops-build-ref-unknown in gitops status).",
+        ),
+        "gitops cancel": _C(
+            "Ask the GitOps controller to cancel a NixRelease's or an "
+            "environment's queued or running build.",
+            reads=("kubeconfig or --state-dir",),
+            writes=("--state-dir requests (local controller)",),
+            cluster="writes",
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.26.0. Unclaimed, the build is dropped; claimed, the build "
+            "host stops at its next stage and its answer is refused. A cancelled "
+            "image build fails its step until piceli gitops sync; a cancelled "
+            "publish waits for a newer tag, a sync or a build. Nothing running: "
+            "gitops-build-not-running in gitops status.",
+        ),
+        "gitops builds": _C(
+            "List every build the GitOps controller knows (NixRelease publishes, "
+            "image builds, train handoffs) with its trigger, commit, tag, host, "
+            "stage times, log tail, duration and the targets that run it now.",
+            reads=("kubeconfig or --state-dir", "the controller's status and history"),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.26.0. Read-only. --json prints piceli.builds.v1; --target "
+            "and --state (a stage, or active) filter it.",
+        ),
         "gitops suspects": _C(
             "List the deployed images a build host (or the builder node) built, "
             "in every environment and component, from the provenance the "

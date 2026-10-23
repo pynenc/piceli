@@ -71,7 +71,10 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli envs`](#cli-envs) | List every environment: branch, namespace, commit, deploy state, health, age. | reads | no |
 | [`piceli explain`](#cli-explain) | Explain an error code: cause, fix and whether a retry can succeed. | none | no |
 | [`piceli gitops approve`](#cli-gitops-approve) | Approve the pending plan of ENV; the controller applies it on its next poll. | writes | yes |
+| [`piceli gitops build`](#cli-gitops-build) | Ask the controller to build NAME now: a NixRelease plans --ref, an environment rebuilds its images; the same gate, plan and approval apply. | writes | no |
+| [`piceli gitops builds`](#cli-gitops-builds) | List every build the controller knows (NixRelease publishes, image builds, train handoffs): trigger, commit, host, stage, log tail, targets. | reads | no |
 | [`piceli gitops cache clear`](#cli-gitops-cache-clear) | Ask the controller to empty its build cache (a corrupted cargo cache). | writes | no |
+| [`piceli gitops cancel`](#cli-gitops-cancel) | Cancel NAME's queued or running build: unclaimed it is dropped, claimed the build host stops at its next stage. | writes | no |
 | [`piceli gitops disable`](#cli-gitops-disable) | Remove the controller (plan first; --approve HASH removes). Never an environment. | writes | yes |
 | [`piceli gitops enable`](#cli-gitops-enable) | Install the GitOps controller (plan first; --approve HASH installs). | writes | yes |
 | [`piceli gitops hosts`](#cli-gitops-hosts) | The health events and quarantine the controller recorded per build host. | reads | no |
@@ -1531,6 +1534,61 @@ Approve the pending plan of ENV; the controller applies it on its next poll.
 - **Output contract:** conforms
 - **Notes:** This is the owner's approval: run it only with the hash the owner approved. Writes a request to the ConfigMap piceli-gitops-requests; a hash the environment is no longer waiting for is dropped (gitops-approval-stale in gitops status). 0.25.0: ENV may name a NixRelease waiting in approval-required; the hash is its plan digest, and approving it lets a build host build, sign and publish that tag.
 
+(cli-gitops-build)=
+### `piceli gitops build`
+
+Ask the controller to build NAME now: a NixRelease plans --ref, an environment rebuilds its images; the same gate, plan and approval apply.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--ref` | text |  | A tag of the release, its branch or a full commit (default: the newest); an environment builds the commit it follows |
+| `--approve` | text |  | Approve the plan in one go when its digest is this sha256:... (a NixRelease) |
+| `--by` | text |  | Who asks (default: your user name) |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir
+- **Writes:** --state-dir requests (local controller)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. Writes a build request; the controller plans it on its next poll, recorded as triggered by cli with the requester (--by, else the user name). A NixRelease waits in approval-required unless auto_approve or --approve names the plan's digest. An environment rebuilds every image at the commit it follows (--ref may name it). An unknown target or ref is dropped (gitops-request-invalid or gitops-build-ref-unknown in gitops status).
+
+(cli-gitops-builds)=
+### `piceli gitops builds`
+
+List every build the controller knows (NixRelease publishes, image builds, train handoffs): trigger, commit, host, stage, log tail, targets.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--target` | text |  | Only this target's builds |
+| `--state` | text |  | Only builds in this stage (queued, building, published, failed, ...), or active for the unfinished ones |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir, the controller's status and history
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. Read-only. --json prints piceli.builds.v1; --target and --state (a stage, or active) filter it.
+
 (cli-gitops-cache-clear)=
 ### `piceli gitops cache clear`
 
@@ -1555,6 +1613,32 @@ Ask the controller to empty its build cache (a corrupted cargo cache).
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** 0.19.0. Writes a request to the ConfigMap piceli-gitops-requests; the controller runs a short Job on the builder node between steps and records controller.cache_clear (at, crates, state) in gitops status. The next build is cold for what was cleared. A controller without --builder-image drops it (gitops-request-invalid).
+
+(cli-gitops-cancel)=
+### `piceli gitops cancel`
+
+Cancel NAME's queued or running build: unclaimed it is dropped, claimed the build host stops at its next stage.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--by` | text |  | Who asks (default: your user name) |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir
+- **Writes:** --state-dir requests (local controller)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. Unclaimed, the build is dropped; claimed, the build host stops at its next stage and its answer is refused. A cancelled image build fails its step until piceli gitops sync; a cancelled publish waits for a newer tag, a sync or a build. Nothing running: gitops-build-not-running in gitops status.
 
 (cli-gitops-disable)=
 ### `piceli gitops disable`

@@ -107,6 +107,37 @@ test('trains', async ({ page }) => {
   await shot(page, 'trains-deployed');
 });
 
+test('builds', async ({ page }) => {
+  await page.goto('/builds');
+  await expect(page.getByRole('heading', { name: 'Builds', exact: true })).toBeVisible();
+  const running = page.getByRole('region', { name: /^Build images:/ });
+  const log = running.getByLabel('Log of main');
+  await expect(log).toContainText('Compiling');
+  const before = await log.textContent();
+  await pause(page, 2500);
+  await expect(log).not.toHaveText(before ?? '');
+  await shot(page, 'builds');
+  const waiting = page.getByRole('region', { name: /^Build web-2@/ });
+  await waiting.scrollIntoViewIfNeeded();
+  await expect(waiting.getByText('cli by ana')).toBeVisible();
+  await waiting.getByRole('button', { name: 'Approve' }).click();
+  const review = page.getByRole('region', { name: 'Review plan of web-2' });
+  await expect(review.getByText('sha256:7777')).toBeVisible();
+  await pause(page, 1500);
+  await review.getByRole('checkbox').check();
+  await pause(page, 800);
+  await review.getByRole('button', { name: 'Confirm approve' }).click();
+  await pause(page, 1000);
+  const form = page.getByRole('region', { name: 'Build now' });
+  await form.scrollIntoViewIfNeeded();
+  await form.getByLabel('Target').selectOption('web-1');
+  await form.getByLabel('Tag or commit').fill('web-v1.2.0');
+  await form.getByRole('button', { name: 'Build now' }).click();
+  await expect(form.getByText(/Build of web-1 requested/)).toBeVisible();
+  await pause(page, 1500);
+  await shot(page, 'builds-requested');
+});
+
 test('compact-source-inventory', async ({ page }) => {
   await page.goto('/composition/sources');
   const product = page.getByRole('region', { name: 'Source product', exact: true });
