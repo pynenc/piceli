@@ -327,6 +327,53 @@ polled:
 piceli host wait hosts.py:web 3f2c1ab --published-after 2026-10-22T10:00:00.000000Z
 ```
 
+## Every target in one view
+
+`piceli targets` lists every GitOps environment and every NixHost of a
+composition in one table (stderr), or one `piceli.targets.v1` object with
+`--json`:
+
+```sh
+piceli targets --composition infra.py --infra infra.py \
+  --kubeconfig ~/.kube/home.yaml --context home --json
+```
+
+```text
+KIND         NAME   WHERE        REVISION                 PINNED           CHECKS      STATE                                    AS OF
+environment  main   shop         3f9c2d1e8a7b             product@3f9c2d1  passed 3/3  deployed                                 2026-10-23T09:30:00Z
+environment  rc     shop-rc      9e1d0c4b2a33             product@9e1d0c4  failed 2/3  rolled-back (checks-failed-rolled-back)  2026-10-23T09:30:00Z
+nix-host     db-1   203.0.113.8  -                        -                none        unreachable (host-unreachable)           -
+nix-host     web-1  203.0.113.7  web-v1.2.0 d41c8e7f0a12  product@3f9c2d1  passed 1/1  deployed                                 2026-10-23T09:29:00Z
+```
+
+Each row has `kind` (`environment` or `nix-host`), `name`, `where`
+(cluster and namespace, or the host's address), the deployed `revision`
+(a commit and, for a host, its tag), `pinned` (the product commit it
+runs), `checks` (`passed`, `failed`, `running` or `none`, with `at`),
+`state` (`deployed`, `deploying`, `waiting`, `held`, `stopped`, `failed`,
+`rolled-back`, `unreachable`, `unknown`) with its `reason`, `as_of`, and
+`facts`: which source told each fact, `controller` or `host-agent`.
+
+- An environment's `pinned` is its product source's deployed commit: the
+  source a promotion gate verified in it, else its only source. Without
+  either, `pinned.source` is `null` and `pinned.commits` lists every
+  source's commit.
+- A NixHost's `pinned` is the `pinned` field (`input`, `commit`,
+  `environment`, `verified_run`, `verified_at`) of its release in the
+  controller's status, when the host runs that release's commit; `null`
+  without a gate or for older releases.
+
+The controller is read once, as `gitops status` reads it (`--kubeconfig
+--context`, or `--state-dir`); the hosts declared by `--composition` (its
+`NixRelease`s) and `--infra` (its `NixHost`s, with their servers' applied
+addresses and pinned host keys) over SSH, in parallel, each within
+`--timeout` seconds (default 20). An unreachable source never fails the
+view: its rows say `unreachable` with the reason, so host rows still work
+with the home cluster down. Exit 0 when every target is reachable and none
+failed; 1 when a target failed, rolled back or is unreachable, or its
+checks failed; 2 when nothing is named (`targets-input-required`). The UI
+shows the same document in its Targets view.
+
 ## Reports
 
 With `report=`, the agent sends OTLP/HTTP JSON logs to `ENDPOINT/v1/logs`

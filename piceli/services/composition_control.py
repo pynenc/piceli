@@ -490,6 +490,22 @@ class CompositionControl:
         self._authorize("inspect")
         return self._document()
 
+    def targets(self) -> dict[str, Any]:
+        """Every environment and NixHost (``piceli.targets.v1``, the document
+        of ``piceli targets``) as the controller knows them: this server does
+        not reach hosts over SSH, so a host's row shows its release as
+        published (tag, ``pinned``, when) and ``hosts_read`` is false."""
+        from piceli.targets import build
+
+        self._authorize("inspect")
+        document, live = self._read()
+        if document is None:
+            return {"configured": False,
+                    **build(None, controller_reason="gitops-not-installed")}  # fmt: skip
+        state = (live or {}).get("state")
+        health = state if state and state != "running" else "running"
+        return {"configured": True, **build({**document, "health": health})}
+
     def environment(self, name: str) -> dict[str, Any]:
         """One environment with its components."""
         self._authorize("inspect")

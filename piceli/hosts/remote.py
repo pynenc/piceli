@@ -203,10 +203,11 @@ def read_status(
     *,
     known_hosts: Path | None = None,
     runner: Callable[..., Any] = subprocess.run,
+    timeout: float = 60,
 ) -> dict[str, Any]:
     """The agent's status (``host-unreachable``, ``host-status-missing``)."""
     done = _ssh(
-        target, None, known_hosts=known_hosts, runner=runner, timeout=60
+        target, None, known_hosts=known_hosts, runner=runner, timeout=timeout
     )  # the status file is readable by anyone: no sudo
     if done.returncode != 0 or not done.stdout:
         raise HostError(

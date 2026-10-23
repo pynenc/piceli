@@ -158,6 +158,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli state show`](#cli-state-show) | Show where the state lives, its generation and who holds the release lock. | reads | no |
 | [`piceli status`](#cli-status) | Say whether the app is up and how to reach it. Read-only. | reads | no |
 | [`piceli support-bundle`](#cli-support-bundle) | Collect a read-only, redacted snapshot of a namespace (no Secrets, no env values). | reads | no |
+| [`piceli targets`](#cli-targets) | Every environment and NixHost: commit or tag, pinned product commit, checks, state. | reads | no |
 | [`piceli ui backup`](#cli-ui-backup) | Back up an offline UI control store and its release journal. | none | no |
 | [`piceli ui cluster-observe`](#cli-ui-cluster-observe) | Serve OIDC-scoped cluster observation and configured delivery. | writes | yes |
 | [`piceli ui cluster-serve`](#cli-ui-cluster-serve) | Serve OIDC-scoped cluster observation and configured delivery. | writes | yes |
@@ -3683,6 +3684,34 @@ Collect a read-only, redacted snapshot of a namespace (no Secrets, no env values
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`). GET requests only (any other method is refused before it is sent); Secrets are never requested; env and ConfigMap values are never collected; logs, events and conditions are redacted. The archive's manifest.json lists every file, its sha256 and the request methods.
+
+(cli-targets)=
+### `piceli targets`
+
+Every environment and NixHost: commit or tag, pinned product commit, checks, state.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--composition` | text |  | MODULE (or file.py) declaring the environments and NixReleases |
+| `--infra` | text |  | MODULE declaring NixHosts and the Infrastructure of their servers (applied addresses, pinned host keys) |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--timeout` | float | `20.0` | Seconds to wait for each host |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** --composition MODULE (environments, NixReleases), --infra MODULE (NixHosts, applied addresses, pinned host keys), kubeconfig or --state-dir (the controller's status, read once), each host's /var/lib/piceli-host/status.json (ssh, in parallel)
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.24.0. Read-only; safe to retry. --json prints one piceli.targets.v1 object. An unreachable controller or host never fails the view: its rows say unreachable with the reason (host rows still work with the home cluster down). Exit 0: every target reachable, none failed; 1: a target failed, rolled back, is unreachable or its checks failed; 2: no module and no controller named (targets-input-required) or a module that does not load.
 
 (cli-ui-backup)=
 ### `piceli ui backup`

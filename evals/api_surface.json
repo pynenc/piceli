@@ -10738,6 +10738,7 @@
      "state",
      "status",
      "support-bundle",
+     "targets",
      "ui",
      "watch"
     ]
@@ -12844,6 +12845,21 @@
     ],
     "subcommands": []
    },
+   "targets": {
+    "arguments": [],
+    "flags": [
+     "--composition",
+     "--context",
+     "--infra",
+     "--json",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--timeout",
+     "--transport"
+    ],
+    "subcommands": []
+   },
    "ui": {
     "arguments": [],
     "flags": [],
@@ -13730,6 +13746,7 @@
    "takeover-conflict",
    "target-mismatch",
    "target-refused",
+   "targets-input-required",
    "timed-out",
    "too-many-redirects",
    "tool-pin-mismatch",
@@ -15638,6 +15655,7 @@
   "piceli.k8s.cli.render",
   "piceli.k8s.cli.restore",
   "piceli.k8s.cli.state",
+  "piceli.k8s.cli.targets",
   "piceli.k8s.cli.ui",
   "piceli.k8s.cli.ui_forward",
   "piceli.k8s.cli.ui_remote",
@@ -15795,6 +15813,7 @@
   "piceli.state.errors",
   "piceli.state.scopes",
   "piceli.state.snapshot",
+  "piceli.targets",
   "piceli.telemetry",
   "piceli.tempfiles",
   "piceli.testing",

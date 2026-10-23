@@ -724,6 +724,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`takeover-conflict`](#error-takeover-conflict) | kubernetes | no |
 | [`target-mismatch`](#error-target-mismatch) | kubernetes | no |
 | [`target-refused`](#error-target-refused) | target | no |
+| [`targets-input-required`](#error-targets-input-required) | hosts | no |
 | [`timed-out`](#error-timed-out) | artifacts-delivery | yes |
 | [`too-many-redirects`](#error-too-many-redirects) | artifacts-registry | yes |
 | [`tool-pin-mismatch`](#error-tool-pin-mismatch) | artifacts-input | no |
@@ -6878,3 +6879,11 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Check `piceli host status`, that the build was published (`piceli dev nix build --publish`) and its pointer names the ref the host follows; wait longer.
 - **Retry-safe:** yes
+
+(error-targets-input-required)=
+### `targets-input-required`
+
+**No targets named.** `piceli targets` was given no module and no controller, so it has nothing to show.
+
+- **Fix:** Pass `--composition MODULE` (environments and NixReleases), `--infra MODULE` (NixHosts and their servers) and the controller (`--kubeconfig FILE --context NAME`, or `--state-dir`).
+- **Retry-safe:** no

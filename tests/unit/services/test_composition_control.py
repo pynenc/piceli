@@ -348,3 +348,30 @@ def test_environment_on_several_clusters_lists_each_without_credentials(
     assert clusters[0]["api"] == "https://100.64.0.10:6443"
     assert "never-expose" not in repr(service.environment("main"))
     assert "clusters" not in environments["wp-login"]
+
+
+def test_targets_are_the_cli_document_with_releases_as_published(
+    tmp_path: Path,
+) -> None:
+    """The UI's Targets view: ``piceli targets``'s document, built by the same
+    function; this server reaches no host, so a host shows its release."""
+    pinned = {"input": "product", "commit": SHA_A, "environment": "main",
+              "verified_run": "run-1", "verified_at": "2026-10-01T09:00:00Z"}  # fmt: skip
+    document = status()
+    document["nix_releases"] = {"web-1": {
+        "state": "published", "tag": "web-v1.0.0", "commit": SHA_B,
+        "published_tag": "web-v1.0.0", "published_commit": SHA_B,
+        "finished_at": "2026-10-01T08:00:00Z", "pinned": pinned}}  # fmt: skip
+    service, _ = _service(tmp_path, Channel(document))
+    view = service.targets()
+    assert view["configured"] is True and view["schema"] == "piceli.targets.v1"
+    assert view["hosts_read"] is False
+    rows = {row["name"]: row for row in view["targets"]}
+    assert rows["main"]["kind"] == "environment"
+    assert rows["main"]["pinned"]["source"] == "product"  # the gate names it
+    web = rows["web-1"]
+    assert web["state"] == "unknown" and web["pinned"] == pinned
+    assert web["revision"] == {"commit": SHA_B, "tag": "web-v1.0.0"}
+    assert web["as_of"] == "2026-10-01T08:00:00Z"
+    absent, _ = _service(tmp_path / "absent", Channel(None))
+    assert absent.targets()["configured"] is False

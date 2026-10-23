@@ -782,6 +782,7 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["host", "status", "ssh://bad user@host"],
         "host-invalid",
     ),
+    "targets": (lambda p: ["targets"], "targets-input-required"),
     "host wait": (
         lambda p: ["host", "wait", "no_such_module:web", "v1.0.0"],
         "host-not-found",

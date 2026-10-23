@@ -71,6 +71,17 @@ test('composition-overview', async ({ page }) => {
   await pause(page, 1400);
 });
 
+test('targets', async ({ page }) => {
+  await page.goto('/composition/targets');
+  await expect(page.getByRole('heading', { name: 'Targets', exact: true })).toBeVisible();
+  const table = page.getByRole('region', { name: 'Targets' });
+  await expect(table.getByRole('row', { name: /Target web-1/ })).toBeVisible();
+  await expect(page.getByText('Hosts are not reached from this UI')).toBeVisible();
+  await pause(page, 2000);
+  await shot(page, 'targets');
+  await pause(page, 1000);
+});
+
 test('compact-source-inventory', async ({ page }) => {
   await page.goto('/composition/sources');
   const product = page.getByRole('region', { name: 'Source product', exact: true });

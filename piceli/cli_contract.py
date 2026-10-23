@@ -1316,6 +1316,27 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "ssh runs with BatchMode and strict host key checking "
             "(host-unreachable, host-status-missing).",
         ),
+        "targets": _C(
+            "One status view of every target: each GitOps environment and each "
+            "NixHost with its commit or tag, the product commit it pins, its "
+            "checks and its state.",
+            reads=(
+                "--composition MODULE (environments, NixReleases)",
+                "--infra MODULE (NixHosts, applied addresses, pinned host keys)",
+                "kubeconfig or --state-dir (the controller's status, read once)",
+                "each host's /var/lib/piceli-host/status.json (ssh, in parallel)",
+            ),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.24.0. Read-only; safe to retry. --json prints one "
+            "piceli.targets.v1 object. An unreachable controller or host never "
+            "fails the view: its rows say unreachable with the reason (host rows "
+            "still work with the home cluster down). Exit 0: every target "
+            "reachable, none failed; 1: a target failed, rolled back, is "
+            "unreachable or its checks failed; 2: no module and no controller "
+            "named (targets-input-required) or a module that does not load.",
+        ),
         "host wait": _C(
             "Wait until a Nix host runs a commit or tag with its checks passed.",
             reads=(

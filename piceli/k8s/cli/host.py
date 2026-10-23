@@ -134,26 +134,33 @@ def _target(text: str, infra_ref: str | None) -> tuple[Any, Any, Path | None]:
             return None, SshTarget.parse(text), None
         except HostError as error:
             reject(error.code, str(error))
-    address, known = None, None
+    from piceli.infra.machines.model import InfraError
+
+    infra = None
     if infra_ref is not None and not isinstance(host.server, str):
+        infra = _infrastructure(infra_ref, host.server)
+    try:
+        return host, *ssh_for(host, infra)
+    except (HostError, InfraError) as error:
+        reject(error.code, str(error))
+
+
+def ssh_for(host: Any, infra: Any) -> tuple[Any, Path | None]:
+    """``(SshTarget, known_hosts)`` of a declared host; with ``infra`` (the
+    ``Infrastructure`` of its server), the server's applied address and
+    pinned host keys. :raises HostError, InfraError:"""
+    address, known = None, None
+    if infra is not None and not isinstance(host.server, str):
         from piceli.infra.machines.install import server_values
-        from piceli.infra.machines.model import InfraError
         from piceli.infra.machines.register import KNOWN_HOSTS
         from piceli.infra.machines.state import state_dir
 
-        infra = _infrastructure(infra_ref, host.server)
-        try:
-            directory = state_dir(infra.name, infra.state_dir, create=False)
-            if host.server.ssh.address is None:
-                address = server_values(infra, directory, host.server).get("address")
-        except InfraError as error:
-            reject(error.code, str(error))
+        directory = state_dir(infra.name, infra.state_dir, create=False)
+        if host.server.ssh.address is None:
+            address = server_values(infra, directory, host.server).get("address")
         if (directory / KNOWN_HOSTS).is_file():
             known = directory / KNOWN_HOSTS
-    try:
-        return host, host.ssh_target(address), known
-    except HostError as error:
-        reject(error.code, str(error))
+    return host.ssh_target(address), known
 
 
 @host_app.command("module")

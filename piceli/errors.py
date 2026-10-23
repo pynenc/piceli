@@ -5980,6 +5980,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "hosts",
     ),
     _E(
+        "targets-input-required",
+        "No targets named",
+        "`piceli targets` was given no module and no controller, so it has nothing to show.",
+        "Pass `--composition MODULE` (environments and NixReleases), `--infra MODULE` (NixHosts and their servers) and the controller (`--kubeconfig FILE --context NAME`, or `--state-dir`).",
+        False,
+        "hosts",
+    ),
+    _E(
         "host-status-missing",
         "Host agent status missing",
         "The host answered but has no readable `/var/lib/piceli-host/status.json`: the agent's module is not imported yet, or it has not run once.",

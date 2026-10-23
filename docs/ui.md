@@ -49,6 +49,7 @@ other sessions start at Applications.
 | --- | --- | --- |
 | Explore infrastructure | Workspace → Overview, `/composition/overview` | Source/component/environment topology, selected-component details, Versions and Attention |
 | Scan repositories and refs | Workspace → Sources, `/composition/sources` | Compact rows, full commit disclosures, polling/errors and environment/component links |
+| See every environment and NixHost | Workspace → Targets, `/composition/targets` | The `piceli targets` document: revision, pinned product commit, checks, state and as-of per target; the in-cluster UI cannot SSH to hosts, so each host shows its release as the controller published it (tag, `pinned`, when) and the view says so |
 | Operate composition environments | Workspace → Environments, `/composition` | Scope, health, revisions and reviewed lifecycle actions |
 | Inspect running objects | Workspace → Applications, `/applications` | Open an application's Overview or Resources for ownership, configuration, logs and access |
 | Inspect nodes and cluster services | Workspace → Cluster, `/cluster` | Nodes, controller, registry and UI status |

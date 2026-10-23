@@ -177,6 +177,16 @@ and rollback.
   without that verified pin (`host-promotion-missing`); its `NixRelease`
   takes the host's gate. New codes `promotion-*`, `promote-*`; see
   `docs/gitops.md`.
+- **One status view of every target.** `piceli targets [--composition
+  MODULE] [--infra MODULE] [--json]` lists each GitOps environment and each
+  NixHost with its commit or tag, the product commit it pins (a promotion
+  gate's `pinned` where present, else every source's commit), its checks
+  and its state, as of when and from which source (controller or host
+  agent): `piceli.targets.v1`. The controller is read once; hosts over
+  SSH in parallel with `--timeout`; an unreachable one shows `unreachable`
+  and never fails the view (exit 1 when any target failed or is
+  unreachable). The UI's new Targets view shows the same document; the
+  in-cluster UI cannot reach hosts and shows each release as published.
 - **Tag prefixes per host.** `Tag("web-v*")` orders tags by the version
   after the pattern's literal prefix (`Tag.prefix`, `Tag.version(tag)`):
   `web-v1.10.0` is above `web-v1.9.0`, and two hosts released from one

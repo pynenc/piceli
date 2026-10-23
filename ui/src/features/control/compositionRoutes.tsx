@@ -11,6 +11,7 @@ const CompositionEnvironments = lazy(async () => ({ default: (await import('./Co
 const CompositionOverview = lazy(async () => ({ default: (await import('./Composition')).CompositionOverview }));
 const CompositionEnvironment = lazy(async () => ({ default: (await import('./Composition')).CompositionEnvironment }));
 const CompositionSources = lazy(async () => ({ default: (await import('./Composition')).CompositionSources }));
+const Targets = lazy(async () => ({ default: (await import('./Targets')).Targets }));
 
 const allowed = (capabilities?: Capabilities) => capabilities?.actions.composition?.allowed === true;
 
@@ -20,12 +21,13 @@ function Unavailable() {
 
 export function compositionNav(capabilities?: Capabilities) {
   if (!allowed(capabilities)) return null;
-  return <><NavLink to="/composition/overview"><Icon name="overview" /><span>Overview</span></NavLink><NavLink to="/composition" end><Icon name="environments" /><span>Environments</span></NavLink><NavLink to="/composition/sources"><Icon name="sources" /><span>Sources</span></NavLink></>;
+  return <><NavLink to="/composition/overview"><Icon name="overview" /><span>Overview</span></NavLink><NavLink to="/composition" end><Icon name="environments" /><span>Environments</span></NavLink><NavLink to="/composition/sources"><Icon name="sources" /><span>Sources</span></NavLink><NavLink to="/composition/targets"><Icon name="environments" /><span>Targets</span></NavLink></>;
 }
 
 export function compositionTitle(pathname: string): string | null {
   if (pathname === '/composition/overview') return 'Overview';
   if (pathname.startsWith('/composition/sources')) return 'Sources';
+  if (pathname.startsWith('/composition/targets')) return 'Targets';
   return pathname.startsWith('/composition') ? 'Environments' : null;
 }
 
@@ -40,6 +42,7 @@ export function compositionRoutes(capabilities?: Capabilities) {
     <Route path="/composition/overview" element={ok ? <CompositionOverview canSync={canSync} /> : <Unavailable />} />
     <Route path="/composition" element={ok ? <CompositionEnvironments canSync={canSync} /> : <Unavailable />} />
     <Route path="/composition/sources" element={ok ? <CompositionSources /> : <Unavailable />} />
+    <Route path="/composition/targets" element={ok ? <Targets /> : <Unavailable />} />
     <Route path="/composition/environments/:env" element={ok ? <CompositionEnvironment canSync={canSync} actions={environment => <NamedEnvironmentActions environment={environment} canChange={canSync} />} /> : <Unavailable />} />
   </>;
 }

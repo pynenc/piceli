@@ -103,6 +103,12 @@ noted.
   file over SSH (no cluster); `wait` exits 1 on a refused, failed or rolled-back
   attempt, on a pinned host (`host-pinned`) and on timeout. See
   {doc}`nix_hosts`.
+- `piceli targets [--composition MODULE] [--infra MODULE] [--kubeconfig F
+  --context C | --state-dir DIR] --json` (0.24.0): every environment and
+  NixHost with its revision, pinned product commit, checks and state
+  (`piceli.targets.v1`); reads the controller once and each host over SSH
+  in parallel. Exit 1 when a target failed, rolled back or is unreachable.
+  See {doc}`nix_hosts`.
 - `piceli profiles [--json]`: lists the stored credential profiles (names,
   contexts, kubeconfig paths; never secrets). `piceli login NAME --kubeconfig
   F --context C` and `piceli logout NAME` only write or remove the local

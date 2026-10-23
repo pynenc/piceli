@@ -111,6 +111,25 @@ COMPOSITION_STATUS["envs"]["wp-idle"] = {
     },
     "components": {},
 }
+# 0.24.0: a NixHost release the controller published, with the product
+# commit a promotion gate verified in main (the Targets view).
+COMPOSITION_STATUS["nix_releases"] = {
+    "web-1": {
+        "state": "published",
+        "tag": "web-v1.2.0",
+        "commit": "d" * 40,
+        "published_tag": "web-v1.2.0",
+        "published_commit": "d" * 40,
+        "finished_at": "2026-10-01T09:20:00Z",
+        "pinned": {
+            "input": "product",
+            "commit": COMPOSITION_STATUS["sources"]["product"]["refs"]["main"],
+            "environment": "main",
+            "verified_run": "run-1",
+            "verified_at": "2026-10-01T09:10:00Z",
+        },
+    }
+}
 
 
 def _dev_status() -> dict[str, Any]:

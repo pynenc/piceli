@@ -4723,6 +4723,26 @@
         "summary": "Composition Sync"
       }
     },
+    "/api/v1/composition/targets": {
+      "get": {
+        "operationId": "composition_targets_api_v1_composition_targets_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Composition Targets Api V1 Composition Targets Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Composition Targets"
+      }
+    },
     "/api/v1/dev/status": {
       "get": {
         "operationId": "dev_status_api_v1_dev_status_get",

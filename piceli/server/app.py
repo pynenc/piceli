@@ -798,6 +798,10 @@ def create_app(
         except (OSError, ValueError):
             raise QueryError("ui-observation-unavailable", 503) from None
 
+    @app.get(f"{api}/composition/targets")
+    def composition_targets() -> dict[str, Any]:
+        return composition().targets()
+
     @app.get(f"{api}/composition/environments/{{env}}")
     def composition_environment(env: str) -> dict[str, Any]:
         return composition().environment(env)

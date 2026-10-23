@@ -29,6 +29,7 @@ from piceli.k8s.cli.release import app as release_app
 from piceli.k8s.cli.render import render
 from piceli.k8s.cli.restore import register as register_restore_commands
 from piceli.k8s.cli.state import app as state_app
+from piceli.k8s.cli.targets import register as register_targets_command
 from piceli.k8s.cli.ui import app as ui_app
 from piceli.k8s.cli.watch import register as register_watch_command
 
@@ -62,6 +63,7 @@ register_bundle_commands(app)
 register_dev_commands(app)
 register_builder_commands(app)
 register_host_commands(app)
+register_targets_command(app)
 
 
 def _version(value: bool) -> None:

@@ -111,6 +111,51 @@ def _api(
 
 
 @contextmanager
+def open_channel(
+    state_dir: Path | None,
+    kubeconfig: Path | None,
+    context: str | None,
+    namespace: str,
+    transport: str,
+) -> Iterator[Any]:
+    """The controller's status channel: a local ``--state-dir`` or the
+    cluster's ConfigMaps. :raises GitOpsError: ``gitops-target-required``,
+    ``gitops-not-installed``, ``gitops-cluster-failed``."""
+    from piceli.gitops import GitOpsError
+    from piceli.gitops.state import DirectoryChannel
+
+    if state_dir is not None:
+        if kubeconfig is not None:
+            raise GitOpsError(
+                "gitops-target-required",
+                "--state-dir and --kubeconfig name two controllers; pass one",
+            )
+        yield DirectoryChannel(state_dir)
+        return
+    if kubeconfig is None or not context:
+        raise GitOpsError(
+            "gitops-target-required",
+            "name the cluster with --kubeconfig FILE --context NAME "
+            "(or a local controller with --state-dir)",
+        )
+    from piceli.gitops.install import CONFIG_MAP, connect
+    from piceli.gitops.state import ConfigMapChannel
+
+    policy = exec_policy(False, None)
+    with connect(kubeconfig, context, transport=transport, exec_policy=policy) as api:
+        found = api.call(
+            f"/api/v1/namespaces/{namespace}/configmaps/{CONFIG_MAP}", "GET"
+        )
+        if found is None:
+            raise GitOpsError(
+                "gitops-not-installed",
+                f"no GitOps controller in namespace {namespace}; install it with "
+                "piceli gitops enable",
+            )
+        yield ConfigMapChannel(api.client, namespace)
+
+
+@contextmanager
 def _channel(
     state_dir: Path | None,
     kubeconfig: Path | None,
@@ -118,30 +163,11 @@ def _channel(
     namespace: str,
     transport: str,
 ) -> Iterator[Any]:
-    from piceli.gitops.state import DirectoryChannel
-
-    if state_dir is not None:
-        if kubeconfig is not None:
-            reject(
-                "gitops-target-required",
-                "--state-dir and --kubeconfig name two controllers; pass one",
-            )
-        yield DirectoryChannel(state_dir)
-        return
-    from piceli.gitops.install import CONFIG_MAP
-    from piceli.gitops.state import ConfigMapChannel
-
-    with _api(kubeconfig, context, transport) as api:
-        found = api.call(
-            f"/api/v1/namespaces/{namespace}/configmaps/{CONFIG_MAP}", "GET"
-        )
-        if found is None:
-            reject(
-                "gitops-not-installed",
-                f"no GitOps controller in namespace {namespace}; install it with "
-                "piceli gitops enable",
-            )
-        yield ConfigMapChannel(api.client, namespace)
+    with (
+        _guard(),
+        open_channel(state_dir, kubeconfig, context, namespace, transport) as channel,
+    ):
+        yield channel
 
 
 def _describe(plan: Any) -> None:
@@ -950,6 +976,42 @@ def _health(status: dict[str, Any] | None, ready: bool | None, now: float) -> st
     return "degraded" if controller.get("last_error") else "healthy"
 
 
+def status_body(channel: Any, namespace: str) -> dict[str, Any]:
+    """The body of ``gitops status --json`` (``piceli.gitops-status.v1``):
+    the published document, the controller's health and liveness, and the
+    per-environment summary. :raises GitOpsError:"""
+    import time
+
+    document = channel.read_status()
+    ready: bool | None = None
+    live: dict[str, Any] | None = None
+    api_client = getattr(channel, "client", None)
+    if api_client is not None:
+        from piceli.gitops import liveness
+        from piceli.gitops.install import NAME, Api
+
+        deployment = Api(api_client).call(
+            f"/apis/apps/v1/namespaces/{namespace}/deployments/{NAME}", "GET"
+        )
+        rollout = (deployment or {}).get("status") or {}
+        ready = bool(rollout.get("availableReplicas") or rollout.get("readyReplicas"))
+        # 0.15.1: the controller's pod, not only its last document.
+        live = liveness.check(Api(api_client), namespace, document, time.time())
+    body: dict[str, Any] = {
+        "schema": "piceli.gitops-status.v1",
+        "health": _health(document, ready, time.time()),
+        "deployment_ready": ready,
+        **(document or {"controller": None, "envs": {}, "rejected_requests": []}),
+    }
+    if live is not None:
+        body["controller_live"] = live
+    from piceli.gitops.wait import summary
+
+    # 0.17.0: per environment, what an agent needs (stage, attempt, retry, error).
+    body["summary"] = summary(document)
+    return body
+
+
 @app.command("status")
 def status(
     kubeconfig: KubeconfigOption = None,
@@ -960,41 +1022,11 @@ def status(
     as_json: JsonOption = False,
 ) -> None:
     """Controller health, repository, last poll and every branch's state."""
-    import time
-
     with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
         with _guard():
-            document = channel.read_status()
-        ready: bool | None = None
-        live: dict[str, Any] | None = None
-        api_client = getattr(channel, "client", None)
-        if api_client is not None:
-            from piceli.gitops import liveness
-            from piceli.gitops.install import NAME, Api
-
-            with _guard():
-                deployment = Api(api_client).call(
-                    f"/apis/apps/v1/namespaces/{namespace}/deployments/{NAME}", "GET"
-                )
-            rollout = (deployment or {}).get("status") or {}
-            ready = bool(
-                rollout.get("availableReplicas") or rollout.get("readyReplicas")
-            )
-            # 0.15.1: the controller's pod, not only its last document.
-            live = liveness.check(Api(api_client), namespace, document, time.time())
-    health = _health(document, ready, time.time())
-    body: dict[str, Any] = {
-        "schema": "piceli.gitops-status.v1",
-        "health": health,
-        "deployment_ready": ready,
-        **(document or {"controller": None, "envs": {}, "rejected_requests": []}),
-    }
-    if live is not None:
-        body["controller_live"] = live
-    from piceli.gitops.wait import summary
-
-    # 0.17.0: per environment, what an agent needs (stage, attempt, retry, error).
-    body["summary"] = summary(document)
+            body = status_body(channel, namespace)
+    health = body["health"]
+    live = body.get("controller_live")
     controller = body.get("controller") or {}
     say(
         f"gitops controller: {health}"
