@@ -108,6 +108,8 @@ class Provider(ABC):
     location: str | None
     #: Whether a ``Server(image=Image(...))`` can be uploaded to this provider.
     supports_images: bool = False
+    #: Piceli uploads the images itself (:meth:`image_service`; 0.25.3).
+    uploads_images: bool = False
     #: Whether ``Bucket(provider=...)`` can be created at this provider.
     supports_buckets: bool = False
     #: Whether this provider serves ``DnsRecord`` s.
@@ -209,6 +211,22 @@ class Provider(ABC):
 
     def render_image(self, image: Image, labels: Mapping[str, str]) -> Resource:
         """The uploaded image (only when :attr:`supports_images`)."""
+        raise NotImplementedError(f"{self.name} does not upload images")
+
+    def image_service(self, env: Mapping[str, str]) -> Any:
+        """The client Piceli uploads images with (0.25.3; ``None``: OpenTofu
+        uploads them). ``env`` holds the provider's credential parts."""
+        return None
+
+    def image_replace_reason(
+        self, before: Mapping[str, Any], image: Image
+    ) -> str | None:
+        """Why an image in the state must be uploaded again (``None``: it
+        need not): a half-made upload, a different sha256."""
+        return None
+
+    def image_record(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        """The image record to create, from the rendered resource's ``body``."""
         raise NotImplementedError(f"{self.name} does not upload images")
 
     def render_bucket(self, bucket: Bucket, labels: Mapping[str, str]) -> Resource:

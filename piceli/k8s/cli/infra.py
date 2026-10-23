@@ -79,6 +79,7 @@ VerboseOption = Annotated[
 #: Failures that ran (exit 1) rather than refusals (exit 2).
 FAILED = {
     "infra-apply-failed",
+    "infra-image-upload-failed",
     "infra-install-failed",
     "infra-k3s-not-ready",
     "secrets-backup-failed",
@@ -184,6 +185,25 @@ def _say_plan(result: InfraPlan) -> None:
             f"  user data of {item['server']}: secret {item['secret']} "
             f"({item['digest']}), passed at creation only"
         )
+    for item in result.images:
+        from piceli.infra.machines.glance import format_bytes
+
+        size = item.get("bytes")
+        shown = f"{format_bytes(size)}, " if isinstance(size, int) else ""
+        head = (
+            f"replace ({item.get('reason')}), upload"
+            if item["action"] == "replace"
+            else "upload"
+        )
+        say(
+            f"  image {item['name']}: {head} from {item['from']} "
+            f"({shown}sha256 {item['sha256'][:12]}…)"
+        )
+    for item in result.stale_images:
+        say(
+            f"  image {item['image']}: a failed upload left {item['id']} "
+            f"({item['status']}); deleted before the upload"
+        )
     for item in result.s3_keys:
         enforced = item.get("read_only_enforced")
         limit = (
@@ -262,7 +282,11 @@ def _plan_or_apply(
             )
             raise typer.Exit(EXIT_APPROVAL)
         try:
-            done, inventory = apply(ws, approve, destroy=destroy, say=say)
+            from piceli.infra.machines.glance import stderr_progress
+
+            done, inventory = apply(
+                ws, approve, destroy=destroy, say=say, progress=stderr_progress()
+            )
         except InfraError as error:
             if error.fields.get("partially_applied"):
                 _say_partial(error, command)
@@ -284,6 +308,11 @@ def _plan_or_apply(
             {
                 **done.to_dict(),
                 "state": state,
+                **(
+                    {"uploaded_images": inventory["uploaded_images"]}
+                    if inventory.get("uploaded_images")
+                    else {}
+                ),
                 "servers": inventory.get("servers") or {},
                 "resources": len(inventory.get("resources") or ()),
                 **({"profiles_left": left} if destroy else {}),

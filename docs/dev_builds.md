@@ -656,7 +656,13 @@ manifest; never a secret. With `--image`, the build also writes
 relative to it, `sha256`, `format`, `bytes`, `store_path`, `commit`), which
 `Image.from_build("my-image", "piceli-dev-artifacts/web-1-image.image.json")`
 reads: nobody copies a checksum by hand (`infra-image-build-invalid` when
-it is missing or malformed).
+it is missing or malformed). 0.25.3: built on a docker host over SSH, the
+sidecar also names that host (`built_on`: its name, context, CLI and run
+image) and the image's file in its store (`store_file`), and `piceli infra
+apply` uploads the image from there, not from this machine
+({ref}`image uploads <image-uploads>`). The host's Nix store must still hold it: a garbage
+collection in between fails the upload with `infra-image-unavailable`
+before anything is created (build again, or `upload="local"`).
 
 **Ref pointers.** After the manifest, publishing writes a signed pointer for
 the tag at the commit and for the branch `--ref` names (or `--branch NAME`):

@@ -60,7 +60,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from piceli.infra.machines.images import stage_image, unstage_images
+from piceli.infra.machines.images import unstage_images
 from piceli.infra.machines.model import (
     INFRA_LABEL,
     MANAGED_BY,
@@ -310,6 +310,10 @@ class InfraPlan:
     user_data: tuple[dict[str, str], ...] = ()
     #: The S3 key pairs: name, bucket, access, action, enforcement (0.25.0).
     s3_keys: tuple[dict[str, Any], ...] = ()
+    #: The images Piceli uploads: name, action, from where, size, sha256 (0.25.3).
+    images: tuple[dict[str, Any], ...] = ()
+    #: Uploads an earlier run left at the cloud, deleted by the apply (not hashed).
+    stale_images: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         body = {
@@ -328,6 +332,10 @@ class InfraPlan:
         }
         if self.s3_keys:
             body["s3_keys"] = [dict(item) for item in self.s3_keys]
+        if self.images:
+            body["images"] = [dict(item) for item in self.images]
+        if self.stale_images:
+            body["stale_images"] = [dict(item) for item in self.stale_images]
         return body
 
 
@@ -343,9 +351,11 @@ def plan_hash(
     rendered: Rendered,
     document: Mapping[str, Any],
     user_data: Sequence[Mapping[str, str]] = (),
+    images: Sequence[Mapping[str, Any]] = (),
 ) -> str:
-    """The approval hash: configuration, operation, plan JSON (no timestamp)
-    and the digests of the user data it passes."""
+    """The approval hash: configuration, operation, plan JSON (no timestamp),
+    the digests of the user data it passes and the image uploads (0.25.3:
+    where each is sent from, its size and sha256)."""
     stable = {k: v for k, v in document.items() if k not in VOLATILE}
     # OpenTofu lists these in map order, which changes from run to run.
     for key in UNORDERED:
@@ -360,6 +370,8 @@ def plan_hash(
     }
     if user_data:
         hashed["user_data"] = [dict(item) for item in user_data]
+    if images:
+        hashed["images"] = [dict(item) for item in images]
     body = json.dumps(
         hashed,
         sort_keys=True,
@@ -554,6 +566,14 @@ def plan(
         if destroy:
             args.append("-destroy")
         document = _plan_document(ws, args, file)
+        from piceli.infra.machines import image_upload
+
+        if not destroy:
+            # A half-made upload or a new sha256: the image is uploaded again.
+            again = image_upload.replacements(ws, document)
+            if again:
+                args += [f"-replace={address}" for address in again]
+                document = _plan_document(ws, args, file)
         creates: list[str] = []
         if not destroy and ws.rendered.user_data:
             # Without the user data first: only a plan that creates the
@@ -572,6 +592,7 @@ def plan(
             for address in creates
         )
         changes, foreign = changes_of(ws, document)
+        images = () if destroy else image_upload.image_entries(ws, document)
         from piceli.infra.machines.keys import plan_entries
 
         s3_keys = plan_entries(ws, changes)
@@ -592,10 +613,14 @@ def plan(
                 document, ws.tokens.get(provider.name), ledger=ledger
             )
             checks += [found] if isinstance(found, dict) else list(found or ())
+        stale: list[dict[str, Any]] = []
+        if images:
+            check, stale = image_upload.stale_images(ws, document, images)
+            checks.append(check)
         result = InfraPlan(
             ws.infra.name,
             operation,
-            plan_hash(operation, ws.rendered, document, user_data),
+            plan_hash(operation, ws.rendered, document, user_data, images),
             ws.rendered.digest,
             changes,
             foreign,
@@ -604,6 +629,8 @@ def plan(
             checks=tuple(checks),
             user_data=user_data,
             s3_keys=s3_keys,
+            images=images,
+            stale_images=tuple(stale),
         )
         if keep is not None:
             target = keep / "plan.tfplan"
@@ -618,9 +645,16 @@ def apply(
     *,
     destroy: bool = False,
     say: Callable[[str], None] = lambda _: None,
+    progress: Callable[[Mapping[str, Any]], None] = lambda _: None,
 ) -> tuple[InfraPlan, dict[str, Any]]:
-    """Plan again; apply that plan only if its hash is ``approved``."""
+    """Plan again; apply that plan only if its hash is ``approved``.
+
+    0.25.3: the images the plan uploads are uploaded first (``progress``
+    gets each step: image, bytes sent, total, attempt) and adopted, then
+    OpenTofu plans again and that plan, the approved one less the uploads,
+    is applied (:mod:`piceli.infra.machines.image_upload`)."""
     from piceli import tempfiles
+    from piceli.infra.machines import image_upload
 
     with tempfiles.temporary_directory(
         "infra-apply", dir=ws.directory, hidden=True
@@ -644,28 +678,57 @@ def apply(
         record["created"] = sorted(ledger | creates)
         write_record(ws.directory, INVENTORY, record)
         assert fresh.file is not None
-        uploads = {
-            c.name for c in fresh.changes if c.kind == "image" and "create" in c.actions
-        }
-        try:
-            for image, _ in ws.infra.images():
-                if image.name in uploads:
-                    say(f"verifying image {image.name} (sha256 {image.sha256[:12]}…)")
-                    stage_image(image, ws.directory)
-            say(
-                f"applying {len(fresh.changes)} change(s) with tofu {ws.tofu.version_text}"
+        file = fresh.file
+        uploaded: list[dict[str, Any]] = []
+        if fresh.images:
+            shown = _check(
+                ws.run("show", "-json", str(fresh.file)),
+                "infra-tofu-failed", "show", ws, known=False,
+            )  # fmt: skip
+            try:
+                image_upload.upload_images(
+                    ws, json.loads(shown.stdout), fresh.images, say=say,
+                    progress=progress, done=uploaded,
+                )  # fmt: skip
+            except InfraError as error:
+                if uploaded:  # an earlier image is uploaded and adopted
+                    error.fields.update(_adopted(uploaded, fresh.changes))
+                raise
+            finally:
+                unstage_images(ws.directory)
+            later = work / "after-upload"
+            later.mkdir()
+            second = plan(ws, keep=later, prices=False)
+            image_upload.check_unchanged(
+                fresh.changes,
+                {item["address"] for item in fresh.images},
+                second.changes,
             )
-            result = ws.run(
-                "apply", "-input=false", "-json", str(fresh.file), timeout=3600
-            )
-        finally:
-            unstage_images(ws.directory)
+            if second.foreign:
+                raise InfraError(
+                    "infra-foreign-resource",
+                    "the plan would change or delete resources Piceli did not "
+                    "create: " + ", ".join(second.foreign),
+                )
+            assert second.file is not None
+            file = second.file
+        say(f"applying {len(fresh.changes)} change(s) with tofu {ws.tofu.version_text}")
+        result = ws.run("apply", "-input=false", "-json", str(file), timeout=3600)
         from piceli.infra.machines.keys import store_keys
 
         if result.code == 0:
             (ws.directory / TOFU_LOG.format("apply")).unlink(missing_ok=True)
             store_keys(ws)
-            return fresh, refresh_inventory(ws, prices=fresh.estimate)
+            inventory = refresh_inventory(ws, prices=fresh.estimate)
+            if uploaded or image_upload.retired(ws):
+                shown = _state_document(ws)
+                for image_id in image_upload.delete_retired(
+                    ws, image_upload.in_use(shown)
+                ):
+                    say(f"deleted the replaced image {image_id}")
+            if uploaded:
+                inventory = {**inventory, "uploaded_images": uploaded}
+            return fresh, inventory
         try:
             fresh_values = store_keys(ws)
         except InfraError:
@@ -673,7 +736,13 @@ def apply(
         error = tofu_failure(
             result, "infra-apply-failed", "apply", ws, secrets=fresh_values
         )
-        partial = progress(result, fresh.changes, hidden=lambda a: _hides_id(ws, a))
+        partial = progress_of(result, fresh.changes, hidden=lambda a: _hides_id(ws, a))
+        if uploaded:
+            adopted = _adopted(uploaded, fresh.changes)
+            if partial:
+                partial["applied"] = adopted["applied"] + partial["applied"]
+            else:
+                partial = adopted
         error.fields.update(partial)
         try:
             refresh_inventory(ws, prices=fresh.estimate)
@@ -681,6 +750,34 @@ def apply(
             if not partial:
                 raise
         raise error
+
+
+def _adopted(
+    uploaded: Sequence[Mapping[str, Any]], changes: Sequence[Change]
+) -> dict[str, Any]:
+    """A partial apply whose applied part is the uploaded, adopted images."""
+    addresses = {item["address"] for item in uploaded}
+    return {
+        "partially_applied": True,
+        "applied": [
+            {"address": item["address"], "action": "upload", "id": item["id"]}
+            for item in uploaded
+        ],
+        "not_applied": [
+            {"address": c.address, "action": c.action}
+            for c in changes
+            if c.address not in addresses
+        ],
+    }
+
+
+def _state_document(ws: Workspace) -> dict[str, Any]:
+    shown = ws.run("show", "-json")
+    try:
+        document = json.loads(shown.stdout) if shown.code == 0 else {}
+    except ValueError:
+        document = {}
+    return document if isinstance(document, dict) else {}
 
 
 def _hides_id(ws: Workspace, address: str) -> bool:
@@ -739,6 +836,10 @@ def progress(
             entry["failed"] = True
         not_applied.append(entry)
     return {"partially_applied": True, "applied": applied, "not_applied": not_applied}
+
+
+#: :func:`progress` under a name :func:`apply`'s callback does not shadow.
+progress_of = progress
 
 
 def _finished(actions: list[str]) -> str:

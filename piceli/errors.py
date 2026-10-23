@@ -5830,7 +5830,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "infra-image-checksum",
         "Image checksum mismatch",
-        "The file or download of an `Image` does not have the declared `sha256`; nothing was uploaded and nothing was applied.",
+        "The file or download of an `Image` does not have the declared `sha256`; nothing was uploaded and nothing was applied. Since 0.25.3 also: after an upload, the image service's checksum (`checksum`, `os_hash_value`) was not the hash of the bytes sent; that image was deleted.",
         "Check that `file=` or `url=` is the image you meant and that `sha256=` is its checksum (`sha256sum FILE`), then plan and approve again.",
         False,
         "infra",
@@ -5846,8 +5846,16 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "infra-image-unavailable",
         "Image file unavailable",
-        "The `file=` of an `Image` cannot be read, or its `url=` cannot be downloaded; nothing was applied.",
-        "Make the file readable or the URL reachable from this machine, then run the apply again.",
+        "The `file=` of an `Image` cannot be read, or its `url=` cannot be downloaded, or (0.25.3) the build host that built it no longer holds it (its Nix store collected it); nothing was uploaded.",
+        'Make the file readable or the URL reachable from this machine, or build the image again (`piceli dev nix build ... --image`), or upload the local copy with `Image.from_build(..., upload="local")`; then plan and apply again.',
+        True,
+        "infra",
+    ),
+    _E(
+        "infra-image-upload-failed",
+        "Image upload failed",
+        "Piceli sent the image to the cloud's image service (Glance) and every attempt failed (a dropped connection, a refused request), or Glance did not make it active. Each failed attempt's half-made image was deleted; nothing else was applied. The full log is `image-upload-<name>.log` in the state directory.",
+        "Read the log, check the link from where the image is sent (the build host, or this machine), then plan and apply again: the upload starts over.",
         True,
         "infra",
     ),

@@ -29,6 +29,12 @@ What each declared object becomes:
 - ``ssh_keys`` → ``openstack_compute_keypair_v2`` (one per server: Nova
   boots with a single key pair).
 - ``Image`` → ``openstack_images_image_v2`` (private, checksum verified).
+  0.25.3: Piceli uploads it (:mod:`piceli.infra.machines.glance`: from the
+  build host that built it, retried, with progress, a failed upload
+  deleted) and OpenTofu adopts it with ``tofu import``. Its tags carry its
+  sha256 (``piceli.io:image-sha256=…``): a new checksum replaces it.
+  ``ignore_changes`` keeps an adopted image (no ``local_file_path`` in its
+  state) and one OpenTofu uploaded before 0.25.3 alike.
 - ``Bucket`` → ``openstack_objectstorage_container_v1`` (Swift).
 - ``Bucket(keys=[S3Key(...)])`` (0.25.0) → one
   ``openstack_identity_ec2_credential_v3`` per key: an EC2 credential of
@@ -145,6 +151,9 @@ _URL = re.compile(r"https?://[^\s?#@]+")
 _TOKEN = re.compile(r"[A-Za-z0-9][-A-Za-z0-9_.]{0,127}")
 _UUID = re.compile(r"[0-9a-fA-F]{8}-?(?:[0-9a-fA-F]{4}-?){3}[0-9a-fA-F]{12}")
 _KEY_NAME = re.compile(r"([a-z](?:[-a-z0-9]*[a-z0-9])?)-[0-9a-f]{12}")
+IMAGE_TYPE = "openstack_images_image_v2"
+#: The tag that carries an image's sha256 (0.25.3).
+IMAGE_SHA_TAG = "piceli.io:image-sha256="
 #: Swift metadata is sent as HTTP headers: keys without ``/``.
 _SWIFT_KEYS = {
     MANAGED_BY: "Piceli-Managed-By",
@@ -160,6 +169,18 @@ def _key(label: str) -> str:
 
 def _tags(labels: Mapping[str, str]) -> list[str]:
     return sorted(f"{_key(k)}={v}" for k, v in labels.items())
+
+
+def image_sha_of(values: Mapping[str, Any]) -> str | None:
+    """The sha256 an image in the state was uploaded with: its tag (0.25.3),
+    else its ``local_file_path`` (``images/<sha256>.<format>``, before)."""
+    for tag in values.get("tags") or ():
+        if isinstance(tag, str) and tag.startswith(IMAGE_SHA_TAG):
+            return tag[len(IMAGE_SHA_TAG) :]
+    path = values.get("local_file_path")
+    if isinstance(path, str) and path.startswith("images/"):
+        return path[len("images/") :].split(".", 1)[0] or None
+    return None
 
 
 def _from_pairs(pairs: Any) -> dict[str, str]:
@@ -212,6 +233,7 @@ class OpenStack(Provider):
     #: The preset that filled the values (``Infomaniak``), for ``describe()``.
     preset: ClassVar[str | None] = None
     supports_images = True
+    uploads_images = True
     supports_buckets = True
     supports_dns = False
     supports_user_data = True
@@ -466,13 +488,55 @@ class OpenStack(Provider):
             "disk_format": image.format,
             "local_file_path": image.local_path,
             "visibility": "private",
-            "tags": _tags(labels),
+            "tags": sorted([*_tags(labels), IMAGE_SHA_TAG + image.sha256]),
+            # Piceli uploads the image and imports it (0.25.3): the state of
+            # an adopted image has no file path; the sha256 tag replaces it.
+            "lifecycle": {"ignore_changes": ["local_file_path", "image_cache_path"]},
         }
         if image.properties:
             body["properties"] = dict(image.properties)
         if image.min_disk_gb is not None:
             body["min_disk_gb"] = image.min_disk_gb
-        return Resource("openstack_images_image_v2", f"image-{image.name}", body)
+        return Resource(IMAGE_TYPE, f"image-{image.name}", body)
+
+    def image_service(self, env: Mapping[str, str]) -> Any:
+        from piceli.infra.machines.glance import Glance
+
+        identifier, secret = env.get(ID_ENV), env.get(SECRET_ENV)
+        if not identifier or not secret:
+            raise InfraError(
+                "infra-credential-invalid",
+                f"credential {self.credentials!r} is not an application credential "
+                "(its ID and its secret)",
+            )
+        assert self.auth_url is not None and self.region is not None
+        return Glance(self.auth_url, self.region, identifier, secret)
+
+    def image_replace_reason(
+        self, before: Mapping[str, Any], image: Image
+    ) -> str | None:
+        status = before.get("status")
+        if isinstance(status, str) and status and status != "active":
+            return f"a failed upload left it in {status}"
+        prior = image_sha_of(before)
+        if prior is not None and prior != image.sha256:
+            return "its sha256 changed"
+        return None
+
+    def image_record(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        record: dict[str, Any] = {
+            "name": body["name"],
+            "container_format": body["container_format"],
+            "disk_format": body["disk_format"],
+            "visibility": body.get("visibility", "private"),
+            "tags": list(body.get("tags") or ()),
+            "min_disk": int(body.get("min_disk_gb") or 0),
+            "min_ram": 0,
+            "protected": False,
+        }
+        for key, value in (body.get("properties") or {}).items():
+            record.setdefault(str(key), str(value))
+        return record
 
     def render_bucket(self, bucket: Bucket, labels: Mapping[str, str]) -> Resource:
         body: dict[str, Any] = {

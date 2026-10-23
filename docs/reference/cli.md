@@ -2123,13 +2123,13 @@ Apply the plan whose hash is --approve (without it: plan, exit 3).
 **Contract**
 
 - **Reads:** MODULE:ATTR (piceli.infra.Infrastructure), tofu binary, credentials (provider token, state passphrase)
-- **Writes:** resources at the provider (servers, IPs, firewalls, DNS records, bucket S3 key pairs), encrypted OpenTofu state, state directory records (inventory.json, s3-keys.json), $PICELI_CREDENTIALS_DIR/NAME.json of each S3Key (s3-keys, 0600)
+- **Writes:** resources at the provider (servers, IPs, firewalls, DNS records, images, bucket S3 key pairs), encrypted OpenTofu state, state directory records (inventory.json, s3-keys.json, images.json, image-upload-NAME.log), $PICELI_CREDENTIALS_DIR/NAME.json of each S3Key (s3-keys, 0600)
 - **Cluster:** none
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Without --approve it plans (exit 3). A hash that is not the fresh plan's is refused (infra-plan-changed). A failed tofu apply exits 1 (infra-apply-failed); one that changed something first exits 1 whatever its code, with partially_applied, applied (address, action, id) and not_applied; plan again to continue. One command at a time per state (infra-state-locked).
+- **Notes:** Without --approve it plans (exit 3). A hash that is not the fresh plan's is refused (infra-plan-changed). A failed tofu apply exits 1 (infra-apply-failed); one that changed something first exits 1 whatever its code, with partially_applied, applied (address, action, id) and not_applied; plan again to continue. One command at a time per state (infra-state-locked). 0.25.3: an OpenStack Image is uploaded by Piceli (from the build host of an Image.from_build, else this machine), retried, its progress on stderr, verified and adopted (tofu import) before tofu apply; a failed upload deletes its image (infra-image-upload-failed, exit 1) and the log's path is printed.
 
 (cli-infra-destroy)=
 ### `piceli infra destroy`

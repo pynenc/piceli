@@ -30,6 +30,7 @@ __all__ = [
     "Firewall",
     "Hook",
     "Image",
+    "ImageHost",
     "InfraError",
     "Infrastructure",
     "PrimaryIp",
@@ -61,6 +62,13 @@ _URL = re.compile(r"https?://[^\s@]+")
 #: S3-compatible bucket names: 3..63 lower-case letters, digits and hyphens.
 _BUCKET = re.compile(r"[a-z0-9][-a-z0-9]{1,61}[a-z0-9]")
 _PROPERTY = re.compile(r"[a-z][a-z0-9_:.-]{0,127}")
+#: A file of the Nix store (the image a build host holds).
+_STORE_FILE = re.compile(
+    r"/nix/store/[0-9a-df-np-sv-z]{32}-[A-Za-z0-9+._?=-]+(?:/[A-Za-z0-9+._=-]+)*"
+)
+_HOST_CONTEXT = re.compile(r"(?:(?:ssh|tcp)://\S+|[A-Za-z0-9][A-Za-z0-9._-]{0,63})")
+_HOST_CLI = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}")
+_PINNED_IMAGE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
 IMAGE_FORMATS = ("qcow2", "raw", "vmdk", "vdi", "vhd", "vhdx", "iso")
 #: Placeholders a :class:`Hook` may use, filled from the server's outputs.
 HOOK_FIELDS = ("name", "id", "ipv4", "ipv6", "address")
@@ -380,6 +388,49 @@ class UserData:
 
 
 @dataclass(frozen=True)
+class ImageHost:
+    """The build host that holds an image, and where (0.25.3).
+
+    ``Image.from_build`` reads it from the sidecar of an image built on a
+    remote docker host: Piceli then uploads the image from that host
+    (a short ``docker run --rm -i`` of the run image with the host's
+    ``/nix`` mounted read-only), not from this machine.
+
+    :param name: The build host's name (shown in the plan).
+    :param context: The container CLI's ``ssh://user@host`` (or a context name).
+    :param image: The container image that runs the upload, pinned by digest.
+    :param path: The image file in the host's Nix store.
+    :param cli: The container CLI (``docker``, ``podman``).
+    """
+
+    name: str
+    context: str
+    image: str
+    path: str
+    cli: str = "docker"
+
+    def __post_init__(self) -> None:
+        _name(self.name, "ImageHost name")
+        if not isinstance(self.context, str) or not _HOST_CONTEXT.fullmatch(
+            self.context
+        ):
+            raise _invalid(f"ImageHost {self.name}: context is ssh://user@host")
+        if not isinstance(self.image, str) or not _PINNED_IMAGE.fullmatch(self.image):
+            raise _invalid(f"ImageHost {self.name}: image is pinned by digest")
+        if (
+            not isinstance(self.path, str)
+            or not _STORE_FILE.fullmatch(self.path)
+            or ".." in self.path.split("/")
+        ):
+            raise _invalid(f"ImageHost {self.name}: path is a file in /nix/store")
+        if not isinstance(self.cli, str) or not _HOST_CLI.fullmatch(self.cli):
+            raise _invalid(f"ImageHost {self.name}: cli is an executable name")
+
+    def describe(self) -> dict[str, Any]:
+        return {"name": self.name, "path": self.path}
+
+
+@dataclass(frozen=True)
 class Image:
     """A disk image Piceli uploads for ``Server(image=Image(...))``.
 
@@ -390,6 +441,12 @@ class Image:
     changes nothing and a new checksum is a new image (and a replaced
     server). ``properties`` are the provider's image properties (for example
     ``{"hw_firmware_type": "uefi"}``).
+
+    0.25.3: Piceli uploads the image itself (``PUT`` to Glance, retried,
+    with progress, its checksums verified, a failed upload deleted) and
+    OpenTofu adopts it. ``host`` (an :class:`ImageHost`, set by
+    :meth:`from_build` for an image built on a remote docker host) uploads
+    it from that host instead of this machine.
     """
 
     name: str
@@ -399,6 +456,9 @@ class Image:
     format: str = "qcow2"
     min_disk_gb: int | None = None
     properties: Mapping[str, str] = field(default_factory=dict)
+    host: ImageHost | None = None
+    #: The image's size in bytes, when known (from the sidecar).
+    size: int | None = None
 
     def __post_init__(self) -> None:
         _name(self.name, "Image name")
@@ -437,6 +497,14 @@ class Image:
         ):
             raise _invalid(f"Image {self.name}: properties map names to strings")
         object.__setattr__(self, "properties", dict(sorted(self.properties.items())))
+        if self.host is not None and not isinstance(self.host, ImageHost):
+            raise _invalid(f"Image {self.name}: host= is an ImageHost")
+        if self.size is not None and (
+            isinstance(self.size, bool)
+            or not isinstance(self.size, int)
+            or self.size < 1
+        ):
+            raise _invalid(f"Image {self.name}: size is a number of bytes")
 
     def __hash__(self) -> int:
         return hash(("Image", self.name, self.sha256))
@@ -449,11 +517,17 @@ class Image:
         *,
         min_disk_gb: int | None = None,
         properties: Mapping[str, str] | None = None,
+        upload: Literal["host", "local"] = "host",
     ) -> Image:
         """The image ``piceli dev nix build --image`` wrote, from its sidecar
         ``NAME.image.json``: the file (relative to the sidecar), its sha256
         and format, so nobody copies a checksum by hand
-        (``infra-image-build-invalid`` when it is missing or malformed)."""
+        (``infra-image-build-invalid`` when it is missing or malformed).
+
+        0.25.3: a sidecar of an image built on a remote docker host also
+        names that host and the image's store path (``built_on``); Piceli
+        then uploads it from there (``upload="host"``, the default), not
+        from this machine. ``upload="local"`` uploads the local copy."""
         import json
 
         path = Path(build).expanduser()
@@ -480,6 +554,26 @@ class Image:
                 "infra-image-build-invalid",
                 f"Image {name}: {path} is not a piceli.nix-image.v1 sidecar",
             )
+        if upload not in ("host", "local"):
+            raise _invalid(f"Image {name}: upload= is host or local")
+        host: ImageHost | None = None
+        built_on = body.get("built_on")
+        if upload == "host" and isinstance(built_on, dict):
+            try:
+                host = ImageHost(
+                    str(built_on.get("host")),
+                    context=str(built_on.get("context")),
+                    image=str(built_on.get("image")),
+                    path=str(body.get("store_file")),
+                    cli=str(built_on.get("cli") or "docker"),
+                )
+            except InfraError:
+                raise InfraError(
+                    "infra-image-build-invalid",
+                    f"Image {name}: {path} names a build host Piceli cannot reach "
+                    "(built_on, store_file)",
+                ) from None
+        size = body.get("bytes")
         return cls(
             name,
             file=path.parent / file,
@@ -487,6 +581,8 @@ class Image:
             format=body["format"],
             min_disk_gb=min_disk_gb,
             properties=dict(properties or {}),
+            host=host,
+            size=size if isinstance(size, int) and size > 0 else None,
         )
 
     @property
@@ -495,7 +591,10 @@ class Image:
         return f"images/{self.sha256}.{self.format}"
 
     def describe(self) -> dict[str, Any]:
-        return {"name": self.name, "sha256": self.sha256, "format": self.format}
+        body = {"name": self.name, "sha256": self.sha256, "format": self.format}
+        if self.host is not None:
+            body["upload_from"] = self.host.name
+        return body
 
 
 S3_ACCESS = ("write", "read")

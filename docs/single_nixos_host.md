@@ -192,7 +192,9 @@ after installing Tailscale.
 2. **The image, then the machines.** Build the image on the build host;
    it lands in `images/` with `images/web-1-image.image.json`, the sidecar
    `Image.from_build` reads (the file, its sha256, the store path, the
-   commit):
+   commit; built on a docker host over SSH, also that host: `infra apply`
+   then uploads the image from there, with retries and progress, not from
+   this machine):
 
    ```sh
    export PICELI_DEV_CLUSTER=web_1.py:builds          # the DevBuilds

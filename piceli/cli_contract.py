@@ -1988,9 +1988,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             ),
             writes=(
                 "resources at the provider (servers, IPs, firewalls, DNS records, "
-                "bucket S3 key pairs)",
+                "images, bucket S3 key pairs)",
                 "encrypted OpenTofu state",
-                "state directory records (inventory.json, s3-keys.json)",
+                "state directory records (inventory.json, s3-keys.json, images.json, "
+                "image-upload-NAME.log)",
                 "$PICELI_CREDENTIALS_DIR/NAME.json of each S3Key (s3-keys, 0600)",
             ),
             approval_required=True,
@@ -2003,7 +2004,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(infra-apply-failed); one that changed something first exits 1 whatever "
             "its code, with partially_applied, applied (address, action, id) and "
             "not_applied; plan again to continue. One command at a time per state "
-            "(infra-state-locked).",
+            "(infra-state-locked). 0.25.3: an OpenStack Image is uploaded by Piceli "
+            "(from the build host of an Image.from_build, else this machine), "
+            "retried, its progress on stderr, verified and adopted (tofu import) "
+            "before tofu apply; a failed upload deletes its image "
+            "(infra-image-upload-failed, exit 1) and the log's path is printed.",
         ),
         "infra destroy": _C(
             "Destroy what Piceli created for a declared Infrastructure, with "

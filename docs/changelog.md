@@ -35,6 +35,40 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   gets the same `s3-read-not-enforced` warning as a bucket's read key. An
   `s3://` cache's own `write_credentials=` is now `pending` by `owner` too,
   instead of `missing`.
+- **Piceli uploads OpenStack images itself, from where they were built.**
+  OpenTofu's image resource sent the file from the machine running `tofu
+  apply` in one stream: a dropped connection after minutes left a
+  half-made image in `saving` and the next plan replaced it. Glance cannot
+  resume an upload (`PUT /v2/images/{id}/file` and `glance-direct` staging
+  are each one stream), so `piceli infra apply` now creates the image
+  record, sends the file and lets OpenTofu adopt it (`tofu import`), then
+  plans again and applies that plan, which must be the approved one less
+  the upload (`infra-plan-changed` otherwise).
+  - `Image.from_build` of an image built on a docker host over SSH uploads
+    it from that host (a short `docker run --rm -i` of the run image with
+    the host's `/nix` read-only); `piceli dev nix build --image` records
+    the host and the store file in the sidecar (`built_on`,
+    `store_file`). `upload="local"` keeps the local copy. A fresh Keystone
+    token reaches the host on stdin only and is revoked after each attempt.
+  - The plan lists each upload (`images`: action, from where, size,
+    sha256), covered by its hash; images a killed upload left at the cloud
+    are listed as `stale_images` and deleted before the upload.
+  - Three attempts, on the same record when Glance put it back to
+    `queued`, else on a new one after deleting the old; then
+    `infra-image-upload-failed` (new code, exit 1).
+  - Progress on stderr (bytes sent, total, rate, ETA; at most once a
+    second), the log's path when it starts (`image-upload-NAME.log` in the
+    state directory), `uploaded_images` in the JSON result.
+  - A failed or interrupted upload (`Ctrl-C` too) deletes the image it
+    made, by its tags. Glance's `checksum` and `os_hash_value` must be the
+    hashes of the bytes sent, and those the declared sha256
+    (`infra-image-checksum`).
+- **A half-made image is replaced, and a new sha256 too.** An image in the
+  state whose status is not `active`, or whose sha256 is not the declared
+  one, is planned with `-replace`: `replace (a failed upload left it in
+  saving)`. Images carry their sha256 as a tag (`piceli.io:image-sha256=…`)
+  and ignore `local_file_path`, so an image uploaded by 0.25.2 is kept: its
+  first plan updates its tags in place.
 
 ## Version 0.25.2
 
