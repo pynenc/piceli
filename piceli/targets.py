@@ -53,6 +53,8 @@ STATES = (
     "unreachable",
     "unknown",  # the source that knows was not read
 )
+#: A release the controller holds: its cache's public key is not declared.
+UNSET_REASON = "dev-nix-cache-key-unset"
 #: The states that make :func:`exit_code` ``1``.
 BAD_STATES = frozenset({"failed", "rolled-back", "unreachable"})
 CHECK_STATES = ("passed", "failed", "running", "none")
@@ -242,6 +244,8 @@ def _release_view(release: Mapping[str, Any]) -> dict[str, Any]:
         "commit": release.get("published_commit"),
         "at": release.get("finished_at"),
         "latest_tag": release.get("tag"),
+        "reason": release.get("reason"),
+        "message": _dict(release.get("refusal")).get("message"),
     }
 
 
@@ -307,6 +311,11 @@ def _host_row(
             row["state"] = "unreachable"
             row["reason"], row["detail"] = read.get("reason"), read.get("detail")
             row["facts"]["state"] = row["facts"]["checks"] = "host-agent"
+        elif view is not None and view["reason"] == UNSET_REASON:
+            # Held by the controller until the cache's public key is declared.
+            row["state"], row["reason"], row["detail"] = (
+                "held", view["reason"], view["message"]
+            )  # fmt: skip
         row["release"] = view
         return row
     row = _row("nix-host", name, where, "host-agent")

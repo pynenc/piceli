@@ -458,3 +458,19 @@ def test_cli_without_the_home_profile_shows_environments_unreachable(
     assert main["where"] == "my-cluster/shop"
     assert "piceli login my-cluster" in main["detail"]
     assert "piceli login my-cluster" in done.stderr and seen == []
+
+
+def test_a_release_without_its_cache_key_is_held_with_the_reason() -> None:
+    message = "NixCache cache-1 has no public key yet: run piceli secrets setup MODULE"
+    blocked = {"state": "rejected", "reason": "dev-nix-cache-key-unset",
+               "refusal": {"message": message}, "latest_tag": "web-v1.0.0"}  # fmt: skip
+    document = targets.build(_status(**{"web-1": blocked}))
+    row = _rows(document)[("web-1", None)]
+    assert (row["state"], row["reason"], row["detail"]) == (
+        "held", "dev-nix-cache-key-unset", message
+    )  # fmt: skip
+    assert row["release"]["reason"] == "dev-nix-cache-key-unset"
+    assert row["release"]["message"] == message
+    main = _rows(document)[("main", "shop")]
+    assert main["state"] == "deployed"  # environments are unaffected
+    assert "held (dev-nix-cache-key-unset)" in "\n".join(targets.table(document))

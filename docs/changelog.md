@@ -218,10 +218,16 @@ environment and host in one view.
   exist for yet, and `infra plan` of the bucket works. `status` shows the
   key `missing`, then, once generated, `copy` with "put `cache-1:...` into
   NixCache(public_key=)" (blocking: exit 1); `setup` generates it and
-  prints the public key to copy. Publishing (`dev nix build --publish`, a
-  `NixRelease` in a composition), `dev nix gc`, `host module` and the
-  agent's configuration refuse with `dev-nix-cache-key-unset`, naming
-  `piceli secrets setup MODULE`. A module whose declaration raises while
+  prints the public key to copy. `dev nix build --publish`, `dev nix gc`,
+  `host module` and the agent's configuration refuse with
+  `dev-nix-cache-key-unset`, naming `piceli secrets setup MODULE`. A
+  composition holding a `NixRelease` of such a cache still loads, so its
+  environments deploy as usual: the controller keeps that release
+  `rejected` with reason `dev-nix-cache-key-unset` and its message (in
+  `gitops status`, `nix_releases`, and `piceli targets`, where the host is
+  `held`), plans and publishes nothing for it, and takes the tags it sees
+  once the key is declared as the baseline; `gitops enable` prints a
+  warning line for it. A module whose declaration raises while
   loading is now reported under the declaration's own code (for example
   `dev-nix-cache-invalid`), else `infra-load-failed`, not `infra-not-found`
   with a hint about an `Infrastructure` attribute; `host` commands do the

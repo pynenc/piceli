@@ -608,6 +608,12 @@ def _enable_composition(
             for source, rules in item.sources
         )
         say(f"environment {item.name} ({item.namespace}): follows {rules}")
+    for release in composition.nix_releases:
+        if release.key_unset:  # 0.25.0: the controller holds it, nothing else
+            say(
+                f"warning: nix release {release.name}: {release.key_unset}; the "
+                "controller publishes nothing for it until then"
+            )
     objects = render_controller(config, settings)
     ui_objects, ui = _ui_objects(composition.cluster, namespace, image)
     if composition.cluster is not None and namespace == "piceli-system":

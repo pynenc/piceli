@@ -6046,7 +6046,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "dev-nix-cache-key-unset",
         "Nix cache public key not declared yet",
-        "The `NixCache` names its key with `key_name=` alone (the key does not exist yet), and publishing, `dev nix gc`, a host's module and a `NixRelease` need the public key hosts trust.",
+        "The `NixCache` names its key with `key_name=` alone (the key does not exist yet), and publishing, `dev nix gc` and a host's module need the public key hosts trust. A `NixRelease` of that cache stays `rejected` with this reason in the controller (its composition still loads), and nothing is published for it.",
         "Run `piceli secrets setup MODULE` (or `piceli secrets nix-cache NAME --generate`) and put the public key it prints into `NixCache(public_key=)`.",
         False,
         "dev",

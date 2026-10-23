@@ -52,6 +52,13 @@ from typing import Any
 
 from piceli.gitops import GitOpsError
 
+#: The release's state, reason and message while its cache's public key is
+#: not declared (``NixCache(key_name=)`` alone): nothing is planned.
+UNSET_REASON = "dev-nix-cache-key-unset"
+KEY_UNSET = (
+    "the cache has no public key yet: run piceli secrets setup MODULE and put "
+    "the public key it prints into NixCache(public_key=)"
+)
 PLAN_SCHEMA = "piceli.nix-release-plan.v1"
 CLAIM_SCHEMA = "piceli.nix-publish-claim.v1"
 #: The kind of a wanted build that publishes a release.
@@ -160,7 +167,20 @@ class NixRelease:
         return str(self.host.name)
 
     def target(self) -> ReleaseTarget:
-        """The release as plain data (what the controller's config holds)."""
+        """The release as plain data (what the controller's config holds).
+
+        A cache declared with ``key_name=`` alone gives ``public_key=None``
+        and ``key_unset`` (why): the composition still loads, and the
+        controller rejects the release (``dev-nix-cache-key-unset``) without
+        planning anything until the key is declared."""
+        from piceli.dev.model import DevError
+
+        cache = self.host.cache
+        try:
+            cache.trusted_key()
+            unset = None
+        except DevError as error:
+            unset = str(error)
         return ReleaseTarget(
             name=self.host.name,
             build=str(self.host.build),
@@ -171,8 +191,9 @@ class NixRelease:
             builder=self.builder,
             auto_approve=self.auto_approve,
             store_url=self.host.cache.store_url,
-            public_key=self.host.cache.trusted_key(),
+            public_key=cache.public_key,
             gate=self.gate,
+            key_unset=unset,
         )
 
 
@@ -189,9 +210,12 @@ class ReleaseTarget:
     builder: str
     auto_approve: bool
     store_url: str
-    public_key: str
+    #: ``None``: the cache names its key without it yet (``key_unset`` says so).
+    public_key: str | None
     #: 0.25.0: the :class:`~piceli.infra.Promotion` gate, or ``None``.
     gate: Any = None
+    #: Why the release cannot publish: its cache's public key is not declared.
+    key_unset: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         gate = {"gate": self.gate.to_dict()} if self.gate is not None else {}
@@ -207,7 +231,8 @@ class ReleaseTarget:
             "source": self.source.key,
             "builder": self.builder,
             "auto_approve": self.auto_approve,
-            "cache": {"store_url": self.store_url, "public_key": self.public_key},
+            "cache": {"store_url": self.store_url, "public_key": self.public_key}
+            | ({"key_unset": self.key_unset} if self.key_unset else {}),
         }
 
     @classmethod
@@ -220,6 +245,9 @@ class ReleaseTarget:
         try:
             follow = value["follow"]
             tag = Tag(str(follow["pattern"]), bool(follow.get("prereleases")))
+            declared = value["cache"]["public_key"]
+            public = None if declared is None else check_public_key(str(declared))
+            unset = str(value["cache"].get("key_unset") or KEY_UNSET)
             target = cls(
                 name=str(value["name"]),
                 build=str(value["build"]),
@@ -230,8 +258,9 @@ class ReleaseTarget:
                 builder=str(value["builder"]),
                 auto_approve=value.get("auto_approve") is True,
                 store_url=str(value["cache"]["store_url"]),
-                public_key=check_public_key(str(value["cache"]["public_key"])),
+                public_key=public,
                 gate=Promotion.from_dict(value["gate"]) if value.get("gate") else None,
+                key_unset=None if public else unset,
             )
         except (KeyError, TypeError, HostError, DevError) as error:
             raise _invalid(f"a nix release is invalid: {error}") from None
@@ -387,6 +416,13 @@ class Releases:
             forced.pop(gone, None)
         for target in targets:
             record = records.setdefault(target.name, {"state": "idle", "tag": None})
+            if target.public_key is None:
+                self._unset(target, record, refs.get(target.source.key))
+                continue
+            if record.get("reason") == UNSET_REASON:  # the key is declared now
+                for key in ("reason", "refusal"):
+                    record.pop(key, None)
+                record["state"] = "idle"
             record.update(
                 host=target.name,
                 source=target.source.key,
@@ -415,6 +451,33 @@ class Releases:
                         self._attempt(target, record, latest, why or f"tag {latest[0]}")
                 record["seen"] = True
             self._advance(target, record)
+
+    def _unset(self, target: ReleaseTarget, record: dict[str, Any], found: Any) -> None:
+        """The cache's public key is not declared: the release is
+        ``rejected`` (``dev-nix-cache-key-unset``), nothing is planned or
+        asked for, and its tags are not taken as seen (the first poll with
+        the key takes them as the baseline)."""
+        again = record.get("reason") == UNSET_REASON
+        self._drop_wanted(record)
+        for key in ("failure", "claimed", "approval", "stages", "approve_command",
+                    "approval_required_since", "pinned"):  # fmt: skip
+            record.pop(key, None)
+        latest = target.latest(found.tags) if found is not None else None
+        record.update(
+            host=target.name,
+            source=target.source.key,
+            builder=target.builder,
+            state="rejected",
+            reason=UNSET_REASON,
+            refusal={"message": target.key_unset or KEY_UNSET},
+            plan=None,
+            plan_digest=None,
+            build_id=None,
+            latest_tag=latest[0] if latest else None,
+            latest_commit=latest[1] if latest else None,
+        )
+        if not again:
+            self.log(f"nix release {target.name}: {target.key_unset or KEY_UNSET}")
 
     @staticmethod
     def _newer(target: ReleaseTarget, tag: str, record: Mapping[str, Any]) -> bool:

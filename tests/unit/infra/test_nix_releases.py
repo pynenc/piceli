@@ -56,7 +56,11 @@ web_release = NixRelease(web, source=hosts, builder="mini", auto_approve=AUTO)
 
 
 def _world(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, auto: bool = False
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    auto: bool = False,
+    infra: str = INFRA,
 ) -> dict[str, Any]:
     from piceli.infra.machines.credentials import save_credential
 
@@ -68,7 +72,7 @@ def _world(
     monkeypatch.setenv("NIX_RELEASE_URL", repo.url)
     monkeypatch.setenv("NIX_RELEASE_PUBLIC", PUBLIC)
     monkeypatch.setenv("NIX_RELEASE_CACHE", str(cache_dir))
-    (tmp_path / "infra.py").write_text(INFRA.replace("AUTO", str(auto)))
+    (tmp_path / "infra.py").write_text(infra.replace("AUTO", str(auto)))
     composition = load_composition(tmp_path / "infra.py")
     config = CompositionConfig(composition=composition.to_dict(), poll_seconds=10)
     state = tmp_path / "state"
@@ -702,3 +706,55 @@ def test_a_host_declared_runs_false_only_publishes(
     plain, other = _serve_cli(tmp_path, monkeypatch, runs=False, host=None)
     assert plain.exit_code == 0, plain.stdout + plain.stderr
     assert other["host"] == "laptop" and other["images"] is True
+
+
+UNSET = "dev-nix-cache-key-unset"
+KEYLESS = INFRA.replace(
+    'NixCache(os.environ["NIX_RELEASE_PUBLIC"],', 'NixCache(key_name="cache-1",'
+)
+
+
+def test_a_release_whose_cache_has_no_key_is_rejected_and_publishes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from piceli.k8s.cli import app
+
+    assert KEYLESS != INFRA
+    world = _world(tmp_path, monkeypatch, infra=KEYLESS)  # the composition loads
+    (target,) = world["composition"].nix_releases
+    assert target.public_key is None
+    controller, repo = world["controller"], world["repo"]
+    status = controller.poll_once()
+    record = _release(status)
+    assert (record["state"], record["reason"]) == ("rejected", UNSET)
+    assert "piceli secrets setup MODULE" in record["refusal"]["message"]
+    assert record["plan"] is None and record["latest_tag"] == "web-v1.0.0"
+    repo.commit({"hosts/web-1.nix": "{ }\n"})
+    repo.tag("web-v1.1.0")
+    status = controller.poll_once()
+    assert _release(status)["state"] == "rejected"
+    assert status["controller"]["builds_wanted"] == []
+    result = CliRunner().invoke(
+        app, ["gitops", "status", "--state-dir", str(world["state"]), "--json"]
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert f"nix release web-1: rejected ({UNSET}: NixCache cache-1" in result.stderr
+    # gitops enable warns about it and goes on.
+    image = "ghcr.io/example/piceli@sha256:" + "0" * 64
+    enabled = CliRunner().invoke(
+        app, ["gitops", "enable", str(tmp_path / "infra.py"), "--image", image]
+    )
+    assert "warning: nix release web-1: NixCache cache-1 has no public key" in (
+        enabled.stderr
+    ), enabled.output
+    assert json.loads(enabled.stdout)["reason"] != UNSET
+    # Once the key is declared, the tags it sees are the baseline.
+    import dataclasses
+
+    keyed = dataclasses.replace(target, public_key=PUBLIC, key_unset=None)
+    controller.nix.poll([keyed], controller.refs)
+    record = controller.nix.records()["web-1"]
+    assert (record["state"], record["tag"]) == ("baseline", "web-v1.1.0")
+    assert "reason" not in record and "refusal" not in record

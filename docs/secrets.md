@@ -500,9 +500,12 @@ cache = NixCache(key_name="example-cache-1", bucket=nix_bucket)
 
 `secrets status`, `secrets setup` and `infra plan` (the bucket and its S3
 pairs need no signing key) work with it. Whatever needs the public key
-refuses with `dev-nix-cache-key-unset` until it is declared: publishing
-(`dev nix build --publish`, a `NixRelease`), `dev nix gc` and `host
-module`. Step 3 puts the key `setup` prints in its place:
+refuses with `dev-nix-cache-key-unset` until it is declared: `dev nix
+build --publish`, `dev nix gc` and `host module`. A composition with a
+`NixRelease` of that cache still loads and its environments deploy; the
+controller keeps that release `rejected` (`dev-nix-cache-key-unset`, in
+`gitops status` and `piceli targets`) and publishes nothing for it, and
+`gitops enable` warns about it. Step 3 puts the key `setup` prints in its place:
 `NixCache("example-cache-1:<base64>", bucket=nix_bucket)`.
 
 1. **See what the declaration needs.**

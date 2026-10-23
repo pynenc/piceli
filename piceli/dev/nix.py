@@ -194,11 +194,11 @@ class NixCache:
     :param key_name: The key's name alone, for a cache whose key does not
         exist yet (0.25.0): ``NixCache(key_name="cache-1", bucket=...)``.
         ``piceli secrets status`` and ``setup`` work with it, and so does
-        ``piceli infra plan`` of the bucket; publishing, ``dev nix gc``, a
-        host's module and a ``NixRelease`` refuse
-        (``dev-nix-cache-key-unset``) until the public key ``setup`` prints
-        is in ``public_key=``. Given with ``public_key=``, it must be that
-        key's name.
+        ``piceli infra plan`` of the bucket; publishing, ``dev nix gc`` and
+        a host's module refuse (``dev-nix-cache-key-unset``), and the
+        controller keeps a ``NixRelease`` of it ``rejected``, until the
+        public key ``setup`` prints is in ``public_key=``. Given with
+        ``public_key=``, it must be that key's name.
     :param signing_key: The local credential holding the secret key
         (default: the key's name).
     :param write_credentials: The local credential with S3 access keys

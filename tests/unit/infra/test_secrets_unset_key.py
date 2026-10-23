@@ -19,7 +19,7 @@ from typer.testing import CliRunner
 
 from piceli.dev import nix
 from piceli.dev.model import DevError
-from piceli.infra import CompositionError, NixCache, NixHost, Source, Tag
+from piceli.infra import NixCache, NixHost, Source, Tag
 from piceli.infra.composition import composition_from
 from piceli.infra.machines import credentials
 from piceli.infra.nix_releases import NixRelease, cache_keys
@@ -119,15 +119,15 @@ def test_everything_that_needs_the_key_refuses() -> None:
             cache=cache,
         ),
         lambda: agent_config(host),
-        release.target,
         lambda: cache_keys(cache),
     ):
         with pytest.raises(DevError) as raised:
             refused()
         assert raised.value.code == UNSET
-    with pytest.raises(CompositionError) as composed:
-        composition_from({"web_release": release})
-    assert composed.value.code == UNSET
+    # The composition loads: the release is refused when the controller polls.
+    (target,) = composition_from({"web_release": release}).nix_releases
+    assert target.public_key is None
+    assert "piceli secrets setup MODULE" in str(target.key_unset)
 
 
 # ------------------------------------------------------------- CLI
