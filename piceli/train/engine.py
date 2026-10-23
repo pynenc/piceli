@@ -682,6 +682,7 @@ class TrainRun:
             own_env=own,
             store=self.store,
             origin={"train": self.train.name, "run": self.run_id, "trial": trial.id},
+            push=self.push_requested,
         )
         for step in train.test_steps:
             self._step_started(trial.id, step.name, step.kind, ctx)

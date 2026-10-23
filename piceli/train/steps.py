@@ -89,6 +89,8 @@ class StepContext:
     :param origin: Who runs it (``train``, ``run``, ``trial``), recorded with
         a passed step's key.
     :param base_branch: The branch ``--promote`` moves to ``head``.
+    :param push: The run pushes (``--push``): a cargo step with
+        ``on_push="all"`` selects every package.
     """
 
     checkout: Path
@@ -106,6 +108,7 @@ class StepContext:
     origin: Mapping[str, Any] = field(default_factory=dict)
     #: The branch the train promotes ``head`` to (``Train(base=...)``).
     base_branch: str = "main"
+    push: bool = False
 
 
 def log_path(ctx: StepContext, step: str) -> Path:
@@ -184,7 +187,13 @@ def run_step(step: Step, ctx: StepContext) -> StepResult:
     selected: list[str] | None = None
     base: dict[str, Any] = {}
     if isinstance(step, CargoCheck | CargoTests):
-        selected, base, error = _selection(step.select, ctx, run, log)
+        select: Impact | str = step.select
+        if step.on_push == "all" and ctx.push:
+            _log_reasons(
+                log, ['impact: every package: on_push="all" and this run pushes']
+            )
+            select = "all"
+        selected, base, error = _selection(select, ctx, run, log)
         if error:
             return finish("failed", error, base, [])
         if selected == []:

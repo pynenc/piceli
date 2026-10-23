@@ -86,8 +86,8 @@ The steps:
 | Step | Runs | Passes when |
 | --- | --- | --- |
 | `Step.command(name, argv, env=None, timeout=3600, cargo=False)` | `argv` in the merged checkout | it exits 0 |
-| `CargoCheck(select=Impact(), args=("--all-targets",))` | `cargo check` on the selected packages | it exits 0 (skipped when nothing selected) |
-| `CargoTests(select=Impact(), args=(), retry=1)` | `cargo test --no-fail-fast` on the selected packages, then the failed tests again by exact name | every test passed, first time or on a retry |
+| `CargoCheck(select=Impact(), args=("--all-targets",), on_push=None)` | `cargo check` on the selected packages | it exits 0 (skipped when nothing selected) |
+| `CargoTests(select=Impact(), args=(), retry=1, on_push=None)` | `cargo test --no-fail-fast` on the selected packages, then the failed tests again by exact name | every test passed, first time or on a retry |
 | `Step.publish(name, argv, env=None, timeout=3600, cargo=False)` | `argv` in a checkout of the promoted head, only with `--promote` | it exits 0; it never judges a candidate |
 | `Step.images("infra.py", components=(), platforms=(), repository="", branch="main")` | builds the GitOps controller's images of the promoted head and offers them to it, only with `--promote` | the images were built, pushed and offered (see [Images for the cluster](#images-for-the-cluster)) |
 
@@ -149,6 +149,13 @@ steps check scripts and documentation).
 
 The step's log lists the reason for each package. `select="all"` always
 tests the whole workspace (`--workspace`).
+
+**Full only when pushing.** `CargoTests(select=Impact(), on_push="all")`
+(and `CargoCheck`) uses the impact selection in every run except one with
+`--push`, which tests the whole workspace: the commit that reaches the
+remote is fully tested, while runs that only promote locally or judge
+branches stay quick. Every trial of a pushing run uses it, bisection
+included.
 
 `Impact(dev_targets=True)` narrows the members that reach a selected
 package **only** through a dev-dependency: their library did not change,

@@ -165,6 +165,14 @@ def _selection(value: Any) -> Selection:
     raise _invalid('select must be Impact(...) or "all"')
 
 
+def _on_push(step: Any) -> None:
+    """Check a cargo step's ``on_push`` (``None`` or ``"all"``)."""
+    if step.on_push not in (None, "all"):
+        raise _invalid(f'step {step.name}: on_push is "all" or None')
+    if step.on_push == "all" and step.select == "all":
+        raise _invalid(f'step {step.name}: on_push="all" needs select=Impact(...)')
+
+
 def _selection_dict(value: Selection) -> Any:
     return "all" if value == "all" else value.to_dict()
 
@@ -487,6 +495,8 @@ class CargoCheck(Step):
 
     :param select: :class:`Impact` (default) or ``"all"`` (``--workspace``).
     :param args: Extra cargo arguments (default ``--all-targets``).
+    :param on_push: ``"all"``: a run with ``--push`` checks every package;
+        other runs use ``select``.
     """
 
     kind: ClassVar[str] = "cargo-check"
@@ -496,14 +506,20 @@ class CargoCheck(Step):
     _: KW_ONLY
     select: Selection = field(default_factory=Impact)
     args: tuple[str, ...] = ("--all-targets",)
+    on_push: Literal["all"] | None = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
         object.__setattr__(self, "select", _selection(self.select))
         object.__setattr__(self, "args", _strings(self.args, f"step {self.name} args"))
+        _on_push(self)
 
     def _fields(self) -> dict[str, Any]:
-        return {"select": _selection_dict(self.select), "args": list(self.args)}
+        return {
+            "select": _selection_dict(self.select),
+            "args": list(self.args),
+            **({"on_push": self.on_push} if self.on_push else {}),
+        }
 
 
 @dataclass(frozen=True)
@@ -518,6 +534,8 @@ class CargoTests(Step):
     :param select: :class:`Impact` (default) or ``"all"`` (``--workspace``).
     :param args: Extra arguments; those after ``--`` go to the test binaries.
     :param retry: How many times failed tests run again (0: never).
+    :param on_push: ``"all"``: a run with ``--push`` tests every package
+        (``--workspace``); other runs use ``select``.
     """
 
     kind: ClassVar[str] = "cargo-test"
@@ -528,6 +546,7 @@ class CargoTests(Step):
     select: Selection = field(default_factory=Impact)
     args: tuple[str, ...] = ()
     retry: int = 1
+    on_push: Literal["all"] | None = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -535,12 +554,14 @@ class CargoTests(Step):
         object.__setattr__(self, "args", _strings(self.args, f"step {self.name} args"))
         if type(self.retry) is not int or self.retry < 0:
             raise _invalid(f"step {self.name}: retry must be a non-negative integer")
+        _on_push(self)
 
     def _fields(self) -> dict[str, Any]:
         return {
             "select": _selection_dict(self.select),
             "args": list(self.args),
             "retry": self.retry,
+            **({"on_push": self.on_push} if self.on_push else {}),
         }
 
 
@@ -587,6 +608,7 @@ def step_from_dict(data: Mapping[str, Any]) -> Step:
     extra: dict[str, Any] = {
         "select": _selection_from(data["select"]),
         "args": tuple(data.get("args") or ()),
+        "on_push": data.get("on_push"),
     }
     if kind is CargoTests:
         extra["retry"] = data.get("retry", 1)

@@ -42,7 +42,9 @@ and `cancel` start and stop one, and the UI's Builds page shows them all.
   everything (`lockfile="all"`: any lock change does). A file outside every
   package tests everything (`Impact(outside="all")`, the default), except
   documentation (`ignore=("*.md", "docs/*")`); `outside="none"` ignores
-  them. With
+  them. `CargoTests(select=Impact(), on_push="all")` (and `CargoCheck`)
+  tests everything in a run with `--push` and the impact selection
+  otherwise. With
   `Impact(dev_targets=True)`, a member that reaches a changed package only
   through a dev-dependency runs only its integration test targets that
   name the changed library (the whole member when its unit tests or shared
