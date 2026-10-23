@@ -168,7 +168,7 @@ piceli state import --spec deploy/app.py:pipeline --in state.json --key-file …
   (secret store, stored discovery with live Secret bodies, execution
   journals, pending plans, backups of replaced objects) is **left out** unless
   `--include-secrets --key-file` encrypts it (AES-256-GCM with an scrypt key,
-  bound to the release and namespace; needs `pip install 'piceli[crypto]'`).
+  bound to the release and namespace).
 - An import replaces the state of the release (shared or local) after an
   approval of its digest. An export without the private part is refused
   (`state-import-partial`) unless `--allow-partial`: the next release would

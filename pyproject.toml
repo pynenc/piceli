@@ -29,6 +29,8 @@ dependencies = [
     "typer>=0.12",
     "rich>=13.7",
     "cron-validator>=1.0.8",
+    # Key generation and signing (secrets setup, nix-cache, age, state exports).
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]
@@ -48,10 +50,8 @@ telemetry = [
     "opentelemetry-proto>=1.27.0",
     "opentelemetry-sdk>=1.44.0",
 ]
-# Encrypted secret material in `piceli state export --include-secrets`.
-crypto = [
-    "cryptography>=42",
-]
+# Kept so `piceli[crypto]` still installs: cryptography is a dependency (0.25.2).
+crypto = []
 ui = [
     "authlib==1.8.0",
     "fastapi==0.142.0",

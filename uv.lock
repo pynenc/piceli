@@ -1797,6 +1797,7 @@ version = "0.25.0"
 source = { editable = "." }
 dependencies = [
     { name = "cron-validator" },
+    { name = "cryptography" },
     { name = "kubernetes" },
     { name = "pydantic" },
     { name = "pyyaml" },
@@ -1807,9 +1808,6 @@ dependencies = [
 [package.optional-dependencies]
 aws = [
     { name = "botocore" },
-]
-crypto = [
-    { name = "cryptography" },
 ]
 gcp = [
     { name = "google-api-core" },
@@ -1888,7 +1886,7 @@ requires-dist = [
     { name = "authlib", marker = "extra == 'ui'", specifier = "==1.8.0" },
     { name = "botocore", marker = "extra == 'aws'", specifier = ">=1.34" },
     { name = "cron-validator", specifier = ">=1.0.8" },
-    { name = "cryptography", marker = "extra == 'crypto'", specifier = ">=42" },
+    { name = "cryptography", specifier = ">=42" },
     { name = "fastapi", marker = "extra == 'ui'", specifier = "==0.142.0" },
     { name = "google-api-core", marker = "extra == 'gcp'", specifier = ">=2.17" },
     { name = "google-auth", marker = "extra == 'gcp'", specifier = ">=2.27" },

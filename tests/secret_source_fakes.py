@@ -139,8 +139,6 @@ class FakeVault:
 
 
 def _self_signed(directory: Path) -> tuple[Path, Path]:
-    crypto = pytest.importorskip("cryptography")
-    del crypto
     import ipaddress
 
     from cryptography import x509

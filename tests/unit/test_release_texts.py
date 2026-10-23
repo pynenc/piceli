@@ -29,3 +29,16 @@ def test_the_readme_says_what_is_new_in_this_minor() -> None:
         r"^## What's new in ([0-9.]+)", (ROOT / "README.md").read_text(), re.M
     )
     assert headings == [MINOR], headings
+
+
+def test_cryptography_is_a_dependency_and_the_crypto_extra_still_installs() -> None:
+    """Key generation (secrets setup, nix-cache, age) is core: no extra needed."""
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    assert any(d.startswith("cryptography>=") for d in project["dependencies"])
+    assert "crypto" in project["optional-dependencies"]  # piceli[crypto] still works
+
+
+def test_no_error_code_asks_for_the_crypto_extra() -> None:
+    from piceli.errors import ERRORS
+
+    assert not [code for code, e in ERRORS.items() if "piceli[crypto]" in e.fix]

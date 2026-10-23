@@ -22,6 +22,12 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   OpenTofu's whole output, redacted, is kept in `tofu-<command>.log` in the
   state directory (`tofu_log`); `piceli infra plan|apply|destroy --verbose`
   prints it.
+- **`cryptography` is a dependency.** Generating keys is core to `piceli
+  secrets setup`, `secrets nix-cache` and `secrets age`, which crashed with
+  `ModuleNotFoundError` when Piceli was installed without the `crypto` extra.
+  `cryptography>=42` is now a base dependency; `piceli[crypto]` still
+  installs (an empty extra). The codes `state-crypto-unavailable` and
+  `dev-nix-crypto-unavailable`, which could no longer happen, are removed.
 
 ## Version 0.25.1
 
