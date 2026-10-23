@@ -4,6 +4,87 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.25.0
+
+A Nix host's releases need no hand-run publish step: in 0.25.0 the GitOps
+controller publishes a `NixHost`'s release when you push its tag, behind a
+promotion gate that only lets through product commits an environment
+verified. Tags carry a prefix per target, and `piceli targets` shows every
+environment and host in one view.
+
+- **The controller publishes Nix host releases.** `NixRelease(host,
+  source=, builder=, auto_approve=False)` (new in `piceli.infra`) in a
+  composition makes the GitOps controller follow the host's
+  `Tag("web-v*")` in the flake's source: a new tag is planned
+  (`piceli.nix-release-plan.v1`), waits for `piceli gitops approve NAME
+  <plan digest>` unless `auto_approve=True`, and is asked for as a
+  `nix-publish` wanted build. `piceli builder serve --publish MODULE:ATTR`
+  (repeatable; a native host with it only publishes) claims it only for a
+  cache whose signing and S3 write keys are in its own secrets, proves it
+  with the key's signature over the claim (the keys never leave it), checks
+  that the tag points at the commit, builds, signs and publishes exactly as
+  `dev nix build --publish` does and answers `nix-published`; the
+  controller accepts only a manifest signed by the cache's key for the
+  planned commit and tag. `gitops status --json` lists `nix_releases`
+  (latest tag, state, stages with times, manifest digest); the history and
+  telemetry (`piceli.nix.release.finished`) record each attempt. A failure
+  is `failed` with its tail (`gitops-nix-release-failed`) until a newer tag
+  or `gitops sync`; tags present at first sight are the baseline. A
+  composition may now hold releases and no environment.
+- **A promotion gate and `piceli promote HOST --from ENV`.**
+  `NixRelease(..., gate=Promotion(input="app", environment="main"))`
+  (`Promotion` is new in `piceli.infra`) publishes only a commit whose
+  `flake.lock` pins the input to a commit the environment ran with its
+  release checks passed (deployed, every check passed, no rollback). The
+  controller leaves another tag `rejected` (`promotion-not-verified`, with
+  the newest passed commit) and checks it again on every poll; `dev nix
+  build --publish --release HOST --composition MODULE` runs the same gate
+  and refuses an unreadable history (`promotion-history-unreachable`). The
+  result, `pinned` (input, commit, environment, verified_run, verified_at),
+  is in the release plan, the signed manifest (an optional field) and
+  `gitops status`. `piceli promote web-1 --from main` plans the pin of the
+  newest passed commit in the flake's working copy (`nix flake lock
+  --override-input`, or a direct edit with the computed narHash without
+  nix), the commit and the next tag of the host's pattern, and with
+  `--approve DIGEST` commits, tags and pushes atomically; it refuses a
+  dirty working copy or one out of sync with its upstream. A hand-run
+  publish of a gated host's attribute to its cache runs the gate without
+  `--release` (found in the `--publish` module or `--composition`). The
+  controller keeps a record of the commits each gated environment passed
+  (the last 200 per source; `passed_commits` in the history), so a verified
+  commit keeps qualifying after it left the 20 listed runs.
+  `NixHost(gate=Promotion(...))` makes the host agent refuse a build
+  without that verified pin (`host-promotion-missing`); its `NixRelease`
+  takes the host's gate. New codes `promotion-*`, `promote-*`; see
+  `docs/gitops.md`.
+- **Tag prefixes per host.** `Tag("web-v*")` orders tags by the version
+  after the pattern's literal prefix (`Tag.prefix`, `Tag.version(tag)`):
+  `web-v1.10.0` is above `web-v1.9.0`, and two hosts released from one
+  repository (`web-v*`, `api-v*`) never see each other's tags.
+  `Tag("v*")` never matches `web-v1.2.3`. The agent's resolve and "never
+  older" use it; `dev nix build --publish --tag-pattern GLOB` points the
+  host's tag when a commit carries several, and `dev nix gc --tag-pattern
+  GLOB` (repeatable) keeps the newest `--keep-tags` versions of each.
+- **One status view of every target.** `piceli targets [--composition
+  MODULE] [--infra MODULE] [--json]` lists each GitOps environment and each
+  NixHost with its commit or tag, the product commit it pins (a promotion
+  gate's `pinned` where present, else every source's commit), its checks
+  and its state, as of when and from which source (controller or host
+  agent): `piceli.targets.v1`. The controller is read once, by default
+  from the composition's home cluster with its `piceli login` profile
+  (explicit flags win; without the profile, environments show
+  `profile-not-found` and the login to run); hosts over
+  SSH in parallel with `--timeout`; an unreachable one shows `unreachable`
+  and never fails the view (exit 1 when any target failed or is
+  unreachable). The UI's new Targets view shows the same document; the
+  in-cluster UI cannot reach hosts and shows each release as published.
+  The host agent now reports the pin of the build it runs: it copies the
+  deployed manifest's `pinned` into its status (`current.pinned`,
+  `previous.pinned` and each attempt's `pinned`; a rollback restores the
+  previous build's), `piceli host status --json` shows it, and `piceli
+  targets` prefers it (`facts.pinned: host-agent`) over the controller's
+  release. Status files without the field still read.
+
 ## Version 0.24.0
 
 A machine without a cluster: 0.24.0 creates NixOS hosts on OpenStack
@@ -132,78 +213,6 @@ and rollback.
   retried, and its earlier failure is not reported meanwhile);
   `--published-after` pins one before the host has polled. New codes
   `host-*`; see `docs/nix_hosts.md`.
-- **The controller publishes Nix host releases.** `NixRelease(host,
-  source=, builder=, auto_approve=False)` (new in `piceli.infra`) in a
-  composition makes the GitOps controller follow the host's
-  `Tag("web-v*")` in the flake's source: a new tag is planned
-  (`piceli.nix-release-plan.v1`), waits for `piceli gitops approve NAME
-  <plan digest>` unless `auto_approve=True`, and is asked for as a
-  `nix-publish` wanted build. `piceli builder serve --publish MODULE:ATTR`
-  (repeatable; a native host with it only publishes) claims it only for a
-  cache whose signing and S3 write keys are in its own secrets, proves it
-  with the key's signature over the claim (the keys never leave it), checks
-  that the tag points at the commit, builds, signs and publishes exactly as
-  `dev nix build --publish` does and answers `nix-published`; the
-  controller accepts only a manifest signed by the cache's key for the
-  planned commit and tag. `gitops status --json` lists `nix_releases`
-  (latest tag, state, stages with times, manifest digest); the history and
-  telemetry (`piceli.nix.release.finished`) record each attempt. A failure
-  is `failed` with its tail (`gitops-nix-release-failed`) until a newer tag
-  or `gitops sync`; tags present at first sight are the baseline. A
-  composition may now hold releases and no environment.
-- **A promotion gate and `piceli promote HOST --from ENV`.**
-  `NixRelease(..., gate=Promotion(input="app", environment="main"))`
-  (`Promotion` is new in `piceli.infra`) publishes only a commit whose
-  `flake.lock` pins the input to a commit the environment ran with its
-  release checks passed (deployed, every check passed, no rollback). The
-  controller leaves another tag `rejected` (`promotion-not-verified`, with
-  the newest passed commit) and checks it again on every poll; `dev nix
-  build --publish --release HOST --composition MODULE` runs the same gate
-  and refuses an unreadable history (`promotion-history-unreachable`). The
-  result, `pinned` (input, commit, environment, verified_run, verified_at),
-  is in the release plan, the signed manifest (an optional field) and
-  `gitops status`. `piceli promote web-1 --from main` plans the pin of the
-  newest passed commit in the flake's working copy (`nix flake lock
-  --override-input`, or a direct edit with the computed narHash without
-  nix), the commit and the next tag of the host's pattern, and with
-  `--approve DIGEST` commits, tags and pushes atomically; it refuses a
-  dirty working copy or one out of sync with its upstream. A hand-run
-  publish of a gated host's attribute to its cache runs the gate without
-  `--release` (found in the `--publish` module or `--composition`). The
-  controller keeps a record of the commits each gated environment passed
-  (the last 200 per source; `passed_commits` in the history), so a verified
-  commit keeps qualifying after it left the 20 listed runs.
-  `NixHost(gate=Promotion(...))` makes the host agent refuse a build
-  without that verified pin (`host-promotion-missing`); its `NixRelease`
-  takes the host's gate. New codes `promotion-*`, `promote-*`; see
-  `docs/gitops.md`.
-- **A host reports the pin it runs.** The host agent copies the
-  deployed manifest's `pinned` into its status: `current.pinned`
-  (`previous.pinned`) and each attempt's `pinned`; a rollback restores
-  the previous build's. `piceli host status --json` shows it, and
-  `piceli targets` prefers it (`facts.pinned: host-agent`) over the
-  controller's release. Status files without the field still read.
-- **One status view of every target.** `piceli targets [--composition
-  MODULE] [--infra MODULE] [--json]` lists each GitOps environment and each
-  NixHost with its commit or tag, the product commit it pins (a promotion
-  gate's `pinned` where present, else every source's commit), its checks
-  and its state, as of when and from which source (controller or host
-  agent): `piceli.targets.v1`. The controller is read once, by default
-  from the composition's home cluster with its `piceli login` profile
-  (explicit flags win; without the profile, environments show
-  `profile-not-found` and the login to run); hosts over
-  SSH in parallel with `--timeout`; an unreachable one shows `unreachable`
-  and never fails the view (exit 1 when any target failed or is
-  unreachable). The UI's new Targets view shows the same document; the
-  in-cluster UI cannot reach hosts and shows each release as published.
-- **Tag prefixes per host.** `Tag("web-v*")` orders tags by the version
-  after the pattern's literal prefix (`Tag.prefix`, `Tag.version(tag)`):
-  `web-v1.10.0` is above `web-v1.9.0`, and two hosts released from one
-  repository (`web-v*`, `api-v*`) never see each other's tags.
-  `Tag("v*")` never matches `web-v1.2.3`. The agent's resolve and "never
-  older" use it; `dev nix build --publish --tag-pattern GLOB` points the
-  host's tag when a commit carries several, and `dev nix gc --tag-pattern
-  GLOB` (repeatable) keeps the newest `--keep-tags` versions of each.
 - **A Nix host keeps 5 systems, not every one.** `NixHost(generations=5)`
   (at least 2: a rollback needs the previous one). After a deploy whose
   checks passed, the agent deletes the system profile's older generations
