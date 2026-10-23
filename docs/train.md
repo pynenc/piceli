@@ -185,6 +185,8 @@ the branch names may follow `APP` directly.
 | --- | --- |
 | `--promote` | Tag the head (`tested/<date>.N`), move `tested` and the base to it by fast-forward only, then run the publish steps |
 | `--push` | Push the tag, `tested` and the base, atomically (needs `--promote`) |
+| `--retire` | Once promoted, rename each joined branch `to_delete_<date>_<branch>` (see [Retire joined branches](#retire-joined-branches)) |
+| `--retire-remote` | `--retire`, and delete each retired branch on the remote after the push (needs `--push`) |
 | `--queue` | When the train is busy, queue the request (with its flags) and return at once; see {ref}`train-queue` |
 | `--json` | Print the result object on stdout |
 | `--state-dir DIR` | The state root (default `$XDG_STATE_HOME/piceli/train`, else `~/.local/state/piceli/train`) |
@@ -200,6 +202,52 @@ failed (`train-publish-failed`) or the push failed (`train-push-failed`);
 `2` rejected before anything ran (`train-not-found`, `train-branch-unknown`,
 `train-push-needs-promote`, `train-busy`, `train-run-unknown`, …). A step
 no host could take stops the run (`train-host-unavailable`, exit `1`).
+
+## Retire joined branches
+
+A joined branch is merged into the base; once the train promoted it, the
+branch is only clutter. `--retire` retires each joined branch after the
+promotion (and after the push, with `--push`), the way a person retires a
+merged branch by hand:
+
+```sh
+piceli train shop/train_spec.py --branches feat-a feat-b --promote --retire
+piceli train shop/train_spec.py --branches feat-a --promote --push --retire-remote
+piceli train shop/train_spec.py --promote-run last --retire
+```
+
+- The local branch is **renamed** `to_delete_<YYYY-MM-DD>_<branch>` (the
+  local date), never deleted: deleting retired branches stays your
+  decision. A worktree that has it checked out, clean, follows the rename.
+- A branch **checked out in a worktree with changes** (staged, unstaged or
+  untracked) is never touched (`checked-out-with-changes`), and neither is
+  a branch that **moved after it joined** (its tip is no longer the
+  commit the train merged: `moved`), one that is gone, or one whose new
+  name is taken (`name-taken`).
+- `--retire-remote` also deletes the branch on the train's remote, only
+  once the push succeeded, and only while the remote branch is at the
+  joined commit (`--force-with-lease`): `deleted`, `absent` (it was never
+  pushed), `moved` (kept) or `failed`. Without `--retire-remote` the
+  remote is never touched.
+
+Retiring never changes the run's verdict or exit code. The result's
+`retire` object lists what was retired and what was skipped:
+
+```json
+"retire": {
+  "state": "retired",
+  "mode": "remote",
+  "retired": [{"branch": "feat-a", "tip": "…", "renamed": "to_delete_2026-10-23_feat-a", "remote": "deleted"}],
+  "skipped": [{"branch": "feat-b", "reason": "checked-out-with-changes"}]
+}
+```
+
+`state` is `retired`, `nothing-retired` or `not-promoted` (the promotion
+was refused: nothing is renamed). The events `branch-retired` and
+`retire-skipped` say the same as it happens (and are span events of the
+run's trace), the summary that notifications and `piceli train-wait` send
+names the branches (`"retired": ["feat-a"]`), and `piceli trains` shows
+them with each run. A queued request keeps its retire flag.
 
 ## How a branch is judged
 
@@ -876,7 +924,7 @@ protobuf-only collector would reject.
 piceli.dev.train                     run: train, run id, branches; at the end state, ok, joined,
 │                                    ejected (branch=step), tag, promote, push, flaky, duration
 │  events: branch-joined, branch-ejected, branch-included, promoted, promote-rejected, pushed, push-failed,
-│          halves-parallel, trial-discarded, outputs-restored, pruned
+│          halves-parallel, trial-discarded, outputs-restored, pruned, branch-retired, retire-skipped
 ├─ piceli.dev.train.trial            trial, branches, verdict, failing step, duration, speculative
 │  ├─ piceli.dev.train.step          step, kind, phase=test, host (where it ran: a build host or local),
 │  │                                 verdict, duration, branches, selection, reused_from (a reused step's run)
@@ -1015,7 +1063,7 @@ train's hosts), and the run reports each step and verdict to an event sink
 selection, flaky tests and a failing tail), `trial-finished`,
 `halves-parallel`, `trial-discarded`, `branch-joined`, `branch-ejected`,
 `branch-included`, `outputs-restored`, `promoted`, `promote-rejected`,
-`published`, `publish-failed`, `pushed`, `push-failed`, `pruned`,
-`run-finished` (with the summary), `run-failed` (with the reason and the
+`published`, `publish-failed`, `pushed`, `push-failed`, `branch-retired`,
+`retire-skipped`, `pruned`, `run-finished` (with the summary), `run-failed` (with the reason and the
 summary), `notify-failed`). Every event is also appended to
 `events.jsonl`. A sink that raises never stops the run.

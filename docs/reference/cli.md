@@ -3995,6 +3995,8 @@ Merge branches onto the base one tested merge at a time; eject failures.
 | `--queue` | boolean | `False` | When the train is busy, queue the request and return at once (its id and position); the running train serves it next |
 | `--json` | boolean | `False` | Print the result object on stdout |
 | `--state-dir` | path |  | Train state root (default $XDG_STATE_HOME/piceli/train, else ~/.local/state/piceli/train) |
+| `--retire` | boolean | `False` | Once promoted, rename each joined branch to_delete_<date>_<branch> (never deleted); a branch checked out with changes, or one that moved after it joined, is left alone |
+| `--retire-remote` | boolean | `False` | --retire, and delete each retired branch on the remote after the push (only while it is at the joined commit; needs --push) |
 | `--promote-run` | text |  | Promote the head an earlier run reached (its id, or 'last'), without running it again; refused when the base moved in a way that is not a fast-forward of that head |
 
 **Contract**

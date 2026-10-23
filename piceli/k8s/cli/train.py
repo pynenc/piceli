@@ -65,6 +65,11 @@ def _human(event: Mapping[str, Any]) -> None:
         say(f"pushed:  {' '.join(event['refs'])} to {event['remote']}")
     elif kind == "push-failed":
         say(f"push to {event['remote']} failed [train-push-failed]")
+    elif kind == "branch-retired":
+        remote = f"; {event['remote']} on the remote" if event.get("remote") else ""
+        say(f"retired: {event['branch']} -> {event['renamed']}{remote}")
+    elif kind == "retire-skipped":
+        say(f"not retired: {event['branch']} ({event['reason']})")
 
 
 def _summary(result: Mapping[str, Any]) -> None:
@@ -81,6 +86,12 @@ def _summary(result: Mapping[str, Any]) -> None:
         f"train {result['train']}: {len(result['trials'])} trial(s) in "
         f"{result['duration']:.1f} s; head {result['head'][:12]}; record {result['record']}"
     )
+    retired = result.get("retire") or {}
+    if retired.get("retired"):
+        say(
+            "  retired: "
+            + ", ".join(f"{r['branch']} -> {r['renamed']}" for r in retired["retired"])
+        )
     if result["promote"]["state"] == "not-requested" and any(
         b["verdict"] == "joined" for b in result["branches"]
     ):
@@ -240,6 +251,23 @@ def train(
             "~/.local/state/piceli/train)",
         ),
     ] = None,
+    retire: Annotated[
+        bool,
+        typer.Option(
+            "--retire",
+            help="Once promoted, rename each joined branch "
+            "to_delete_<date>_<branch> (never deleted); a branch checked out "
+            "with changes, or one that moved after it joined, is left alone",
+        ),
+    ] = False,
+    retire_remote: Annotated[
+        bool,
+        typer.Option(
+            "--retire-remote",
+            help="--retire, and delete each retired branch on the remote after "
+            "the push (only while it is at the joined commit; needs --push)",
+        ),
+    ] = False,
     promote_run: Annotated[
         str | None,
         typer.Option(
@@ -269,6 +297,16 @@ def train(
         )
     if push and not promote and promote_run is None:
         reject("train-push-needs-promote", "--push pushes a promotion: add --promote")
+    mode = "remote" if retire_remote else "local" if retire else None
+    if mode and not promote and promote_run is None:
+        reject(
+            "train-retire-invalid", "--retire retires promoted branches: add --promote"
+        )
+    if mode == "remote" and not push:
+        reject(
+            "train-retire-invalid",
+            "--retire-remote deletes branches the push made redundant: add --push",
+        )
     try:
         loaded, repo, spec_path = locate(app, Path.cwd())
     except TrainError as error:
@@ -285,6 +323,7 @@ def train(
         events=fan_out(_human),
         warn=say,
         promote_run=promote_run,
+        retire=mode,
     )
     try:
         run.prepare()
@@ -305,6 +344,7 @@ def train(
             # ``last`` is resolved now: the run the caller saw, not whichever
             # run is last when the request is served
             promote_run=run.promoted_from,
+            retire=mode,
         )
         return
     try:
@@ -361,6 +401,7 @@ def build_request(state_dir: Path | None) -> Callable[[Mapping[str, Any]], Any]:
             warn=say,
             queue=str(request["id"]),
             promote_run=request.get("promote_run") or None,
+            retire=request.get("retire") or None,
         )
 
     return build
@@ -396,6 +437,7 @@ def queued_body(request: Mapping[str, Any], position: int | None) -> dict[str, A
             if request.get("promote_run")
             else {}
         ),
+        **({"retire": request["retire"]} if request.get("retire") else {}),
     }
 
 
@@ -409,6 +451,7 @@ def _queued_run(
     state_dir: Path | None,
     as_json: bool,
     promote_run: str | None = None,
+    retire: str | None = None,
 ) -> None:
     """``--queue``: write the request; return at once when the train is
     busy, else serve the queue (this request in its turn) here."""
@@ -419,6 +462,7 @@ def _queued_run(
         promote=promote,
         push=push,
         promote_run=promote_run,
+        retire=retire,
     )
     if queue.state.owner() is None:
         for done, result in serve_queue(queue, state_dir):

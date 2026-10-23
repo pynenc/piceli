@@ -26,6 +26,9 @@ Notifications, the ``piceli.dev.train.finished`` OpenTelemetry event and
       "record": ".../runs/<run>/run.json"
     }
 
+With ``--retire`` it also names the branches retired (``"retired":
+["feat-a"]``).
+
 It holds names, commits, step names and fixed reason codes only: no step
 output, so it can go to a webhook. Importing this module is side-effect free.
 """
@@ -79,6 +82,16 @@ def summarize(result: Mapping[str, Any]) -> dict[str, Any]:
         "record": result.get("record"),
         **({"reason": result["reason"]} if result.get("reason") else {}),
         **({"queue": result["queue"]} if result.get("queue") else {}),
+        **(
+            {
+                "retired": [
+                    str(item.get("branch"))
+                    for item in (result["retire"].get("retired") or ())
+                ]
+            }
+            if isinstance(result.get("retire"), Mapping)
+            else {}
+        ),
     }
 
 
@@ -106,6 +119,8 @@ def headline(summary: Mapping[str, Any]) -> str:
         tail.append("pushed")
     elif summary.get("push") == "failed":
         tail.append("push failed")
+    if summary.get("retired"):
+        tail.append(f"retired {len(summary['retired'])}")
     flaky = summary.get("flaky") or []
     if flaky:
         tail.append(f"{len(flaky)} flaky")

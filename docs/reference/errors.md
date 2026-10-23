@@ -775,6 +775,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`train-queue-not-found`](#error-train-queue-not-found) | train | no |
 | [`train-queue-not-waiting`](#error-train-queue-not-waiting) | train | no |
 | [`train-repo-invalid`](#error-train-repo-invalid) | train | no |
+| [`train-retire-invalid`](#error-train-retire-invalid) | train | no |
 | [`train-run-cancelled`](#error-train-run-cancelled) | train | yes |
 | [`train-run-failed`](#error-train-run-failed) | train | yes |
 | [`train-run-not-found`](#error-train-run-not-found) | train | no |
@@ -7323,6 +7324,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Train repository invalid.** The train's `repo` is not a Git repository, or its base branch does not exist.
 
 - **Fix:** Point `Train(repo=...)` at the repository (relative to the spec module) and create the base branch.
+- **Retry-safe:** no
+
+(error-train-retire-invalid)=
+### `train-retire-invalid`
+
+**--retire without a promotion, or --retire-remote without --push.** `--retire` renames the branches a promotion joined, so it needs `--promote` (or `--promote-run`); `--retire-remote` also deletes them on the remote once the push made them redundant, so it needs `--push`.
+
+- **Fix:** Add `--promote` (and `--push` for `--retire-remote`), or leave out the retire flag.
 - **Retry-safe:** no
 
 (error-train-run-cancelled)=

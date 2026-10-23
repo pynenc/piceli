@@ -209,6 +209,33 @@ class Git:
             self.out("status", "--porcelain", "--untracked-files=no", cwd=checkout)
         )
 
+    def has_changes(self, checkout: Path) -> bool:
+        """Any change in ``checkout``: staged, unstaged or untracked."""
+        return bool(self.out("status", "--porcelain", cwd=checkout))
+
+    def rename_branch(self, old: str, new: str) -> None:
+        """Rename a local branch (a worktree that has it checked out follows)."""
+        self.run("branch", "-m", old, new)
+
+    def remote_tip(self, remote: str, branch: str) -> str | None:
+        """The commit of ``branch`` on ``remote`` (``None``: not there).
+        Raises :class:`TrainError` when the remote cannot be read."""
+        out = self.out("ls-remote", "--heads", remote, f"refs/heads/{branch}")
+        return out.split()[0] if out else None
+
+    def delete_remote(self, remote: str, branch: str, expected: str) -> bool:
+        """Delete ``branch`` on ``remote`` only while it is at ``expected``
+        (``--force-with-lease``); whether it went."""
+        done = self.run(
+            "push",
+            "--porcelain",
+            f"--force-with-lease=refs/heads/{branch}:{expected}",
+            remote,
+            f":refs/heads/{branch}",
+            check=False,
+        )
+        return done.returncode == 0
+
     def fast_forward(self, branch: str, old: str | None, new: str) -> None:
         """Move ``branch`` from ``old`` (``None``: create it) to ``new``."""
         checkout = self.checked_out(branch)

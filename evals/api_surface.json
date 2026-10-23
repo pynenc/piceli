@@ -13989,6 +13989,8 @@
      "--promote-run",
      "--push",
      "--queue",
+     "--retire",
+     "--retire-remote",
      "--state-dir"
     ],
     "subcommands": []
@@ -14986,6 +14988,7 @@
    "train-queue-not-found",
    "train-queue-not-waiting",
    "train-repo-invalid",
+   "train-retire-invalid",
    "train-run-cancelled",
    "train-run-failed",
    "train-run-not-found",

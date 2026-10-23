@@ -267,6 +267,16 @@ def run_row(record: Mapping[str, Any], active: str | None) -> dict[str, Any]:
         "flaky": len(record.get("flaky") or ()),
         "reason": record.get("reason"),
         "queue": record.get("queue"),
+        **(
+            {
+                "retired": [
+                    str(item.get("branch"))
+                    for item in (record["retire"].get("retired") or ())
+                ]
+            }
+            if isinstance(record.get("retire"), Mapping)
+            else {}
+        ),
     }
 
 
@@ -575,6 +585,8 @@ def table(document: Mapping[str, Any], *, logs: bool = True) -> list[str]:
                 flags = f"--promote-run {row['promote_run']}" + (
                     " --push" if row.get("push") else ""
                 )
+            if row.get("retire"):
+                flags += " --retire" + ("-remote" if row["retire"] == "remote" else "")
             where = f"#{row['position']}" if row.get("position") else row.get("state")
             out.append(
                 f"    {where} {row['id']} {' '.join(row.get('branches') or ())}"
@@ -585,7 +597,7 @@ def table(document: Mapping[str, Any], *, logs: bool = True) -> list[str]:
         for run in train.get("runs") or ():
             verdicts = ", ".join(
                 f"{b['branch']} {b.get('verdict')}"
-                + (f" ({b['step']})" if b.get("verdict") == "ejected" else "")
+                + (f" ({b.get('step')})" if b.get("verdict") == "ejected" else "")
                 for b in run.get("branches") or ()
             )
             steps = " · ".join(
@@ -598,6 +610,8 @@ def table(document: Mapping[str, Any], *, logs: bool = True) -> list[str]:
                 extra += f" [{run['reason']}]"
             if run.get("push") == "pushed":
                 extra += " pushed"
+            if run.get("retired"):
+                extra += " retired " + ", ".join(run["retired"])
             if run.get("hosts"):
                 extra += " on " + ", ".join(run["hosts"])
             if run.get("reused"):

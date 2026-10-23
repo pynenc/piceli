@@ -24,7 +24,10 @@ its head. ``--promote`` tags the head and moves ``tested`` and ``base`` by
 fast-forward only, then runs the publish steps (the outputs of test steps
 that declared them restored first); ``--push`` pushes the tag and both
 branches (atomically). ``--promote-run RUN`` promotes the head of a
-reviewed earlier run without running it again. Nothing else changes a ref.
+reviewed earlier run without running it again. ``--retire`` then renames
+each joined branch ``to_delete_<date>_<branch>`` (``--retire-remote``: and
+deletes it on the remote after the push), except a branch checked out with
+changes or one that moved after it joined. Nothing else changes a ref.
 
 Importing this module is side-effect free.
 """
@@ -56,6 +59,9 @@ from piceli.train.spec import LoadedSpec, load
 from piceli.train.state import RUN_SCHEMA, TrainState, new_run_id
 from piceli.train.steps import StepContext, StepResult, log_path, run_step
 from piceli.train.summary import summarize
+
+#: ``retire=``: off, rename joined branches, or also delete them remotely.
+RETIRE = (None, "local", "remote")
 
 
 @dataclass
@@ -193,9 +199,26 @@ class TrainRun:
         warn: Callable[[str], None] = lambda _message: None,
         queue: str | None = None,
         promote_run: str | None = None,
+        retire: str | None = None,
     ) -> None:
         if push and not promote:
             raise TrainError("train-push-needs-promote", "--push needs --promote")
+        if retire not in RETIRE:
+            raise TrainError("train-retire-invalid", "retire is local or remote")
+        if retire and not (promote or promote_run):
+            raise TrainError(
+                "train-retire-invalid",
+                "--retire retires promoted branches: add --promote",
+            )
+        if retire == "remote" and not push:
+            raise TrainError(
+                "train-retire-invalid",
+                "--retire-remote deletes branches the push made redundant: add --push",
+            )
+        #: ``local``: rename joined branches once promoted; ``remote``: and
+        #: delete them on the remote after the push.
+        self.retire_mode = retire
+        self.retired: dict[str, Any] | None = None
         self.spec = spec
         self.train: Train = spec.train
         self.repo = repo
@@ -386,6 +409,8 @@ class TrainRun:
                 "publish-failed",
             }:
                 self.pushed = self._push(self.promotion["tag"])
+            if self.retire_mode:
+                self.retired = self._retire()
         self.finished = time.time()
         at = now_iso(self.finished)
         self.flakes = self.state.record_flakes(self._observed_flakes(), self.run_id, at)
@@ -930,6 +955,74 @@ class TrainRun:
             "message": lines[-1] if lines else "git push failed",
         }
 
+    def _retire(self) -> dict[str, Any]:
+        """Rename each joined branch ``to_delete_<date>_<branch>`` (the
+        workspace convention: never a deletion), and with ``remote`` delete
+        it on the remote once the push succeeded. A branch that moved after
+        it joined, or is checked out in a worktree with changes, is skipped."""
+        mode = self.retire_mode
+        assert self.promotion is not None
+        if self.promotion.get("state") not in {"promoted", "publish-failed"}:
+            return {"state": "not-promoted", "mode": mode}
+        pushed = bool(self.pushed and self.pushed.get("state") == "pushed")
+        date = datetime.now().strftime("%Y-%m-%d")
+        retired: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+
+        def skip(branch: str, reason: str) -> None:
+            skipped.append({"branch": branch, "reason": reason})
+            self.emit("retire-skipped", branch=branch, reason=reason)
+
+        for candidate in self.joined():
+            branch, renamed = candidate.branch, f"to_delete_{date}_{candidate.branch}"
+            tip = self.git.ref(branch)
+            if tip is None:
+                skip(branch, "gone")
+                continue
+            if tip != candidate.tip:
+                skip(branch, "moved")
+                continue
+            checkout = self.git.checked_out(branch)
+            if checkout is not None and self.git.has_changes(checkout):
+                skip(branch, "checked-out-with-changes")
+                continue
+            if self.git.ref(renamed) is not None:
+                skip(branch, "name-taken")
+                continue
+            self.git.rename_branch(branch, renamed)
+            entry: dict[str, Any] = {"branch": branch, "tip": tip, "renamed": renamed}
+            if mode == "remote":
+                entry["remote"] = (
+                    self._retire_remote(branch, tip) if pushed else "not-pushed"
+                )
+            retired.append(entry)
+            self.emit(
+                "branch-retired",
+                branch=branch,
+                renamed=renamed,
+                **({"remote": entry["remote"]} if "remote" in entry else {}),
+            )
+        return {
+            "state": "retired" if retired else "nothing-retired",
+            "mode": mode,
+            "retired": retired,
+            "skipped": skipped,
+        }
+
+    def _retire_remote(self, branch: str, tip: str) -> str:
+        """``deleted``, ``absent`` (never pushed), ``moved`` (the remote
+        branch is elsewhere: kept) or ``failed``."""
+        remote = self.train.remote
+        try:
+            there = self.git.remote_tip(remote, branch)
+        except TrainError:
+            return "failed"
+        if there is None:
+            return "absent"
+        if there != tip:
+            return "moved"
+        return "deleted" if self.git.delete_remote(remote, branch, tip) else "failed"
+
     # ------------------------------------------------------------ output
 
     def _observed_flakes(self) -> list[dict[str, Any]]:
@@ -1031,6 +1124,7 @@ class TrainRun:
             **({"notify": self.notified} if self.notified else {}),
             **({"reason": self.failure} if self.failure else {}),
             **({"queue": self.queue_id} if self.queue_id else {}),
+            **({"retire": self.retired} if self.retired else {}),
         }
 
     # ------------------------------------------------- promote a past run
@@ -1065,6 +1159,7 @@ class TrainRun:
         for item in record.get("branches") or ():
             candidate = Candidate(str(item["branch"]), str(item.get("tip") or ""))
             candidate.verdict = str(item.get("verdict") or "pending")
+            candidate.step, candidate.reason = item.get("step"), item.get("reason")
             self.candidates.append(candidate)
         self.branches = [c.branch for c in self.candidates]
 
@@ -1084,6 +1179,8 @@ class TrainRun:
             "publish-failed",
         }:
             self.pushed = self._push(self.promotion["tag"])
+        if self.retire_mode:
+            self.retired = self._retire()
         self.finished = time.time()
         return self._conclude(self._finish())
 

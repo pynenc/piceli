@@ -55,6 +55,16 @@ and `cancel` start and stop one, and the UI's Builds page shows them all.
   moves), then runs the publish steps; `--push` (with `--promote`) pushes
   the tag and both branches atomically. Without them no ref changes and
   nothing is pushed.
+- **Retire joined branches: `--retire`.** With `--promote` (or
+  `--promote-run`), `--retire` renames each joined branch
+  `to_delete_<date>_<branch>` once promoted, never deleting it; a branch
+  checked out in a worktree with changes, or one that moved after it
+  joined, is left alone. `--retire-remote` (needs `--push`) also deletes
+  the branch on the remote after the push, only while it is at the joined
+  commit. The result's `retire` object, the `branch-retired` and
+  `retire-skipped` events, the summary (`retired`) and `piceli trains` say
+  what was retired (`train-retire-invalid` without the promotion or push
+  it needs).
 - **Keep the tested head; promote a reviewed run.** Every run that joined
   something points `refs/piceli/train/<name>/last` at its head.
   `piceli train APP --promote-run RUN` (or `last`) promotes that head
@@ -310,8 +320,8 @@ and `cancel` start and stop one, and the UI's Builds page shows them all.
   `train-wait-timeout`, `train-interrupted`, `train-run-failed`,
   `train-run-cancelled`, `train-queue-not-found`,
   `train-queue-not-waiting`, `train-queue-cancelled`,
-  `train-notify-failed`, `train-telemetry-failed` and
-  `train-telemetry-unavailable`; in `gitops`:
+  `train-notify-failed`, `train-telemetry-failed`,
+  `train-telemetry-unavailable` and `train-retire-invalid`; in `gitops`:
   `gitops-build-ref-unknown`, `gitops-build-not-running` and
   `gitops-build-cancelled`; in `infra`: `infra-nix-input-unreachable`.
 

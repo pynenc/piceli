@@ -8,8 +8,8 @@ that turns a run's events into OTLP/HTTP requests (no SDK): protobuf for
 - a root span ``piceli.dev.train`` for the run, with span events for each
   verdict (``branch-joined``, ``branch-ejected``, ``branch-included``) and
   for ``promoted``, ``promote-rejected``, ``pushed``, ``push-failed``,
-  ``halves-parallel``, ``trial-discarded``, ``outputs-restored`` and
-  ``pruned``;
+  ``halves-parallel``, ``trial-discarded``, ``outputs-restored``,
+  ``pruned``, ``branch-retired`` and ``retire-skipped``;
 - a child span ``piceli.dev.train.trial`` per trial (``speculative`` for
   the right half of parallel halves), and under it a span
   ``piceli.dev.train.step`` per step (publish steps hang off the root), with
@@ -96,6 +96,8 @@ _ROOT_EVENTS = frozenset(
         "trial-discarded",
         "outputs-restored",
         "pruned",
+        "branch-retired",
+        "retire-skipped",
     }
 )
 
@@ -443,6 +445,7 @@ class TrainTelemetry:
                             "piceli.train.steps": event.get("steps"),
                             "piceli.train.pruned.freed": event.get("freed"),
                             "piceli.train.pruned.removed": event.get("removed"),
+                            "piceli.train.renamed": event.get("renamed"),
                         }
                     ),
                 }

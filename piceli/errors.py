@@ -6502,6 +6502,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "train",
     ),
     _E(
+        "train-retire-invalid",
+        "--retire without a promotion, or --retire-remote without --push",
+        "`--retire` renames the branches a promotion joined, so it needs `--promote` (or `--promote-run`); `--retire-remote` also deletes them on the remote once the push made them redundant, so it needs `--push`.",
+        "Add `--promote` (and `--push` for `--retire-remote`), or leave out the retire flag.",
+        False,
+        "train",
+    ),
+    _E(
         "train-busy",
         "Train already running",
         "Another run of the same train holds its lock in the state directory.",

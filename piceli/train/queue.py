@@ -126,6 +126,7 @@ class TrainQueue:
         promote: bool,
         push: bool,
         promote_run: str | None = None,
+        retire: str | None = None,
     ) -> dict[str, Any]:
         """Add a request at the tail; returns it with its ``position``.
 
@@ -142,6 +143,7 @@ class TrainQueue:
             "promote": promote,
             "push": push,
             **({"promote_run": promote_run} if promote_run else {}),
+            **({"retire": retire} if retire else {}),
             "queued_at": _now(),
             "state": "waiting",
             "resumed": 0,
@@ -269,7 +271,8 @@ class TrainQueue:
                 key: row.get(key)
                 for key in (
                     "id", "state", "position", "branches", "promote", "push",
-                    "promote_run", "queued_at", "started_at", "run", "resumed",
+                    "promote_run", "retire", "queued_at", "started_at", "run",
+                    "resumed",
                 )
             }
             for row in rows
