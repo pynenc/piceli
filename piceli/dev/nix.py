@@ -189,32 +189,42 @@ class NixCache:
     cache that cannot be published to).
 
     :param public_key: ``NAME:base64``: what hosts trust
-        (``piceli secrets nix-cache NAME --generate`` prints it).
+        (``piceli secrets setup MODULE`` or ``piceli secrets nix-cache NAME
+        --generate`` prints it).
+    :param key_name: The key's name alone, for a cache whose key does not
+        exist yet (0.25.0): ``NixCache(key_name="cache-1", bucket=...)``.
+        ``piceli secrets status`` and ``setup`` work with it, and so does
+        ``piceli infra plan`` of the bucket; publishing, ``dev nix gc`` and
+        a host's module refuse (``dev-nix-cache-key-unset``), and the
+        controller keeps a ``NixRelease`` of it ``rejected``, until the
+        public key ``setup`` prints is in ``public_key=``. Given with
+        ``public_key=``, it must be that key's name.
     :param signing_key: The local credential holding the secret key
         (default: the key's name).
     :param write_credentials: The local credential with S3 access keys
         that may **put and delete** objects (``piceli secrets s3 NAME
         --prompt``): only the publishing side (``dev nix build --publish``,
-        ``dev nix gc``) uses them; required for ``s3://``. Hosts read with
-        separate read-only keys that live in sops-nix on the host
-        (``NixHost(read_credentials_file=)``), never in Piceli.
+        ``dev nix gc``) uses them; required for ``s3://``. Default (0.25.0):
+        the ``S3Key(access="write")`` of ``bucket=``, which ``piceli infra
+        apply`` creates and stores. Hosts read with separate keys: the
+        bucket's ``S3Key(access="read")``, which ``piceli host secrets``
+        puts on the host (0.25.0), or keys in sops-nix on the host
+        (``NixHost(read_credentials_file=)``).
     :param endpoint: The S3 endpoint host (``s3.example.net``).
     :param region: The S3 region signatures name.
     """
 
-    public_key: str
+    public_key: str | None = None
     bucket: Any = None
     url: str | None = None
     endpoint: str | None = None
     region: str = "us-east-1"
     signing_key: str | None = None
     write_credentials: str | None = None
+    key_name: str | None = None
 
     def __post_init__(self) -> None:
-        try:
-            object.__setattr__(self, "public_key", check_public_key(self.public_key))
-        except DevError:
-            raise _invalid("NixCache(public_key=) is NAME:base64 of 32 bytes") from None
+        self._check_key()
         if (self.bucket is None) == (self.url is None):
             raise _invalid("NixCache: give one of bucket= or url=")
         if self.bucket is not None:
@@ -222,6 +232,9 @@ class NixCache:
 
             if not isinstance(self.bucket, Bucket):
                 raise _invalid("NixCache(bucket=) is a piceli.infra.Bucket")
+            write = self.bucket.key("write")
+            if self.write_credentials is None and write is not None:
+                object.__setattr__(self, "write_credentials", write.name)
             endpoint = self.endpoint or S3_ENDPOINTS.get(
                 str(getattr(self.bucket.provider, "preset", "") or "")
             )
@@ -248,6 +261,44 @@ class NixCache:
             raise _invalid(
                 "NixCache: an s3 cache needs write_credentials= (S3 keys that put)"
             )
+
+    def _check_key(self) -> None:
+        if self.public_key is None:
+            if self.key_name is None or not _KEY_NAME.fullmatch(str(self.key_name)):
+                raise _invalid(
+                    "NixCache: give public_key= (NAME:base64), or key_name= "
+                    "(letters, digits, . _ + -) until piceli secrets setup "
+                    "prints the public key"
+                )
+            return
+        try:
+            object.__setattr__(self, "public_key", check_public_key(self.public_key))
+        except DevError:
+            raise _invalid("NixCache(public_key=) is NAME:base64 of 32 bytes") from None
+        name = key_name(self.public_key)
+        if self.key_name is not None and self.key_name != name:
+            raise _invalid("NixCache(key_name=) is the name of public_key=")
+        object.__setattr__(self, "key_name", name)
+
+    @property
+    def key_set(self) -> bool:
+        """Whether the declaration holds the public key (not only its name)."""
+        return self.public_key is not None
+
+    def trusted_key(self) -> str:
+        """The public key hosts trust.
+
+        :raises DevError: ``dev-nix-cache-key-unset``: the declaration names
+            the key (``key_name=``) without its public key yet."""
+        if self.public_key is None:
+            raise DevError(
+                "dev-nix-cache-key-unset",
+                f"NixCache {self.key_name} has no public key yet: run piceli "
+                "secrets setup MODULE (or piceli secrets nix-cache "
+                f"{self.signing_credential} --generate) and put the public key "
+                "it prints into NixCache(public_key=)",
+            )
+        return self.public_key
 
     def _check_url(self, url: str) -> None:
         parsed = urllib.parse.urlsplit(url)
@@ -284,12 +335,23 @@ class NixCache:
         return None
 
     @property
-    def key_name(self) -> str:
-        return key_name(self.public_key)
+    def read_credentials(self) -> str | None:
+        """The credential of the bucket's ``S3Key(access="read")`` that
+        ``piceli infra apply`` creates (``None``: hosts get keys another way)."""
+        if self.bucket is None:
+            return None
+        found = self.bucket.key("read")
+        return found.name if found is not None else None
+
+    def creates(self, credential: str) -> bool:
+        """Whether ``piceli infra apply`` creates ``credential`` (a bucket key)."""
+        return self.bucket is not None and any(
+            key.name == credential for key in self.bucket.keys
+        )
 
     @property
     def signing_credential(self) -> str:
-        return self.signing_key or self.key_name
+        return self.signing_key or str(self.key_name)
 
     @property
     def store_url(self) -> str:
@@ -313,9 +375,14 @@ class NixCache:
     def describe(self) -> dict[str, Any]:
         return {
             "store_url": self.store_url,
-            "public_key": self.public_key,
+            "public_key": self.trusted_key(),
             "signing_key": self.signing_credential,
             "write_credentials": self.write_credentials,
+            **(
+                {"read_credentials": self.read_credentials}
+                if self.read_credentials
+                else {}
+            ),
         }
 
 
@@ -468,11 +535,16 @@ def manifest(
     key: str,
     image: Mapping[str, Any] | None = None,
     now: _dt.datetime | None = None,
+    pinned: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The build manifest, unsigned (:func:`sign_manifest` adds ``signature``)."""
+    """The build manifest, unsigned (:func:`sign_manifest` adds ``signature``).
+
+    ``pinned`` (0.25.0, a gated release): the promotion gate's result. The
+    field is present only then, so older manifests verify unchanged."""
     moment = (now or _dt.datetime.now(_dt.UTC)).strftime("%Y-%m-%dT%H:%M:%SZ")
     closure = published.get("closure_size")
-    return {
+    extra = {"pinned": dict(pinned)} if pinned is not None else {}
+    return extra | {
         "schema": MANIFEST_SCHEMA,
         "name": name,
         "commit": commit,
@@ -745,6 +817,65 @@ def upload_pointers(
     return written
 
 
+def publish_closure(
+    cache: NixCache,
+    plan: Mapping[str, Any],
+    store_path: str,
+    host: str,
+    image: Mapping[str, Any] | None,
+    secret: str,
+    s3_keys: tuple[str, str] | None,
+    *,
+    say: Callable[[str], None],
+    push: Callable[[Mapping[str, Any], Callable[[str], None]], Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Publish a built store path as ``plan`` says: ``push`` signs and pushes
+    the closure on the build host (the keys on its stdin only, see
+    :func:`run_publisher`), then the signed manifest and the plan's ref
+    pointers go into the cache. :raises DevError: a step failed."""
+    say(f"publishing {store_path} to {cache.store_url} (on {host})")
+    request = {
+        "store_path": store_path,
+        "store_url": cache.store_url,
+        "signing_key": secret,
+        "s3": None
+        if s3_keys is None
+        else {"access_key_id": s3_keys[0], "secret_access_key": s3_keys[1]},
+    }
+    outcome = push(request, say)
+    del request
+    signed = sign_manifest(
+        manifest(
+            name=plan["name"], commit=plan["commit"], tag=plan["tag"],
+            target=plan["attribute"], published=outcome, host=host,
+            key=str(cache.key_name), image=image, pinned=plan.get("pinned"),
+        ),
+        secret,
+    )  # fmt: skip
+    url = upload_manifest(cache, signed, s3_keys=s3_keys)
+    pointers = upload_pointers(
+        cache, signed, plan.get("pointers") or [], secret, s3_keys=s3_keys
+    )
+    say(f"published; manifest {url}")
+    for body in pointers:
+        say(f"  {body['ref']} -> {str(body['commit'])[:12]} ({body['published_at']})")
+    return {
+        "cache": cache.store_url,
+        "public_key": cache.trusted_key(),
+        "nar_hash": outcome["nar_hash"],
+        "nar_size": outcome["nar_size"],
+        "signatures": outcome.get("signatures") or [],
+        "system": outcome.get("system"),
+        "closure_size": signed.get("closure_size"),
+        "manifest": plan["manifest"],
+        "manifest_url": url,
+        "manifest_body": signed,
+        "pointers": [
+            {k: body[k] for k in ("ref", "commit", "published_at")} for body in pointers
+        ],
+    }
+
+
 # ------------------------------------------------------------------ git
 
 
@@ -757,12 +888,37 @@ def _git(repo: Path, *args: str) -> str:
     return done.stdout.strip() if done.returncode == 0 else ""
 
 
-def tag_of(repo: Path, ref: str | None, commit: str) -> str | None:
-    """The tag being built: ``--ref`` when it is a tag, else a tag at the commit."""
-    if ref and _git(repo, "rev-parse", "--verify", "-q", f"refs/tags/{ref}"):
+def tag_of(
+    repo: Path, ref: str | None, commit: str, pattern: str | None = None
+) -> str | None:
+    """The tag being built: ``--ref`` when it is a tag, else a tag at the commit.
+
+    With ``pattern`` (a ``NixHost``'s ``Tag`` pattern, ``--tag-pattern``)
+    only a tag whose version after the pattern's prefix parses counts
+    (:func:`piceli.hosts.agent.tag_version`): ``--ref`` when it is one, else
+    the highest one at the commit, else ``None``; a ``--ref`` tag of another
+    pattern is refused (``dev-nix-invalid``)."""
+    from piceli.hosts.agent import tag_version
+
+    is_tag = bool(ref and _git(repo, "rev-parse", "--verify", "-q", f"refs/tags/{ref}"))
+    if pattern is None:
+        if is_tag:
+            return ref
+        tags = sorted(_git(repo, "tag", "--points-at", commit).split())
+        return tags[0] if tags else None
+    if is_tag and ref is not None:
+        if tag_version(pattern, ref) is None:
+            raise DevError(
+                "dev-nix-invalid",
+                f"--ref {ref} is not a version tag of --tag-pattern {pattern}",
+            )
         return ref
-    tags = sorted(_git(repo, "tag", "--points-at", commit).split())
-    return tags[0] if tags else None
+    ranked = [
+        (version, tag)
+        for tag in _git(repo, "tag", "--points-at", commit).split()
+        if (version := tag_version(pattern, tag)) is not None
+    ]
+    return max(ranked)[1] if ranked else None
 
 
 def branch_of(repo: Path, ref: str) -> str | None:
@@ -776,14 +932,37 @@ def branch_of(repo: Path, ref: str) -> str | None:
     return None
 
 
-def kept_commits(repo: Path, keep_tags: int, main: str) -> dict[str, list[str]]:
+def kept_commits(
+    repo: Path, keep_tags: int, main: str, patterns: Sequence[str] = ()
+) -> dict[str, list[str]]:
     """The commits whose builds stay: the newest ``keep_tags`` tags (by tag or
-    commit date) and ``main``; each with the refs that name it."""
+    commit date) and ``main``; each with the refs that name it.
+
+    With ``patterns`` (each host's ``Tag`` pattern, ``--tag-pattern``), the
+    highest ``keep_tags`` versions of each pattern instead (the version
+    after its prefix, :func:`piceli.hosts.agent.tag_version`): one target's
+    releases never push another's out."""
+    from piceli.hosts.agent import tag_version
+
     kept: dict[str, list[str]] = {}
     tags = _git(
         repo, "for-each-ref", "--sort=-creatordate", "--format=%(refname:short)",
         "refs/tags",
     ).split()  # fmt: skip
+    if patterns:
+        chosen: list[str] = []
+        for pattern in patterns:
+            ranked = sorted(
+                (
+                    (version, tag)
+                    for tag in tags
+                    if (version := tag_version(pattern, tag)) is not None
+                ),
+                reverse=True,
+            )
+            chosen += [tag for _, tag in ranked[: max(0, keep_tags)]]
+        tags = list(dict.fromkeys(chosen))
+        keep_tags = len(tags)
     for tag in tags[: max(0, keep_tags)]:
         commit = _git(repo, "rev-parse", "--verify", "-q", f"{tag}^{{commit}}")
         if commit:
@@ -811,6 +990,7 @@ def gc_plan(
     main: str,
     grace_seconds: float,
     now: float,
+    tag_patterns: Sequence[str] = (),
 ) -> dict[str, Any]:
     """What ``piceli dev nix gc`` would delete: tag pointers of tags not
     kept, manifests of other commits that no remaining pointer names, then
@@ -907,6 +1087,8 @@ def gc_plan(
         "schema": GC_SCHEMA,
         "cache": objects.cache.store_url,
         "keep_tags": keep_tags,
+        # Only when given: other plans (and their digests) are unchanged.
+        **({"tag_patterns": list(tag_patterns)} if tag_patterns else {}),
         "main": main,
         "kept": [
             {

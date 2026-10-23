@@ -75,10 +75,13 @@ web = Server(
 )
 
 # The Nix binary cache: a bucket, a signing key and S3 keys that write
-# (builds, gc). The host reads it with separate read-only keys, in sops-nix.
+# (builds, gc). The host reads it with separate keys, in sops-nix.
 nix_bucket = Bucket("example-nix-cache", provider=cloud, protect=True)
 cache = NixCache(
-    "example-cache-1:jXbGkEMPpvXtlVqGBrqfsnU8Jyn1cZB9u0QhGhvsKP0=",
+    # The key does not exist yet: name it. Step 1's `piceli secrets setup`
+    # generates it and prints its public key; then replace this line with
+    # it: NixCache("example-cache-1:<base64>", bucket=..., ...).
+    key_name="example-cache-1",
     bucket=nix_bucket,
     write_credentials="nix-cache-write",
 )
@@ -123,9 +126,12 @@ builds = DevBuilds(
 The flake has a `nixosConfigurations.web-1` (nginx, your service, a
 `/healthz`) and two outputs of it: `config.system.build.toplevel`, the
 system the host switches to, and `config.system.build.openstackImage`, the
-disk image it first boots. Replace the public key, the SSH key, the tailnet
-name and the builder image's digest with yours; the commands below say
-where each comes from.
+disk image it first boots. Replace the SSH key, the tailnet name and the
+builder image's digest with yours; the commands below say where each comes
+from. The cache names its key with `key_name=` until step 1 creates it:
+`secrets status` and `setup` and `infra plan` work meanwhile, while
+publishing, `dev nix gc` and `host module` refuse
+(`dev-nix-cache-key-unset`) until the public key is in the declaration.
 
 The system joins the tailnet on its first boot with the key in its user
 data. NixOS's OpenStack image fetches the user data to
@@ -150,23 +156,30 @@ after installing Tailscale.
 ## Steps
 
 1. **Secrets.** Each is stored once, `0600`, in Piceli's credentials
-   directory, and never printed.
+   directory, and never printed. `piceli secrets status web_1.py` lists
+   them with their state and the next command, and `piceli secrets setup
+   web_1.py` walks through the missing ones in this order
+   ({ref}`host-secrets-setup`); one by one:
 
    ```sh
    piceli secrets state-key web-1-state --generate        # encrypts the OpenTofu state
-   printf '%s:%s' "$ID" "$SECRET" | piceli secrets provider infomaniak --prompt
-   printf '%s:%s' "$KEY" "$SECRET" | piceli secrets provider porkbun --prompt
+   piceli secrets provider infomaniak --prompt            # application credential ID, then secret
+   piceli secrets provider porkbun --prompt               # API key (pk1_…), then secret API key (sk1_…)
    piceli secrets nix-cache example-cache-1 --generate    # prints example-cache-1:<base64>
    piceli secrets s3 nix-cache-write --prompt              # key id, then secret: put and delete
    piceli secrets age web-1-age --generate                 # prints age1...: the host's sops key
    piceli secrets user-data web-1-boot --prompt           # the tailnet key, just before step 2
    ```
 
-   The Infomaniak credential is an application credential (`ID:SECRET`),
-   Porkbun's an API key pair with API access turned on for `example.org`.
+   The Infomaniak credential is an application credential (its ID, then its
+   secret), Porkbun's an API key pair (API key, then secret API key) with API
+   access turned on for `example.org`; each part is asked for, checked and
+   stored on its own (piped: one per line).
    The S3 keys are EC2 credentials (`openstack ec2 credentials create`).
-   Put the printed cache public key in `NixCache(...)` and the `age1...`
-   key in your `.sops.yaml`. The host's own secrets do not go into Piceli:
+   Put the printed cache public key in the declaration, in place of
+   `key_name="example-cache-1"` (`NixCache("example-cache-1:<base64>",
+   bucket=nix_bucket, ...)`: `secrets status` shows it `copy` until
+   then), and the `age1...` key in your `.sops.yaml`. The host's own secrets do not go into Piceli:
    step 3 puts them in sops-nix.
 
    The user data is a Tailscale auth key you mint just before the first
@@ -221,9 +234,10 @@ after installing Tailscale.
 3. **The age identity with `piceli host secrets`; cache keys and OTLP
    headers in sops-nix.** The host's secrets live encrypted in Git, in
    `secrets/web-1.yaml` (`sops secrets/web-1.yaml`, encrypted to the
-   `age1...` key): `piceli/cache.env` with the cache's **read-only** keys
-   (`AWS_ACCESS_KEY_ID=...` and `AWS_SECRET_ACCESS_KEY=...` lines, EC2
-   credentials that can only read the bucket) and `piceli/otlp-headers`
+   `age1...` key): `piceli/cache.env` with the cache's read keys
+   (`AWS_ACCESS_KEY_ID=...` and `AWS_SECRET_ACCESS_KEY=...` lines: a second
+   EC2 credential, never the write one; at Infomaniak it is not limited to
+   reading, see {doc}`infrastructure`) and `piceli/otlp-headers`
    (`Authorization: Bearer ...`). The configuration declares them:
 
    ```nix
@@ -247,6 +261,15 @@ after installing Tailscale.
    `/var/lib/sops-nix/key.txt`, and the host re-runs its activation so
    sops-nix decrypts. A host that already has another key is refused
    unless you pass `--replace`.
+
+   Since 0.25.0 Piceli can make the cache's keys itself: declare
+   `Bucket(..., keys=[S3Key("nix-cache-write"), S3Key("nix-cache-read",
+   access="read")])`, drop `write_credentials=` and `piceli secrets s3`,
+   and leave `piceli/cache.env` out of sops. `infra apply` creates and
+   stores both pairs, and `piceli host secrets` also writes the read pair
+   to `/var/lib/piceli-host/cache.env`. At Infomaniak that pair is separate
+   but not read-only (see {doc}`infrastructure`), and the application
+   credential must be unrestricted to create it.
 
 4. **The agent's module, into the flake.**
 

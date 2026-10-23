@@ -112,8 +112,13 @@ class Tofu:
         cwd: Path,
         env: Mapping[str, str],
         timeout: float = 1800,
+        redacted: bool = True,
     ) -> TofuResult:
-        """Run ``tofu ARGS`` in ``cwd`` (stdin closed; output redacted)."""
+        """Run ``tofu ARGS`` in ``cwd`` (stdin closed; output redacted).
+
+        ``redacted=False`` only for reading the S3 keys out of the state
+        (:mod:`piceli.infra.machines.keys`), whose output is parsed and
+        dropped, never shown or kept."""
         child = {k: os.environ[k] for k in PASSTHROUGH if os.environ.get(k)}
         child.update(
             {"TF_IN_AUTOMATION": "1", "TF_INPUT": "0", "CHECKPOINT_DISABLE": "1"}
@@ -156,6 +161,8 @@ class Tofu:
                 pass
             process.wait()
             raise
+        if not redacted:
+            return TofuResult(process.returncode, stdout, redact(stderr, secrets))
         return TofuResult(
             process.returncode, redact(stdout, secrets), redact(stderr, secrets)
         )

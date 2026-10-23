@@ -848,6 +848,12 @@ class CompositionController:
             github_token_expiry
         )
         self.telemetry.attach(self)  # closes runs a crash interrupted
+        # 0.25.0: the Nix host releases it publishes (piceli.infra.nix_releases).
+        from piceli.infra.nix_releases import Releases
+
+        self.nix = Releases(
+            self.state, clock=self.clock, log=self.log, telemetry=self.telemetry
+        )
 
     # ------------------------------------------------------------ helpers
     @property
@@ -1528,7 +1534,8 @@ class CompositionController:
             kind = body.get("kind")
             try:
                 if kind == "approve":
-                    self._approve(body)
+                    if not self.nix.approve(body):  # 0.25.0: a NixRelease
+                        self._approve(body)
                 elif kind == "promote":
                     self._promote(body)
                 elif kind == "sync":
@@ -1541,9 +1548,14 @@ class CompositionController:
                     from piceli.infra import remote_builds
 
                     self._refuse_quarantined(str(body.get("host") or ""))
+                    publish = self.nix.entry(body.get("id"))
+                    if publish is not None:  # 0.25.0: proves the cache's key
+                        self.nix.check_claim(publish, body)
                     remote_builds.claim(self.state, body, self.clock())
                 elif kind == "built":
                     self._delivered(body)
+                elif kind == "nix-published":
+                    self.nix.published(body)
                 elif kind == "build-failed":
                     from piceli.infra import remote_builds
 
@@ -1689,6 +1701,10 @@ class CompositionController:
         # 0.22.0: an explicit sync retries builds a host reported failed.
         remote_builds.clear_failures(self.state)
         env = body.get("env")
+        # 0.25.0: a NixRelease publishes its newest tag now; a sync of every
+        # environment also retries the failed releases.
+        if self.nix.sync(str(env) if env else None) and env:
+            return
         component = body.get("component")
         instances = self._instances()
         names = list(dict.fromkeys(item.group for item in instances))
@@ -3181,6 +3197,7 @@ class CompositionController:
             return self._publish()
         self._requests()
         self._desired()
+        self.nix.poll(self.composition.nix_releases, self.refs, gate=self._promotion)
         if not self.swept and not failed:  # only on a complete view of the sources
             self.swept = True
             try:
@@ -3673,6 +3690,9 @@ class CompositionController:
                 for key, value in sorted(self.state["sources"].items())
             },
             "envs": envs,
+            # Added in 0.25.0, only when declared: each NixRelease's latest
+            # tag, publish state, timings and manifest digest.
+            **({"nix_releases": releases} if (releases := self.nix.status()) else {}),
             "rejected_requests": list(self.state.get("rejected") or []),
             # Added in 0.15, only with several clusters: each cluster's reach
             # and the placements removed from them.
@@ -3918,6 +3938,47 @@ class CompositionController:
             | ({"requested_at": str(at)[:32]} if at else {}),
         )
 
+    def _promotion(self, target: Any, commit: str) -> dict[str, Any]:
+        """A gated NixRelease's commit checked against this controller's own
+        history (0.25.0, :mod:`piceli.infra.promotion`): its ``flake.lock``
+        from the source's mirror, the environment's runs.
+
+        :raises PromotionError: refused, or unreadable (never a pass)."""
+        from piceli.gitops import history
+        from piceli.infra import promotion
+
+        gate, key = target.gate, target.source.key
+        try:
+            self.sources.fetch(key)
+            lock = self.sources.read(key, commit, promotion.LOCK_FILE)
+        except GitOpsError:
+            raise promotion.PromotionError(
+                "promotion-input-missing",
+                f"{promotion.LOCK_FILE} of {key} at {commit[:12]} could not be read",
+                {"input": gate.input},
+            ) from None
+        rev = promotion.locked_rev(lock, gate.input)
+        try:
+            if self._runs is None:
+                self._runs = history.RunReader()
+            document = self._history_document()
+        except (GitOpsError, OSError, ValueError):
+            document = None
+        record = self._passed_commits(document)
+        return promotion.verify(gate, rev, document, host=target.name, record=record)
+
+    def _passed_commits(self, document: Any) -> dict[str, Any]:
+        """The record of passed commits of the gated environments (0.25.0,
+        :func:`piceli.infra.promotion.remember`), updated from ``document``;
+        kept in the state, published in the history for a hand-run gate."""
+        from piceli.infra import promotion
+
+        record: dict[str, Any] = self.state.setdefault("passed_commits", {})
+        releases = self._composition.nix_releases if self._composition else ()
+        gates = [item.gate for item in releases if item.gate is not None]
+        promotion.remember(record, document, gates)
+        return record
+
     def _history_document(self) -> dict[str, Any]:
         """``piceli.gitops-history.v1``: an environment on several clusters
         lists the runs of all of them, each with its ``cluster`` (0.15)."""
@@ -3941,6 +4002,9 @@ class CompositionController:
                 key=lambda item: str(item.get("started_at") or ""), reverse=True
             )
             document["envs"][group] = {"runs": entries[: history.MAX_RUNS]}
+        releases = self.nix.history()
+        if releases:  # 0.25.0: each NixRelease's attempts, newest first
+            document["nix_releases"] = releases
         return history.bounded(document) if merged else document
 
     def _publish_history(self) -> None:
@@ -3957,6 +4021,9 @@ class CompositionController:
                 self._runs = history.RunReader()
             history.forget_gone(self.state, self._envs())
             document = self._history_document()
+            passed = self._passed_commits(document)
+            if passed:  # 0.25.0: only with a promotion gate
+                document = {**document, "passed_commits": passed}
             digest = hashlib.sha256(
                 json.dumps(document, sort_keys=True).encode()
             ).hexdigest()

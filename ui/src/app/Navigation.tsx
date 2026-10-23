@@ -63,6 +63,7 @@ export function Navigation({ capabilities }: { capabilities?: Capabilities }) {
       { to: '/composition/overview', label: 'Overview', icon: 'overview' as const, badge: !allowed('cluster_build') ? <Count value={summary.failed_builds} tone="danger" label="failed builds" /> : null },
       { to: '/composition', label: 'Environments', icon: 'environments' as const, end: true, badge: <Count value={summary.degraded_environments} tone="danger" label="degraded environments" />, children: environments.map(env => ({ to: environmentPath(env.name), label: env.name, state: tone(env.health, env.state) })) },
       { to: '/composition/sources', label: 'Sources', icon: 'sources' as const },
+      { to: '/composition/targets', label: 'Targets', icon: 'environments' as const },
     ] : []),
     { to: '/applications', label: 'Applications', icon: 'applications' },
     ...(allowed('cluster_status') ? [{ to: '/cluster', label: 'Cluster', icon: 'cluster' as const, badge: <Count value={summary.registry_warnings} tone="warning" label="registry warnings" />, children: [{ to: '/cluster#nodes', label: 'Nodes' }, { to: '/cluster#registry', label: 'Registry' }] }] : []),

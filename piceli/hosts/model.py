@@ -51,6 +51,8 @@ STATE_DIR = "/var/lib/piceli-host"
 AGE_KEY_FILE = "/var/lib/sops-nix/key.txt"
 #: Where sops-nix decrypts ``sops.secrets."piceli/cache.env"``.
 CACHE_ENV = "/run/secrets/piceli/cache.env"
+#: Where ``piceli host secrets`` puts the read pair Piceli created (0.25.0).
+PICELI_CACHE_ENV = "/var/lib/piceli-host/cache.env"
 #: Defaults (proposals): a poll every 5 minutes, 60 s per check, 20 attempts kept.
 POLL_SECONDS = 300
 CHECK_TIMEOUT = 60
@@ -84,9 +86,11 @@ class Tag:
     """Follow the highest version among the tags that match ``pattern``.
 
     Tags compare as semantic versions (an optional ``v``, then
-    ``MAJOR.MINOR.PATCH``, an optional ``-prerelease`` and ``+build``); a
-    matching tag that is not one is ignored (the status lists it).
-    Pre-releases count only with ``prereleases=True``.
+    ``MAJOR.MINOR.PATCH``, an optional ``-prerelease`` and ``+build``) after
+    the pattern's literal :attr:`prefix`: ``Tag("web-v*")`` orders
+    ``web-v1.10.0`` above ``web-v1.9.0`` and never sees ``api-v2.0.0`` or
+    ``v3.0.0``. A matching tag whose rest is not a version is ignored (the
+    status lists it). Pre-releases count only with ``prereleases=True``.
     """
 
     pattern: str = "v*"
@@ -95,6 +99,21 @@ class Tag:
     def __post_init__(self) -> None:
         if not isinstance(self.pattern, str) or not _PATTERN.fullmatch(self.pattern):
             raise _invalid("Tag(pattern=) is a glob of tag names (v*)")
+
+    @property
+    def prefix(self) -> str:
+        """The literal part before the version (``web-v`` of ``web-v*``)."""
+        from piceli.hosts.agent import tag_prefix
+
+        return tag_prefix(self.pattern)
+
+    def version(self, tag: str) -> tuple[Any, ...] | None:
+        """``tag``'s sort key under this pattern, ``None`` when it does not
+        match or the rest after :attr:`prefix` is no version (pre-releases
+        included: :attr:`prereleases` is the follower's choice)."""
+        from piceli.hosts.agent import tag_version
+
+        return tag_version(self.pattern, tag)
 
     def describe(self) -> dict[str, Any]:
         return {"kind": "tag", "pattern": self.pattern, "prereleases": self.prereleases}
@@ -299,10 +318,15 @@ class NixHost:
         (``--name`` of ``piceli dev nix build``; default: ``NAME`` of
         ``.#NAME``, else the host's name).
     :param read_credentials_file: A root-only file on the host with the
-        cache's **read-only** S3 keys (``AWS_ACCESS_KEY_ID=`` and
-        ``AWS_SECRET_ACCESS_KEY=`` lines), decrypted by sops-nix; default
-        ``/run/secrets/piceli/cache.env`` (``sops.secrets."piceli/cache.env"``)
-        for an ``s3://`` cache, none for a ``file://`` or ``https://`` one.
+        cache's read S3 keys (``AWS_ACCESS_KEY_ID=`` and
+        ``AWS_SECRET_ACCESS_KEY=`` lines). Default (0.25.0) when the cache's
+        bucket declares ``S3Key(access="read")``:
+        ``/var/lib/piceli-host/cache.env``, which ``piceli host secrets``
+        writes from the pair ``piceli infra apply`` created (the agent reads
+        it on each poll). Otherwise ``/run/secrets/piceli/cache.env``
+        (``sops.secrets."piceli/cache.env"``, decrypted by sops-nix) for an
+        ``s3://`` cache, none for a ``file://`` or ``https://`` one. A path
+        given here is the host's own file: ``host secrets`` leaves it alone.
     :param poll_seconds: How often the agent looks for a new build.
     :param history: How many attempts the status keeps.
     :param generations: How many system generations the host keeps (at
@@ -315,6 +339,10 @@ class NixHost:
         puts on the host for sops-nix; ``None``: the host gets its key
         another way.
     :param age_key_file: Where it goes: sops-nix's ``sops.age.keyFile``.
+    :param gate: A :class:`~piceli.infra.Promotion` (0.25.0): the agent
+        switches only to a build whose signed manifest carries the gate's
+        verified ``pinned`` (input and environment); a ``NixRelease`` of
+        this host takes it as its gate.
     """
 
     name: str
@@ -331,7 +359,11 @@ class NixHost:
     generations: int = GENERATIONS
     age_identity: str | None = None
     age_key_file: str = AGE_KEY_FILE
+    gate: Any = None
     attribute: str = field(init=False, default="")
+    #: The credential ``piceli host secrets`` writes to
+    #: ``read_credentials_file`` (``None``: the host's own file).
+    cache_credentials: str | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         from piceli.dev.nix import NixCache
@@ -378,6 +410,9 @@ class NixHost:
             raise _invalid("NixHost(build=) is the builds' manifest name (a DNS label)")
         object.__setattr__(self, "build", build)
         path = self.read_credentials_file
+        if path is None and self.cache.read_credentials is not None:
+            path = PICELI_CACHE_ENV
+            object.__setattr__(self, "cache_credentials", self.cache.read_credentials)
         if path is None and self.cache.scheme == "s3":
             path = CACHE_ENV
         if path is not None and not _PATH.fullmatch(path):
@@ -405,6 +440,11 @@ class NixHost:
             self.age_key_file
         ):
             raise _invalid("NixHost(age_key_file=) is an absolute path")
+        if self.gate is not None:
+            from piceli.infra.promotion import Promotion
+
+            if not isinstance(self.gate, Promotion):
+                raise _invalid("NixHost(gate=) is a piceli.infra.Promotion")
 
     def ssh_target(self, address: str | None = None) -> SshTarget:
         """Where its status is read: the SSH target, or the server's ``Ssh``
@@ -447,7 +487,7 @@ def agent_config(host: NixHost) -> dict[str, Any]:
         "follow": host.follow.describe(),
         "cache": {
             "store_url": host.cache.store_url,
-            "public_key": host.cache.public_key,
+            "public_key": host.cache.trusted_key(),
             "objects": _objects(host.cache),
         },
         "read_credentials_file": host.read_credentials_file,
@@ -457,4 +497,6 @@ def agent_config(host: NixHost) -> dict[str, Any]:
         "history": host.history,
         "generations": host.generations,
         "state_dir": STATE_DIR,
+        # 0.25.0, only when declared: the build must carry a verified pin.
+        **({"gate": host.gate.to_dict()} if host.gate is not None else {}),
     }

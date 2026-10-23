@@ -135,6 +135,27 @@ def semver(tag: str) -> tuple[Any, ...] | None:
     return (*core, 0, parts)
 
 
+_GLOB = re.compile(r"[*?\[]")
+
+
+def tag_prefix(pattern: str) -> str:
+    """The literal prefix of a ``Tag`` pattern: what comes before its first
+    wildcard (``*``, ``?``, ``[``), without the version digits and dots it
+    may pin (``web-v1.*`` is ``web-v``). ``v*`` is ``v``, ``*`` is ``""``."""
+    return _GLOB.split(pattern, 1)[0].rstrip("0123456789.")
+
+
+def tag_version(pattern: str, tag: str) -> tuple[Any, ...] | None:
+    """The sort key of ``tag`` under ``pattern``: the tag matches the glob and
+    what follows the pattern's :func:`tag_prefix` is a semantic version
+    (:func:`semver`); ``None`` otherwise. ``Tag("v*")`` never matches
+    ``web-v1.2.3``, and ``Tag("web-*")`` never takes ``web-api-1.2.3``."""
+    if not fnmatch.fnmatchcase(tag, pattern):
+        return None
+    prefix = tag_prefix(pattern)
+    return semver(tag[len(prefix) :]) if tag.startswith(prefix) else None
+
+
 def read_env_file(path: str) -> dict[str, str]:
     """``KEY=VALUE`` lines of a root-only file (``host-credentials-exposed``
     when others may read it, ``host-credentials-missing`` when absent)."""
@@ -417,6 +438,17 @@ def _read_json(path: str) -> dict[str, Any]:
 # ------------------------------------------------------------------ agent
 
 
+#: The fields of a promotion gate's pin the status keeps.
+PINNED_KEYS = ("input", "commit", "environment", "verified_run", "verified_at")
+
+
+def _pinned(value: Any) -> dict[str, Any] | None:
+    """A manifest's ``pinned`` (its known fields), or ``None``."""
+    if not isinstance(value, Mapping) or not value.get("commit"):
+        return None
+    return {key: value.get(key) for key in PINNED_KEYS}
+
+
 class Agent:
     """One host's agent; :meth:`run_once` is one poll."""
 
@@ -541,9 +573,10 @@ class Agent:
                 if not found.endswith(".json"):
                     continue
                 tag = found[len(prefix) : -len(".json")]
-                if not fnmatch.fnmatchcase(tag, str(follow["pattern"])):
+                pattern = str(follow["pattern"])
+                if not fnmatch.fnmatchcase(tag, pattern):
                     continue
-                order = semver(tag)
+                order = tag_version(pattern, tag)
                 if order is None or (order[3] == 0 and not follow.get("prereleases")):
                     ignored.append(tag)
                     continue
@@ -558,7 +591,7 @@ class Agent:
             return None, "no-build"
         current = self.state.get("current") or {}
         if version is not None and isinstance(current.get("tag"), str):
-            running = semver(str(current["tag"]))
+            running = tag_version(str(follow["pattern"]), str(current["tag"]))
             if running is not None and version < running:
                 return None, "older"
         if current.get("ref") == body["ref"] and str(
@@ -618,6 +651,19 @@ class Agent:
         attribute = self.config.get("attribute")
         if attribute and manifest.get("attribute") != attribute:
             raise Failure("host-manifest-mismatch", "a build of another attribute")
+        gate = self.config.get("gate")
+        if gate:  # 0.25.0: the publish passed the promotion gate
+            pinned = manifest.get("pinned")
+            if not (
+                isinstance(pinned, dict)
+                and pinned.get("input") == gate.get("input")
+                and pinned.get("environment") == gate.get("environment")
+                and re.fullmatch(r"[0-9a-f]{40}", str(pinned.get("commit")))
+                and pinned.get("verified_run")
+            ):
+                raise Failure(
+                    "host-promotion-missing", "a build without its verified pin"
+                )
         system = self.config.get("system")
         if system and manifest.get("system") != system:
             raise Failure("host-system-mismatch", "a build for another system")
@@ -983,6 +1029,9 @@ class Agent:
             "checks": [],
             "rollback": None,
             "prune": None,
+            # 0.25.0: the promotion gate's pin of the build (a rollback's: the
+            # one recorded when it was deployed; else the verified manifest's).
+            "pinned": _pinned(pointer.get("pinned")) if local else None,
         }
         started = self.monotonic()
         trace = attempt["trace_id"]
@@ -999,6 +1048,7 @@ class Agent:
                 manifest = self._stage(
                     attempt, "verify", lambda: self.verify(cache, pointer)
                 )
+                attempt["pinned"] = _pinned(manifest.get("pinned"))
                 self._stage(attempt, "realise", lambda: self.realise(manifest))
             switched = True
             self._stage(
@@ -1043,7 +1093,7 @@ class Agent:
                 "store_path": pointer["store_path"], "commit": pointer.get("commit"),
                 "tag": attempt["tag"], "ref": pointer.get("ref"),
                 "published_at": pointer.get("published_at"),
-                "since": now_text(self.clock()),
+                "since": now_text(self.clock()), "pinned": attempt["pinned"],
             }  # fmt: skip
         attempt["ended_at"] = now_text(self.clock())
         attempt["seconds"] = round(self.monotonic() - started, 3)

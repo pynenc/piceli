@@ -70,7 +70,14 @@ JsonOption = Annotated[
     bool, typer.Option("--json", help="Print one JSON object on stdout")
 ]
 #: Failures that ran (exit 1) rather than refusals (exit 2).
-FAILED = {"infra-apply-failed", "infra-install-failed", "infra-k3s-not-ready"}
+FAILED = {
+    "infra-apply-failed",
+    "infra-install-failed",
+    "infra-k3s-not-ready",
+    "secrets-backup-failed",
+    "secrets-backup-key-failed",
+    "secrets-restore-decrypt-failed",
+}
 #: Variables a token is never read from.
 TOKEN_ENVS = (
     "HCLOUD_TOKEN",
@@ -159,6 +166,19 @@ def _say_plan(result: InfraPlan) -> None:
         say(
             f"  user data of {item['server']}: secret {item['secret']} "
             f"({item['digest']}), passed at creation only"
+        )
+    for item in result.s3_keys:
+        enforced = item.get("read_only_enforced")
+        limit = (
+            ""
+            if item["access"] != "read"
+            else " (read-only enforced)"
+            if enforced
+            else " (read-only NOT enforced by the cloud)"
+        )
+        say(
+            f"  s3 key {item['name']}: {item['access']} on bucket {item['bucket']}, "
+            f"{item['action']}{limit}; stored as credential {item['credential']}"
         )
     for check in result.checks:
         if not check.get("ran"):
@@ -473,18 +493,21 @@ def _read_secret(prompt: str) -> str:
     return line.rstrip("\r\n")
 
 
-def _no_secret_arguments(context: typer.Context) -> None:
+def _no_secret_arguments(context: typer.Context, *, from_env: bool = False) -> None:
     if context.args:
         # Never echo what was passed: it may be the secret itself.
         reject(
             "infra-credential-refused",
             "a secret is never an argument; pass --prompt and type it (or pipe it on stdin)",
         )
+    if from_env:
+        return
     for name in TOKEN_ENVS:
         if os.environ.get(name):
             reject(
                 "infra-credential-refused",
-                f"a secret is never read from the environment; unset {name} and use --prompt",
+                f"a secret is never read from the environment unasked; unset {name} "
+                "and use --prompt, or pass --from-env to read the provider's variables",
             )
 
 
@@ -497,23 +520,190 @@ PromptOption = Annotated[
 ]
 
 
-def provider_secret(
-    context: typer.Context, name: NameArgument, prompt: PromptOption = False
-) -> None:
-    """Store a provider API token (read from stdin, never printed)."""
-    from piceli.infra.machines.credentials import save_credential
+def _terminal() -> bool:
+    return bool(sys.stdin is not None and sys.stdin.isatty())
 
-    _no_secret_arguments(context)
-    if not prompt:
-        reject("infra-prompt-required", "pass --prompt: the token is read from stdin")
-    with _guard():
-        value = _read_secret("Provider token (not echoed): ")
-        path = save_credential(name, "provider-token", value)
+
+def _echoed(prompt: str) -> str:
+    """An identifier, typed with echo (it is not a secret)."""
+    sys.stderr.write(prompt)
+    sys.stderr.flush()
+    line = sys.stdin.readline() if sys.stdin is not None else ""
+    return line.rstrip("\r\n")
+
+
+def _hidden(prompt: str) -> str:
+    return _read_secret(prompt)
+
+
+def _ask_parts(shape: Any, *, from_env: bool) -> dict[str, str]:
+    """Each part of ``shape``: from the provider's variables, or asked for
+    one by one (on a terminal: what it is and where to find it; piped: one
+    per line). Each is checked as it comes; nothing is printed."""
+    from piceli.infra.machines.credential_parts import check_part
+    from piceli.infra.machines.model import InfraError
+
+    parts: dict[str, str] = {}
+    total = len(shape.parts)
+    for step, part in enumerate(shape.parts, 1):
+        if from_env:
+            value = os.environ.get(part.env, "")
+            if not value:
+                raise InfraError(
+                    "infra-credential-part-invalid",
+                    f"{part.label}: {part.env} is not set; nothing was stored",
+                    fields={"part": part.key},
+                )
+        elif _terminal():
+            say(f"Step {step} of {total}: {part.label}. Where: {part.where}.")
+            if part.secret:
+                head = part.label[:-1] if part.label.endswith(")") else part.label
+                tail = ", not echoed)" if part.label.endswith(")") else " (not echoed)"
+                value = _hidden(f"{head}{tail}: ")
+            else:
+                value = _echoed(f"{part.label}: ")
+        else:
+            value = _read_secret("")
+        check_part(shape, part, value, parts)
+        parts[part.key] = value
         del value
-    say(f"stored credential {name} (provider-token); the token was not printed")
-    emit_json(
-        {"state": "stored", "name": name, "kind": "provider-token", "path": str(path)}
+    return parts
+
+
+def _declared_provider(ref: str, name: str) -> str:
+    """The provider of ``ref`` whose ``credentials=`` is ``name``."""
+    from piceli.infra.machines.model import InfraError
+
+    found = {p.name for p in load_infra(ref).providers() if p.credentials == name}
+    if len(found) != 1:
+        raise InfraError(
+            "infra-credential-invalid",
+            f"no single provider of {ref} uses credentials={name!r}"
+            if not found
+            else f"providers of different kinds use credentials={name!r}",
+        )
+    return found.pop()
+
+
+def provider_secret(
+    context: typer.Context,
+    name: NameArgument,
+    prompt: Annotated[
+        bool,
+        typer.Option(
+            "--prompt",
+            help="Ask for each part on stdin (typed: an identifier echoed, a "
+            "secret not; piped: one part per line, in order)",
+        ),
+    ] = False,
+    provider: Annotated[
+        str | None,
+        typer.Option(
+            "--provider",
+            help="Whose credential it is: porkbun, openstack (or infomaniak), "
+            "hetzner (or hcloud), or token (one API token)",
+            show_default=False,
+        ),
+    ] = None,
+    infra_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--infra",
+            help="MODULE:ATTR of the Infrastructure whose provider uses "
+            "credentials=NAME: it tells which provider NAME is for",
+            show_default=False,
+        ),
+    ] = None,
+    from_env: Annotated[
+        bool,
+        typer.Option(
+            "--from-env",
+            help="Read the parts from the provider's standard variables instead "
+            "of stdin (for scripts)",
+        ),
+    ] = False,
+) -> None:
+    """Store a provider's API credential, part by part (never printed).
+
+    Which provider NAME is for: --provider, else the provider of --infra
+    MODULE:ATTR that uses credentials=NAME, else the provider stored under NAME
+    before, else the name itself (porkbun; openstack or infomaniak; hetzner or
+    hcloud; alone or before a dash, as in porkbun-dns). Otherwise it is one API
+    token.
+
+    A credential with two parts is asked for part by part, as the provider's
+    console names them, and each part is checked before anything is stored
+    (not empty, no space around it, no ':' inside, the provider's known shape):
+
+    \b
+      porkbun:    1. Porkbun API key (pk1_…)
+                  2. Porkbun secret API key (sk1_…)
+                  (porkbun.com > Account > API Access > Create API Key)
+      openstack,  1. Application credential ID (32 hex)
+      infomaniak: 2. Application credential secret
+                  (Horizon > Identity > Application Credentials, or
+                  `openstack application credential create`)
+      hetzner:    Hetzner Cloud API token
+      token:      Provider API token
+
+    Piped (scripts, tests): one part per line, in that order; a KEY:SECRET line
+    is refused. --from-env reads PORKBUN_API_KEY and PORKBUN_SECRET_API_KEY,
+    OS_APPLICATION_CREDENTIAL_ID and OS_APPLICATION_CREDENTIAL_SECRET,
+    HCLOUD_TOKEN, or PICELI_PROVIDER_TOKEN. Never pass a secret as an argument.
+
+    Running it again replaces the stored credential (a one-part value a plan
+    reported, an old token): no delete is needed.
+    """
+    from piceli.infra.machines import credential_parts as cp
+    from piceli.infra.machines.credentials import (
+        credential_present,
+        save_credential,
+        save_parts,
     )
+    from piceli.infra.machines.model import InfraError
+
+    _no_secret_arguments(context, from_env=from_env)
+    if prompt == from_env:
+        reject(
+            "infra-prompt-required",
+            "pass --prompt (the parts are read from stdin) or --from-env",
+        )
+    with _guard():
+        if provider is not None:
+            if provider not in cp.PROVIDER_OPTIONS:
+                raise InfraError(
+                    "infra-credential-invalid",
+                    "--provider is one of " + ", ".join(cp.PROVIDER_OPTIONS),
+                )
+            shape = cp.shape_of(provider)
+        elif infra_ref is not None:
+            shape = cp.shape_of(_declared_provider(infra_ref, name))
+        else:
+            recorded = cp.credential_report(name) if credential_present(name) else None
+            shape = (
+                cp.shape_of(recorded["provider"])
+                if recorded and recorded["kind"] == "provider-token"
+                else cp.shape_for_name(name)
+            )
+        replaced = credential_present(name)
+        parts = _ask_parts(shape, from_env=from_env)
+        if len(shape.parts) == 1:
+            path = save_credential(
+                name, "provider-token", parts[shape.keys[0]], provider=shape.provider
+            )
+        else:
+            path = save_parts(name, shape.provider, parts)
+        del parts
+    verb = "replaced" if replaced else "stored"
+    say(
+        f"{verb} credential {name} (provider-token, {shape.title}): "
+        f"{shape.names()}; no value was printed"
+    )
+    emit_json(
+        {"state": "stored", "name": name, "kind": "provider-token",
+         "provider": shape.provider, "parts": shape.keys, "replaced": replaced,
+         "path": str(path)}
+    )  # fmt: skip
 
 
 def state_key_secret(
@@ -683,3 +873,8 @@ def register(root: typer.Typer) -> None:
     secrets_app.command("state-key", context_settings=settings)(state_key_secret)
     secrets_app.command("user-data", context_settings=settings)(user_data_secret)
     secrets_app.command("delete")(delete_secret)
+    from piceli.k8s.cli.secrets_backup import register as register_backup
+    from piceli.k8s.cli.secrets_status import register as register_status
+
+    register_backup(secrets_app)
+    register_status(secrets_app)

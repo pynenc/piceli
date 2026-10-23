@@ -762,6 +762,33 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["secrets", "s3", "cache-s3"],
         "infra-prompt-required",
     ),
+    "secrets backup": (
+        lambda p: [
+            "secrets",
+            "backup",
+            "--to",
+            str(p / "junk"),
+            "--recipient",
+            "AGE-SECRET-KEY-1",
+        ],
+        "secrets-backup-recipient-invalid",
+    ),
+    "secrets backup-key": (
+        lambda p: ["secrets", "backup-key", "--out", str(p / "no" / "dir" / "k")],
+        "secrets-backup-key-invalid",
+    ),
+    "secrets status": (
+        lambda p: ["secrets", "status", "no_such_module:infra"],
+        "infra-not-found",
+    ),
+    "secrets setup": (
+        lambda p: ["secrets", "setup", "no_such_module"],
+        "infra-not-found",
+    ),
+    "secrets restore": (
+        lambda p: ["secrets", "restore", str(p / "missing.age")],
+        "secrets-restore-archive-invalid",
+    ),
     "secrets delete": (
         lambda p: ["secrets", "delete", "../web-1-boot", "--yes"],
         "infra-credential-invalid",
@@ -782,6 +809,7 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["host", "status", "ssh://bad user@host"],
         "host-invalid",
     ),
+    "targets": (lambda p: ["targets"], "targets-input-required"),
     "host wait": (
         lambda p: ["host", "wait", "no_such_module:web", "v1.0.0"],
         "host-not-found",
@@ -968,3 +996,28 @@ def test_a_partially_applied_infra_change_fails_with_exit_1(
     assert "sk1_secret" not in stdout + stderr
     for line in stderr.splitlines():
         assert not line.lstrip().startswith(("{", "[")), line
+
+
+@pytest.mark.parametrize(
+    ("argv", "lines", "part"),
+    [
+        (["provider", "porkbun"], "pk1_" + "0a" * 32 + "\n", "secret_api_key"),
+        (["provider", "infomaniak"], "id:secret\n", "application_credential_id"),
+        (["s3", "cache-s3"], "AKIDEXAMPLE\n", "secret_access_key"),
+    ],
+    ids=["porkbun-one-part", "openstack-joined", "s3-one-part"],
+)
+def test_a_wrong_credential_part_follows_the_contract(
+    argv: list[str], lines: str, part: str, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # fmt: skip
+    monkeypatch.setenv("PICELI_CREDENTIALS_DIR", str(tmp_path / "credentials"))
+    result = CliRunner().invoke(app, ["secrets", *argv, "--prompt"], input=lines)
+    assert result.exit_code == 2, result.output
+    body = json.loads(result.stdout)
+    assert body["state"] == "rejected"
+    assert body["reason"] == "infra-credential-part-invalid" and body["part"] == part
+    assert "[infra-credential-part-invalid]" in result.stderr
+    assert not (tmp_path / "credentials").exists() or not any(
+        (tmp_path / "credentials").iterdir()
+    )

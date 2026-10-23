@@ -32,14 +32,15 @@ __all__ = [
     "generate_passphrase",
     "load_credential",
     "save_credential",
+    "save_parts",
 ]
 
 CREDENTIALS_ENV = "PICELI_CREDENTIALS_DIR"
 _SCHEMA = "piceli.credential.v1"
 #: ``provider-token``: an API token; ``state-key``: a state passphrase;
 #: 0.24: ``nix-signing-key``: a Nix binary cache's secret key
-#: (``piceli secrets nix-cache``); ``s3-keys``: ``ACCESS_KEY_ID:SECRET``
-#: of a bucket's S3 API (``piceli secrets s3``); ``age-identity``: a host's
+#: (``piceli secrets nix-cache``); ``s3-keys``: the access key id and secret
+#: of a bucket's S3 API (``piceli secrets s3``; by part since 0.25); ``age-identity``: a host's
 #: age X25519 identity for sops-nix (``piceli secrets age``); ``user-data``:
 #: a server's user data at creation (``piceli secrets user-data``).
 KINDS = (
@@ -132,14 +133,45 @@ def generate_passphrase() -> str:
     return secrets.token_urlsafe(32)
 
 
-def save_credential(name: str, kind: str, value: str) -> Path:
-    """Store ``value`` under ``name`` (atomic, ``0600`` in a ``0700`` directory)."""
+def save_credential(
+    name: str, kind: str, value: str, *, provider: str | None = None
+) -> Path:
+    """Store ``value`` under ``name`` (atomic, ``0600`` in a ``0700``
+    directory); ``provider`` records whose token it is."""
     check_value(kind, value)
+    body: dict[str, object] = {"schema": _SCHEMA, "kind": kind, "value": value}
+    if provider is not None:
+        body["provider"] = provider
+    return _write(name, body)
+
+
+def save_parts(name: str, provider: str, parts: dict[str, str]) -> Path:
+    """Store a credential by part (``piceli secrets provider|s3``): each part
+    is checked (:func:`~.credential_parts.check_part`) and stored under its
+    own name, never joined."""
+    from piceli.infra.machines.credential_parts import SHAPES, check_part
+
+    shape = SHAPES[provider]
+    if set(parts) != set(shape.keys):
+        raise InfraError(
+            "infra-credential-invalid", f"a {shape.title} has the parts {shape.names()}"
+        )
+    earlier: dict[str, str] = {}
+    for part in shape.parts:
+        check_part(shape, part, parts[part.key], earlier)
+        earlier[part.key] = parts[part.key]
+    body: dict[str, object] = {"schema": _SCHEMA, "kind": shape.kind, "parts": earlier}
+    if shape.kind == "provider-token":
+        body["provider"] = provider
+    return _write(name, body)
+
+
+def _write(name: str, content: dict[str, object]) -> Path:
     path = _path(name)
     directory = path.parent
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(directory, 0o700)
-    body = json.dumps({"schema": _SCHEMA, "kind": kind, "value": value}, sort_keys=True)
+    body = json.dumps(content, sort_keys=True)
     descriptor, staged = tempfile.mkstemp(dir=directory, prefix=".piceli-credential-")
     try:
         os.fchmod(descriptor, 0o600)
@@ -180,12 +212,14 @@ def load_credential(name: str, kind: str) -> str:
     if (
         not isinstance(body, dict)
         or body.get("kind") != kind
-        or not isinstance(body.get("value"), str)
+        or not isinstance(body.get("value", body.get("parts")), str | dict)
     ):
         raise InfraError(
             "infra-credential-invalid", f"credential {name!r} is not a {kind}"
         )
-    return str(body["value"])
+    from piceli.infra.machines.credential_parts import joined
+
+    return joined(name, body)
 
 
 def kind_of(option: str) -> str:

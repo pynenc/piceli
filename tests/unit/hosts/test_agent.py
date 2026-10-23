@@ -72,6 +72,7 @@ def publish(
     system: str = SYSTEM,
     attribute: str = ATTRIBUTE,
     name: str = "web-1",
+    pinned: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """What ``piceli dev nix build --publish`` leaves in a file cache."""
     path = store_path(commit)
@@ -81,7 +82,7 @@ def publish(
         published={"store_path": path, "system": system,
                    "nar_hash": nar_hash_of(path), "nar_size": 1234,
                    "closure_size": 5678},
-        host="nix-1", key="cache-1", now=when,
+        host="nix-1", key="cache-1", now=when, pinned=pinned,
     )  # fmt: skip
     signed = nix.sign_manifest(body, secret)
     nix.upload_manifest(cache, signed, s3_keys=None)
@@ -807,3 +808,75 @@ def test_a_rollback_needs_a_previous_system_in_the_store(
     agent.runner = gone
     assert agent.control("rollback")["reason"] == "host-rollback-unavailable"
     assert os.readlink(fake.current) == store_path(commit_of(1))
+
+
+def test_a_gated_host_switches_only_to_a_build_with_its_verified_pin(
+    tmp_path: Path, cache_dir: Path, fake: FakeHost
+) -> None:
+    from piceli.infra.promotion import Promotion
+
+    declared = host(cache_dir, gate=Promotion(input="app", environment="main"))
+    assert agent_config(declared)["gate"] == {
+        "input": "app", "environment": "main", "source": "app",
+    }  # fmt: skip
+    assert "gate" not in agent_config(host(cache_dir))  # ungated: unchanged
+    publish(cache_dir, commit_of(1), tag="v1.0.0")  # published without the gate
+    poll = make_agent(tmp_path, declared, fake).run_once()
+    assert poll["reason"] == "host-promotion-missing" and fake.calls == []
+    other = {"input": "app", "commit": "e" * 40, "environment": "rc",
+             "verified_run": "r1", "verified_at": "2026-10-23T10:00:00Z"}  # fmt: skip
+    publish(cache_dir, commit_of(2), tag="v1.1.0", pinned=other,
+            when=T0 + dt.timedelta(minutes=1))  # fmt: skip
+    poll = make_agent(tmp_path, declared, fake).run_once()
+    assert poll["reason"] == "host-promotion-missing" and fake.calls == []
+    publish(cache_dir, commit_of(3), tag="v1.2.0",
+            pinned={**other, "environment": "main"},
+            when=T0 + dt.timedelta(minutes=2))  # fmt: skip
+    poll = make_agent(tmp_path, declared, fake).run_once()
+    assert poll["state"] == "deployed", poll
+
+
+def test_the_status_carries_the_pin_of_the_build_it_runs(
+    tmp_path: Path, cache_dir: Path, fake: FakeHost
+) -> None:
+    """``current.pinned`` and each attempt's ``pinned``: the deployed
+    manifest's; a rollback restores the previous build's; a status written
+    before the field is read as before (no ``pinned``)."""
+    pin = {"input": "app", "commit": "e" * 40, "environment": "main",
+           "verified_run": "r1", "verified_at": "2026-10-23T10:00:00Z"}  # fmt: skip
+    agent = lambda: make_agent(tmp_path, host(cache_dir), fake)  # noqa: E731
+    publish(cache_dir, commit_of(1), tag="v1.0.0", pinned=pin)
+    poll = agent().run_once()
+    assert poll["state"] == "deployed", poll
+    body = status(tmp_path)
+    assert body["current"]["pinned"] == pin
+    assert body["last_attempt"]["pinned"] == pin
+    publish(
+        cache_dir, commit_of(2), tag="v1.1.0", when=T0 + dt.timedelta(minutes=1)
+    )  # published without a gate
+    assert agent().run_once()["state"] == "deployed"
+    body = status(tmp_path)
+    assert body["current"]["tag"] == "v1.1.0" and body["current"]["pinned"] is None
+    assert body["previous"]["pinned"] == pin
+    result = agent().control("rollback")
+    assert result["state"] == "rolled-back"
+    assert result["attempt"]["pinned"] == pin
+    body = status(tmp_path)
+    assert body["current"]["tag"] == "v1.0.0" and body["current"]["pinned"] == pin
+    # A pin of the running build keeps its pin.
+    assert agent().control("pin", "v1.0.0")["state"] == "pinned"
+    assert status(tmp_path)["current"]["pinned"] == pin
+
+
+def test_a_status_without_pinned_still_reads(
+    tmp_path: Path, cache_dir: Path, fake: FakeHost
+) -> None:
+    publish(cache_dir, commit_of(1), tag="v1.0.0")
+    make_agent(tmp_path, host(cache_dir), fake).run_once()
+    state = tmp_path / "state" / "state.json"
+    old = json.loads(state.read_text())
+    old["current"].pop("pinned", None)
+    state.write_text(json.dumps(old))
+    publish(cache_dir, commit_of(2), tag="v1.1.0", when=T0 + dt.timedelta(minutes=1))
+    assert make_agent(tmp_path, host(cache_dir), fake).run_once()["state"] == "deployed"
+    assert status(tmp_path)["previous"].get("pinned") is None

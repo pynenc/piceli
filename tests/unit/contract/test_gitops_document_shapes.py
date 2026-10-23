@@ -18,6 +18,8 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from piceli.gitops import history
 from piceli.gitops.state import sync_request
 from tests.gitops_history_fixture import sample_history
@@ -41,6 +43,7 @@ NAMED = {
     "deployed_revision",
     "counts",
     "clusters",
+    "nix_releases",
 }
 
 
@@ -86,6 +89,26 @@ def _repo_status(tmp_path: Path) -> Any:
     return channel.read_status()
 
 
+def _release_statuses(tmp_path: Path, monkeypatch: Any) -> list[Any]:
+    """A gated NixRelease (0.25.0): refused (``refusal``), then planned with
+    its verified ``pinned``."""
+    from tests.unit.infra import promotion_support as support
+    from tests.unit.infra.promotion_support import history, run
+    from tests.unit.infra.test_promotion import _controller
+
+    found = support.world(tmp_path / "release", monkeypatch)
+    controller = _controller(found, monkeypatch)
+    controller.poll_once()
+    found["history"]["value"] = history(
+        run(found["b"], "r2", "2026-10-21T10:00:00Z", passed=False)
+    )
+    found["hosts"].commit({"flake.lock": support.lock(found["app"].url, found["b"])})
+    found["hosts"].tag("web-v1.1.0")
+    refused = controller.poll_once()
+    found["history"]["value"] = history(run(found["b"], "r3", "2026-10-21T12:00:00Z"))
+    return [refused, controller.poll_once()]
+
+
 def _lifecycle_history() -> dict[str, Any]:
     events = [
         history.lifecycle(
@@ -104,10 +127,13 @@ def _lifecycle_history() -> dict[str, Any]:
     return {"envs": {"rc": {"runs": history.environment_runs("rc", events, [])}}}
 
 
-def _documents(journaled: dict[str, Any], tmp_path: Path) -> dict[str, list[str]]:
+def _documents(
+    journaled: dict[str, Any], tmp_path: Path, monkeypatch: Any
+) -> dict[str, list[str]]:
     status, published = _composition_status(journaled)
+    releases = _release_statuses(tmp_path, monkeypatch)
     return {
-        "status": _union([status, _repo_status(tmp_path)]),
+        "status": _union([status, _repo_status(tmp_path), *releases]),
         "history": _union(
             [published, sample_history(tmp_path / "sample"), _lifecycle_history()]
         ),
@@ -115,9 +141,9 @@ def _documents(journaled: dict[str, Any], tmp_path: Path) -> dict[str, list[str]
 
 
 def test_no_documented_field_of_the_v1_documents_disappears(
-    journaled: dict[str, Any], tmp_path: Path
+    journaled: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    found = _documents(journaled, tmp_path)
+    found = _documents(journaled, tmp_path, monkeypatch)
     golden = json.loads(GOLDEN.read_text())
     if os.environ.get("PICELI_UPDATE_SHAPES") == "1":
         merged = {

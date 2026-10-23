@@ -34,7 +34,7 @@ import os
 import re
 import shutil
 import tempfile
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Protocol
@@ -58,6 +58,8 @@ REQUEST_KINDS = (
     "build-claim", "built", "build-failed",
     # 0.22.0: rebuild what a host built; release a quarantined host
     "rebuild", "host-release",
+    # 0.25.0: a build host published a NixRelease
+    "nix-published",
 )  # fmt: skip
 #: Env states a status may carry.
 ENV_STATES = (
@@ -307,9 +309,38 @@ def _build_id(value: str) -> str:
     return value
 
 
-def build_claim_request(build: str, host: str) -> tuple[str, dict[str, Any]]:
-    """A build host takes the wanted build ``build`` (``piceli builder serve``)."""
-    return request("build-claim", id=_build_id(build), host=str(host)[:64])
+def build_claim_request(
+    build: str, host: str, proof: str | None = None
+) -> tuple[str, dict[str, Any]]:
+    """A build host takes the wanted build ``build`` (``piceli builder serve``).
+
+    ``proof`` (0.25.0, a ``nix-publish``): the cache key's signature over
+    the claim (:func:`piceli.infra.nix_releases.claim_message`), never a key."""
+    if proof is None:
+        return request("build-claim", id=_build_id(build), host=str(host)[:64])
+    return request(
+        "build-claim", id=_build_id(build), host=str(host)[:64], proof=str(proof)[:200]
+    )
+
+
+def nix_published_request(
+    build: str,
+    host: str,
+    manifest: Mapping[str, Any],
+    pointers: Sequence[Mapping[str, Any]],
+    receipt: Mapping[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """The wanted publish ``build`` is in the cache (0.25.0): the signed
+    manifest, the pointers written (ref, commit, ``published_at``) and a
+    receipt (host, stages with their times)."""
+    return request(
+        "nix-published",
+        id=_build_id(build),
+        host=str(host)[:64],
+        manifest=dict(manifest),
+        pointers=[dict(item) for item in pointers],
+        receipt=dict(receipt),
+    )
 
 
 def built_request(

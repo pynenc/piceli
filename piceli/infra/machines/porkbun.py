@@ -2,8 +2,8 @@
 
 Rendered for the ``marcfrederick/porkbun`` OpenTofu provider (Porkbun API
 v3), pinned to one version and its lock-file hashes. The credential is an
-API key pair stored as ``APIKEY:SECRETKEY`` (``piceli secrets provider NAME
---prompt``); OpenTofu reads it from ``PORKBUN_API_KEY`` and
+API key pair, its API key (``pk1_…``) and secret API key (``sk1_…``) stored
+by part (``piceli secrets provider NAME --prompt``); OpenTofu reads it from ``PORKBUN_API_KEY`` and
 ``PORKBUN_SECRET_API_KEY`` in its environment, never from the
 configuration, a plan or the state.
 
@@ -307,8 +307,8 @@ def _unconfirmed(domain: str, why: str) -> InfraError:
 class Porkbun(Provider):
     """Porkbun's DNS, for domains registered at Porkbun with API access on.
 
-    :param credentials: The local credential holding ``APIKEY:SECRETKEY``
-        (``piceli secrets provider NAME --prompt``).
+    :param credentials: The local credential holding the API key and secret
+        API key (``piceli secrets provider NAME --prompt``).
     """
 
     credentials: str | None = None
@@ -341,12 +341,13 @@ class Porkbun(Provider):
     def token_env(self) -> str:
         return SECRET_ENV
 
-    def credential_env(self, value: str) -> dict[str, str]:
-        key, separator, secret = value.partition(":")
-        if not separator or not key or not secret:
+    def credential_env(self, parts: Mapping[str, str]) -> dict[str, str]:
+        key, secret = parts.get("api_key"), parts.get("secret_api_key")
+        if not key or not secret:
             raise InfraError(
                 "infra-credential-invalid",
-                f"credential {self.credentials!r} is not APIKEY:SECRETKEY",
+                f"credential {self.credentials!r} is not a Porkbun API key pair "
+                "(its API key and its secret API key)",
             )
         return {KEY_ENV: key, SECRET_ENV: secret}
 

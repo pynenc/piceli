@@ -59,12 +59,15 @@ __all__ = [
     "LocalState",
     "NixCache",
     "NixHost",
+    "NixRelease",
     "Node",
     "OpenStack",
     "Otlp",
     "Porkbun",
     "PrimaryIp",
+    "Promotion",
     "Rule",
+    "S3Key",
     "Server",
     "Source",
     "Ssh",
@@ -406,6 +409,7 @@ from piceli.infra.machines import (  # noqa: E402
     Porkbun,
     PrimaryIp,
     Rule,
+    S3Key,
     Server,
     Ssh,
     UserData,
@@ -415,8 +419,12 @@ from piceli.infra.machines import (  # noqa: E402
 # loads no Kubernetes client.
 _LAZY = {
     "register_cluster": "piceli.infra.multicluster",
+    "NixRelease": "piceli.infra.nix_releases",
+    "Promotion": "piceli.infra.promotion",
 }
 __getattr__, __dir__ = lazy_exports(__name__, _LAZY, globals())
 
 if TYPE_CHECKING:
     from piceli.infra.multicluster import register_cluster
+    from piceli.infra.nix_releases import NixRelease
+    from piceli.infra.promotion import Promotion

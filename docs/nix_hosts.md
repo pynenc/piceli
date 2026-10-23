@@ -11,6 +11,16 @@ The builds come from `piceli dev nix build --publish` ({doc}`dev_builds`),
 which signs the closure, its manifest and the ref pointers with the cache's
 key.
 
+The GitOps controller can also publish them itself when a tag appears
+(0.25.0, a `NixRelease`): the build and the keys stay on a build host. See
+[Nix host releases](#gitops-nix-releases) in {doc}`gitops`. A remote
+machine that only publishes is declared as a docker host with an SSH
+context to itself and `runs=False`, `BuildHost.docker("nix-builder",
+context="ssh://builder@builder-1.example.org", runs=False)`, and runs
+`piceli builder serve --host nix-builder --publish MODULE:ATTR` (0.25.0):
+it claims no image build, and no development run lands on it. `BuildHost.native` would be wrong there: it means
+whichever machine runs Piceli.
+
 {doc}`single_nixos_host` takes one host from nothing to its first release
 with one complete example, and compares it with a Kubernetes environment.
 
@@ -51,7 +61,7 @@ web = NixHost(
 | `checks=` | `HostCheck.unit(UNIT)`, `HostCheck.http(URL)` (2xx), `HostCheck.command(ARG, ...)` (exit 0); each tried every 2 s until its `timeout=` (60 s) |
 | `report=` | `HostReport(endpoint, headers_file=None, insecure=False)`: OTLP/HTTP logs |
 | `build=` | The manifests' name, `--name` of the publish (`NAME` of `.#NAME`, else the host's name) |
-| `read_credentials_file=` | The host's file with the cache's read-only S3 keys, a sops-nix secret (`/run/secrets/piceli/cache.env` for an `s3://` cache, none otherwise) |
+| `read_credentials_file=` | The host's file with the cache's read S3 keys. When the cache's bucket declares `S3Key(access="read")` (0.25.0): `/var/lib/piceli-host/cache.env`, which `piceli host secrets` writes. Otherwise a sops-nix secret (`/run/secrets/piceli/cache.env` for an `s3://` cache, none otherwise). A path you give is your own file: `host secrets` leaves it alone |
 | `poll_seconds=`, `history=` | How often the agent polls (300) and how many attempts the status keeps (20) |
 | `generations=` | How many system generations the host keeps (5, at least 2: a rollback needs the previous one); see [Old systems](#old-systems) |
 | `age_identity=`, `age_key_file=` | The local credential with the host's age identity, and where `piceli host secrets` puts it (`/var/lib/sops-nix/key.txt`, sops-nix's `sops.age.keyFile`) |
@@ -62,6 +72,47 @@ that is not a version is ignored, and the status lists it under
 `ignored_tags`. Pre-releases count only with `prereleases=True`. A
 declaration that does not hold is refused with `host-invalid` or
 `host-check-invalid`.
+
+### Several hosts in one repository: tag prefixes
+
+Give each host its own tag prefix, and release each one with its own
+tags:
+
+```python
+web = NixHost("web-1", ..., follow=Tag("web-v*"))   # web-v1.2.3
+api = NixHost("api-1", ..., follow=Tag("api-v*"))   # api-v0.4.0
+```
+
+A tag counts for a host when it matches the glob **and** what follows the
+pattern's literal prefix is a version as above. The prefix (`Tag.prefix`)
+is the pattern before its first `*`, `?` or `[`, without the digits and
+dots of a version it pins:
+
+| Pattern | Prefix | Counts | Never counts |
+| --- | --- | --- | --- |
+| `v*` | `v` | `v1.2.3` | `web-v1.2.3` (no match) |
+| `web-v*` | `web-v` | `web-v1.10.0` above `web-v1.9.0` | `api-v2.0.0`, `v3.0.0`, `web-vNext` (ignored) |
+| `web-*` | `web-` | `web-1.2.3`, `web-v1.2.3` | `web-api-1.2.3` (ignored: `api-1.2.3` is no version) |
+| `web-v1.*` | `web-v` | `web-v1.4.0` | `web-v2.0.0` (no match) |
+| `*` | (none) | `1.2.3`, `v1.2.3` | `web-v1.2.3` (ignored) |
+
+So two hosts with different prefixes never see each other's tags, in the
+agent's resolve and ordering ("never older" included), in the pointer
+`dev nix build --publish --tag-pattern 'web-v*'` writes, and in the
+versions `dev nix gc --tag-pattern 'web-v*' --tag-pattern 'api-v*'` keeps
+(see {doc}`dev_builds`). Put the prefix before the first wildcard:
+`Tag("*-v*")` has no prefix, so `web-v1.2.3` is not a version for it.
+`Tag(...).version(tag)` gives a tag's sort key, `None` when it does not
+count.
+
+### Only verified products: `gate=`
+
+`NixHost(..., gate=Promotion(input="app", environment="main"))` (0.25.0)
+makes the agent switch only to a build whose signed manifest carries the
+promotion gate's verified `pinned` for that flake input and GitOps
+environment; any other build is refused (`host-promotion-missing`). The
+gate and `piceli promote` are described in {doc}`gitops` (Nix host
+releases).
 
 ## Install the agent
 
@@ -82,8 +133,9 @@ upgrade Piceli.
 ## Secrets: one age key, the rest in sops-nix
 
 The module holds no secret. The host's secrets live in Git, encrypted with
-[sops-nix](https://github.com/Mic92/sops-nix): the cache's **read-only** S3
-keys (never the write ones), the report's headers and your services'
+[sops-nix](https://github.com/Mic92/sops-nix): the cache's read S3 keys
+(never the write ones; since 0.25.0 Piceli can create and install them,
+below), the report's headers and your services'
 secrets. The only secret Piceli puts on the host is the key sops-nix
 decrypts them with, an age identity:
 
@@ -103,6 +155,23 @@ ssh's stdin into a temporary file that is renamed over the path, and the
 host re-runs its activation (`switch-to-configuration switch`) so sops-nix
 decrypts with it. Another key is replaced only with `--replace`
 (`host-secret-exists`); the same key is a no-op.
+
+**The cache's read keys from Piceli** (0.25.0). When the cache's bucket
+declares `S3Key("cache-read", access="read")`, `piceli infra apply`
+creates that pair and stores it (see {doc}`infrastructure`), and `piceli
+host secrets` also puts it on the host, at `/var/lib/piceli-host/cache.env`
+(`0600` root; `AWS_ACCESS_KEY_ID=` and `AWS_SECRET_ACCESS_KEY=` lines), the
+agent's default `read_credentials_file=` for such a cache. The plan's
+`cache` shows the path, the credential, a short digest and whether the host
+has the same file, another one or none (compared by sha256, never read
+back). A different file is a rotated pair: it is replaced without
+`--replace`, and nothing is re-activated, since the agent reads the file on
+each poll. A host without `age_identity=` gets only this file. The pair is
+not read-only at OpenStack (the plan of `infra apply` says
+`read_only_enforced: false`); see {doc}`infrastructure` for what that means
+and how to limit it. The sops-nix path below still works: give
+`read_credentials_file=` the path of your sops secret, and keys you created
+yourself.
 
 Declare the secrets in the host's configuration, encrypted to that public
 key:
@@ -245,8 +314,11 @@ collection freed.
 
 The agent writes `/var/lib/piceli-host/status.json` (`0644`, no secret,
 `schema: piceli.nix-host-status.v1`). It holds `current` and `previous`
-(store path, commit, tag, ref, `published_at`, `since`), `poll` (the last
-poll's state and reason), `last_attempt` (its stages with `seconds`, the
+(store path, commit, tag, ref, `published_at`, `since`, and `pinned`: the
+promotion gate's pin of that build from its signed manifest, `input`,
+`commit`, `environment`, `verified_run`, `verified_at`, or `null` for a
+build published without a gate; a rollback restores the previous build's), `poll` (the last
+poll's state and reason), `last_attempt` (its `pinned`, its stages with `seconds`, the
 check results, the `rollback`, the `prune`), `history` (the newest
 attempts), `prune` (the last one), the ignored tags, the `hold` (or `null`)
 and the report's state.
@@ -281,6 +353,57 @@ polled:
 ```sh
 piceli host wait hosts.py:web 3f2c1ab --published-after 2026-10-22T10:00:00.000000Z
 ```
+
+## Every target in one view
+
+`piceli targets` lists every GitOps environment and every NixHost of a
+composition in one table (stderr), or one `piceli.targets.v1` object with
+`--json`:
+
+```sh
+piceli targets --composition infra.py --infra infra.py --json
+```
+
+```text
+KIND         NAME   WHERE        REVISION                 PINNED           CHECKS      STATE                                    AS OF
+environment  main   shop         3f9c2d1e8a7b             product@3f9c2d1  passed 3/3  deployed                                 2026-10-23T09:30:00Z
+environment  rc     shop-rc      9e1d0c4b2a33             product@9e1d0c4  failed 2/3  rolled-back (checks-failed-rolled-back)  2026-10-23T09:30:00Z
+nix-host     db-1   203.0.113.8  -                        -                none        unreachable (host-unreachable)           -
+nix-host     web-1  203.0.113.7  web-v1.2.0 d41c8e7f0a12  product@3f9c2d1  passed 1/1  deployed                                 2026-10-23T09:29:00Z
+```
+
+Each row has `kind` (`environment` or `nix-host`), `name`, `where`
+(cluster and namespace, or the host's address), the deployed `revision`
+(a commit and, for a host, its tag), `pinned` (the product commit it
+runs), `checks` (`passed`, `failed`, `running` or `none`, with `at`),
+`state` (`deployed`, `deploying`, `waiting`, `held`, `stopped`, `failed`,
+`rolled-back`, `unreachable`, `unknown`) with its `reason`, `as_of`, and
+`facts`: which source told each fact, `controller` or `host-agent`.
+
+- An environment's `pinned` is its product source's deployed commit: the
+  source a promotion gate verified in it, else its only source. Without
+  either, `pinned.source` is `null` and `pinned.commits` lists every
+  source's commit.
+- A NixHost's `pinned` is the host agent's own `current.pinned` (the pin
+  in the manifest of the build it runs; `facts.pinned` is `host-agent`).
+  From an agent before that field, or when the host is not read, it is
+  the `pinned` (`input`, `commit`, `environment`, `verified_run`,
+  `verified_at`) of its release in the controller's status, when the host
+  runs that release's latest commit; `null` without a gate.
+
+The controller is read once, as `gitops status` reads it: from the
+composition's home `Cluster` with its `piceli login` profile, as `gitops
+enable` finds it (`--kubeconfig --context` or `--state-dir` win). Without
+that profile the environments show `unreachable` (`profile-not-found`,
+with the `piceli login` command to run); the hosts declared by `--composition` (its
+`NixRelease`s) and `--infra` (its `NixHost`s, with their servers' applied
+addresses and pinned host keys) over SSH, in parallel, each within
+`--timeout` seconds (default 20). An unreachable source never fails the
+view: its rows say `unreachable` with the reason, so host rows still work
+with the home cluster down. Exit 0 when every target is reachable and none
+failed; 1 when a target failed, rolled back or is unreachable, or its
+checks failed; 2 when nothing is named (`targets-input-required`). The UI
+shows the same document in its Targets view.
 
 ## Reports
 

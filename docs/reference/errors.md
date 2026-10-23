@@ -190,10 +190,12 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`deploy-stage-unknown`](#error-deploy-stage-unknown) | cli | no |
 | [`dev-cache-clear-failed`](#error-dev-cache-clear-failed) | dev | yes |
 | [`dev-command-failed`](#error-dev-command-failed) | dev | yes |
+| [`dev-host-publish-only`](#error-dev-host-publish-only) | dev | no |
 | [`dev-host-unavailable`](#error-dev-host-unavailable) | dev | no |
 | [`dev-host-unknown`](#error-dev-host-unknown) | dev | no |
 | [`dev-isolation-not-enforced`](#error-dev-isolation-not-enforced) | dev | no |
 | [`dev-nix-cache-invalid`](#error-dev-nix-cache-invalid) | dev | no |
+| [`dev-nix-cache-key-unset`](#error-dev-nix-cache-key-unset) | dev | no |
 | [`dev-nix-crypto-unavailable`](#error-dev-nix-crypto-unavailable) | dev | no |
 | [`dev-nix-gc-failed`](#error-dev-nix-gc-failed) | dev | yes |
 | [`dev-nix-host-unsupported`](#error-dev-nix-host-unsupported) | dev | no |
@@ -305,6 +307,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`gitops-git-failed`](#error-gitops-git-failed) | gitops | yes |
 | [`gitops-image-unpinned`](#error-gitops-image-unpinned) | gitops | no |
 | [`gitops-image-unresolved`](#error-gitops-image-unresolved) | gitops | no |
+| [`gitops-nix-release-failed`](#error-gitops-nix-release-failed) | gitops | yes |
 | [`gitops-not-installed`](#error-gitops-not-installed) | gitops | no |
 | [`gitops-pipeline-invalid`](#error-gitops-pipeline-invalid) | gitops | yes |
 | [`gitops-plan-changed`](#error-gitops-plan-changed) | gitops | yes |
@@ -346,6 +349,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`host-pin-not-found`](#error-host-pin-not-found) | hosts | no |
 | [`host-pinned`](#error-host-pinned) | hosts | no |
 | [`host-pointer-replayed`](#error-host-pointer-replayed) | hosts | no |
+| [`host-promotion-missing`](#error-host-promotion-missing) | hosts | no |
 | [`host-prune-failed`](#error-host-prune-failed) | hosts | yes |
 | [`host-realise-failed`](#error-host-realise-failed) | hosts | yes |
 | [`host-report-failed`](#error-host-report-failed) | hosts | yes |
@@ -389,8 +393,10 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`infra-apply-failed`](#error-infra-apply-failed) | infra | no |
 | [`infra-backend-changed`](#error-infra-backend-changed) | infra | no |
 | [`infra-credential-exists`](#error-infra-credential-exists) | infra | no |
+| [`infra-credential-incomplete`](#error-infra-credential-incomplete) | infra | no |
 | [`infra-credential-invalid`](#error-infra-credential-invalid) | infra | no |
 | [`infra-credential-missing`](#error-infra-credential-missing) | infra | no |
+| [`infra-credential-part-invalid`](#error-infra-credential-part-invalid) | infra | no |
 | [`infra-credential-refused`](#error-infra-credential-refused) | infra | no |
 | [`infra-credential-unsafe`](#error-infra-credential-unsafe) | infra | no |
 | [`infra-dns-api-disabled`](#error-infra-dns-api-disabled) | infra | no |
@@ -413,11 +419,13 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`infra-plan-changed`](#error-infra-plan-changed) | infra | yes |
 | [`infra-prompt-required`](#error-infra-prompt-required) | infra | no |
 | [`infra-register-changed`](#error-infra-register-changed) | infra | yes |
+| [`infra-s3-key-refused`](#error-infra-s3-key-refused) | infra | yes |
 | [`infra-server-unknown`](#error-infra-server-unknown) | infra | no |
 | [`infra-ssh-missing`](#error-infra-ssh-missing) | infra | no |
 | [`infra-ssh-unreachable`](#error-infra-ssh-unreachable) | infra | yes |
 | [`infra-state-in-git`](#error-infra-state-in-git) | infra | no |
 | [`infra-state-locked`](#error-infra-state-locked) | infra | yes |
+| [`infra-state-unencrypted`](#error-infra-state-unencrypted) | infra | no |
 | [`infra-state-unexpected`](#error-infra-state-unexpected) | infra | no |
 | [`infra-tofu-failed`](#error-infra-tofu-failed) | infra | yes |
 | [`infra-tofu-missing`](#error-infra-tofu-missing) | infra | no |
@@ -549,7 +557,17 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`profile-conflict`](#error-profile-conflict) | target | no |
 | [`profile-invalid`](#error-profile-invalid) | target | no |
 | [`profile-not-found`](#error-profile-not-found) | target | no |
+| [`promote-dirty`](#error-promote-dirty) | gitops | yes |
+| [`promote-git-failed`](#error-promote-git-failed) | gitops | yes |
+| [`promote-invalid`](#error-promote-invalid) | gitops | no |
+| [`promote-lock-failed`](#error-promote-lock-failed) | gitops | yes |
+| [`promote-not-in-sync`](#error-promote-not-in-sync) | gitops | yes |
+| [`promote-plan-changed`](#error-promote-plan-changed) | gitops | no |
+| [`promote-push-failed`](#error-promote-push-failed) | gitops | yes |
 | [`promote-refused`](#error-promote-refused) | observe | no |
+| [`promotion-history-unreachable`](#error-promotion-history-unreachable) | gitops | yes |
+| [`promotion-input-missing`](#error-promotion-input-missing) | gitops | no |
+| [`promotion-not-verified`](#error-promotion-not-verified) | gitops | yes |
 | [`provider-error`](#error-provider-error) | kubernetes | yes |
 | [`publish-failed`](#error-publish-failed) | publish | yes |
 | [`publish-input-changed`](#error-publish-input-changed) | publish | no |
@@ -660,8 +678,24 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`secret-source-tool-missing`](#error-secret-source-tool-missing) | secrets | no |
 | [`secret-template-invalid`](#error-secret-template-invalid) | secrets | no |
 | [`secret-unknown-reference`](#error-secret-unknown-reference) | secrets | no |
+| [`secrets-age-missing`](#error-secrets-age-missing) | infra | no |
+| [`secrets-backup-empty`](#error-secrets-backup-empty) | infra | no |
+| [`secrets-backup-exists`](#error-secrets-backup-exists) | infra | no |
+| [`secrets-backup-failed`](#error-secrets-backup-failed) | infra | no |
+| [`secrets-backup-invalid`](#error-secrets-backup-invalid) | infra | no |
+| [`secrets-backup-key-exists`](#error-secrets-backup-key-exists) | infra | no |
+| [`secrets-backup-key-failed`](#error-secrets-backup-key-failed) | infra | yes |
+| [`secrets-backup-key-invalid`](#error-secrets-backup-key-invalid) | infra | no |
+| [`secrets-backup-only-unknown`](#error-secrets-backup-only-unknown) | infra | yes |
+| [`secrets-backup-recipient-invalid`](#error-secrets-backup-recipient-invalid) | infra | no |
+| [`secrets-backup-recipients-missing`](#error-secrets-backup-recipients-missing) | infra | no |
+| [`secrets-backup-single-recipient`](#error-secrets-backup-single-recipient) | infra | no |
 | [`secrets-invalid`](#error-secrets-invalid) | cluster | no |
+| [`secrets-nothing-declared`](#error-secrets-nothing-declared) | infra | yes |
 | [`secrets-prompt-required`](#error-secrets-prompt-required) | cluster | no |
+| [`secrets-restore-archive-invalid`](#error-secrets-restore-archive-invalid) | infra | no |
+| [`secrets-restore-decrypt-failed`](#error-secrets-restore-decrypt-failed) | infra | no |
+| [`secrets-restore-plan-changed`](#error-secrets-restore-plan-changed) | infra | no |
 | [`secrets-token-empty`](#error-secrets-token-empty) | cluster | no |
 | [`secrets-token-refused`](#error-secrets-token-refused) | cluster | no |
 | [`server-target-identity-mismatch`](#error-server-target-identity-mismatch) | kubernetes | no |
@@ -712,6 +746,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`takeover-conflict`](#error-takeover-conflict) | kubernetes | no |
 | [`target-mismatch`](#error-target-mismatch) | kubernetes | no |
 | [`target-refused`](#error-target-refused) | target | no |
+| [`targets-input-required`](#error-targets-input-required) | hosts | no |
 | [`timed-out`](#error-timed-out) | artifacts-delivery | yes |
 | [`too-many-redirects`](#error-too-many-redirects) | artifacts-registry | yes |
 | [`tool-pin-mismatch`](#error-tool-pin-mismatch) | artifacts-input | no |
@@ -4353,6 +4388,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Render from a `release.toml` whose `[images]` or receipts pin every image by digest, or deploy the pipeline with `piceli deploy`.
 - **Retry-safe:** no
 
+(error-gitops-nix-release-failed)=
+### `gitops-nix-release-failed`
+
+**NixRelease publish failed.** The build host that claimed a NixRelease's publish answered `build-failed`: the source could not be fetched at the commit, the tag points at another commit, the Nix build failed, or signing, pushing or uploading the manifest failed. The release stays `failed` with the host's reason and output tail in `piceli gitops status`.
+
+- **Fix:** Read the release's `failure` (`reason`, `log_tail`) in `piceli gitops status --json`, fix the cause (a newer tag publishes again), or retry the same tag with `piceli gitops sync NAME`.
+- **Retry-safe:** yes
+
 (error-gitops-not-installed)=
 ### `gitops-not-installed`
 
@@ -4488,6 +4531,86 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Create a new token and update the `password` of the credentials Secret (`--credentials-secret`, in the controller's namespace) before `expires_at`; the controller reads it on its next poll.
 - **Retry-safe:** no
+
+(error-promote-dirty)=
+### `promote-dirty`
+
+**Working copy has changes.** The flake's working copy has uncommitted changes to tracked files; the promotion commits `flake.lock` alone and refuses to mix them.
+
+- **Fix:** Commit or stash the changes, then plan again.
+- **Retry-safe:** yes
+
+(error-promote-git-failed)=
+### `promote-git-failed`
+
+**Git failed in the working copy.** A Git command in the flake's working copy failed (a fetch from its remote, a commit, a tag).
+
+- **Fix:** Run the same Git operation by hand to see Git's message (remote access, hooks, signing), fix it and retry.
+- **Retry-safe:** yes
+
+(error-promote-invalid)=
+### `promote-invalid`
+
+**Promotion request invalid.** `piceli promote` names a host with no NixRelease in the composition, a NixRelease without `gate=Promotion(...)`, an environment other than the gate's (`--from`), or an unknown `--bump`.
+
+- **Fix:** Name the NixRelease's host, give `--from` the gate's environment and `--bump` major, minor or patch.
+- **Retry-safe:** no
+
+(error-promote-lock-failed)=
+### `promote-lock-failed`
+
+**flake.lock not pinned.** Pinning the input failed: `nix flake lock --override-input` failed, or (without nix) the input could not be cloned, has no such commit, is not a git, github or gitlab input, has submodules or export rules in `.gitattributes`; or the new lock does not pin the commit.
+
+- **Fix:** Install nix (preferred), or give this machine Git access to the input; check that the commit exists in the input's repository.
+- **Retry-safe:** yes
+
+(error-promote-not-in-sync)=
+### `promote-not-in-sync`
+
+**Working copy not in sync with its remote.** The flake's branch is behind, ahead of or diverged from its upstream after a fetch, or it has no upstream (or HEAD is detached). Pushing would lose or publish commits the plan does not show.
+
+- **Fix:** Pull or push until the branch equals its upstream (`git status`), or set one with `git push -u REMOTE BRANCH`, then plan again.
+- **Retry-safe:** yes
+
+(error-promote-plan-changed)=
+### `promote-plan-changed`
+
+**Promotion plan changed.** The `--approve` digest is not the digest of the promotion plan computed now: the environment passed a newer commit, the branch or tags moved, or the computed lock differs.
+
+- **Fix:** Run `piceli promote` without `--approve`, review the new plan and approve its digest.
+- **Retry-safe:** no
+
+(error-promote-push-failed)=
+### `promote-push-failed`
+
+**Promotion push failed.** The commit and the tag were created locally but the atomic push of both to the remote failed (access, a branch protection, a tag that already exists there). The remote is unchanged.
+
+- **Fix:** Fix the remote access and run the `git push --atomic` the message names, or delete the local tag, reset the commit and plan again.
+- **Retry-safe:** yes
+
+(error-promotion-history-unreachable)=
+### `promotion-history-unreachable`
+
+**Environment history unreadable.** The promotion gate could not read the controller's history (`piceli-gitops-history`): the cluster or its credential profile is unreachable, the controller published no history yet, or the document is not `piceli.gitops-history.v1`. The gate fails closed: nothing is published or promoted.
+
+- **Fix:** Check that `piceli gitops status` reaches the controller with the same options (`--kubeconfig`/`--context`, `--state-dir`, or `piceli login` for the composition's cluster), then retry.
+- **Retry-safe:** yes
+
+(error-promotion-input-missing)=
+### `promotion-input-missing`
+
+**Flake input not locked.** The release commit has no `flake.lock`, or its root inputs have no input with the gate's name, or that input is locked to no Git commit (`locked.rev`).
+
+- **Fix:** Fix `Promotion(input=)` to name the input as `flake.nix` does, or commit a `flake.lock` that locks it (`nix flake lock`).
+- **Retry-safe:** no
+
+(error-promotion-not-verified)=
+### `promotion-not-verified`
+
+**Commit not verified by the environment.** A NixRelease with `gate=Promotion(input=, environment=)` was asked to publish a commit whose `flake.lock` pins the input to a commit the environment never ran with its release checks passed (a run that failed, degraded or rolled back does not count, nor one without checks). The controller leaves the release `rejected` and checks again on every poll; a hand-run `dev nix build --publish --release` refuses before any build; `piceli promote` refuses when the environment passed no commit.
+
+- **Fix:** Pin a verified commit: `piceli promote HOST --from ENV` pins the newest commit the environment passed (the refusal's `newest_passed`), or wait until the environment runs the pinned commit with its checks passing.
+- **Retry-safe:** yes
 
 (error-rollout-stopped)=
 ### `rollout-stopped`
@@ -4986,6 +5109,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Read `log_tail` (or `piceli dev logs RUN`), fix the code, run again.
 - **Retry-safe:** yes
 
+(error-dev-host-publish-only)=
+### `dev-host-publish-only`
+
+**The build host only publishes.** `piceli builder serve` ran on a build host declared `BuildHost(..., runs=False)` (0.25.0) without `--publish MODULE:ATTR`, or with `--no-publish-only`: such a host only publishes Nix releases and never takes an image build.
+
+- **Fix:** Run `piceli builder serve --host NAME --publish MODULE:ATTR` on it (`--publish-only` is implied), and serve image builds from another host; or declare it without `runs=False`.
+- **Retry-safe:** no
+
 (error-dev-host-unavailable)=
 ### `dev-host-unavailable`
 
@@ -5013,9 +5144,17 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-dev-nix-cache-invalid)=
 ### `dev-nix-cache-invalid`
 
-**Nix cache declaration refused.** `NixCache` needs a public key `NAME:base64`, one of `bucket=` or `url=` (`s3://`, `file://`, or a read-only `https://`), an S3 endpoint and `credentials=` for an S3 cache; or `--publish` did not name a `NixCache`, or names a read-only cache.
+**Nix cache declaration refused.** `NixCache` needs a public key `NAME:base64` (or `key_name=` until it exists), one of `bucket=` or `url=` (`s3://`, `file://`, or a read-only `https://`), an S3 endpoint and `credentials=` for an S3 cache; or `--publish` did not name a `NixCache`, or names a read-only cache.
 
 - **Fix:** Fix the declaration; publish to the cache's `s3://` or `file://` URL.
+- **Retry-safe:** no
+
+(error-dev-nix-cache-key-unset)=
+### `dev-nix-cache-key-unset`
+
+**Nix cache public key not declared yet.** The `NixCache` names its key with `key_name=` alone (the key does not exist yet), and publishing, `dev nix gc` and a host's module need the public key hosts trust. A `NixRelease` of that cache stays `rejected` with this reason in the controller (its composition still loads), and nothing is published for it.
+
+- **Fix:** Run `piceli secrets setup MODULE` (or `piceli secrets nix-cache NAME --generate`) and put the public key it prints into `NixCache(public_key=)`.
 - **Retry-safe:** no
 
 (error-dev-nix-crypto-unavailable)=
@@ -6198,7 +6337,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Retry-safe:** no
 
 
-## Machines provisioned with OpenTofu (`piceli.infra.Infrastructure`, `piceli infra …`, `piceli secrets provider|state-key`)
+## Machines provisioned with OpenTofu (`piceli.infra.Infrastructure`, `piceli infra …`, `piceli secrets provider|state-key|backup|restore`)
 
 (error-infra-apply-failed)=
 ### `infra-apply-failed`
@@ -6224,10 +6363,18 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Keep the existing key, or pass `--replace` if the state it protected is gone.
 - **Retry-safe:** no
 
+(error-infra-credential-incomplete)=
+### `infra-credential-incomplete`
+
+**Credential lacks a part.** A stored credential holds fewer parts than its provider needs (one part of a Porkbun API key pair, an OpenStack application credential or S3 keys), or another provider's parts. It was refused before any API call.
+
+- **Fix:** Run the command in the message (`piceli secrets provider NAME --prompt`); it replaces the stored credential without a separate delete.
+- **Retry-safe:** no
+
 (error-infra-credential-invalid)=
 ### `infra-credential-invalid`
 
-**Invalid credential.** A credential name is not a valid name, its file is damaged or of another kind, or the value read is empty, has control characters, or is a state passphrase shorter than 16 characters, or an OpenStack credential is not `APPLICATION_CREDENTIAL_ID:SECRET` (a Porkbun one not `APIKEY:SECRETKEY`).
+**Invalid credential.** A credential name is not a valid name, its file is damaged or of another kind, or the value read is empty, has control characters, or is a state passphrase shorter than 16 characters, or `--provider` (or `--infra`) does not name one provider.
 
 - **Fix:** Store the credential again with `piceli secrets provider|state-key NAME --prompt`.
 - **Retry-safe:** no
@@ -6240,12 +6387,20 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Store it: `piceli secrets provider NAME --prompt` for a token, `piceli secrets state-key NAME --generate` (or `--prompt`) for a state passphrase.
 - **Retry-safe:** no
 
+(error-infra-credential-part-invalid)=
+### `infra-credential-part-invalid`
+
+**Credential part refused.** One part of a credential (named in `part`: `api_key`, `secret_api_key`, `application_credential_id`, `application_credential_secret`, `access_key_id`, `secret_access_key`, `token`) is empty, has a space around it, holds a `:` (two parts pasted as one `ID:SECRET` line), is not the provider's shape (a Porkbun API key starts with `pk1_`, its secret API key with `sk1_`; an OpenStack application credential ID is 32 hex characters), is the other part pasted in its place, or its variable is not set (`--from-env`). The value is not printed; nothing was stored.
+
+- **Fix:** Run `piceli secrets provider NAME --prompt` (or `piceli secrets s3 NAME --prompt`) again and give each part on its own line, as its prompt names it.
+- **Retry-safe:** no
+
 (error-infra-credential-refused)=
 ### `infra-credential-refused`
 
-**Secret passed the unsafe way.** A secret was given as a command-line argument or in the environment (`HCLOUD_TOKEN`, `OS_APPLICATION_CREDENTIAL_SECRET`, `PORKBUN_API_KEY`, `PORKBUN_SECRET_API_KEY`, `PICELI_PROVIDER_TOKEN`, `PICELI_STATE_KEY`), where it leaks into process listings and logs. It was not stored or echoed.
+**Secret passed the unsafe way.** A secret was given as a command-line argument, or is in the environment (`HCLOUD_TOKEN`, `OS_APPLICATION_CREDENTIAL_SECRET`, `PORKBUN_API_KEY`, `PORKBUN_SECRET_API_KEY`, `PICELI_PROVIDER_TOKEN`, `PICELI_STATE_KEY`) without `--from-env`, where it leaks into process listings and logs. It was not stored or echoed.
 
-- **Fix:** Unset the variable and run `piceli secrets provider|state-key NAME --prompt`, then type the value (or pipe it on stdin).
+- **Fix:** Unset the variable and run `piceli secrets provider|state-key NAME --prompt`, then type the value (or pipe it on stdin); for a script, `piceli secrets provider NAME --from-env` reads the provider's own variables on purpose.
 - **Retry-safe:** no
 
 (error-infra-credential-unsafe)=
@@ -6403,7 +6558,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-infra-prompt-required)=
 ### `infra-prompt-required`
 
-**Secret source not chosen.** `piceli secrets provider` needs `--prompt`; `piceli secrets state-key` needs exactly one of `--prompt` or `--generate`.
+**Secret source not chosen.** `piceli secrets provider` needs exactly one of `--prompt` or `--from-env`; `piceli secrets state-key` needs exactly one of `--prompt` or `--generate`.
 
 - **Fix:** Add `--prompt` (and type the value, or pipe it on stdin) or `--generate`.
 - **Retry-safe:** no
@@ -6414,6 +6569,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Registration changed since approval.** The host keys, the kubeconfig or the profile that `register` would write are not those approved, or the digest is wrong. A changed host key can mean another machine answers at that address.
 
 - **Fix:** Run `piceli infra register MODULE:ATTR SERVER` again, check the fingerprints, and approve the new digest.
+- **Retry-safe:** yes
+
+(error-infra-s3-key-refused)=
+### `infra-s3-key-refused`
+
+**Cloud refused to create S3 keys.** OpenStack's identity service refused to create an EC2 credential (S3 keys) with the provider's application credential. Since Keystone's OSSA-2026-005 fix, a restricted application credential (the default) may not create EC2 credentials.
+
+- **Fix:** Create an unrestricted application credential and store it (`piceli secrets provider NAME --prompt`), then plan again; or remove `keys=`, create the keys yourself (`openstack ec2 credentials create`) and store them with `piceli secrets s3 NAME --prompt`.
 - **Retry-safe:** yes
 
 (error-infra-server-unknown)=
@@ -6456,6 +6619,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Wait for the other command to end, then run this one again.
 - **Retry-safe:** yes
 
+(error-infra-state-unencrypted)=
+### `infra-state-unencrypted`
+
+**S3 keys need an encrypted state.** The declaration has `Bucket(keys=[S3Key(...)])`: their secrets go into the OpenTofu state and plan files, and the encryption configuration does not encrypt and enforce both.
+
+- **Fix:** Run it through `piceli infra plan` and `apply`, which always encrypt the state with `Infrastructure(state_key=)`; or remove `keys=` and store keys yourself with `piceli secrets s3 NAME --prompt`.
+- **Retry-safe:** no
+
 (error-infra-state-unexpected)=
 ### `infra-state-unexpected`
 
@@ -6495,6 +6666,134 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Store it, then plan again: `piceli secrets user-data NAME --file PATH` (or `--prompt`). For a bootstrap key, mint a single-use key that expires within the hour just before.
 - **Retry-safe:** yes
+
+(error-secrets-age-missing)=
+### `secrets-age-missing`
+
+**age is not installed.** `piceli secrets backup|restore` encrypt and decrypt with the `age` command (the standard age format, plugins for hardware keys), and it is not on `PATH` or at `$PICELI_AGE`; `piceli secrets backup-key` needs `age-keygen` (`$PICELI_AGE_KEYGEN`, next to `$PICELI_AGE`, or on `PATH`).
+
+- **Fix:** Install age (`nix profile install nixpkgs#age`, `brew install age`, `apt install age`) or set `PICELI_AGE` to its path.
+- **Retry-safe:** no
+
+(error-secrets-backup-empty)=
+### `secrets-backup-empty`
+
+**Secret store empty.** `$PICELI_CREDENTIALS_DIR` holds no file, so there is nothing to back up.
+
+- **Fix:** Store a credential first (`piceli secrets provider|state-key|...`), or point `PICELI_CREDENTIALS_DIR` at the store.
+- **Retry-safe:** no
+
+(error-secrets-backup-exists)=
+### `secrets-backup-exists`
+
+**Backup file exists.** `piceli secrets backup --to PATH` never replaces an existing file on its own.
+
+- **Fix:** Choose another path, or pass `--force` to replace it.
+- **Retry-safe:** no
+
+(error-secrets-backup-failed)=
+### `secrets-backup-failed`
+
+**age refused to encrypt.** age exited with an error: a recipient it cannot use (a missing plugin such as `age-plugin-yubikey`) or a write error. Nothing was written.
+
+- **Fix:** Check the recipients and that each plugin is on `PATH`, then run the backup again.
+- **Retry-safe:** no
+
+(error-secrets-backup-invalid)=
+### `secrets-backup-invalid`
+
+**Backup destination refused.** The backup would be written inside the secret store or the profiles, or its directory does not exist.
+
+- **Fix:** Choose a file outside the store in an existing directory (an external drive, a synced folder).
+- **Retry-safe:** no
+
+(error-secrets-backup-key-exists)=
+### `secrets-backup-key-exists`
+
+**Offline key file exists.** `piceli secrets backup-key --out PATH` never replaces an existing file on its own: it may be the only copy of a key.
+
+- **Fix:** Choose another path, or pass `--force` once you are sure the old key is not needed.
+- **Retry-safe:** no
+
+(error-secrets-backup-key-failed)=
+### `secrets-backup-key-failed`
+
+**Offline key not created.** `age-keygen` exited with an error or printed no key. Nothing was written.
+
+- **Fix:** Check the age installation (`age-keygen` on `PATH`, or `PICELI_AGE_KEYGEN`), then run the command again.
+- **Retry-safe:** yes
+
+(error-secrets-backup-key-invalid)=
+### `secrets-backup-key-invalid`
+
+**Offline key destination refused.** `piceli secrets backup-key --out PATH` would write the key inside the secret store or the profiles it protects, or PATH's directory does not exist. Nothing was written.
+
+- **Fix:** Choose a path outside the store in an existing directory (a USB drive), or one you delete after printing the key.
+- **Retry-safe:** no
+
+(error-secrets-backup-only-unknown)=
+### `secrets-backup-only-unknown`
+
+**Credential to transfer not found.** `piceli secrets backup --only NAME` named a credential the store does not hold (only `NAME.json` credentials of `$PICELI_CREDENTIALS_DIR` can be named). Nothing was written.
+
+- **Fix:** Check the names with `piceli secrets status MODULE`; create a missing one first (its `next` command), then run the transfer again.
+- **Retry-safe:** yes
+
+(error-secrets-backup-recipient-invalid)=
+### `secrets-backup-recipient-invalid`
+
+**Backup recipient not a public key.** A recipient is not an age (`age1...`, `age1yubikey1...`) or SSH (`ssh-ed25519 ...`, `ssh-rsa ...`) public key, or the recipients file is unreadable. The value is not printed: a pasted identity must not reach a log.
+
+- **Fix:** Pass the public key (`age-keygen -y KEY`, `age-plugin-yubikey --list`), never an identity.
+- **Retry-safe:** no
+
+(error-secrets-backup-recipients-missing)=
+### `secrets-backup-recipients-missing`
+
+**No backup recipients.** `piceli secrets backup` got no `--recipient` or `--recipients-file`, and no earlier backup remembered any.
+
+- **Fix:** Pass `--recipient age1...` (repeatable, at least two keys kept apart: `piceli secrets backup-key --out PATH --add` creates the offline one) or `--recipients-file FILE`; later backups reuse them.
+- **Retry-safe:** no
+
+(error-secrets-backup-single-recipient)=
+### `secrets-backup-single-recipient`
+
+**Backup for one recipient.** `piceli secrets backup` got a single recipient: losing that one key loses the secret store and its backup together. Nothing was written.
+
+- **Fix:** Add a second recipient kept apart: an offline age key (`piceli secrets backup-key --out PATH --add`, kept on paper or USB) or an `age-plugin-yubikey` identity, next to the age key in your password manager. To accept one recipient anyway, pass `--single-recipient` (recorded in the backup and its marker).
+- **Retry-safe:** no
+
+(error-secrets-nothing-declared)=
+### `secrets-nothing-declared`
+
+**No declaration that needs secrets.** `piceli secrets status` or `setup` got a module (or `MODULE:ATTR`) that declares no `Infrastructure`, `Bucket`, `NixCache`, `NixHost`, `NixRelease`, `DevBuilds` or `Cluster`. Nothing was read or stored.
+
+- **Fix:** Name the module that declares them (`piceli secrets status web_1.py`), or the attribute of one declaration (`web_1.py:host`).
+- **Retry-safe:** yes
+
+(error-secrets-restore-archive-invalid)=
+### `secrets-restore-archive-invalid`
+
+**Backup archive refused.** The file is missing, is not a Piceli secret-store backup, or holds an unsafe member (an absolute path, `..`, a link, a special file, a name twice, a file outside the store). Nothing was written.
+
+- **Fix:** Restore from a file written by `piceli secrets backup`; never extract a crafted archive into the store.
+- **Retry-safe:** no
+
+(error-secrets-restore-decrypt-failed)=
+### `secrets-restore-decrypt-failed`
+
+**Backup not decrypted.** age could not decrypt the backup: the identity is not one of its recipients, the passphrase or hardware key was refused, or the file is damaged. Nothing was written.
+
+- **Fix:** Pass `--identity FILE` with a key the backup was made for (or plug in the hardware key with its plugin on `PATH`).
+- **Retry-safe:** no
+
+(error-secrets-restore-plan-changed)=
+### `secrets-restore-plan-changed`
+
+**Restore plan changed.** `--approve` does not match the restore plan of this archive and this store: the store or the archive changed since the plan was shown.
+
+- **Fix:** Run `piceli secrets restore PATH` without `--approve` and approve the digest it prints.
+- **Retry-safe:** no
 
 
 ## Nix host releases (`piceli.infra.NixHost`, the host agent, `piceli host …`)
@@ -6635,6 +6934,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Publish the build again (a new pointer is newer); check who can write to the cache.
 - **Retry-safe:** no
 
+(error-host-promotion-missing)=
+### `host-promotion-missing`
+
+**Build without its verified pin.** The host declares `gate=Promotion(...)` and the build's signed manifest carries no `pinned` of that input and environment: it was published without the promotion gate (an older Piceli, or a publish that skipped it). The agent does not switch to it.
+
+- **Fix:** Publish the build through the gate: the controller's `NixRelease`, or `piceli dev nix build --publish` of the gated host (the gate runs automatically), after `piceli promote HOST --from ENV` pinned a verified commit.
+- **Retry-safe:** no
+
 (error-host-prune-failed)=
 ### `host-prune-failed`
 
@@ -6710,9 +7017,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-host-secret-undeclared)=
 ### `host-secret-undeclared`
 
-**Host declares no age identity.** `piceli host secrets` needs a `NixHost` with `age_identity=` (a credential from `piceli secrets age NAME --generate`).
+**Host declares no secret to install.** `piceli host secrets` needs a `NixHost` with `age_identity=` (a credential from `piceli secrets age NAME --generate`) or a cache whose bucket declares `S3Key(access="read")` (0.25.0).
 
-- **Fix:** Declare `NixHost(age_identity=NAME)` and give the `NixHost` (`MODULE:ATTR`).
+- **Fix:** Declare `NixHost(age_identity=NAME)` or the bucket's read key, and give the `NixHost` (`MODULE:ATTR`).
 - **Retry-safe:** no
 
 (error-host-secret-write-failed)=
@@ -6770,3 +7077,11 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Check `piceli host status`, that the build was published (`piceli dev nix build --publish`) and its pointer names the ref the host follows; wait longer.
 - **Retry-safe:** yes
+
+(error-targets-input-required)=
+### `targets-input-required`
+
+**No targets named.** `piceli targets` was given no module and no controller, so it has nothing to show.
+
+- **Fix:** Pass `--composition MODULE` (environments and NixReleases), `--infra MODULE` (NixHosts and their servers) and, to read another controller than the composition's home cluster's (its `piceli login` profile), `--kubeconfig FILE --context NAME` or `--state-dir`.
+- **Retry-safe:** no

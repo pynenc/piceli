@@ -1055,15 +1055,24 @@
   "Bucket": {
    "attrs": [
     "describe",
+    "key",
+    "keys",
     "protect"
    ],
    "init": [
+    "keys",
     "name",
     "protect",
     "provider"
    ],
    "methods": {
-    "describe": []
+    "describe": [],
+    "key": [
+     "access"
+    ]
+   },
+   "returns": {
+    "key": "S3Key"
    }
   },
   "Build": {
@@ -1183,6 +1192,7 @@
     "quarantine_after",
     "quarantine_policy",
     "quarantine_window",
+    "runs",
     "slots",
     "state_dir"
    ],
@@ -1198,6 +1208,7 @@
     "platforms",
     "quarantine_after",
     "quarantine_window",
+    "runs",
     "slots",
     "state_dir"
    ],
@@ -4288,6 +4299,7 @@
     "default_ttl",
     "describe",
     "endpoint",
+    "hides_id",
     "known_error",
     "labels_of",
     "ledger_owned",
@@ -4306,16 +4318,20 @@
     "render_primary_ip",
     "render_record",
     "render_records",
+    "render_s3_key",
     "render_server",
     "render_ssh_key",
     "render_user_data",
     "resource_labels",
+    "s3_key_enforcement",
+    "s3_key_values",
     "server_id",
     "server_status",
     "server_types",
     "supports_buckets",
     "supports_dns",
     "supports_images",
+    "supports_s3_keys",
     "supports_servers",
     "supports_user_data",
     "token_env"
@@ -4336,10 +4352,13 @@
      "server"
     ],
     "credential_env": [
-     "value"
+     "parts"
     ],
     "data_sources": [],
     "describe": [],
+    "hides_id": [
+     "type_"
+    ],
     "known_error": [
      "diagnostics"
     ],
@@ -4392,6 +4411,11 @@
      "record",
      "values"
     ],
+    "render_s3_key": [
+     "bucket",
+     "key",
+     "labels"
+    ],
     "render_server": [
      "firewall",
      "ips",
@@ -4413,6 +4437,12 @@
      "type_",
      "values"
     ],
+    "s3_key_enforcement": [
+     "key"
+    ],
+    "s3_key_values": [
+     "values"
+    ],
     "server_id": [
      "server"
     ],
@@ -4432,6 +4462,7 @@
     "render_primary_ip": "Resource",
     "render_record": "Resource",
     "render_records": "Resource",
+    "render_s3_key": "Resource",
     "render_server": "Resource",
     "render_ssh_key": "Resource",
     "render_user_data": "Resource"
@@ -4919,6 +4950,7 @@
     "default_ttl",
     "describe",
     "flavors",
+    "hides_id",
     "ip_prices",
     "known_error",
     "labels_of",
@@ -4941,15 +4973,19 @@
     "render_primary_ip",
     "render_record",
     "render_records",
+    "render_s3_key",
     "render_server",
     "render_ssh_key",
     "render_user_data",
     "resource_labels",
+    "s3_key_enforcement",
+    "s3_key_values",
     "server_id",
     "server_status",
     "supports_buckets",
     "supports_dns",
     "supports_images",
+    "supports_s3_keys",
     "supports_servers",
     "supports_user_data",
     "token_env"
@@ -4973,10 +5009,13 @@
      "server"
     ],
     "credential_env": [
-     "value"
+     "parts"
     ],
     "data_sources": [],
     "describe": [],
+    "hides_id": [
+     "type_"
+    ],
     "known_error": [
      "diagnostics"
     ],
@@ -5029,6 +5068,11 @@
      "record",
      "values"
     ],
+    "render_s3_key": [
+     "bucket",
+     "key",
+     "labels"
+    ],
     "render_server": [
      "firewall",
      "ips",
@@ -5050,6 +5094,12 @@
      "type_",
      "values"
     ],
+    "s3_key_enforcement": [
+     "key"
+    ],
+    "s3_key_values": [
+     "values"
+    ],
     "server_id": [
      "server"
     ],
@@ -5069,6 +5119,7 @@
     "render_primary_ip": "Resource",
     "render_record": "Resource",
     "render_records": "Resource",
+    "render_s3_key": "Resource",
     "render_server": "Resource",
     "render_ssh_key": "Resource",
     "render_user_data": "Resource"
@@ -5101,6 +5152,7 @@
     "images",
     "providers",
     "records",
+    "s3_keys",
     "server",
     "servers",
     "state_dir",
@@ -5121,6 +5173,7 @@
     "firewalls": [],
     "images": [],
     "providers": [],
+    "s3_keys": [],
     "server": [
      "name"
     ]
@@ -5931,22 +5984,27 @@
    "attrs": [
     "bucket",
     "bucket_name",
+    "creates",
     "describe",
     "endpoint",
     "key_name",
+    "key_set",
     "manifest_url",
     "public_key",
+    "read_credentials",
     "region",
     "scheme",
     "signing_credential",
     "signing_key",
     "store_url",
+    "trusted_key",
     "url",
     "write_credentials"
    ],
    "init": [
     "bucket",
     "endpoint",
+    "key_name",
     "public_key",
     "region",
     "signing_key",
@@ -5954,11 +6012,15 @@
     "write_credentials"
    ],
    "methods": {
+    "creates": [
+     "credential"
+    ],
     "describe": [],
     "manifest_url": [
      "commit",
      "name"
-    ]
+    ],
+    "trusted_key": []
    }
   },
   "NixHost": {
@@ -5973,9 +6035,11 @@
     "attribute",
     "build",
     "cache",
+    "cache_credentials",
     "checks",
     "flake",
     "follow",
+    "gate",
     "generations",
     "history",
     "name",
@@ -5993,6 +6057,7 @@
     "checks",
     "flake",
     "follow",
+    "gate",
     "generations",
     "history",
     "name",
@@ -6008,6 +6073,30 @@
    },
    "returns": {
     "ssh_target": "SshTarget"
+   }
+  },
+  "NixRelease": {
+   "attrs": [
+    "auto_approve",
+    "builder",
+    "gate",
+    "host",
+    "name",
+    "source",
+    "target"
+   ],
+   "init": [
+    "auto_approve",
+    "builder",
+    "gate",
+    "host",
+    "source"
+   ],
+   "methods": {
+    "target": []
+   },
+   "returns": {
+    "target": "ReleaseTarget"
    }
   },
   "Node": {
@@ -6463,6 +6552,7 @@
     "default_ttl",
     "describe",
     "flavors",
+    "hides_id",
     "ip_prices",
     "known_error",
     "labels_of",
@@ -6485,15 +6575,19 @@
     "render_primary_ip",
     "render_record",
     "render_records",
+    "render_s3_key",
     "render_server",
     "render_ssh_key",
     "render_user_data",
     "resource_labels",
+    "s3_key_enforcement",
+    "s3_key_values",
     "server_id",
     "server_status",
     "supports_buckets",
     "supports_dns",
     "supports_images",
+    "supports_s3_keys",
     "supports_servers",
     "supports_user_data",
     "token_env"
@@ -6517,10 +6611,13 @@
      "server"
     ],
     "credential_env": [
-     "value"
+     "parts"
     ],
     "data_sources": [],
     "describe": [],
+    "hides_id": [
+     "type_"
+    ],
     "known_error": [
      "diagnostics"
     ],
@@ -6573,6 +6670,11 @@
      "record",
      "values"
     ],
+    "render_s3_key": [
+     "bucket",
+     "key",
+     "labels"
+    ],
     "render_server": [
      "firewall",
      "ips",
@@ -6594,6 +6696,12 @@
      "type_",
      "values"
     ],
+    "s3_key_enforcement": [
+     "key"
+    ],
+    "s3_key_values": [
+     "values"
+    ],
     "server_id": [
      "server"
     ],
@@ -6613,6 +6721,7 @@
     "render_primary_ip": "Resource",
     "render_record": "Resource",
     "render_records": "Resource",
+    "render_s3_key": "Resource",
     "render_server": "Resource",
     "render_ssh_key": "Resource",
     "render_user_data": "Resource"
@@ -7324,6 +7433,7 @@
     "data_sources",
     "default_ttl",
     "describe",
+    "hides_id",
     "known_error",
     "labels_of",
     "ledger_owned",
@@ -7341,15 +7451,19 @@
     "render_primary_ip",
     "render_record",
     "render_records",
+    "render_s3_key",
     "render_server",
     "render_ssh_key",
     "render_user_data",
     "resource_labels",
+    "s3_key_enforcement",
+    "s3_key_values",
     "server_id",
     "server_status",
     "supports_buckets",
     "supports_dns",
     "supports_images",
+    "supports_s3_keys",
     "supports_servers",
     "supports_user_data",
     "token_env"
@@ -7367,10 +7481,13 @@
      "server"
     ],
     "credential_env": [
-     "value"
+     "parts"
     ],
     "data_sources": [],
     "describe": [],
+    "hides_id": [
+     "type_"
+    ],
     "known_error": [
      "diagnostics"
     ],
@@ -7424,6 +7541,11 @@
      "record",
      "values"
     ],
+    "render_s3_key": [
+     "bucket",
+     "key",
+     "labels"
+    ],
     "render_server": [
      "firewall",
      "ips",
@@ -7445,6 +7567,12 @@
      "type_",
      "values"
     ],
+    "s3_key_enforcement": [
+     "key"
+    ],
+    "s3_key_values": [
+     "values"
+    ],
     "server_id": [
      "server"
     ],
@@ -7464,6 +7592,7 @@
     "render_primary_ip": "Resource",
     "render_record": "Resource",
     "render_records": "Resource",
+    "render_s3_key": "Resource",
     "render_server": "Resource",
     "render_ssh_key": "Resource",
     "render_user_data": "Resource"
@@ -7602,6 +7731,30 @@
    "init": [],
    "methods": {
     "describe": []
+   }
+  },
+  "Promotion": {
+   "attrs": [
+    "environment",
+    "from_dict",
+    "input",
+    "source",
+    "source_key",
+    "to_dict"
+   ],
+   "init": [
+    "environment",
+    "input",
+    "source"
+   ],
+   "methods": {
+    "from_dict": [
+     "value"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "from_dict": "Promotion"
    }
   },
   "PythonCheck": {
@@ -8324,6 +8477,53 @@
    "methods": {},
    "pydantic": true
   },
+  "ReleaseTarget": {
+   "attrs": [
+    "attribute",
+    "auto_approve",
+    "build",
+    "builder",
+    "from_dict",
+    "gate",
+    "key_unset",
+    "latest",
+    "name",
+    "pattern",
+    "prereleases",
+    "public_key",
+    "source",
+    "store_url",
+    "to_dict",
+    "version"
+   ],
+   "init": [
+    "attribute",
+    "auto_approve",
+    "build",
+    "builder",
+    "gate",
+    "key_unset",
+    "name",
+    "pattern",
+    "prereleases",
+    "public_key",
+    "source",
+    "store_url"
+   ],
+   "methods": {
+    "from_dict": [
+     "sources",
+     "value"
+    ],
+    "latest": [
+     "tags"
+    ],
+    "to_dict": [],
+    "version": [
+     "tag"
+    ]
+   }
+  },
   "ReleaseWorkflow": {
    "attr_types": {
     "authorization_factory": "DeploymentPlan",
@@ -9010,6 +9210,20 @@
    "returns": {
     "capture": "RunResult",
     "feed": "RunResult"
+   }
+  },
+  "S3Key": {
+   "attrs": [
+    "access",
+    "describe",
+    "name"
+   ],
+   "init": [
+    "access",
+    "name"
+   ],
+   "methods": {
+    "describe": []
    }
   },
   "Scaling": {
@@ -10643,6 +10857,7 @@
      "state",
      "status",
      "support-bundle",
+     "targets",
      "ui",
      "watch"
     ]
@@ -10944,8 +11159,11 @@
      "--image",
      "--json",
      "--namespace",
+     "--no-publish-only",
      "--once",
      "--poll",
+     "--publish",
+     "--publish-only",
      "--state-dir",
      "--transport"
     ],
@@ -11248,17 +11466,24 @@
      "--artifacts-dir",
      "--branch",
      "--cluster",
+     "--composition",
+     "--context",
      "--dev",
      "--host",
      "--image",
      "--json",
+     "--kubeconfig",
      "--name",
+     "--namespace",
      "--profile",
      "--publish",
      "--queue-timeout",
      "--quiet",
      "--ref",
+     "--release",
      "--repo",
+     "--state-dir",
+     "--tag-pattern",
      "--worktree"
     ],
     "subcommands": []
@@ -11272,7 +11497,8 @@
      "--json",
      "--keep-tags",
      "--main",
-     "--repo"
+     "--repo",
+     "--tag-pattern"
     ],
     "subcommands": []
    },
@@ -12221,9 +12447,16 @@
      "source"
     ],
     "flags": [
+     "--approve",
+     "--bump",
+     "--composition",
      "--context",
+     "--from",
+     "--infra",
+     "--json",
      "--kubeconfig",
      "--namespace",
+     "--repo",
      "--state-dir",
      "--transport"
     ],
@@ -12554,13 +12787,18 @@
     "flags": [],
     "subcommands": [
      "age",
+     "backup",
+     "backup-key",
      "cluster",
      "delete",
      "git",
      "nix-cache",
      "provider",
+     "restore",
      "s3",
+     "setup",
      "state-key",
+     "status",
      "user-data"
     ]
    },
@@ -12572,6 +12810,29 @@
      "--generate",
      "--prompt",
      "--replace"
+    ],
+    "subcommands": []
+   },
+   "secrets backup": {
+    "arguments": [],
+    "flags": [
+     "--force",
+     "--json",
+     "--only",
+     "--recipient",
+     "--recipients-file",
+     "--single-recipient",
+     "--to"
+    ],
+    "subcommands": []
+   },
+   "secrets backup-key": {
+    "arguments": [],
+    "flags": [
+     "--add",
+     "--force",
+     "--json",
+     "--out"
     ],
     "subcommands": []
    },
@@ -12629,7 +12890,21 @@
      "name"
     ],
     "flags": [
-     "--prompt"
+     "--from-env",
+     "--infra",
+     "--prompt",
+     "--provider"
+    ],
+    "subcommands": []
+   },
+   "secrets restore": {
+    "arguments": [
+     "path"
+    ],
+    "flags": [
+     "--approve",
+     "--identity",
+     "--json"
     ],
     "subcommands": []
    },
@@ -12638,7 +12913,18 @@
      "name"
     ],
     "flags": [
+     "--from-env",
      "--prompt"
+    ],
+    "subcommands": []
+   },
+   "secrets setup": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--json",
+     "--yes"
     ],
     "subcommands": []
    },
@@ -12650,6 +12936,15 @@
      "--generate",
      "--prompt",
      "--replace"
+    ],
+    "subcommands": []
+   },
+   "secrets status": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--json"
     ],
     "subcommands": []
    },
@@ -12729,6 +13024,21 @@
      "--log-lines",
      "--namespace",
      "--out",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "targets": {
+    "arguments": [],
+    "flags": [
+     "--composition",
+     "--context",
+     "--infra",
+     "--json",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--timeout",
      "--transport"
     ],
     "subcommands": []
@@ -13085,10 +13395,12 @@
    "deploy-stage-unknown",
    "dev-cache-clear-failed",
    "dev-command-failed",
+   "dev-host-publish-only",
    "dev-host-unavailable",
    "dev-host-unknown",
    "dev-isolation-not-enforced",
    "dev-nix-cache-invalid",
+   "dev-nix-cache-key-unset",
    "dev-nix-crypto-unavailable",
    "dev-nix-gc-failed",
    "dev-nix-host-unsupported",
@@ -13200,6 +13512,7 @@
    "gitops-git-failed",
    "gitops-image-unpinned",
    "gitops-image-unresolved",
+   "gitops-nix-release-failed",
    "gitops-not-installed",
    "gitops-pipeline-invalid",
    "gitops-plan-changed",
@@ -13241,6 +13554,7 @@
    "host-pin-not-found",
    "host-pinned",
    "host-pointer-replayed",
+   "host-promotion-missing",
    "host-prune-failed",
    "host-realise-failed",
    "host-report-failed",
@@ -13284,8 +13598,10 @@
    "infra-apply-failed",
    "infra-backend-changed",
    "infra-credential-exists",
+   "infra-credential-incomplete",
    "infra-credential-invalid",
    "infra-credential-missing",
+   "infra-credential-part-invalid",
    "infra-credential-refused",
    "infra-credential-unsafe",
    "infra-dns-api-disabled",
@@ -13308,11 +13624,13 @@
    "infra-plan-changed",
    "infra-prompt-required",
    "infra-register-changed",
+   "infra-s3-key-refused",
    "infra-server-unknown",
    "infra-ssh-missing",
    "infra-ssh-unreachable",
    "infra-state-in-git",
    "infra-state-locked",
+   "infra-state-unencrypted",
    "infra-state-unexpected",
    "infra-tofu-failed",
    "infra-tofu-missing",
@@ -13444,7 +13762,17 @@
    "profile-conflict",
    "profile-invalid",
    "profile-not-found",
+   "promote-dirty",
+   "promote-git-failed",
+   "promote-invalid",
+   "promote-lock-failed",
+   "promote-not-in-sync",
+   "promote-plan-changed",
+   "promote-push-failed",
    "promote-refused",
+   "promotion-history-unreachable",
+   "promotion-input-missing",
+   "promotion-not-verified",
    "provider-error",
    "publish-failed",
    "publish-input-changed",
@@ -13555,8 +13883,24 @@
    "secret-source-tool-missing",
    "secret-template-invalid",
    "secret-unknown-reference",
+   "secrets-age-missing",
+   "secrets-backup-empty",
+   "secrets-backup-exists",
+   "secrets-backup-failed",
+   "secrets-backup-invalid",
+   "secrets-backup-key-exists",
+   "secrets-backup-key-failed",
+   "secrets-backup-key-invalid",
+   "secrets-backup-only-unknown",
+   "secrets-backup-recipient-invalid",
+   "secrets-backup-recipients-missing",
+   "secrets-backup-single-recipient",
    "secrets-invalid",
+   "secrets-nothing-declared",
    "secrets-prompt-required",
+   "secrets-restore-archive-invalid",
+   "secrets-restore-decrypt-failed",
+   "secrets-restore-plan-changed",
    "secrets-token-empty",
    "secrets-token-refused",
    "server-target-identity-mismatch",
@@ -13607,6 +13951,7 @@
    "takeover-conflict",
    "target-mismatch",
    "target-refused",
+   "targets-input-required",
    "timed-out",
    "too-many-redirects",
    "tool-pin-mismatch",
@@ -14545,6 +14890,9 @@
    "NixHost": {
     "class": "NixHost"
    },
+   "NixRelease": {
+    "class": "NixRelease"
+   },
    "Node": {
     "class": "Node"
    },
@@ -14560,8 +14908,14 @@
    "PrimaryIp": {
     "class": "PrimaryIp"
    },
+   "Promotion": {
+    "class": "Promotion"
+   },
    "Rule": {
     "class": "Rule"
+   },
+   "S3Key": {
+    "class": "S3Key"
    },
    "Server": {
     "class": "Server"
@@ -15448,10 +15802,12 @@
   "piceli.infra.contract",
   "piceli.infra.controller",
   "piceli.infra.machines",
+  "piceli.infra.machines.credential_parts",
   "piceli.infra.machines.credentials",
   "piceli.infra.machines.hetzner",
   "piceli.infra.machines.images",
   "piceli.infra.machines.install",
+  "piceli.infra.machines.keys",
   "piceli.infra.machines.model",
   "piceli.infra.machines.openstack",
   "piceli.infra.machines.plan",
@@ -15459,11 +15815,16 @@
   "piceli.infra.machines.provider",
   "piceli.infra.machines.register",
   "piceli.infra.machines.render",
+  "piceli.infra.machines.secrets_backup",
+  "piceli.infra.machines.secrets_status",
   "piceli.infra.machines.state",
   "piceli.infra.machines.status",
   "piceli.infra.machines.tofu",
   "piceli.infra.multicluster",
+  "piceli.infra.nix_releases",
   "piceli.infra.pipelines",
+  "piceli.infra.promote",
+  "piceli.infra.promotion",
   "piceli.infra.provenance",
   "piceli.infra.remote_builds",
   "piceli.infra.render",
@@ -15499,12 +15860,16 @@
   "piceli.k8s.cli.observe",
   "piceli.k8s.cli.operator",
   "piceli.k8s.cli.profiles",
+  "piceli.k8s.cli.promote",
   "piceli.k8s.cli.publish",
   "piceli.k8s.cli.registry",
   "piceli.k8s.cli.release",
   "piceli.k8s.cli.render",
   "piceli.k8s.cli.restore",
+  "piceli.k8s.cli.secrets_backup",
+  "piceli.k8s.cli.secrets_status",
   "piceli.k8s.cli.state",
+  "piceli.k8s.cli.targets",
   "piceli.k8s.cli.ui",
   "piceli.k8s.cli.ui_forward",
   "piceli.k8s.cli.ui_remote",
@@ -15662,6 +16027,7 @@
   "piceli.state.errors",
   "piceli.state.scopes",
   "piceli.state.snapshot",
+  "piceli.targets",
   "piceli.telemetry",
   "piceli.tempfiles",
   "piceli.testing",
@@ -15700,5 +16066,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.24.0"
+ "version": "0.25.0"
 }

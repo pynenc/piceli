@@ -88,7 +88,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli host module`](#cli-host-module) | Render the NixOS module that installs the host agent (commit it, import it). | none | no |
 | [`piceli host pin`](#cli-host-pin) | Deploy a tag's build (an older one too) and hold it: no newer build until unpin. | none | no |
 | [`piceli host rollback`](#cli-host-rollback) | Switch back to the previous system (in the store) and hold it until unpin. | none | no |
-| [`piceli host secrets`](#cli-host-secrets) | Put the host's age identity where sops-nix reads it: plan, then --approve. | none | yes |
+| [`piceli host secrets`](#cli-host-secrets) | Put the host's age identity where sops-nix reads it, and the cache's read keys Piceli created where the agent reads them: plan, then --approve. | none | yes |
 | [`piceli host status`](#cli-host-status) | Read the host agent's status over SSH (current build, last attempt, checks). | none | no |
 | [`piceli host unpin`](#cli-host-unpin) | Drop a pin or rollback hold: the host follows its declared ref again. | none | no |
 | [`piceli host wait`](#cli-host-wait) | Wait until the host runs REV with its checks passed (exit 1: failed or timeout). | none | no |
@@ -122,7 +122,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli operator serve`](#cli-operator-serve) | Launch the Piceli Operator dashboard and unified REST API. | reads | no |
 | [`piceli operator status`](#cli-operator-status) | Print classified operator inventory: managed, unmanaged, unknown, and releases. | reads | no |
 | [`piceli profiles`](#cli-profiles) | List the stored credential profiles (references only, never secrets). | none | no |
-| [`piceli promote`](#cli-promote) | Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV. | writes | no |
+| [`piceli promote`](#cli-promote) | Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV; with --from, pin a verified commit in a NixRelease's flake and tag it. | writes | yes |
 | [`piceli publish`](#cli-publish) | Push the rendered manifests as a Flux OCI artifact (needs --approve DIGEST). | none | yes |
 | [`piceli registry forward`](#cli-registry-forward) | Keep a loopback port-forward to the registry open for pushes from here. | reads | no |
 | [`piceli registry install`](#cli-registry-install) | Install the in-cluster registry and its node mirror (plan first; --approve HASH installs). | writes | yes |
@@ -144,13 +144,18 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli restore-points`](#cli-restore-points) | List a pipeline's restore points, newest first (read-only, offline). | none | no |
 | [`piceli runs`](#cli-runs) | List the deploy runs of a pipeline, newest first, with their state, release, duration and summary files. Read-only (with shared state it reads the local working copy: run `piceli state pull` first). | none | no |
 | [`piceli secrets age`](#cli-secrets-age) | A host's age identity for sops-nix: generate or import it; print its public key. | none | no |
+| [`piceli secrets backup`](#cli-secrets-backup) | Write the whole secret store, encrypted with age, to one file (never printed). | none | no |
+| [`piceli secrets backup-key`](#cli-secrets-backup-key) | Create the offline age key for backups: prints only its age1... recipient. | none | no |
 | [`piceli secrets cluster`](#cli-secrets-cluster) | Store another cluster's credentials for the GitOps controller (never printed). | writes | no |
 | [`piceli secrets delete`](#cli-secrets-delete) | Delete a stored credential (a spent bootstrap key, an old token); never printed. | none | yes |
 | [`piceli secrets git`](#cli-secrets-git) | Store the Git token the controller and cluster builds use (read from stdin, never printed). | writes | no |
 | [`piceli secrets nix-cache`](#cli-secrets-nix-cache) | A Nix binary cache's signing key: generate or import it; print its public key. | none | no |
-| [`piceli secrets provider`](#cli-secrets-provider) | Store a provider API token (read from stdin, never printed). | none | no |
-| [`piceli secrets s3`](#cli-secrets-s3) | Store a bucket's S3 access keys (an access key id and its secret). | none | no |
+| [`piceli secrets provider`](#cli-secrets-provider) | Store a provider's API credential, part by part (never printed). | none | no |
+| [`piceli secrets restore`](#cli-secrets-restore) | Restore the secret store from an encrypted backup (plans first when not empty). | none | yes |
+| [`piceli secrets s3`](#cli-secrets-s3) | Store a bucket's S3 access keys, part by part (never printed). | none | no |
+| [`piceli secrets setup`](#cli-secrets-setup) | Walk through the missing secrets of a declaration, in order. | none | no |
 | [`piceli secrets state-key`](#cli-secrets-state-key) | Store the passphrase that encrypts an infrastructure's OpenTofu state. | none | no |
+| [`piceli secrets status`](#cli-secrets-status) | Every secret a declaration needs: present or missing, who creates it, the next command. | none | no |
 | [`piceli secrets user-data`](#cli-secrets-user-data) | Store a server's user data (a cloud-config, a script or a bootstrap key). | none | no |
 | [`piceli state export`](#cli-state-export) | Write the release's state to one file (secret material excluded unless asked). | reads | no |
 | [`piceli state import`](#cli-state-import) | Replace the release's state with an export (needs --approve DIGEST). | writes | yes |
@@ -158,6 +163,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli state show`](#cli-state-show) | Show where the state lives, its generation and who holds the release lock. | reads | no |
 | [`piceli status`](#cli-status) | Say whether the app is up and how to reach it. Read-only. | reads | no |
 | [`piceli support-bundle`](#cli-support-bundle) | Collect a read-only, redacted snapshot of a namespace (no Secrets, no env values). | reads | no |
+| [`piceli targets`](#cli-targets) | Every environment and NixHost: commit or tag, pinned product commit, checks, state. | reads | no |
 | [`piceli ui backup`](#cli-ui-backup) | Back up an offline UI control store and its release journal. | none | no |
 | [`piceli ui cluster-observe`](#cli-ui-cluster-observe) | Serve OIDC-scoped cluster observation and configured delivery. | writes | yes |
 | [`piceli ui cluster-serve`](#cli-ui-cluster-serve) | Serve OIDC-scoped cluster observation and configured delivery. | writes | yes |
@@ -660,7 +666,9 @@ Take the builds the controller publishes, build and deliver them, answer it.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster whose controller to serve |
-| `--host` | text |  | The docker build host to build on (DevBuilds(hosts=[...]); default: the first docker host) |
+| `--host` | text |  | The docker build host to build on (DevBuilds(hosts=[...]); default: the first docker host); with --publish also a native host, which then only publishes (as any host with --publish-only) |
+| `--publish` | text (repeatable) |  | MODULE:ATTR of a piceli.infra.NixCache this host publishes NixReleases to (repeat); its signing key and S3 write keys must be in this machine's piceli secrets (checked at start, never sent) |
+| `--publish-only`, `--no-publish-only` | boolean |  | Claim only the --publish NixReleases, never an image build, whatever the host's kind (a docker host that only publishes); default: on for a host declared runs=False, else off |
 | `--image` | text |  | The builder image (default: the host's, else DevBuilds(image=)); the same Piceli version as the controller |
 | `--namespace` | text | `piceli-system` | The controller's namespace |
 | `--once` | boolean | `False` | Build at most one wanted build, then exit |
@@ -673,14 +681,14 @@ Take the builds the controller publishes, build and deliver them, answer it.
 
 **Contract**
 
-- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=DevBuilds(hosts=[...])), credential profile, the controller's status, each source with this machine's Git access
-- **Writes:** the controller's requests (build-claim, built, build-failed), images in the cluster's registry (through a port-forward), ~/.cache/piceli/builder (Git mirrors), the piceli-build-cache volume, the host's health record (piceli-health-* volumes)
+- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=DevBuilds(hosts=[...])), credential profile, the controller's status, each source with this machine's Git access, MODULE:ATTR of each --publish NixCache, and its signing key and S3 write keys from this machine's credentials (0.25.0)
+- **Writes:** the controller's requests (build-claim, built, build-failed, nix-published), the binary cache: closure, signed manifest, tag pointer (--publish), images in the cluster's registry (through a port-forward), ~/.cache/piceli/builder (Git mirrors), the piceli-build-cache volume, the host's health record (piceli-health-* volumes)
 - **Cluster:** writes
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.21.0. Runs until Ctrl-C (--once: one build). The builder image must be the controller's Piceli version. 0.22.0: each delivered image's provenance is pushed as an OCI referrer when the registry takes it; a build showing a machine-health signature records a health event on the host, and a quarantined host claims nothing (quarantined in --once --json).
+- **Notes:** 0.21.0. Runs until Ctrl-C (--once: one build). The builder image must be the controller's Piceli version. 0.22.0: each delivered image's provenance is pushed as an OCI referrer when the registry takes it; a build showing a machine-health signature records a health event on the host, and a quarantined host claims nothing (quarantined in --once --json). 0.25.0: --publish MODULE:ATTR (repeatable) also takes the nix-publish builds of the NixReleases that name this host as builder, only for those caches; every key is read at start (infra-credential-missing, dev-nix-key-mismatch refuse it) and never leaves the host: a claim carries the cache key's signature over it. A native host with --publish only publishes. The publish itself was approved by the release's policy or gitops approve of its plan digest. 0.25.0: --publish-only (needs --publish, else dev-nix-invalid) claims only those publishes on any kind of host, never an image build (said once), and needs no cluster registry: a remote publisher is a docker host with an SSH context to itself, since a native host is the machine running Piceli. A host declared runs=False implies --publish-only and is refused without --publish or with --no-publish-only (dev-host-publish-only); without --host it is never the default.
 
 (cli-bundle)=
 ### `piceli bundle`
@@ -1105,8 +1113,15 @@ Build a flake output on a Nix build host; with --publish, sign and push it.
 | `--host` | text |  | A docker or native build host (default: the first) |
 | `--image` | boolean | `False` | The output is a disk image: copy its file back with its sha256 |
 | `--publish` | text |  | MODULE:ATTR of a piceli.infra.NixCache: sign and push the closure, upload the manifest (needs --approve) |
+| `--tag-pattern` | text |  | With --publish: the pointer names the highest version tag at the commit matching this NixHost Tag pattern (web-v*), compared after its prefix (default: --ref when it is a tag, else the first tag at the commit) |
 | `--branch` | text |  | With --publish: also point refs/heads/BRANCH at this build (default: --ref when it names a branch) |
 | `--approve` | text |  | The publish plan's digest |
+| `--release` | text |  | With --publish: the host of a NixRelease with gate=Promotion(...) in --composition; the publish needs its promotion gate to pass |
+| `--composition` | path |  | The composition module declaring the gated NixRelease (default: the --publish module; --release's default: infra.py) |
+| `--kubeconfig` | path |  | With --release: reach the controller with this kubeconfig (default: the composition's cluster's credential profile) |
+| `--context` | text |  | With --kubeconfig: its context |
+| `--state-dir` | path |  | With --release: a local controller's state directory |
+| `--namespace` | text | `piceli-system` | With --release: the controller's namespace |
 | `--artifacts-dir` | path | `piceli-dev-artifacts` | Where an image lands (RUN/) |
 | `--queue-timeout` | integer | `3600` | Seconds to wait for a slot |
 | `--quiet` | boolean | `False` | Do not stream the build's log |
@@ -1121,7 +1136,7 @@ Build a flake output on a Nix build host; with --publish, sign and push it.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** 0.24.0. Without --publish it is a development run (no approval; covered like dev run). With --publish it prints the plan (commit, output, host, cache, key) and exits 3; --approve DIGEST builds, then a separate step on the same host receives the signing key and S3 keys on stdin only (never the build), pushes with nix copy and the client uploads the manifest. Prints the store path, the image's sha256 and the public key, never a secret. Exit 1: the build failed, no output (dev-nix-no-output), dev-nix-publish-failed, dev-nix-manifest-failed.
+- **Notes:** 0.24.0. Without --publish it is a development run (no approval; covered like dev run). With --publish it prints the plan (commit, output, host, cache, key) and exits 3; --approve DIGEST builds, then a separate step on the same host receives the signing key and S3 keys on stdin only (never the build), pushes with nix copy and the client uploads the manifest. Prints the store path, the image's sha256 and the public key, never a secret. Exit 1: the build failed, no output (dev-nix-no-output), dev-nix-publish-failed, dev-nix-manifest-failed. --tag-pattern GLOB (a NixHost's Tag pattern) points the highest version tag of that pattern at the commit; a --ref tag of another pattern is refused (dev-nix-invalid). A publish of a gated host's attribute to its cache (a NixRelease or NixHost with gate= in the --publish module or --composition MODULE; --release HOST names it) runs the promotion gate at plan time: the commit's flake.lock must pin the gate's input to a commit its environment ran with passed release checks (promotion-not-verified, promotion-input-missing); the history is read as gitops status reads it (--state-dir, --kubeconfig/--context, else the composition cluster's profile) and an unreadable one refuses (promotion-history-unreachable). The plan, and the signed manifest, carry pinned.
 
 (cli-dev-nix-gc)=
 ### `piceli dev nix gc`
@@ -1133,6 +1148,7 @@ Remove builds of old commits from a Nix cache: plan, then --approve.
 | `--cache` | text | required | MODULE:ATTR of the piceli.infra.NixCache |
 | `--repo` | path | `.` | The repository whose tags and main count |
 | `--keep-tags` | integer | `5` | Keep the builds of the newest N tags |
+| `--tag-pattern` | text (repeatable) |  | Keep the newest --keep-tags versions of each NixHost Tag pattern (web-v*, compared after its prefix) instead of the newest tags by date; repeat it for each host of the repository |
 | `--main` | text | `main` | The branch whose current commit stays |
 | `--grace` | integer | `3600` | Seconds: younger objects stay (a publish in progress) |
 | `--approve` | text |  | The gc plan's digest |
@@ -1147,7 +1163,7 @@ Remove builds of old commits from a Nix cache: plan, then --approve.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** 0.24.0. Without --approve prints the keys it would delete and the plan digest (exit 3; 0 and state clean when nothing goes). A path a kept manifest's closure reaches is never deleted; objects younger than --grace stay. --approve with another digest is refused (dev-nix-plan-changed); a failed delete exits 1 (dev-nix-gc-failed).
+- **Notes:** 0.24.0. Without --approve prints the keys it would delete and the plan digest (exit 3; 0 and state clean when nothing goes). A path a kept manifest's closure reaches is never deleted; objects younger than --grace stay. --approve with another digest is refused (dev-nix-plan-changed); a failed delete exits 1 (dev-nix-gc-failed). --tag-pattern GLOB (repeatable, each host's Tag pattern) keeps the newest --keep-tags versions of each pattern, compared after its prefix; the plan lists tag_patterns.
 
 (cli-dev-release-host)=
 ### `piceli dev release-host`
@@ -1504,7 +1520,7 @@ Approve the pending plan of ENV; the controller applies it on its next poll.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** This is the owner's approval: run it only with the hash the owner approved. Writes a request to the ConfigMap piceli-gitops-requests; a hash the environment is no longer waiting for is dropped (gitops-approval-stale in gitops status).
+- **Notes:** This is the owner's approval: run it only with the hash the owner approved. Writes a request to the ConfigMap piceli-gitops-requests; a hash the environment is no longer waiting for is dropped (gitops-approval-stale in gitops status). 0.25.0: ENV may name a NixRelease waiting in approval-required; the hash is its plan digest, and approving it lets a build host build, sign and publish that tag.
 
 (cli-gitops-cache-clear)=
 ### `piceli gitops cache clear`
@@ -1734,7 +1750,7 @@ Controller health, repository, last poll and every branch's state.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** Read-only. Reads the ConfigMap piceli-gitops-status and the controller Deployment (or a local --state-dir). Health: healthy, degraded (last poll failed), stale (no poll for 3 intervals), starting, down. gitops-not-installed without a controller.
+- **Notes:** Read-only. Reads the ConfigMap piceli-gitops-status and the controller Deployment (or a local --state-dir). Health: healthy, degraded (last poll failed), stale (no poll for 3 intervals), starting, down. gitops-not-installed without a controller. 0.25.0: nix_releases lists each NixRelease (latest tag, state, plan digest and approve_command, stages with times, the published manifest's sha256, failure). A gated release shows pinned (input, commit, environment, verified_run, verified_at), or state rejected with its reason and refusal.
 
 (cli-gitops-suspects)=
 ### `piceli gitops suspects`
@@ -1787,7 +1803,7 @@ Ask the controller to deploy ENV now at its revision (--component: rebuild one).
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** Writes a request to the ConfigMap piceli-gitops-requests; the controller deploys on its next poll with the environment's usual approval (auto_approve or gitops approve of the plan hash). An unknown environment or component is dropped (gitops-request-invalid in gitops status); --component needs a composition controller.
+- **Notes:** Writes a request to the ConfigMap piceli-gitops-requests; the controller deploys on its next poll with the environment's usual approval (auto_approve or gitops approve of the plan hash). An unknown environment or component is dropped (gitops-request-invalid in gitops status); --component needs a composition controller. 0.25.0: ENV may name a NixRelease (its host): the controller publishes its newest tag now, with the release's approval; a sync of every environment also retries failed releases.
 
 (cli-gitops-wait)=
 ### `piceli gitops wait`
@@ -1947,26 +1963,26 @@ Switch back to the previous system (in the store) and hold it until unpin.
 (cli-host-secrets)=
 ### `piceli host secrets`
 
-Put the host's age identity where sops-nix reads it: plan, then --approve.
+Put the host's age identity where sops-nix reads it, and the cache's read keys Piceli created where the agent reads them: plan, then --approve.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `TARGET` | text | required |  |
 | `--infra` | text |  | MODULE (or MODULE:ATTR of its Infrastructure): the NixHosts it declares by name, its servers' applied addresses and pinned host keys |
-| `--replace` | boolean | `False` | Replace a different key the host has (what it decrypts with it changes) |
+| `--replace` | boolean | `False` | Replace a different age key the host has (what it decrypts with it changes) |
 | `--approve` | text |  | The plan's digest |
 | `--json` | boolean | `False` | Print one JSON object on stdout |
 
 **Contract**
 
-- **Reads:** MODULE:ATTR (piceli.infra.NixHost with age_identity=), $PICELI_CREDENTIALS_DIR/NAME.json (age-identity), the host's key file, by fingerprint only (ssh)
-- **Writes:** NixHost(age_key_file=) on the host, 0600 root (ssh stdin, atomic rename)
+- **Reads:** MODULE:ATTR (piceli.infra.NixHost with age_identity= or a cache bucket with S3Key(access='read')), $PICELI_CREDENTIALS_DIR/NAME.json (age-identity, s3-keys), the host's key file and cache.env, by fingerprint only (ssh)
+- **Writes:** NixHost(age_key_file=) on the host, 0600 root (ssh stdin, atomic rename), /var/lib/piceli-host/cache.env, 0600 root (0.25.0)
 - **Cluster:** none
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** 0.24.0. The plan lists host, path, mode, owner, public key and whether the host has the same, a different or no key (exit 3 with the digest; 0 when it has the same). A different key is refused without --replace (host-secret-exists). The key travels on ssh's stdin, never in an argument, log or state. After writing, the host re-runs switch-to-configuration switch so sops-nix decrypts.
+- **Notes:** 0.24.0. The plan lists host, path, mode, owner, public key and whether the host has the same, a different or no key (exit 3 with the digest; 0 when it has the same). A different key is refused without --replace (host-secret-exists). The key travels on ssh's stdin, never in an argument, log or state. After writing, the host re-runs switch-to-configuration switch so sops-nix decrypts. 0.25.0: with a bucket S3Key(access='read') the plan's cache lists the read pair (credential, short digest, same/different/absent); it is written without --replace and needs no activation (the agent reads it each poll).
 
 (cli-host-status)=
 ### `piceli host status`
@@ -2106,7 +2122,7 @@ Apply the plan whose hash is --approve (without it: plan, exit 3).
 **Contract**
 
 - **Reads:** MODULE:ATTR (piceli.infra.Infrastructure), tofu binary, credentials (provider token, state passphrase)
-- **Writes:** resources at the provider (servers, IPs, firewalls, DNS records), encrypted OpenTofu state, state directory records (inventory.json)
+- **Writes:** resources at the provider (servers, IPs, firewalls, DNS records, bucket S3 key pairs), encrypted OpenTofu state, state directory records (inventory.json, s3-keys.json), $PICELI_CREDENTIALS_DIR/NAME.json of each S3Key (s3-keys, 0600)
 - **Cluster:** none
 - **Approval required:** yes
 - **Safe to retry:** yes
@@ -2766,7 +2782,7 @@ List the stored credential profiles (references only, never secrets).
 (cli-promote)=
 ### `piceli promote`
 
-Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV.
+Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV; with --from, pin a verified commit in a NixRelease's flake and tag it.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -2777,17 +2793,23 @@ Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV.
 | `--namespace` | text | `piceli-system` | The controller's namespace |
 | `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
 | `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--from` | text |  | 0.25.0: TARGET is a NixRelease's host; pin the newest commit this environment (its gate's) ran with passed release checks in the flake's flake.lock, commit, tag and push (plan, then --approve) |
+| `--composition`, `--infra` | path | `infra.py` | With --from: the composition module declaring the NixRelease |
+| `--repo` | path | `.` | With --from: the flake's working copy |
+| `--bump` | text | `patch` | With --from: major, minor or patch |
+| `--approve` | text |  | With --from: the promotion plan's digest |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
 
 **Contract**
 
-- **Reads:** kubeconfig or --state-dir
-- **Writes:** --state-dir requests (local controller)
+- **Reads:** kubeconfig or --state-dir, with --from: the composition module (--composition; the NixRelease and its gate), the controller's history (--state-dir, --kubeconfig/--context, or the composition cluster's credential profile), the flake's working copy (--repo) and its remote (git fetch), nix when on the PATH, else the input's repository (git clone into a temporary directory)
+- **Writes:** --state-dir requests (local controller), with --from --approve: flake.lock, one commit and one annotated tag in the working copy; the branch and the tag on the remote, pushed atomically
 - **Cluster:** writes
-- **Approval required:** no
+- **Approval required:** yes
 - **Safe to retry:** yes
-- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Writes a request; the controller accepts only a commit it saw on that branch (gitops-promote-unknown otherwise), a named environment only when it follows Promote() (gitops-promote-not-allowed), and the environment then waits for gitops approve of its plan hash.
+- **Notes:** Writes a request; the controller accepts only a commit it saw on that branch (gitops-promote-unknown otherwise), a named environment only when it follows Promote() (gitops-promote-not-allowed), and the environment then waits for gitops approve of its plan hash. 0.25.0, promote HOST --from ENV: without --approve it prints the plan (pinned, the lock change old rev -> new rev, the commit message, the tag, the remote and branch) with its digest and exits 3. A lock that already pins the commit exits 0 with state current: with a tag of the pattern at HEAD there is nothing to do; without one the plan only tags HEAD and --approve tags and pushes the tag. --approve recomputes the plan (promote-plan-changed when it differs), commits flake.lock alone, tags and pushes with git push --atomic (promote-push-failed exits 1; the commit and tag stay local). Refuses a dirty working copy (promote-dirty), one behind, ahead of or diverged from its upstream (promote-not-in-sync), an environment without a passed run (promotion-not-verified) and an unreadable history (promotion-history-unreachable).
 
 (cli-publish)=
 ### `piceli publish`
@@ -3346,6 +3368,55 @@ A host's age identity for sops-nix: generate or import it; print its public key.
 - **Output contract:** conforms
 - **Notes:** 0.24.0. Prints the public key (age1...) for .sops.yaml, never the identity. Without --generate or --prompt it only reads. Refuses to replace an identity without --replace (infra-credential-exists).
 
+(cli-secrets-backup)=
+### `piceli secrets backup`
+
+Write the whole secret store, encrypted with age, to one file (never printed).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--to` | path | required | The encrypted archive to write (age format) |
+| `--recipient` | text (repeatable) |  | An age (age1...), plugin (age1yubikey1...) or SSH public key; repeatable; remembered for later backups |
+| `--recipients-file` | path |  | A file of recipients, one per line (age -R) |
+| `--force` | boolean | `False` | Replace an existing backup file |
+| `--single-recipient` | boolean | `False` | Allow one recipient (losing it loses the store and the backup together); recorded in the backup and its marker |
+| `--only` | text (repeatable) |  | Only this credential (repeatable): a transfer to another machine, such as a build host; needs --recipient, allows one, and is not a backup of this store |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** $PICELI_CREDENTIALS_DIR (every file), $PICELI_PROFILES_DIR, --recipients-file
+- **Writes:** --to PATH (age ciphertext, mode 0600), <credentials dir>.backup.json (recipients and the last backup's marker; no values)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.25.0. Runs the age command (PICELI_AGE, else age on PATH; secrets-age-missing otherwise): the tar is streamed into age, no plaintext touches the disk. Refuses an existing file without --force (secrets-backup-exists). Prints names, kinds, the archive's sha256 and the staleness, never a value. Exit 1 when age refuses (secrets-backup-failed). Needs two recipients: one is refused (secrets-backup-single-recipient) unless --single-recipient, which the manifest, the marker and the staleness record. --only NAME (repeatable) writes just those credentials for another machine (a build host): it needs --recipient (never the remembered ones), allows one, records only: true in the manifest, changes neither the marker nor the remembered recipients, and refuses an unknown name (secrets-backup-only-unknown).
+
+(cli-secrets-backup-key)=
+### `piceli secrets backup-key`
+
+Create the offline age key for backups: prints only its age1... recipient.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--out` | path | required | Where to write the private key (outside the store; offline: a USB drive, or print it and delete the file) |
+| `--add` | boolean | `False` | Add its recipient to the remembered recipients |
+| `--force` | boolean | `False` | Replace an existing file at --out |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** <credentials dir>.backup.json (--add)
+- **Writes:** --out PATH (the age identity, mode 0600), <credentials dir>.backup.json (--add: the remembered recipients)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.25.0. Runs age-keygen (PICELI_AGE_KEYGEN, next to PICELI_AGE, or on PATH; secrets-age-missing otherwise). Refuses a path inside the store or in a missing directory (secrets-backup-key-invalid) and an existing file without --force (secrets-backup-key-exists). Never prints the private key. Exit 1 when age-keygen fails (secrets-backup-key-failed).
+
 (cli-secrets-cluster)=
 ### `piceli secrets cluster`
 
@@ -3448,44 +3519,93 @@ A Nix binary cache's signing key: generate or import it; print its public key.
 (cli-secrets-provider)=
 ### `piceli secrets provider`
 
-Store a provider API token (read from stdin, never printed).
+Store a provider's API credential, part by part (never printed).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `NAME` | text | required |  |
-| `--prompt` | boolean | `False` | Read the value from stdin (typed without echo, or piped) |
+| `--prompt` | boolean | `False` | Ask for each part on stdin (typed: an identifier echoed, a secret not; piped: one part per line, in order) |
+| `--provider` | text |  | Whose credential it is: porkbun, openstack (or infomaniak), hetzner (or hcloud), or token (one API token) |
+| `--infra` | text |  | MODULE:ATTR of the Infrastructure whose provider uses credentials=NAME: it tells which provider NAME is for |
+| `--from-env` | boolean | `False` | Read the parts from the provider's standard variables instead of stdin (for scripts) |
 
 **Contract**
 
-- **Reads:** stdin (--prompt)
+- **Reads:** stdin (--prompt), the provider's variables (--from-env), --infra MODULE:ATTR (which provider uses NAME)
 - **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)
 - **Cluster:** none
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** The token is read from stdin only (typed without echo, or piped); an argument or HCLOUD_TOKEN in the environment is refused (infra-credential-refused) without echoing it. Prints the name, never the value.
+- **Notes:** 0.25.0: a two-part credential (Porkbun API key pair, OpenStack application credential) is asked for part by part, each checked before anything is stored (infra-credential-part-invalid names the part), and stored by part; piped, one part per line. The provider is --provider, else --infra's provider using NAME, else the one stored before, else the name; otherwise one token. --from-env reads the provider's standard variables. An argument, or a token variable without --from-env, is refused (infra-credential-refused) without echoing it. Replaces a stored credential. Prints the name and the parts' names, never a value.
+
+(cli-secrets-restore)=
+### `piceli secrets restore`
+
+Restore the secret store from an encrypted backup (plans first when not empty).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `PATH` | path | required |  |
+| `--identity` | path |  | An age identity file (age -i); without it age asks for a passphrase or uses its plugins |
+| `--approve` | text |  | The plan digest, to restore into a used store |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** PATH (age ciphertext), --identity, the store (digests)
+- **Writes:** $PICELI_CREDENTIALS_DIR and $PICELI_PROFILES_DIR (files 0600, directories 0700; into a used store only with --approve)
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** 0.25.0. Decrypts in memory with age (identity file, plugin or passphrase) and refuses an unsafe archive (secrets-restore-archive-invalid). Into an empty store it restores directly; otherwise it prints what it would add, what is identical and what differs, with a digest (exit 3), and writes only with --approve DIGEST. Never prints a value. Exit 1 when age cannot decrypt (secrets-restore-decrypt-failed).
 
 (cli-secrets-s3)=
 ### `piceli secrets s3`
 
-Store a bucket's S3 access keys (an access key id and its secret).
+Store a bucket's S3 access keys, part by part (never printed).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `NAME` | text | required |  |
 | `--prompt` | boolean | `False` | Read the access key id, then the secret, from stdin |
+| `--from-env` | boolean | `False` | Read AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY instead of stdin (for scripts) |
 
 **Contract**
 
-- **Reads:** stdin (--prompt)
+- **Reads:** stdin (--prompt), AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (--from-env)
 - **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)
 - **Cluster:** none
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.24.0. Two lines on stdin (typed without echo, or piped); an argument is refused (infra-credential-refused) without echoing it. Prints the name, never a value.
+- **Notes:** 0.24.0. Two lines on stdin (the key id echoed, the secret not; or piped); since 0.25.0 each part is checked before anything is stored (infra-credential-part-invalid names the part) and they are stored by part, and --from-env reads AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY. An argument is refused (infra-credential-refused) without echoing it. Prints the name and the parts' names, never a value.
+
+(cli-secrets-setup)=
+### `piceli secrets setup`
+
+Walk through the missing secrets of a declaration, in order.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `REF` | text | required |  |
+| `--yes` | boolean | `False` | Generate the keys Piceli generates without asking (never replaces one, never answers a prompt) |
+| `--json` | boolean | `False` | Print one JSON object per step on stdout |
+
+**Contract**
+
+- **Reads:** MODULE[:ATTR], stdin (each credential part; on a terminal, confirmations), $PICELI_CREDENTIALS_DIR
+- **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600) for each secret it stores or generates, on a terminal, when chosen: the offline backup key, the backup and <credentials dir>.backup.json
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.25.0. Provider credentials are asked for part by part (piped: one part per line, in the order status lists them; stdin at its end skips them). Keys Piceli generates (state key, Nix signing key, age identity) are generated after a confirmation on a terminal or with --yes, printing only public halves; a damaged key is replaced only after a confirmation on a terminal, never with --yes. User data is offered on a terminal only (default: later, right before infra apply); S3 pairs are left to infra apply. --json prints one object per step, then a summary. Never prints a value. Exit 0: everything stored but what is left for later on purpose (user data, the pairs infra apply makes); 1: something still missing, incomplete or damaged (a declined generation, a refused part, a profile); 2: a module that does not load or declares nothing.
 
 (cli-secrets-state-key)=
 ### `piceli secrets state-key`
@@ -3509,6 +3629,27 @@ Store the passphrase that encrypts an infrastructure's OpenTofu state.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Never printed; back the file up, the state cannot be read without it. Refuses to replace an existing key without --replace (infra-credential-exists).
+
+(cli-secrets-status)=
+### `piceli secrets status`
+
+Every secret a declaration needs: present or missing, who creates it, the next command.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `REF` | text | required |  |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE[:ATTR] (Infrastructure, Bucket, NixCache, NixHost, NixRelease, DevBuilds, a composition's clusters), $PICELI_CREDENTIALS_DIR (kinds and parts; signing keys and age identities checked in memory), $PICELI_PROFILES_DIR, the infrastructure's state records (which servers exist), <credentials dir>.backup.json (the last backup's marker)
+- **Writes:** nothing (read-only)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.25.0. Read-only; safe to retry; never prints a value. For each secret: state (present, pending: a pair the next infra apply creates, missing, incomplete, damaged, or not-needed: the user data of a server that exists), created_by (infra-apply, piceli: --generate, owner: --prompt), next (the exact command), purpose and where else it must live; then the backup's state (empty, none, stale, single-recipient, current) and warnings (an S3 read pair the provider does not limit to reading, a spent user-data key). --json prints one piceli.secrets-status.v1 object. Exit 0: every secret stored and complete or pending (the backup does not count); a secret a NixRelease's build host needs gets, once present, the backup --only command that carries it there; 1: something missing, incomplete or damaged; 2: a module that does not load or declares nothing (secrets-nothing-declared).
 
 (cli-secrets-user-data)=
 ### `piceli secrets user-data`
@@ -3668,6 +3809,34 @@ Collect a read-only, redacted snapshot of a namespace (no Secrets, no env values
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`). GET requests only (any other method is refused before it is sent); Secrets are never requested; env and ConfigMap values are never collected; logs, events and conditions are redacted. The archive's manifest.json lists every file, its sha256 and the request methods.
+
+(cli-targets)=
+### `piceli targets`
+
+Every environment and NixHost: commit or tag, pinned product commit, checks, state.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--composition` | text |  | MODULE (or file.py) declaring the environments and NixReleases |
+| `--infra` | text |  | MODULE declaring NixHosts and the Infrastructure of their servers (applied addresses, pinned host keys) |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--timeout` | float | `20.0` | Seconds to wait for each host |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** --composition MODULE (environments, NixReleases), --infra MODULE (NixHosts, applied addresses, pinned host keys), the controller's status, read once: --kubeconfig/--context or --state-dir, else the composition's home Cluster with its piceli login profile, each host's /var/lib/piceli-host/status.json (ssh, in parallel)
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.25.0. Read-only; safe to retry. --json prints one piceli.targets.v1 object. An unreachable controller or host never fails the view: its rows say unreachable with the reason (host rows still work with the home cluster down; a missing login profile of the home cluster shows profile-not-found with a piceli login hint). Exit 0: every target reachable, none failed; 1: a target failed, rolled back, is unreachable or its checks failed; 2: no module and no controller named (targets-input-required) or a module that does not load.
 
 (cli-ui-backup)=
 ### `piceli ui backup`

@@ -4,7 +4,10 @@
 OpenTofu's built-in ``terraform_data`` resource: a real ``tofu plan`` and
 ``tofu apply`` run, the state is real (and encrypted), but no provider is
 downloaded and no network is used. Its servers get the addresses the test
-declares (``addresses={"edge-1": "127.0.0.1"}``).
+declares (``addresses={"edge-1": "127.0.0.1"}``). Buckets and their
+``S3Key`` pairs are ``terraform_data`` too: a key's access key id and secret
+are derived from the infrastructure, the key's name and ``generation``
+(fake values, never valid anywhere).
 
 :class:`MockHetznerApi` serves ``GET /v1/pricing`` (and records requests)
 on 127.0.0.1, for the price estimates of :class:`~piceli.infra.Hetzner`.
@@ -15,6 +18,7 @@ its ``with`` block.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 from collections.abc import Iterator, Mapping
@@ -23,7 +27,14 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from piceli.infra.machines.model import DnsRecord, Firewall, PrimaryIp, Server
+from piceli.infra.machines.model import (
+    Bucket,
+    DnsRecord,
+    Firewall,
+    PrimaryIp,
+    S3Key,
+    Server,
+)
 from piceli.infra.machines.provider import Prices, Provider, Resource
 
 __all__ = ["PRICING", "FakeProvider", "MockHetznerApi", "mock_hetzner_api"]
@@ -43,9 +54,13 @@ class FakeProvider(Provider):
     addresses: Mapping[str, str] = field(default_factory=dict)
     addresses6: Mapping[str, str] = field(default_factory=dict)
     monthly: Mapping[str, float] = field(default_factory=dict)
+    #: Changes every fake S3 key pair (a test's rotation).
+    generation: int = 0
 
     name = "fake"
     supports_user_data = True
+    supports_buckets = True
+    supports_s3_keys = True
 
     def __hash__(self) -> int:
         return hash(("FakeProvider", self.location))
@@ -116,6 +131,35 @@ class FakeProvider(Provider):
             "lifecycle": {"ignore_changes": ["triggers_replace"]},
         }
         return Resource(server.type, server.name, body)  # fmt: skip
+
+    def render_bucket(self, bucket: Bucket, labels: Mapping[str, str]) -> Resource:
+        return Resource(
+            "terraform_data", f"bucket-{bucket.name}",
+            {"input": {"kind": "bucket", "name": bucket.name, "labels": dict(labels)}},
+        )  # fmt: skip
+
+    def render_s3_key(
+        self, key: S3Key, bucket: Resource, labels: Mapping[str, str]
+    ) -> Resource:
+        seed = f"{labels.get('piceli.io/infra')}/{key.name}/{self.generation}"
+        digest = hashlib.sha256(seed.encode()).hexdigest()
+        return Resource(
+            "terraform_data", f"s3key-{key.name}",
+            {"input": {"kind": "s3-key", "name": key.name, "access": key.access,
+                       "bucket": bucket.ref("id"), "access_key": "FAKE" + digest[:16],
+                       "secret_key": "fake-secret-" + digest[16:48],
+                       "labels": dict(labels)}},
+        )  # fmt: skip
+
+    def s3_key_values(self, values: Mapping[str, Any]) -> tuple[str, str] | None:
+        found = values.get("output") or values.get("input")
+        if not isinstance(found, Mapping):
+            return None
+        access, secret = found.get("access_key"), found.get("secret_key")
+        return (access, secret) if access and secret else None
+
+    def s3_key_enforcement(self, key: S3Key) -> dict[str, Any]:
+        return {"read_only_enforced": key.access == "read", "how": "fake"}
 
     def render_record(
         self, record: DnsRecord, values: list[str], labels: Mapping[str, str]

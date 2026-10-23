@@ -4,6 +4,263 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.25.0
+
+A Nix host's releases need no hand-run publish step: in 0.25.0 the GitOps
+controller publishes a `NixHost`'s release when you push its tag, behind a
+promotion gate that only lets through product commits an environment
+verified. Tags carry a prefix per target, and `piceli targets` shows every
+environment and host in one view.
+
+- **The controller publishes Nix host releases.** `NixRelease(host,
+  source=, builder=, auto_approve=False)` (new in `piceli.infra`) in a
+  composition makes the GitOps controller follow the host's
+  `Tag("web-v*")` in the flake's source: a new tag is planned
+  (`piceli.nix-release-plan.v1`), waits for `piceli gitops approve NAME
+  <plan digest>` unless `auto_approve=True`, and is asked for as a
+  `nix-publish` wanted build. `piceli builder serve --publish MODULE:ATTR`
+  (repeatable; a native host with it only publishes) claims it only for a
+  cache whose signing and S3 write keys are in its own secrets, proves it
+  with the key's signature over the claim (the keys never leave it), checks
+  that the tag points at the commit, builds, signs and publishes exactly as
+  `dev nix build --publish` does and answers `nix-published`; the
+  controller accepts only a manifest signed by the cache's key for the
+  planned commit and tag. `gitops status --json` lists `nix_releases`
+  (latest tag, state, stages with times, manifest digest); the history and
+  telemetry (`piceli.nix.release.finished`) record each attempt. A failure
+  is `failed` with its tail (`gitops-nix-release-failed`) until a newer tag
+  or `gitops sync`; tags present at first sight are the baseline. A
+  composition may now hold releases and no environment. `builder serve
+  --publish MODULE:ATTR --publish-only` claims only those publishes on any
+  kind of host, never an image build (said once), and needs no cluster
+  registry: a remote machine that only publishes is a docker host with an
+  SSH context to itself (`BuildHost.native` is the machine running Piceli),
+  so a publisher never changes who builds a cluster's images.
+- **A build host that only publishes.** `BuildHost(..., runs=False)`
+  (docker or native) declares a host that only publishes Nix releases: it
+  is in the plan (`runs: false`, only when declared, so other hashes stay)
+  and `piceli dev hosts` shows it (`runs` in `--json`). `piceli dev run`,
+  `piceli dev nix build` and `builder serve` never pick it without
+  `--host`, so an agent's runs never land on the publisher. `builder serve`
+  on it implies `--publish-only` and is refused without `--publish` or with
+  `--no-publish-only` (`dev-host-publish-only`).
+- **A promotion gate and `piceli promote HOST --from ENV`.**
+  `NixRelease(..., gate=Promotion(input="app", environment="main"))`
+  (`Promotion` is new in `piceli.infra`) publishes only a commit whose
+  `flake.lock` pins the input to a commit the environment ran with its
+  release checks passed (deployed, every check passed, no rollback). The
+  controller leaves another tag `rejected` (`promotion-not-verified`, with
+  the newest passed commit) and checks it again on every poll; `dev nix
+  build --publish --release HOST --composition MODULE` runs the same gate
+  and refuses an unreadable history (`promotion-history-unreachable`). The
+  result, `pinned` (input, commit, environment, verified_run, verified_at),
+  is in the release plan, the signed manifest (an optional field) and
+  `gitops status`. `piceli promote web-1 --from main` plans the pin of the
+  newest passed commit in the flake's working copy (`nix flake lock
+  --override-input`, or a direct edit with the computed narHash without
+  nix), the commit and the next tag of the host's pattern, and with
+  `--approve DIGEST` commits, tags and pushes atomically; it refuses a
+  dirty working copy or one out of sync with its upstream. A hand-run
+  publish of a gated host's attribute to its cache runs the gate without
+  `--release` (found in the `--publish` module or `--composition`). The
+  controller keeps a record of the commits each gated environment passed
+  (the last 200 per source; `passed_commits` in the history), so a verified
+  commit keeps qualifying after it left the 20 listed runs.
+  `NixHost(gate=Promotion(...))` makes the host agent refuse a build
+  without that verified pin (`host-promotion-missing`); its `NixRelease`
+  takes the host's gate. New codes `promotion-*`, `promote-*`; see
+  `docs/gitops.md`.
+- **Tag prefixes per host.** `Tag("web-v*")` orders tags by the version
+  after the pattern's literal prefix (`Tag.prefix`, `Tag.version(tag)`):
+  `web-v1.10.0` is above `web-v1.9.0`, and two hosts released from one
+  repository (`web-v*`, `api-v*`) never see each other's tags.
+  `Tag("v*")` never matches `web-v1.2.3`. The agent's resolve and "never
+  older" use it; `dev nix build --publish --tag-pattern GLOB` points the
+  host's tag when a commit carries several, and `dev nix gc --tag-pattern
+  GLOB` (repeatable) keeps the newest `--keep-tags` versions of each.
+- **One status view of every target.** `piceli targets [--composition
+  MODULE] [--infra MODULE] [--json]` lists each GitOps environment and each
+  NixHost with its commit or tag, the product commit it pins (a promotion
+  gate's `pinned` where present, else every source's commit), its checks
+  and its state, as of when and from which source (controller or host
+  agent): `piceli.targets.v1`. The controller is read once, by default
+  from the composition's home cluster with its `piceli login` profile
+  (explicit flags win; without the profile, environments show
+  `profile-not-found` and the login to run); hosts over
+  SSH in parallel with `--timeout`; an unreachable one shows `unreachable`
+  and never fails the view (exit 1 when any target failed or is
+  unreachable). The UI's new Targets view shows the same document; the
+  in-cluster UI cannot reach hosts and shows each release as published.
+  The host agent now reports the pin of the build it runs: it copies the
+  deployed manifest's `pinned` into its status (`current.pinned`,
+  `previous.pinned` and each attempt's `pinned`; a rollback restores the
+  previous build's), `piceli host status --json` shows it, and `piceli
+  targets` prefers it (`facts.pinned: host-agent`) over the controller's
+  release. Status files without the field still read.
+- **An encrypted backup of the secret store.** `piceli secrets backup --to
+  PATH [--recipient R]... [--recipients-file F] [--force]` streams every
+  file of `$PICELI_CREDENTIALS_DIR` (whatever its kind, the registered
+  clusters' kubeconfigs included) and the profiles into `age`, to the
+  recipients you choose (`age1...` keys, hardware keys through their age
+  plugin, SSH keys); no plaintext touches the disk. The recipients and a
+  marker of the last backup (time, sha256, names) are kept, without
+  values, in `credentials.backup.json` next to the store, so later backups
+  need no flags. `piceli secrets restore PATH [--identity FILE]` decrypts
+  in memory, refuses an unsafe archive (`secrets-restore-archive-invalid`)
+  and restores `0600` files in `0700` directories; into a store that is
+  not empty it lists what it would add, what is identical and what
+  differs, and writes only with `--approve DIGEST` (exit 3 otherwise).
+  `piceli.infra.machines.secrets_backup.staleness()` tells when the last
+  backup is older than the newest secret; `backup --json` includes it.
+  Needs the `age` command (`secrets-age-missing` otherwise).
+- **The cache's S3 keys from `infra apply`.** `Bucket(..., keys=[S3Key(
+  "cache-write"), S3Key("cache-read", access="read")])` (`S3Key` new in
+  `piceli.infra`) declares the key pairs a bucket needs. `infra plan` lists
+  them in `s3_keys` (name, bucket, access, action, credential,
+  `read_only_enforced` and how; never a value); `infra apply` creates them
+  (OpenStack: `openstack_identity_ec2_credential_v3`) and stores each as the
+  credential of its name (`s3-keys`, `0600`), also after a partial apply,
+  redacted from every output (an EC2 credential's id, its access key id, is
+  not reported). A re-apply is a no-op; removing a key deletes the pair
+  through the plan and then its stored credential; a credential Piceli did
+  not store is never replaced (`infra-credential-exists`). Key pairs need an
+  encrypted, enforced state (`infra-state-unencrypted`). `NixCache(bucket=)`
+  takes the bucket's write key as `write_credentials` by default.
+- **What "read" means at OpenStack.** An EC2 credential carries its user's
+  project roles, and Swift lets `member` read and write every container:
+  `S3Key(access="read")` is a separate pair, not a read-only one, and the
+  plan says `read_only_enforced: false`. A bucket in a project of its own
+  limits what the pair reaches. Since Keystone's OSSA-2026-005 fix a
+  restricted application credential may not create EC2 credentials:
+  `infra-s3-key-refused` (new) names that.
+- **`piceli host secrets` installs the cache's read pair.** This reverses
+  0.24.0, where the hosts' cache keys lived only in sops-nix: for a cache
+  whose bucket declares `S3Key(access="read")`, `NixHost`'s
+  `read_credentials_file=` defaults to `/var/lib/piceli-host/cache.env`,
+  and `host secrets` writes the stored pair there (`0600` root, on ssh's
+  stdin, compared by sha256, never read back). The plan's `cache` shows the
+  path, credential, a short digest and what the host has; a rotated pair is
+  replaced without `--replace` and needs no activation (the agent reads the
+  file each poll). A host without `age_identity=` gets only this file; the
+  age-only plan and its digest are unchanged. A `read_credentials_file=`
+  you give (a sops-nix path) is left alone.
+- **`piceli.infra.machines.keys.needed_secrets(...)`** lists every secret
+  a declaration (`Infrastructure`, `Bucket`, `NixCache`, `NixHost`) needs:
+  name, kind, who creates it (`infra-apply` or `operator`) and the command.
+- **Backups need two recipients.** `piceli secrets backup` refuses a
+  single recipient (`secrets-backup-single-recipient`): losing that one key
+  loses the store and its backup together. `--single-recipient` allows it,
+  and the backup's manifest, the remembered marker in
+  `credentials.backup.json` and `staleness()` record it
+  (`single_recipient: true`). The recommended pair is an age key kept in
+  the password manager plus an offline age key: `piceli secrets backup-key
+  --out PATH [--add] [--force]` creates it with `age-keygen`, writes the
+  private key to PATH (`0600`; refused inside the store
+  (`secrets-backup-key-invalid`) and over an existing file without
+  `--force` (`secrets-backup-key-exists`)), prints only its `age1...`
+  recipient and, with `--add`, adds it to the remembered recipients.
+  `age-plugin-yubikey` is documented as the hardware alternative.
+- **Two-part credentials are asked for, checked and stored by part.**
+  `piceli secrets provider NAME --prompt` asks for a Porkbun API key pair
+  as "Porkbun API key (pk1_…)", then "Porkbun secret API key (sk1_…)", and
+  an OpenStack (Infomaniak) application credential as "Application
+  credential ID", then "Application credential secret", each with where to
+  find it; identifiers are echoed, secrets are not. Each part is checked
+  before anything is stored (not empty, no space around it, no `:` inside,
+  `pk1_`/`sk1_`, 32 hex for the ID): a wrong one is refused with
+  `infra-credential-part-invalid`, whose `part` names it, so a pasted
+  secret alone or a swapped pair is caught at once, not at apply. Parts are
+  stored under their own names; the `stored` line and JSON name them
+  (`"parts": [...]`, `"provider"`, `"replaced"`), never their values.
+  Piped input is one part per line; `--from-env` reads the provider's
+  standard variables (`PORKBUN_API_KEY`, `PORKBUN_SECRET_API_KEY`,
+  `OS_APPLICATION_CREDENTIAL_ID`, `OS_APPLICATION_CREDENTIAL_SECRET`,
+  `HCLOUD_TOKEN`). The provider comes from `--provider`, `--infra
+  MODULE:ATTR`, the credential stored before, or the name (`porkbun`,
+  `infomaniak`, `hcloud`, alone or before a dash); otherwise one token.
+  `piceli secrets s3 NAME --prompt` checks and stores its two keys by part
+  too. A credential stored as one `A:B` value still reads; one that lacks a
+  part is refused by every plan before any API call
+  (`infra-credential-incomplete`: "porkbun: one part of two stored, re-run
+  `piceli secrets provider porkbun --prompt`"), and re-running that command
+  replaces it. `piceli.infra.machines.credential_parts.credential_reports()`
+  reports every stored credential's completeness; `secrets backup --json`
+  lists the incomplete ones (`incomplete`).
+- **`piceli secrets status MODULE[:ATTR]` and `piceli secrets setup`.**
+  `status` lists every secret a module's declarations need
+  (`Infrastructure`, `Bucket`, `NixCache`, `NixHost`, `NixRelease`,
+  `DevBuilds`, and a composition's clusters, whose credentials are `piceli
+  login` profiles): `present`, `missing`, `incomplete` (a credential that
+  lacks a part), `damaged` (unreadable, readable by others, another kind, a
+  signing key whose public key is not the declared one), `pending` (a key
+  pair the next `infra apply` creates: the infrastructure's records show it
+  not applied yet; not an error) or `not-needed` (the user data of a server
+  that exists); who creates it (`infra-apply`,
+  `piceli` with `--generate`, or `owner` with `--prompt`); the exact next
+  command; what it is for and where else it must live (the host, a build
+  host, "read once at creation"). Then the backup's state (`none`, `stale`
+  with the newer names, `single-recipient`, `current`) and warnings (an S3
+  read pair the cloud does not limit to reading, a spent user-data key).
+  `--json` prints one `piceli.secrets-status.v1` object; exit 0 when every
+  secret is stored and complete or pending, 1 otherwise (a pair applied but
+  absent here is `missing`: the next plan stores it again), 2 for a module that declares
+  nothing (`secrets-nothing-declared`). `setup` walks the missing ones in
+  order: provider credentials part by part, the keys Piceli generates
+  (printing only the public halves to copy into the declaration or
+  `.sops.yaml`; `--yes` without a terminal), the user data (offered, left
+  for right before `infra apply` by default), the S3 pairs (left to `infra
+  apply`) and a backup. It never replaces a stored key without a typed
+  confirmation; `--json` prints one object per step. Never prints a value.
+- **A cache declared before its key exists: `NixCache(key_name=)`.**
+  `NixCache(key_name="cache-1", bucket=...)` names the signing key without
+  its public key (`NixCache("cache-1:base64...", ...)` still works), so
+  `piceli secrets status` and `setup` load the module that the key does not
+  exist for yet, and `infra plan` of the bucket works. `status` shows the
+  key `missing`, then, once generated, `copy` with "put `cache-1:...` into
+  NixCache(public_key=)" (blocking: exit 1); `setup` generates it and
+  prints the public key to copy. `dev nix build --publish`, `dev nix gc`,
+  `host module` and the agent's configuration refuse with
+  `dev-nix-cache-key-unset`, naming `piceli secrets setup MODULE`. A
+  composition holding a `NixRelease` of such a cache still loads, so its
+  environments deploy as usual: the controller keeps that release
+  `rejected` with reason `dev-nix-cache-key-unset` and its message (in
+  `gitops status`, `nix_releases`, and `piceli targets`, where the host is
+  `held`), plans and publishes nothing for it, and takes the tags it sees
+  once the key is declared as the baseline; `gitops enable` prints a
+  warning line for it. A module whose declaration raises while
+  loading is now reported under the declaration's own code (for example
+  `dev-nix-cache-invalid`), else `infra-load-failed`, not `infra-not-found`
+  with a hint about an `Infrastructure` attribute; `host` commands do the
+  same.
+- **`needed_secrets()`** also takes `NixRelease` (its cache's signing and
+  write keys are needed on its build host too) and `DevBuilds`, and each
+  `NeededSecret` carries `provider`, `where` and `build_host` (the
+  release's builder).
+- **Carrying a build host's keys there: `piceli secrets backup --only
+  NAME`.** The signing key and S3 write pair a `NixRelease`'s builder
+  publishes with are made on the owner's machine; `backup --only cache-1
+  --only cache-write --to PATH --recipient <the build host's age1...>`
+  writes just those, encrypted to that one key (one recipient is enough
+  with `--only`; the manifest says `only: true`; an unknown name is
+  `secrets-backup-only-unknown`), without touching the last backup's
+  marker or the remembered recipients. `piceli secrets restore PATH
+  --identity KEY` on the build host adds them (plan, then `--approve`, into
+  a store that is not empty) and does not adopt the transfer as its backup
+  configuration. `secrets status` gives that command for each such secret
+  once it is present.
+- **S3 pairs from `infra apply` are stored by part**, as `piceli secrets
+  s3` stores them, so `credential_report()` sees them complete. Plans pass
+  OpenStack and Porkbun credentials to OpenTofu from their stored parts
+  (`Provider.credential_env(parts)` now takes the parts by name, not an
+  `ID:SECRET` string). `piceli secrets s3 NAME --from-env` reads
+  `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+- **Upgrade note: credentials stored by part need 0.25.0.** A credential
+  that 0.25.0 stores by part (a Porkbun key pair or an OpenStack
+  application credential from `secrets provider`, S3 keys from `secrets s3`
+  or `infra apply`) cannot be read by an earlier Piceli, which expects one
+  `A:B` value. Credentials stored before still read in 0.25.0. Keep every
+  machine that shares a secret store (or restores its backup) on 0.25.0.
+
 ## Version 0.24.0
 
 A machine without a cluster: 0.24.0 creates NixOS hosts on OpenStack

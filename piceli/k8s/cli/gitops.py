@@ -110,6 +110,61 @@ def _api(
         yield api
 
 
+def home_credentials(cluster: Any) -> tuple[Path, str]:
+    """The kubeconfig and context of a composition's home ``Cluster``: its
+    credential profile (``piceli login NAME``), never in Git.
+    :raises ProfileError, ValueError:"""
+    from piceli.profiles import resolve
+
+    found = resolve(cluster.credentials)
+    return found.kubeconfig, found.context
+
+
+@contextmanager
+def open_channel(
+    state_dir: Path | None,
+    kubeconfig: Path | None,
+    context: str | None,
+    namespace: str,
+    transport: str,
+) -> Iterator[Any]:
+    """The controller's status channel: a local ``--state-dir`` or the
+    cluster's ConfigMaps. :raises GitOpsError: ``gitops-target-required``,
+    ``gitops-not-installed``, ``gitops-cluster-failed``."""
+    from piceli.gitops import GitOpsError
+    from piceli.gitops.state import DirectoryChannel
+
+    if state_dir is not None:
+        if kubeconfig is not None:
+            raise GitOpsError(
+                "gitops-target-required",
+                "--state-dir and --kubeconfig name two controllers; pass one",
+            )
+        yield DirectoryChannel(state_dir)
+        return
+    if kubeconfig is None or not context:
+        raise GitOpsError(
+            "gitops-target-required",
+            "name the cluster with --kubeconfig FILE --context NAME "
+            "(or a local controller with --state-dir)",
+        )
+    from piceli.gitops.install import CONFIG_MAP, connect
+    from piceli.gitops.state import ConfigMapChannel
+
+    policy = exec_policy(False, None)
+    with connect(kubeconfig, context, transport=transport, exec_policy=policy) as api:
+        found = api.call(
+            f"/api/v1/namespaces/{namespace}/configmaps/{CONFIG_MAP}", "GET"
+        )
+        if found is None:
+            raise GitOpsError(
+                "gitops-not-installed",
+                f"no GitOps controller in namespace {namespace}; install it with "
+                "piceli gitops enable",
+            )
+        yield ConfigMapChannel(api.client, namespace)
+
+
 @contextmanager
 def _channel(
     state_dir: Path | None,
@@ -118,30 +173,11 @@ def _channel(
     namespace: str,
     transport: str,
 ) -> Iterator[Any]:
-    from piceli.gitops.state import DirectoryChannel
-
-    if state_dir is not None:
-        if kubeconfig is not None:
-            reject(
-                "gitops-target-required",
-                "--state-dir and --kubeconfig name two controllers; pass one",
-            )
-        yield DirectoryChannel(state_dir)
-        return
-    from piceli.gitops.install import CONFIG_MAP
-    from piceli.gitops.state import ConfigMapChannel
-
-    with _api(kubeconfig, context, transport) as api:
-        found = api.call(
-            f"/api/v1/namespaces/{namespace}/configmaps/{CONFIG_MAP}", "GET"
-        )
-        if found is None:
-            reject(
-                "gitops-not-installed",
-                f"no GitOps controller in namespace {namespace}; install it with "
-                "piceli gitops enable",
-            )
-        yield ConfigMapChannel(api.client, namespace)
+    with (
+        _guard(),
+        open_channel(state_dir, kubeconfig, context, namespace, transport) as channel,
+    ):
+        yield channel
 
 
 def _describe(plan: Any) -> None:
@@ -548,18 +584,16 @@ def _enable_composition(
             or (controller is not None and controller.delete_volumes),
         )
     if kubeconfig is None and composition.cluster is not None:
-        # The cluster's credential profile (`piceli login`), never in Git.
-        from piceli.profiles import ProfileError, resolve
+        from piceli.profiles import ProfileError
 
         try:
-            found = resolve(composition.cluster.credentials)
+            kubeconfig, context = home_credentials(composition.cluster)
         except (ProfileError, ValueError):
             reject(
                 "gitops-target-required",
                 "the cluster's credential profile is unknown here: run piceli login "
                 "or pass --kubeconfig FILE --context NAME",
             )
-        kubeconfig, context = found.kubeconfig, found.context
     say(f"composition {composition.name}: sources " + ", ".join(
         f"{source.key} ({source.url})" for source in composition.sources
     ))  # fmt: skip
@@ -574,6 +608,12 @@ def _enable_composition(
             for source, rules in item.sources
         )
         say(f"environment {item.name} ({item.namespace}): follows {rules}")
+    for release in composition.nix_releases:
+        if release.key_unset:  # 0.25.0: the controller holds it, nothing else
+            say(
+                f"warning: nix release {release.name}: {release.key_unset}; the "
+                "controller publishes nothing for it until then"
+            )
     objects = render_controller(config, settings)
     ui_objects, ui = _ui_objects(composition.cluster, namespace, image)
     if composition.cluster is not None and namespace == "piceli-system":
@@ -950,6 +990,42 @@ def _health(status: dict[str, Any] | None, ready: bool | None, now: float) -> st
     return "degraded" if controller.get("last_error") else "healthy"
 
 
+def status_body(channel: Any, namespace: str) -> dict[str, Any]:
+    """The body of ``gitops status --json`` (``piceli.gitops-status.v1``):
+    the published document, the controller's health and liveness, and the
+    per-environment summary. :raises GitOpsError:"""
+    import time
+
+    document = channel.read_status()
+    ready: bool | None = None
+    live: dict[str, Any] | None = None
+    api_client = getattr(channel, "client", None)
+    if api_client is not None:
+        from piceli.gitops import liveness
+        from piceli.gitops.install import NAME, Api
+
+        deployment = Api(api_client).call(
+            f"/apis/apps/v1/namespaces/{namespace}/deployments/{NAME}", "GET"
+        )
+        rollout = (deployment or {}).get("status") or {}
+        ready = bool(rollout.get("availableReplicas") or rollout.get("readyReplicas"))
+        # 0.15.1: the controller's pod, not only its last document.
+        live = liveness.check(Api(api_client), namespace, document, time.time())
+    body: dict[str, Any] = {
+        "schema": "piceli.gitops-status.v1",
+        "health": _health(document, ready, time.time()),
+        "deployment_ready": ready,
+        **(document or {"controller": None, "envs": {}, "rejected_requests": []}),
+    }
+    if live is not None:
+        body["controller_live"] = live
+    from piceli.gitops.wait import summary
+
+    # 0.17.0: per environment, what an agent needs (stage, attempt, retry, error).
+    body["summary"] = summary(document)
+    return body
+
+
 @app.command("status")
 def status(
     kubeconfig: KubeconfigOption = None,
@@ -960,41 +1036,11 @@ def status(
     as_json: JsonOption = False,
 ) -> None:
     """Controller health, repository, last poll and every branch's state."""
-    import time
-
     with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
         with _guard():
-            document = channel.read_status()
-        ready: bool | None = None
-        live: dict[str, Any] | None = None
-        api_client = getattr(channel, "client", None)
-        if api_client is not None:
-            from piceli.gitops import liveness
-            from piceli.gitops.install import NAME, Api
-
-            with _guard():
-                deployment = Api(api_client).call(
-                    f"/apis/apps/v1/namespaces/{namespace}/deployments/{NAME}", "GET"
-                )
-            rollout = (deployment or {}).get("status") or {}
-            ready = bool(
-                rollout.get("availableReplicas") or rollout.get("readyReplicas")
-            )
-            # 0.15.1: the controller's pod, not only its last document.
-            live = liveness.check(Api(api_client), namespace, document, time.time())
-    health = _health(document, ready, time.time())
-    body: dict[str, Any] = {
-        "schema": "piceli.gitops-status.v1",
-        "health": health,
-        "deployment_ready": ready,
-        **(document or {"controller": None, "envs": {}, "rejected_requests": []}),
-    }
-    if live is not None:
-        body["controller_live"] = live
-    from piceli.gitops.wait import summary
-
-    # 0.17.0: per environment, what an agent needs (stage, attempt, retry, error).
-    body["summary"] = summary(document)
+            body = status_body(channel, namespace)
+    health = body["health"]
+    live = body.get("controller_live")
     controller = body.get("controller") or {}
     say(
         f"gitops controller: {health}"
@@ -1078,6 +1124,30 @@ def status(
                     f"{cluster_checks.get('passed')}/{cluster_checks.get('total')}"
                 )
             say(part)
+    for name, release in (body.get("nix_releases") or {}).items():
+        # 0.25.0: a NixRelease the controller publishes.
+        line = (
+            f"  nix release {name}: {release.get('state')} "
+            f"{release.get('tag') or ''} {str(release.get('commit') or '')[:12]}"
+        ).rstrip()
+        if release.get("state") == "approval-required":
+            line += f"; approve: {release.get('approve_command')}"
+        elif release.get("state") == "published":
+            line += (
+                f"; manifest {(release.get('published') or {}).get('manifest_sha256')}"
+            )
+        elif release.get("state") == "failed":
+            line += f" ({(release.get('failure') or {}).get('reason')})"
+        elif release.get("state") == "rejected":
+            refusal = release.get("refusal") or {}
+            line += f" ({release.get('reason')}: {refusal.get('message')})"
+        if pinned := release.get("pinned"):
+            line += (
+                f"; pinned {pinned.get('input')} {str(pinned.get('commit'))[:12]} "
+                f"verified on {pinned.get('environment')} "
+                f"(run {pinned.get('verified_run')})"
+            )
+        say(line)
     if as_json:
         emit_json(body)
 
@@ -1450,13 +1520,58 @@ def promote(
     namespace: NamespaceOption = "piceli-system",
     state_dir: StateDirOption = None,
     transport: TransportOption = "https",
+    from_env: Annotated[
+        str | None,
+        typer.Option(
+            "--from",
+            help="0.25.0: TARGET is a NixRelease's host; pin the newest commit "
+            "this environment (its gate's) ran with passed release checks in "
+            "the flake's flake.lock, commit, tag and push (plan, then --approve)",
+            show_default=False,
+        ),
+    ] = None,
+    composition: Annotated[
+        Path,
+        typer.Option(
+            "--composition",
+            "--infra",
+            help="With --from: the composition module declaring the NixRelease",
+        ),
+    ] = Path("infra.py"),
+    repo: Annotated[
+        Path, typer.Option("--repo", help="With --from: the flake's working copy")
+    ] = Path("."),
+    bump: Annotated[
+        str, typer.Option("--bump", help="With --from: major, minor or patch")
+    ] = "patch",
+    approve: Annotated[
+        str | None,
+        typer.Option("--approve", help="With --from: the promotion plan's digest"),
+    ] = None,
+    as_json: JsonOption = False,
 ) -> None:
-    """Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV.
+    """Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV;
+    with --from, pin a verified commit in a NixRelease's flake and tag it.
 
     ``piceli promote wp-1@abc1234`` targets main; ``piceli promote rc
     main@abc1234`` targets the named environment ``rc`` (it must follow
-    ``Promote()``).
+    ``Promote()``). ``piceli promote web --from main`` (0.25.0) plans the
+    pin of the newest commit ``main`` verified for the host ``web``'s
+    gated NixRelease.
     """
+    if from_env is not None:
+        from piceli.k8s.cli.promote import promote_host
+
+        if source is not None:
+            reject("promote-invalid", "--from takes the host alone, not BRANCH@SHA")
+        promote_host(
+            target, from_env, composition=composition, repo=repo, bump=bump,
+            approve=approve, kubeconfig=kubeconfig, context=context,
+            state_dir=state_dir, namespace=namespace, as_json=as_json,
+        )  # fmt: skip
+        return
+    if approve is not None:
+        reject("promote-invalid", "--approve approves a --from promotion plan")
     from piceli.gitops.state import promote_request
 
     env = target if source is not None else None

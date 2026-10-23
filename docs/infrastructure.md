@@ -96,7 +96,8 @@ declaration fails at import, never halfway through a plan.
 | `Hook(argv, timeout=3600)` | The command that installs the OS. Placeholders `{name}`, `{id}`, `{ipv4}`, `{ipv6}`, `{address}`. |
 | `Ssh(user="root", address=None, port=22, kubeconfig_path="/etc/rancher/k3s/k3s.yaml")` | How Piceli reaches the server to read its k3s kubeconfig. |
 | `Image(name, file= \| url=, sha256=, format="qcow2", min_disk_gb=, properties=)` | A disk image to upload (OpenStack). `sha256` is required and checked before the upload (`infra-image-checksum`). |
-| `Bucket(name, provider=, protect=False)` | An S3-compatible object-storage bucket (OpenStack Swift). Never emptied: destroying one that holds objects fails. |
+| `Bucket(name, provider=, protect=False, keys=[])` | An S3-compatible object-storage bucket (OpenStack Swift). Never emptied: destroying one that holds objects fails. `keys=` (0.25.0): the `S3Key` pairs Piceli creates for it (below). |
+| `S3Key(name, access="write")` | An S3 key pair of a bucket, created by `infra apply` and stored as the local credential `name` (`s3-keys`); `access="read"` for the hosts' pair. |
 | `Infrastructure(name, servers=, records=, state_dir=, state_key=, backend=, home=, buckets=)` | Everything one OpenTofu state holds. |
 
 Each resource Piceli renders is labelled `piceli.io/managed-by=piceli`,
@@ -163,17 +164,20 @@ infra = Infrastructure("web", servers=[host], buckets=[Bucket("my-cache", provid
 | `ssh_keys` | `openstack_compute_keypair_v2`; one key per server (Nova boots with one key pair) |
 | `Image` | `openstack_images_image_v2`, private, named by its checksum: at apply time Piceli copies the file (or downloads the URL) into the state directory, verifies it, uploads it, then removes the copy |
 | `Bucket` | `openstack_objectstorage_container_v1` (Swift) |
+| `S3Key` | `openstack_identity_ec2_credential_v3`: an EC2 credential of the application credential's user in its project (0.25.0) |
 | `user_data=UserData(NAME)` | `user_data` from the sensitive variable `user_data_<server>`, with `ignore_changes`: read at creation only |
 
 The credential is an application credential (Horizon: Identity →
 Application Credentials, or `openstack application credential create`),
-stored as `ID:SECRET`: `printf '%s:%s' "$ID" "$SECRET" | piceli secrets
-provider cloud --prompt`. OpenTofu gets it only as
+stored by part: `piceli secrets provider cloud --provider openstack --prompt`
+asks for the application credential ID, then its secret (see
+[Secrets](#secrets): credentials with two parts). OpenTofu gets it only as
 `OS_APPLICATION_CREDENTIAL_ID` and `OS_APPLICATION_CREDENTIAL_SECRET`; both
 are redacted from its output. S3 access to a bucket needs EC2 credentials
-(`openstack ec2 credentials create`; at Infomaniak the endpoint is
-`https://s3.pub1.infomaniak.cloud`); Piceli never creates these long-lived
-keys. OpenStack has no price API here: `prices=` (monthly net per flavor) and
+(at Infomaniak the endpoint is `https://s3.pub1.infomaniak.cloud`): declare
+them as `S3Key`s (below), or create them yourself (`openstack ec2
+credentials create`) and store them with `piceli secrets s3 NAME --prompt`.
+OpenStack has no price API here: `prices=` (monthly net per flavor) and
 `ip_prices=` (`{"ipv4": …}`) are your own table, shown as the plan's
 estimate. One region per declaration; `ipv4=False` and `ipv6=PrimaryIp` are
 refused (the port holds both families). OpenStack serves no DNS: give a
@@ -195,8 +199,69 @@ to any process on it, so a key in it should be single-use and short-lived.
 {doc}`single_nixos_host` uses one to join a tailnet on first boot.
 
 Ownership marks: metadata on servers and buckets, tags on ports, security
-groups and images, the description of security group rules. Key pairs carry
-none: their name (`<infra>-<digest>`) and the ledger stand in.
+groups and images, the description of security group rules. Key pairs and
+EC2 credentials carry none: their name (`<infra>-<digest>`) and the ledger stand in.
+
+**S3 keys** (0.25.0). A bucket declares the key pairs it needs, and
+`infra apply` creates them:
+
+```python
+nix_bucket = Bucket("my-cache", provider=cloud, keys=[
+    S3Key("cache-write"),                 # the build host: put and delete
+    S3Key("cache-read", access="read"),   # the hosts
+])
+cache = NixCache("cache-1:…", bucket=nix_bucket)  # write_credentials: cache-write
+```
+
+`infra plan` lists them in `s3_keys` (never a value):
+
+```json
+{"name": "cache-read", "bucket": "my-cache", "access": "read", "action": "create",
+ "credential": "cache-read", "stored": false, "read_only_enforced": false,
+ "how": "not enforced by the cloud: an EC2 credential has its user's project roles …"}
+```
+
+After the apply (also a partial one) Piceli reads each pair out of the
+state and stores it as the credential of its name (`s3-keys`,
+`ACCESS_KEY_ID:SECRET`, `0600`), where `NixCache` (`write_credentials`
+defaults to the bucket's write key), `builder serve --publish`, `dev nix
+build --publish` and `piceli host secrets` (the read key, see
+{doc}`nix_hosts`) load it. The values are redacted from OpenTofu's output
+as soon as they are known; an EC2 credential's id is its access key id, so
+a partial apply does not report it. `s3-keys.json` in the state directory
+records each key's credential name and a short digest of what was stored.
+A re-apply changes nothing; a plan stores again a pair the state holds and
+the store lost. Removing an `S3Key` deletes the pair through the
+plan (approved like any change) and then its stored credential, if it still
+holds what Piceli wrote. A credential of that name that Piceli did not
+store is never replaced (`infra-credential-exists`): delete it first
+(`piceli secrets delete NAME`) or pick another name.
+
+The secret is in the OpenTofu state (the provider keeps it there in plain
+text), so Piceli creates key pairs only into a state and plan files that
+OpenTofu encrypts and refuses to read unencrypted
+(`infra-state-unencrypted`); `piceli infra` always configures that.
+
+**What "read" means at OpenStack.** Keystone gives an EC2 credential the
+roles its user has in the project, and Swift lets any operator role
+(`member` at Infomaniak) read and write every container of the project.
+Piceli authenticates with one application credential and cannot create a
+user with fewer roles, so `S3Key(access="read")` is a **separate pair, not
+a read-only one**: the plan says `read_only_enforced: false`. What keeps it
+safe enough for a host: the host only reads with it, Nix and the host agent
+verify every build's signature (a write cannot make a host run something
+unsigned, only delete or spoil builds), and it can be removed alone. To
+limit what a leaked pair reaches, put the cache bucket in an OpenStack
+project of its own (a separate `Infrastructure` with that project's
+application credential): its keys then reach only the cache. Two more
+limits come from Keystone itself: since its OSSA-2026-005 fix, a
+*restricted* application credential (the default) may not create EC2
+credentials (`infra-s3-key-refused`: use an unrestricted one, or create the
+keys yourself), and a `reader`-only identity may not either.
+
+**Rotation** is not a command yet: remove the key, apply, add it back and
+apply (a new pair, stored over the old one), then run `piceli host secrets`
+again for a read key.
 
 To move to a newer OpenStack provider, change `OPENSTACK_PIN` in
 `piceli/infra/machines/openstack.py` and take its hashes from `tofu
@@ -230,8 +295,8 @@ infra = Infrastructure("web", servers=[host], records=[
   the record follows it in the same apply. No address is written in the
   configuration.
 - **Credentials.** An API key pair (Porkbun: Account → API Access), stored
-  as `APIKEY:SECRETKEY`: `printf '%s:%s' "$KEY" "$SECRET" | piceli secrets
-  provider porkbun --prompt`. OpenTofu gets it only as `PORKBUN_API_KEY`
+  by part: `piceli secrets provider porkbun --prompt` asks for the API key
+  (`pk1_…`), then the secret API key (`sk1_…`). OpenTofu gets it only as `PORKBUN_API_KEY`
   and `PORKBUN_SECRET_API_KEY`; both are redacted from its output.
 - **API access per domain.** Turn it on for each domain (Domain Management
   → Details → API Access). A plan that changes records at Porkbun asks its
@@ -355,17 +420,195 @@ server types and primary IPs; without them it is left out, never an error.
 
 ## Secrets
 
+`piceli secrets status MODULE` lists every secret a declaration needs, with
+who creates it and the next command, and `piceli secrets setup MODULE` walks
+through the missing ones: see {ref}`host-secrets-setup`.
+
 Provider tokens are local credentials, like cluster credentials are local
 profiles: `piceli secrets provider NAME --prompt` reads the token from stdin
 (typed without echo, or piped) into `$PICELI_CREDENTIALS_DIR/NAME.json`
 (`0600`). A token given as an argument or in `HCLOUD_TOKEN` (or
 `OS_APPLICATION_CREDENTIAL_SECRET`, `PORKBUN_API_KEY`,
 `PORKBUN_SECRET_API_KEY`) is refused
-(`infra-credential-refused`) without echoing it, and a credential file other
-users can read is refused (`infra-credential-unsafe`). Piceli passes the token
-to OpenTofu in its environment only (`HCLOUD_TOKEN`), never as an argument,
-closes OpenTofu's stdin, passes no `TF_LOG`, and redacts every token and the
-passphrase from OpenTofu's output before it is shown.
+(`infra-credential-refused`) without echoing it, unless you pass
+`--from-env` to read the provider's own variables on purpose (scripts). A
+credential file other users can read is refused (`infra-credential-unsafe`).
+Piceli passes the token to OpenTofu in its environment only
+(`HCLOUD_TOKEN`), never as an argument, closes OpenTofu's stdin, passes no
+`TF_LOG`, and redacts every token and the passphrase from OpenTofu's output
+before it is shown.
+
+### Credentials with two parts
+
+A Porkbun API key pair and an OpenStack application credential (Infomaniak
+included) have two parts. `piceli secrets provider` asks for each by the name
+the provider's console gives it, says where to find it, and checks it before
+anything is stored:
+
+```console
+$ piceli secrets provider porkbun --prompt
+Step 1 of 2: Porkbun API key (pk1_…). Where: porkbun.com > Account > API Access > Create API Key; …
+Porkbun API key (pk1_…): pk1_…
+Step 2 of 2: Porkbun secret API key (sk1_…). Where: …
+Porkbun secret API key (sk1_…, not echoed):
+stored credential porkbun (provider-token, Porkbun API key pair): API key and secret API key; no value was printed
+```
+
+| Provider | Parts, in order | `--from-env` |
+| --- | --- | --- |
+| `porkbun` | Porkbun API key (`pk1_…`), Porkbun secret API key (`sk1_…`) | `PORKBUN_API_KEY`, `PORKBUN_SECRET_API_KEY` |
+| `openstack` (`infomaniak`) | Application credential ID (32 hex), Application credential secret | `OS_APPLICATION_CREDENTIAL_ID`, `OS_APPLICATION_CREDENTIAL_SECRET` |
+| `hetzner` (`hcloud`) | Hetzner Cloud API token | `HCLOUD_TOKEN` |
+| `token` | Provider API token | `PICELI_PROVIDER_TOKEN` |
+
+- **Which provider.** `--provider porkbun|openstack|infomaniak|hetzner|token`;
+  else `--infra MODULE:ATTR`, whose provider with `credentials=NAME` tells;
+  else the provider stored under NAME before; else the name, alone or
+  before a dash (`porkbun`, `porkbun-dns`, `infomaniak`, `hcloud`).
+  Otherwise it is one API token.
+- **Each part is checked as it is entered**, never printed: not empty, no
+  space around it, no `:` inside, and the known shape (Porkbun's `pk1_` and
+  `sk1_`, an application credential ID of 32 hex characters). A wrong part
+  (a swapped pair, a single `KEY:SECRET` line, only one of the two) is
+  refused with `infra-credential-part-invalid`, whose `part` names it
+  (`api_key`, `secret_api_key`, …), and nothing is stored. Identifiers
+  are echoed as you type them; secrets are not.
+- **Piped**, for scripts and tests: one part per line, in the order above:
+  `printf '%s\n%s\n' "$KEY" "$SECRET" | piceli secrets provider porkbun --prompt`.
+- **Stored by part**: `{"provider": "porkbun", "parts": {"api_key": …,
+  "secret_api_key": …}}`. The `stored` line and its JSON name the parts
+  (`"parts": ["api_key", "secret_api_key"]`), never their values. A
+  credential stored as one `ID:SECRET` value by an earlier version still
+  reads.
+- **One part stored earlier?** Every plan checks the credentials its
+  providers use before any API call and refuses one that lacks a part
+  (`infra-credential-incomplete`), with the command to run: "porkbun: one
+  part of two stored, re-run `piceli secrets provider porkbun --prompt`".
+  Running that command
+  replaces the credential; no delete is needed.
+  `piceli.infra.machines.credential_parts.credential_reports()` reports
+  every stored credential's completeness (names and counts, never values);
+  `secrets backup --json` lists the incomplete ones in `incomplete`.
+
+`piceli secrets s3 NAME --prompt` does the same for a bucket's S3 keys: the
+S3 access key id (echoed), then the S3 secret access key, stored by part
+(`--from-env` reads `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`). The
+pairs `infra apply` creates are stored by part the same way. A credential
+stored by part needs Piceli 0.25.0 or later to read it.
+
+## Back the secret store up
+
+The store (`$PICELI_CREDENTIALS_DIR`) is the only copy of your provider
+tokens, state passphrases and the registered clusters' kubeconfigs: a lost
+laptop without a backup means an unreadable OpenTofu state. Keep an
+encrypted copy elsewhere:
+
+```console
+$ piceli secrets backup-key --out /Volumes/usb/piceli-offline.key --add   # prints age1...
+$ piceli secrets backup --to /Volumes/backup/piceli-secrets.age \
+    --recipient age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
+$ piceli secrets backup --to /Volumes/backup/piceli-secrets.age --force   # later: no flags
+```
+
+- **What it holds.** Every file under `$PICELI_CREDENTIALS_DIR`, whatever
+  its kind (the `NAME.json` credentials, `kubeconfigs/`, kinds a later
+  version adds), and the profiles of `$PICELI_PROFILES_DIR` (pointers; one
+  pointing into the store is moved with it on restore). Not the
+  `known_hosts` of an infrastructure: it sits next to its state, and
+  `piceli infra register` pins the keys again.
+- **How it is encrypted.** With the [age](https://age-encryption.org)
+  command, so `age -d -i KEY FILE | tar t` reads it without Piceli. The
+  tar is streamed into age; no plaintext touches the disk. An existing
+  file is replaced only with `--force`.
+- **Which recipients.** At least two, kept apart, so one lost key is not
+  the end: with one, losing that key loses the store and its backup
+  together, and the backup is refused (`secrets-backup-single-recipient`)
+  unless you pass `--single-recipient`, which the backup's manifest, the
+  remembered marker and `staleness()` record (`single_recipient: true`).
+  The recommended pair:
+  1. an age key whose identity lives in your password manager
+     (`age-keygen`, store the `AGE-SECRET-KEY-1...` line there, pass the
+     `age1...` public key);
+  2. an offline age key, made by one command that prints only its
+     recipient: `piceli secrets backup-key --out /Volumes/usb/piceli-offline.key
+     --add` writes the private key (`0600`; refused inside the store, and
+     over an existing file without `--force`) and adds its `age1...`
+     recipient to the remembered ones. It is the only copy: keep it
+     offline, on a USB drive or printed on paper, and delete it from this
+     machine.
+
+  A hardware key is the alternative to the offline file:
+  [age-plugin-yubikey](https://github.com/str4d/age-plugin-yubikey) creates
+  an identity on a YubiKey (`age-plugin-yubikey` to set it up,
+  `age-plugin-yubikey --list` prints its `age1yubikey1...` recipient); pass
+  that with `--recipient`, and keep the plugin on `PATH` for a restore. An
+  SSH key (`ssh-ed25519 ...`) works too. Pass public keys only.
+  `--recipients-file FILE` takes them one per line; the recipients are
+  remembered in `credentials.backup.json` next to the store, with the time,
+  sha256 and names of the last backup (never a value).
+- **Is it current?** `backup --json` reports `staleness`: the last backup's
+  time, the newest file's, and the names changed or added since.
+
+On a new machine, install Piceli and age, then:
+
+```console
+$ piceli secrets restore piceli-secrets.age --identity ~/backup.key   # or the hardware key's plugin
+```
+
+Into an empty store it restores at once (files `0600`, directories `0700`)
+and remembers the recipients. Into a store that is not empty it lists what
+it would add, what is identical and what differs, with a digest, exits 3
+and writes nothing; `--approve DIGEST` restores those. An archive with an
+absolute path, `..`, a link or a file outside the store is refused
+(`secrets-restore-archive-invalid`). Read the identity from the password
+manager into a file only for the restore, and delete it afterwards.
+
+(build-host-secrets)=
+### Moving a build host's keys there
+
+A `NixRelease(..., builder="mini")` is published by `piceli builder serve
+--publish` on the build host `mini`, which reads the cache's signing key and
+S3 write pair from its own store. They are made on your machine (`piceli
+secrets setup`, `infra apply`); carry them over with the same encrypted
+archive, for that machine's key only:
+
+1. **On the build host**, make the key that receives them (or use
+   `age-keygen -o ~/.config/piceli/transfer.key`):
+
+   ```console
+   mini$ piceli secrets backup-key --out ~/.config/piceli/transfer.key
+   recipient: age1...
+   ```
+
+2. **On your machine**, write just those secrets, encrypted to it.
+   `piceli secrets status MODULE` prints this command, with the names, for
+   each secret a release's build host needs:
+
+   ```console
+   $ piceli secrets backup --only cache-1 --only cache-write \
+       --to /tmp/x.age --recipient age1...
+   $ scp /tmp/x.age mini:/tmp/x.age
+   $ rm /tmp/x.age
+   ```
+
+   `--only NAME` (repeatable) takes credentials of the store by name
+   (`secrets-backup-only-unknown` otherwise). It needs `--recipient` (the
+   remembered recipients are your own, not the build host's) and one is
+   enough; the archive's manifest says `only: true`. It is not a backup of
+   your store: the last backup's marker, its staleness and the remembered
+   recipients do not change.
+
+3. **On the build host**, restore them and delete the file:
+
+   ```console
+   mini$ piceli secrets restore /tmp/x.age --identity ~/.config/piceli/transfer.key
+   mini$ rm /tmp/x.age
+   ```
+
+   Into an empty store they are added at once; into one that is not empty
+   the restore lists what it adds or replaces and exits 3, and `--approve
+   DIGEST` writes them. A transfer never becomes the build host's backup
+   configuration.
 
 ## The OS hand-off and the cluster
 
@@ -422,9 +665,12 @@ the command line with their approvals.
 | `piceli infra status REF [--json]` | Read-only status | 0, 2 |
 | `piceli infra install REF SERVER [--approve DIGEST]` | Run the install hook | 0, 1 `infra-install-failed`, 2, 3 |
 | `piceli infra register REF SERVER [--kubeconfig F] [--approve DIGEST]` | Register the server's k3s | 0, 1 `infra-k3s-not-ready`, 2, 3 |
-| `piceli secrets provider NAME --prompt` | Store a provider token | 0, 2 |
+| `piceli secrets provider NAME --prompt\|--from-env [--provider P] [--infra REF]` | Store a provider credential, part by part | 0, 2 |
 | `piceli secrets state-key NAME --generate\|--prompt` | Store the state passphrase | 0, 2 |
 | `piceli secrets delete NAME [--kind KIND] [--yes]` | Delete a stored credential (asks first; never printed) | 0, 2, 3 |
+| `piceli secrets backup --to PATH [--recipient R] [--force] [--single-recipient]` | Back the store up, encrypted with age (two recipients) | 0, 1, 2 |
+| `piceli secrets backup-key --out PATH [--add] [--force]` | Create the offline age key; print only its recipient | 0, 1, 2 |
+| `piceli secrets restore PATH [--identity F] [--approve DIGEST]` | Restore it (plans first into a used store) | 0, 1, 2, 3 |
 
 `--tofu PATH` (or `$PICELI_TOFU`) chooses the OpenTofu binary; otherwise
 `tofu` on `PATH`. Error codes: area `infra` in {doc}`reference/errors`.

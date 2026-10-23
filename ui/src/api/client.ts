@@ -79,6 +79,7 @@ export const api = {
   clusterBuildOperation: (operation_id: string, signal?: AbortSignal) => service().GET('/api/v1/cluster-build/operations/{operation_id}', { params: { path: { operation_id } }, signal }).then(data),
   composition: (signal?: AbortSignal) => service().GET('/api/v1/composition', { signal }).then(data),
   compositionEnvironment: (env: string, signal?: AbortSignal) => service().GET('/api/v1/composition/environments/{env}', { params: { path: { env } }, signal }).then(data),
+  compositionTargets: (signal?: AbortSignal) => service().GET('/api/v1/composition/targets', { signal }).then(data),
   compositionHistory: (signal?: AbortSignal) => service().GET('/api/v1/composition/history', { signal }).then(data),
   compositionEnvironmentHistory: (env: string, signal?: AbortSignal) => service().GET('/api/v1/composition/environments/{env}/history', { params: { path: { env } }, signal }).then(data),
   compositionSync: (body: CompositionSyncRequest) => service().POST('/api/v1/composition/sync', { body }).then(data),

@@ -542,6 +542,8 @@ def hosts(
                 if state.up
                 else f"down: {state.detail}"
             )
+            # 0.25.0: a host declared runs=False only publishes.
+            + ("" if state.host.runs else "; publishes Nix releases only (runs=False)")
         )
         health = state.health or {}
         if state.quarantined is not None:

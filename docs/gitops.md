@@ -601,6 +601,294 @@ NAME` ends a quarantine once the machine is sound. A build that passed but
 met a corrupt cached blob (`cache-corrupt` in a host build's log: the blob
 is discarded and fetched or written again) also counts against its host.
 
+(gitops-nix-releases)=
+### Nix host releases (0.25.0)
+
+The controller can also publish the releases of a {doc}`NixHost <nix_hosts>`,
+so a new tag needs no hand-run `piceli dev nix build --publish`. Declare a
+`NixRelease` in the composition module, next to the host and the `Source`
+that holds its flake:
+
+```python
+from piceli.infra import NixCache, NixHost, NixRelease, Source, Tag
+
+hosts = Source("https://git.example.org/org/hosts.git")
+cache = NixCache("cache-1:<base64 public key>",
+                 url="s3://nix-cache?endpoint=s3.example.org&region=us-east-1",
+                 write_credentials="cache-s3-write")
+web = NixHost("web-1", server="ssh://root@web-1.example.org", flake=".#web-1",
+              follow=Tag("web-v*"), cache=cache)
+web_release = NixRelease(web, source=hosts, builder="mini", auto_approve=False)
+```
+
+`piceli gitops enable infra.py` puts it into the controller's
+configuration (the install plan hash covers it). A composition may hold
+releases and no environment. A `NixRelease` follows `Tag(...)` only, and
+its name (the host's) may not be an environment's: `approve` and `sync`
+name either.
+
+**The write keys stay on the build host.** The controller in the cluster
+never holds them. On the build host named by `builder=` (a docker or
+native host of the cluster's `DevBuilds(hosts=[...])` with
+`DevProfile.for_nix()`), with the cache's signing key and S3 write keys in
+its own Piceli secrets (`piceli secrets nix-cache cache-1 --prompt`,
+`piceli secrets s3 cache-s3-write --prompt`, or carried from your machine
+with `piceli secrets backup --only`: {ref}`build-host-secrets`):
+
+```sh
+piceli builder serve --cluster infra.py:my_cluster --host mini \
+  --publish infra.py:cache
+```
+
+`--publish MODULE:ATTR` (repeat it for several caches) names the caches
+this host publishes to. It reads every key when it starts and refuses to
+start without one (`infra-credential-missing`) or with another cache's
+(`dev-nix-key-mismatch`). It claims a publish only when it is the
+release's builder and holds that cache's keys, and says once why it skips
+any other. Its claim carries the cache key's signature over the claim
+(`piceli.nix-publish-claim.v1`, the build's id and the host), which the
+controller checks with the cache's public key: the key itself is never
+sent. A native host with `--publish` only publishes; a docker host also
+builds images as before, unless `--publish-only` (0.25.0) is given.
+
+**A remote machine that only publishes is a docker host with an SSH
+context to itself.** `BuildHost.native` means the machine running Piceli:
+every machine that loads the composition (a laptop running `dev run`, the
+owner's `piceli dev nix build`) would take it for itself, so it cannot name
+a remote machine. Declare the publisher as a docker host reached over SSH
+with `runs=False` (0.25.0), and run `builder serve` on that machine:
+
+```python
+from piceli.infra import BuildHost, DevBuilds, DevProfile
+
+dev = DevBuilds(
+    node=None,
+    image="ghcr.io/pynenc/piceli-builder@sha256:<digest>",
+    profiles=[DevProfile.for_nix()],
+    hosts=[
+        BuildHost.docker("nix-builder", runs=False,  # it only publishes
+                         context="ssh://builder@builder-1.example.org"),
+        BuildHost.docker("laptop"),
+    ],
+)
+```
+
+```sh
+# on builder-1, with the cache's keys in its own piceli secrets
+piceli builder serve --cluster infra.py:my_cluster --host nix-builder \
+  --publish infra.py:cache
+```
+
+`--publish-only` claims only the `nix-publish` builds of its caches,
+whatever the host's kind: it never claims an image build (it says so once),
+so who builds the cluster's images does not change, and it needs no
+cluster registry. Without `--publish` it is refused (`dev-nix-invalid`).
+
+`runs=False` makes the host's role part of the declaration (and of the
+plans and `piceli dev hosts`, which shows it as publishing only):
+`builder serve` on it implies `--publish-only` and refuses to start
+without `--publish` or with `--no-publish-only` (`dev-host-publish-only`);
+`piceli dev run`, `piceli dev nix build` and `builder serve` without
+`--host` never pick it, so an agent's runs never land on the publisher.
+`--host nix-builder` still names it.
+
+What happens when a tag appears in the source:
+
+1. The controller takes the highest version of the host's pattern (the
+   version after its prefix, see {doc}`nix_hosts`). Tags that exist when it
+   first sees the release are the **baseline** and publish nothing;
+   `piceli gitops sync web-1` publishes the newest one. A newer tag starts
+   a new attempt (an older or equal one never does).
+2. It plans the publish, `piceli.nix-release-plan.v1`: the attribute, the
+   build's name, the commit and the tag, the source, the builder, the
+   cache, the manifest key and the tag's pointer. With
+   `auto_approve=True` it goes on; otherwise the release waits in
+   `approval-required` until `piceli gitops approve web-1
+   sha256:<plan digest>`.
+3. It asks for the publish in `controller.builds_wanted` (kind
+   `nix-publish`, with the plan and its digest). The release is
+   `waiting-build`, then `publishing` once its builder claimed it.
+4. The build host fetches the source at the commit with its own Git
+   access, checks that the tag points at that commit (a tag moved since
+   fails the publish), builds the attribute as a development run (as
+   `piceli dev nix build`), signs and pushes the closure, then uploads the
+   signed manifest (its `commit` and `tag` are the tag's) and the tag's
+   pointer, exactly as `dev nix build --publish` does. It refuses a plan
+   whose pointers are not exactly its tag's. It answers `nix-published`
+   with the signed manifest, the pointer and its stages.
+5. The controller records the release `published` only when the manifest
+   is signed by the cache's key and names the planned build, commit, tag
+   and attribute, and the pointer is the tag's. Anything else is a
+   rejected request (`rejected_requests`).
+
+A failed fetch, build or publish is answered `build-failed`: the release
+is `failed` with the host's reason and output tail
+(`gitops-nix-release-failed`) and is not tried again until a newer tag or
+`piceli gitops sync` (`sync web-1` retries that release, `sync` alone
+every failed one). A quarantined build host claims nothing. The hosts
+deploy the published build on their own, as {doc}`nix_hosts` describes.
+
+`piceli gitops status --json` lists each release under `nix_releases`:
+
+```json
+"nix_releases": {"web-1": {
+  "host": "web-1", "source": "hosts", "builder": "mini", "auto_approve": false,
+  "follow": {"kind": "tag", "pattern": "web-v*", "prereleases": false},
+  "latest_tag": "web-v1.4.0", "latest_commit": "3f2c…",
+  "state": "published", "reason": null, "trigger": "tag web-v1.4.0",
+  "tag": "web-v1.4.0", "commit": "3f2c…",
+  "plan": {"schema": "piceli.nix-release-plan.v1", "…": "…"},
+  "plan_digest": "sha256:…", "build_id": "0a1b…",
+  "approval": {"via": "cli", "at": "2026-10-23T10:04:00Z", "requested_at": "…"},
+  "requested_at": "2026-10-23T10:00:00Z", "started_at": "2026-10-23T10:05:00Z",
+  "finished_at": "2026-10-23T10:20:00Z", "seconds": 1200.0,
+  "stages": {"approval": {"started_at": "…", "finished_at": "…", "seconds": 240.0},
+             "queue": {"seconds": 60.0}, "fetch": {"seconds": 4.1},
+             "build": {"seconds": 590.0}, "publish": {"seconds": 300.0}},
+  "published": {"host": "mini", "manifest": "piceli/web-1/3f2c….json",
+                "manifest_sha256": "sha256:…", "store_path": "/nix/store/…",
+                "system": "x86_64-linux", "nar_hash": "sha256:…",
+                "pointers": [{"ref": "refs/tags/web-v1.4.0", "commit": "3f2c…",
+                              "published_at": "…"}]},
+  "published_tag": "web-v1.4.0", "published_commit": "3f2c…"}}
+```
+
+`state` is `idle` (no matching tag), `baseline`, `approval-required` (with
+`approve_command`), `waiting-build`, `publishing` (with `claimed`),
+`published` or `failed` (with `failure`: `host`, `reason`, `log_tail`),
+or `rejected` by a promotion gate (below).
+The history (`piceli-gitops-history`) keeps each attempt under
+`nix_releases.<name>.runs` (newest first; the tag, commit, state, trigger,
+approval, stages, build host and manifest digest), and the controller's
+telemetry sends each as a trace `PUBLISH <name> <tag>` with a span per
+stage and the event `piceli.nix.release.finished` (see
+{doc}`opentelemetry`).
+
+#### A promotion gate and `piceli promote` (0.25.0)
+
+A host often runs a product from another repository, pinned as a flake
+input (`inputs.app.url = "git+https://git.example.org/org/app.git"`). A
+`Promotion` gate lets a release publish only a product commit one of the
+composition's environments ran with its release checks passed:
+
+```python
+from piceli.infra import NixRelease, Promotion
+
+app = Source("https://git.example.org/org/app.git")
+environments = [Environment("main", follow={app: "main"}, namespace="shop-main",
+                            stack=full, cluster=cluster)]
+web_release = NixRelease(web, source=hosts, builder="mini",
+                         gate=Promotion(input="app", environment="main"))
+```
+
+`input` is the input's name in `flake.lock`; `environment` an
+`Environment` of the same composition that follows the input's source
+(`source=`, default: the source named like the input). The composition
+refuses a gate naming another environment or a source it does not follow.
+The gate lives on the `NixRelease`, not on the `NixHost`: it is a rule of
+who publishes, checked against an environment of the same composition, and
+the host itself never reads the controller's history.
+
+**The rule.** At plan time the gate reads `flake.lock` at the release
+commit and takes the input's `locked.rev`. The commit qualifies when the
+environment's history (`piceli-gitops-history`) has a run of it in state
+`deployed` whose checks ran (at least one) and all passed, without a
+rollback. A run that failed, degraded or rolled back does not count, nor an
+environment without checks.
+
+- **The controller** checks a new tag's commit before it plans the publish.
+  Refused, the release is `rejected` with `reason`
+  `promotion-not-verified` and `refusal` (the input, the commit, the
+  environment and `newest_passed`, the newest commit it did pass); nothing
+  is asked of a build host. It checks again on every poll, so the tag
+  publishes once the environment passed that commit. A flake without the
+  input is `promotion-input-missing`.
+- **A hand-run publish** of a gated host runs the same gate, always:
+  `piceli dev nix build ATTR --ref web-v1.4.0 --publish infra.py:cache`
+  finds the gated `NixRelease` (or `NixHost` with `gate=`) of the same
+  cache and attribute in the `--publish` module, or in `--composition
+  MODULE` when given; `--release HOST` names it explicitly. It reads the
+  history as `piceli gitops status` does (`--state-dir`,
+  `--kubeconfig FILE --context NAME`, else the composition cluster's
+  credential profile from `piceli login`, `--namespace`) and refuses before
+  any build. A history it cannot read refuses too
+  (`promotion-history-unreachable`): the gate fails closed.
+
+The result goes into the release plan (so the approval covers it), into
+the signed build manifest (an optional field: older manifests verify
+unchanged) and into `piceli gitops status` under the release:
+
+```json
+"pinned": {"input": "app", "commit": "9b1e…", "environment": "main",
+           "verified_run": "20261023T101500Z-3f2c9a10", "verified_at": "2026-10-23T10:20:00Z"}
+```
+
+`verified_run` is the newest qualifying run of that commit and
+`verified_at` when it finished.
+
+**Passed commits outlive the history.** The history lists the last 20 runs
+of an environment, so the controller also keeps, in its state, a record of
+the commits each gated environment passed: per environment and source,
+each commit's first and last passed run and their times, for the last 200
+commits per source (the oldest by last pass drop out). The gate checks the
+record as well as the runs, so a verified commit keeps qualifying after
+many deploys. The record is published in the history document as
+`passed_commits` (only for gated environments), where a hand-run gate and
+`piceli promote` read it:
+
+```json
+"passed_commits": {"main": {"app": {"9b1e…": {
+  "first_run": "20261021T090000Z-1a2b3c4d", "first_at": "2026-10-21T09:05:00Z",
+  "last_run": "20261023T101500Z-3f2c9a10", "last_at": "2026-10-23T10:20:00Z"}}}}
+```
+
+**The host checks it too.** `NixHost(..., gate=Promotion(input="app",
+environment="main"))` puts the gate into the agent's configuration: the
+agent switches only to a build whose signed manifest carries a `pinned` of
+that input and environment, and refuses any other (`host-promotion-missing`,
+nothing is realised). A `NixRelease` of that host takes the host's gate
+(giving another one is refused), so the gate is declared once.
+
+**`piceli promote HOST --from ENV`** writes the pin for you:
+
+```sh
+piceli promote web-1 --from main --composition infra.py --repo ../hosts
+# plan, exit 3; then the same command with --approve sha256:<digest>
+```
+
+It takes the newest commit `ENV` passed, computes in the flake's working
+copy the `flake.lock` that pins the input to exactly it, the next tag of
+the host's pattern (a patch bump of the highest release; `--bump major|minor`)
+and prints the plan with its digest (`piceli.promote.v1`):
+
+```json
+{"schema": "piceli.promote.v1", "state": "approval-required",
+ "digest": "sha256:…", "approve_command": "piceli promote web-1 --from main … --approve sha256:…",
+ "plan": {"schema": "piceli.promote-plan.v1", "host": "web-1",
+          "pinned": {"input": "app", "commit": "9b1e…", "environment": "main",
+                     "verified_run": "…", "verified_at": "…"},
+          "change": {"file": "flake.lock", "input": "app", "from": "41d0…",
+                     "to": "9b1e…", "method": "nix", "lock_sha256": "…"},
+          "commit_message": "promote app to 9b1e… from main\n\n…",
+          "base": "c0ff…", "remote": "origin", "branch": "main",
+          "tag": "web-v1.4.1", "previous_tag": "web-v1.4.0", "bump": "patch"}}
+```
+
+`--approve` recomputes the plan (`promote-plan-changed` when anything
+moved), commits `flake.lock` alone, creates an annotated tag and pushes the
+branch and the tag with `git push --atomic` (`promote-push-failed`, exit
+1, leaves both local). With `nix` on the `PATH` the lock comes from `nix
+flake lock --override-input` in a temporary worktree; without it the input's
+node is edited (`rev`, `lastModified`, `revCount`, and the `narHash`
+computed from a temporary bare clone of the input; a `git`, `github` or
+`gitlab` input without submodules or export rules). It refuses a working
+copy with uncommitted changes to tracked files (`promote-dirty`) and a
+branch without an upstream, or behind, ahead of or diverged from it
+(`promote-not-in-sync`). When the lock already pins the commit the state is
+`current` (exit 0): with a tag of the pattern at `HEAD` there is nothing to
+do; without one the plan only tags `HEAD`, and `--approve` tags and pushes
+the tag.
+
 ### Removed objects are deleted (pruning)
 
 New in 0.14.7. Every sync, of a branch, a named environment or main, and of

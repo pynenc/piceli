@@ -4,7 +4,9 @@ This page shows how to give a release every secret value it needs (passwords,
 connection strings, config files that embed a password, a private CA and its
 certificates) without writing any of them yourself, how to take values from
 an external source (a SOPS file, HashiCorp Vault, AWS Secrets Manager), and how
-to import, inspect and rotate them.
+to import, inspect and rotate them. The local secrets a machine or a Nix host
+needs (provider credentials, a cache's signing key, an age identity) are set
+up with `piceli secrets status` and `setup`: see {ref}`host-secrets-setup`.
 
 **Maturity: preview.** The `[secrets.*]` generator types and the
 `piceli release secret show` command may still change before 1.0. The origin
@@ -478,6 +480,171 @@ to a Secret, so an adopted CA has no key. The CA certificate and every leaf
 are kept, and later releases carry them. Adding a leaf needs the key, so it
 is refused with `secret-adoption-incomplete`: rotate the CA (`--rotate ca`)
 into Secrets with new names when you need new leaves.
+
+(host-secrets-setup)=
+## Setting up a host's secrets
+
+A declaration of machines and Nix hosts ({doc}`single_nixos_host`) needs
+local secrets that never go into Git: the cloud's and the registrar's
+credentials, the state passphrase, the cache's signing key, the host's age
+identity, its first-boot user data and the cache's S3 key pairs. Two
+commands set them up from the declaration itself (0.25.0). Neither prints a
+value.
+
+The cache's signing key does not exist before `setup` makes it, so a new
+declaration names the key without its public key:
+
+```python
+cache = NixCache(key_name="example-cache-1", bucket=nix_bucket)
+```
+
+`secrets status`, `secrets setup` and `infra plan` (the bucket and its S3
+pairs need no signing key) work with it. Whatever needs the public key
+refuses with `dev-nix-cache-key-unset` until it is declared: `dev nix
+build --publish`, `dev nix gc` and `host module`. A composition with a
+`NixRelease` of that cache still loads and its environments deploy; the
+controller keeps that release `rejected` (`dev-nix-cache-key-unset`, in
+`gitops status` and `piceli targets`) and publishes nothing for it, and
+`gitops enable` warns about it. Step 3 puts the key `setup` prints in its place:
+`NixCache("example-cache-1:<base64>", bucket=nix_bucket)`.
+
+1. **See what the declaration needs.**
+
+   ```console
+   $ piceli secrets status web_1.py
+   NAME             KIND             STATE       BY           NEXT
+   infomaniak       provider-token   incomplete  owner        piceli secrets provider infomaniak --prompt
+   porkbun          provider-token   missing     owner        piceli secrets provider porkbun --prompt
+   example-cache-1  nix-signing-key  missing     piceli       piceli secrets nix-cache example-cache-1 --generate
+   web-1-state      state-key        present     piceli       -
+   web-1-age        age-identity     missing     piceli       piceli secrets age web-1-age --generate
+   web-1-boot       user-data        missing     owner        piceli secrets user-data web-1-boot --prompt
+   nix-cache-write  s3-keys          pending     infra-apply  piceli infra plan web_1.py:infra
+   nix-cache-read   s3-keys          pending     infra-apply  piceli infra plan web_1.py:infra
+
+   what each is for:
+     infomaniak       openstack API [infomaniak: one part of two stored, re-run `piceli secrets provider infomaniak --prompt`]
+     web-1-age        sops-nix on web-1; on host web-1 too: piceli host secrets web-1 puts it there; its age1 public key goes in .sops.yaml
+     web-1-boot       user data of web-1; read once, when infra apply creates web-1: store a short-lived key right before that apply
+     nix-cache-read   read S3 keys of bucket example-nix-cache; on host web-1 too: piceli host secrets web-1 writes it to /var/lib/piceli-host/cache.env [created by the next infra apply]
+     ...
+   backup: no backup yet; next: piceli secrets backup-key --out PATH --add
+   warning: S3 key nix-cache-read (bucket example-nix-cache) is not read-only at openstack: hosts only read with it, but the cloud lets it write
+   summary: 1 present, 2 pending, 4 missing, 1 incomplete; piceli secrets setup web_1.py walks through them
+   ```
+
+   It reads every declaration in the module (`Infrastructure`, `Bucket`,
+   `NixCache`, `NixHost`, `NixRelease`, `DevBuilds`, and a composition's
+   clusters, whose credentials are `piceli login` profiles), or one with
+   `web_1.py:host`. Each secret is:
+
+   | State | Meaning |
+   | --- | --- |
+   | `present` | Stored and complete. |
+   | `pending` | A key pair the next `infra apply` creates: the infrastructure has not applied it yet. Not an error. |
+   | `missing` | Not stored. A pair `infra apply` already created but this store lacks: the next `infra plan` stores it again from the state. |
+   | `incomplete` | A credential that lacks a part (a Porkbun key pair stored as one value). |
+   | `damaged` | Unreadable, readable by other users, of another kind, or a signing key whose public key is not `NixCache(public_key=)`. |
+   | `copy` | A signing key stored for a cache declared with `key_name=` alone: `put example-cache-1:<base64> into NixCache(public_key=)`; `NEXT` prints the public key again. |
+   | `not-needed` | The user data of a server that exists: a plan reads it only to create the server again. |
+
+   `BY` says who makes it: `owner` (only you have it: you type it with
+   `--prompt`), `piceli` (generated with `--generate`) or `infra-apply`
+   (`piceli infra apply` creates and stores it). `NEXT` is the exact
+   command. The backup line tells whether a backup exists and is newer than
+   every secret (`stale` names the newer ones). Exit 0 means every secret
+   is stored and complete, or pending; 1 that something is missing,
+   incomplete, damaged or waits for its public key to be copied. `--json` prints the same as one `piceli.secrets-status.v1`
+   object (`secrets`, each with `state`, `created_by`, `next`, `purpose`,
+   `where`, `build_host`, `detail`; `counts`, `complete`, `backup`,
+   `warnings`).
+
+2. **Walk through what is missing.** `piceli secrets setup web_1.py` takes
+   the secrets in this order:
+
+   1. Provider credentials, asked for part by part, as `piceli secrets
+      provider` asks for them (an identifier echoed, a secret not).
+   2. The keys Piceli generates, after a `[Y/n]` each: the state
+      passphrase, the cache's signing key and the host's age identity. Only
+      the public halves are printed; copy the signing key's into
+      `NixCache(public_key=...)` and the `age1...` key into `.sops.yaml`.
+   3. The user data, offered with a `[y/N]`: a bootstrap key in it should
+      be short-lived (single-use, expiring in an hour), so the default is to
+      store it later, right before `infra apply`.
+   4. The S3 key pairs: `infra apply` creates them; nothing happens here.
+   5. A backup when none is current: the offline key (`backup-key`), your
+      own age recipient, then the backup itself. Each is skipped with an
+      empty answer.
+
+   ```console
+   $ piceli secrets setup web_1.py
+   1. Provider credentials: only you have them
+     infomaniak: OpenStack application credential (openstack API); application credential ID and application credential secret
+   Step 1 of 2: Application credential ID. Where: the cloud's dashboard (Horizon): …
+   Application credential ID: 0123456789abcdef0123456789abcdef
+   Step 2 of 2: Application credential secret. Where: …
+   Application credential secret (not echoed):
+     stored infomaniak: application credential ID and application credential secret; no value was printed
+     ...
+   2. Keys Piceli generates
+     Generate nix-signing-key example-cache-1 now? [Y/n]: y
+     generated example-cache-1 (nix-signing-key); the secret was not printed
+     public key: example-cache-1:SRm8gJ5/1Ar3IoTsZn4jGAGWab2eao9d4zpNY1n6rec=
+     put it in NixCache(public_key=...) in your declaration
+     present: web-1-state (state-key)
+     Generate age-identity web-1-age now? [Y/n]: y
+     ...
+   3. User data: needed only when infra apply creates the server
+     Store web-1-boot now? [y/N]:
+     later, right before infra apply: piceli secrets user-data web-1-boot --prompt
+   4. S3 key pairs
+     nix-cache-write: write S3 keys of bucket example-nix-cache, made by piceli infra apply; nothing to do here; next: piceli infra plan web_1.py:infra
+     ...
+   5. Backup
+     Offline backup key: a path outside the store (a USB drive), empty to skip: /Volumes/usb/piceli-offline.key
+     ...
+   copy: example-cache-1:SRm8gJ5/1Ar3IoTsZn4jGAGWab2eao9d4zpNY1n6rec= into NixCache(public_key=...) (example-cache-1)
+   copy: age1tyz57d7pampk4pt8ry6vcxgdalz4tpj48jnux3y92u44f09rtfusahd42n into .sops.yaml (web-1-age)
+   done: every secret Piceli can set up now is stored
+   ```
+
+   A stored key is never replaced without a typed `y`: a damaged one is
+   offered for replacement with `[y/N]`, and a signing key that only
+   differs from the declaration prints its public key instead. Exit 0
+   means everything is stored but what is left for later on purpose (the
+   user data, the pairs `infra apply` makes); 1 that something still needs
+   you.
+
+3. **Copy the public keys** into the declaration and `.sops.yaml`: replace
+   `key_name="example-cache-1"` with the printed key
+   (`NixCache("example-cache-1:SRm8gJ5/...", bucket=nix_bucket)`). Until
+   then `piceli secrets status web_1.py` shows the signing key `copy`:
+
+   ```console
+   example-cache-1  nix-signing-key  copy     piceli       piceli secrets nix-cache example-cache-1
+   ```
+
+   and `present` once the declaration names it. A declaration that names
+   another key shows it `damaged`.
+
+4. **Right before the first apply**, store the user data (`piceli secrets
+   user-data web-1-boot --prompt`), then plan and apply: `infra apply`
+   stores the S3 pairs, and `status` shows them `present`.
+
+5. **A build host that publishes releases.** With a `NixRelease(...,
+   builder="mini")`, the cache's signing key and S3 write pair are made
+   here (`setup`, `infra apply`), but `piceli builder serve --publish` on
+   `mini` reads them from `mini`'s own store. Once they are present here,
+   `status` gives the command that carries them there (`build_host:
+   "mini"`), and the steps are in {ref}`build-host-secrets`.
+
+Without a terminal (scripts, agents), `setup --yes` generates the keys and
+reads provider parts piped one per line, in the order `status` lists them;
+stdin at its end skips them, and the user data and the backup are left for
+later. `--yes` never replaces a key. `--json` prints one object per step
+(`state`: `stored`, `generated`, `copy`, `present`, `later`, `skipped`,
+`needs-yes`, `kept`, `failed`), then a summary with `remaining`, `later` and
+`copy`.
 
 ## If it fails
 

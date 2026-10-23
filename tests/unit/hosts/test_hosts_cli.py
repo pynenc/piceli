@@ -561,7 +561,11 @@ class FakeSsh:
         if words[0] == "/run/current-system/bin/switch-to-configuration":
             return subprocess.CompletedProcess(argv, self.activate_code, b"", b"")
         assert words[:2] == ["sh", "-c"]
-        script = words[2].replace("/var/lib/sops-nix", str(self.root))
+        script = (
+            words[2]
+            .replace("/var/lib/sops-nix", str(self.root))
+            .replace("/var/lib/piceli-host", str(self.root / "piceli-host"))
+        )
         done = subprocess.run(
             ["sh", "-c", script.replace("chown 0:0", "true")],
             input=kwargs.get("input") or b"", capture_output=True, timeout=30,
@@ -645,3 +649,88 @@ def test_host_secrets_plans_writes_and_reactivates(
     )  # fmt: skip
     monkeypatch.setattr(cli_host, "load_host", lambda _ref: no_identity)
     assert json.loads(run("hosts.py:web").stdout)["reason"] == "host-secret-undeclared"
+
+
+def test_host_secrets_puts_the_cache_read_pair_piceli_created(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0.25.0: the bucket's S3Key(access="read") goes to the agent's file,
+    compared by sha256 and never read back; no activation for it."""
+    import shlex
+
+    import piceli.hosts.remote as remote_module
+    import piceli.k8s.cli.host as cli_host
+    from piceli.hosts.model import PICELI_CACHE_ENV
+    from piceli.infra import Bucket, OpenStack
+    from piceli.infra.machines.credentials import save_credential
+    from piceli.infra.machines.model import S3Key
+    from piceli.k8s.cli import app
+
+    if shutil.which("sha256sum") is None:
+        pytest.skip("no sha256sum")
+    monkeypatch.setenv("PICELI_CREDENTIALS_DIR", str(tmp_path / "creds"))
+    cloud = OpenStack(
+        credentials="cloud", auth_url="https://identity.example.org/v3",
+        region="region-1", public_network="public", flavors=["small"],
+    )  # fmt: skip
+    bucket = Bucket("nix-cache", provider=cloud,
+                    keys=[S3Key("cache-write"), S3Key("cache-read", access="read")])  # fmt: skip
+    cache = NixCache(PUBLIC, bucket=bucket, endpoint="s3.example.org")
+    declared = NixHost("web-1", server="ssh://root@web-1.example.org",
+                       flake=".#web-1", follow=Tag("v*"), cache=cache)  # fmt: skip
+    assert declared.read_credentials_file == PICELI_CACHE_ENV
+    assert declared.cache_credentials == "cache-read"
+    own = NixHost("web-1", server="ssh://root@web-1.example.org", flake=".#web-1",
+                  follow=Tag("v*"), cache=cache,
+                  read_credentials_file="/run/secrets/piceli/cache.env")  # fmt: skip
+    assert own.cache_credentials is None  # the host's own (sops) file: left alone
+    monkeypatch.setattr(cli_host, "load_host", lambda _ref: declared)
+    host_root = tmp_path / "host"
+    fake = FakeSsh(host_root)
+    monkeypatch.setattr(
+        remote_module, "_ssh",
+        lambda target, words, **kw: fake(
+            ["ssh", "--", "web-1.example.org",
+             *(shlex.split(" ".join(words)) if words else [])],
+            **({"input": kw["data"]} if kw.get("data") is not None else {}),
+        ),
+    )  # fmt: skip
+    run = lambda *a: CliRunner().invoke(app, ["host", "secrets", *a])  # noqa: E731
+    missing = run("hosts.py:web")
+    assert json.loads(missing.stdout)["reason"] == "infra-credential-missing"
+    secret = "read-secret-" + "s" * 30
+    save_credential("cache-read", "s3-keys", f"AKREAD123:{secret}")
+    planned = run("hosts.py:web", "--json")
+    assert planned.exit_code == 3, planned.stdout + planned.stderr
+    plan = json.loads(planned.stdout)
+    assert "public_key" not in plan  # no age identity declared
+    assert {k: v for k, v in plan["cache"].items() if k != "digest"} == {
+        "path": PICELI_CACHE_ENV, "mode": "0600", "owner": "root",
+        "credential": "cache-read", "bucket": "nix-cache", "existing": "absent",
+        "activation": False,
+    }  # fmt: skip
+    for text in (secret, "AKREAD123"):
+        assert text not in planned.stdout + planned.stderr
+    done = run("hosts.py:web", "--approve", plan["digest"])
+    assert done.exit_code == 0, done.stdout + done.stderr
+    result = json.loads(done.stdout)
+    assert result["state"] == "written" and result["activated"] is False
+    written = host_root / "piceli-host" / "cache.env"
+    assert written.stat().st_mode & 0o777 == 0o600
+    assert f"AWS_ACCESS_KEY_ID=AKREAD123\nAWS_SECRET_ACCESS_KEY={secret}\n" in (
+        written.read_text()
+    )
+    assert all(secret not in " ".join(call) for call in fake.calls)
+    assert not any("switch-to-configuration" in " ".join(c) for c in fake.calls)
+    assert secret not in done.stdout + done.stderr
+    # The agent's parser reads it.
+    from piceli.hosts.agent import read_env_file
+
+    assert read_env_file(str(written))["AWS_SECRET_ACCESS_KEY"] == secret
+    assert json.loads(run("hosts.py:web").stdout)["state"] == "current"
+    # A rotated pair: the plan says "different" and writes it, no --replace.
+    save_credential("cache-read", "s3-keys", f"AKREAD456:{secret}-2")
+    rotated = json.loads(run("hosts.py:web").stdout)
+    assert rotated["cache"]["existing"] == "different"
+    assert run("hosts.py:web", "--approve", rotated["digest"]).exit_code == 0
+    assert "AKREAD456" in written.read_text()

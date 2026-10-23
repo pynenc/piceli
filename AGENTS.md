@@ -133,6 +133,7 @@ These are enforced by tests or review. Do not weaken them.
 | Import live objects or YAML as a typed module (`piceli import`) | `piceli/importing/`, `piceli/k8s/cli/importing.py` |
 | Public fake Kubernetes API for tests | `piceli/testing/` |
 | Observe / operator UI and REST API | `piceli/k8s/observe*.py`, `piceli/k8s/operator*.py` |
+| One status view of every environment and NixHost (`piceli targets`, the UI's Targets view) | `piceli/targets.py`, `piceli/k8s/cli/targets.py`, `piceli/services/composition_control.py` |
 | Access and status (`piceli access`, `piceli status`) | `piceli/app/access.py`, `piceli/k8s/access.py`, `piceli/k8s/port_owner.py`, `piceli/k8s/cli/access.py` |
 | Examples (run in CI where possible) | `examples/` |
 | Cross-model eval of agents using Piceli (tasks, grader, sandbox, baselines) | `evals/` (see `evals/README.md`) |

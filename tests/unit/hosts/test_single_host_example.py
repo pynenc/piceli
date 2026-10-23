@@ -41,11 +41,20 @@ def _built_image(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
 
 
-def _example(tmp_path: Path) -> ModuleType:
+#: The public key step 1's ``piceli secrets setup`` prints.
+PUBLIC = "example-cache-1:jXbGkEMPpvXtlVqGBrqfsnU8Jyn1cZB9u0QhGhvsKP0="
+_KEY_NAME = 'key_name="example-cache-1",'
+
+
+def _example(tmp_path: Path, *, keyed: bool = True) -> ModuleType:
+    """The page's declaration; ``keyed``: after step 1, with the public key
+    in place of ``key_name=``."""
     found = _BLOCK.findall(PAGE.read_text(encoding="utf-8"))
     assert len(found) == 1, "the page has one `# web_1.py` block"
-    path = tmp_path / "web_1.py"
-    path.write_text(found[0], encoding="utf-8")
+    assert found[0].count(_KEY_NAME) == 1, "the cache names its key first"
+    text = found[0].replace(_KEY_NAME, f"{PUBLIC!r},") if keyed else found[0]
+    path = tmp_path / ("web_1.py" if keyed else "web_1_new.py")
+    path.write_text(text, encoding="utf-8")
     spec = importlib.util.spec_from_file_location("single_host_example", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -81,6 +90,18 @@ def test_the_example_renders_the_infrastructure(tmp_path: Path) -> None:
     }
     assert rendered.digest.startswith("sha256:")
     assert render(_example(tmp_path).infra).digest == rendered.digest  # stable
+
+
+def test_the_example_as_written_waits_for_its_public_key(tmp_path: Path) -> None:
+    from piceli.dev.model import DevError
+
+    example = _example(tmp_path, keyed=False)
+    assert example.cache.public_key is None
+    assert example.cache.signing_credential == "example-cache-1"
+    render(example.infra)  # the bucket needs no signing key
+    with pytest.raises(DevError) as raised:
+        agent_config(example.host)
+    assert raised.value.code == "dev-nix-cache-key-unset"
 
 
 def test_the_example_declares_the_host_and_its_builds(tmp_path: Path) -> None:

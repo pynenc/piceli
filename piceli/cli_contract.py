@@ -1316,6 +1316,29 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "ssh runs with BatchMode and strict host key checking "
             "(host-unreachable, host-status-missing).",
         ),
+        "targets": _C(
+            "One status view of every target: each GitOps environment and each "
+            "NixHost with its commit or tag, the product commit it pins, its "
+            "checks and its state.",
+            reads=(
+                "--composition MODULE (environments, NixReleases)",
+                "--infra MODULE (NixHosts, applied addresses, pinned host keys)",
+                "the controller's status, read once: --kubeconfig/--context or --state-dir, "
+                "else the composition's home Cluster with its piceli login profile",
+                "each host's /var/lib/piceli-host/status.json (ssh, in parallel)",
+            ),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.25.0. Read-only; safe to retry. --json prints one "
+            "piceli.targets.v1 object. An unreachable controller or host never "
+            "fails the view: its rows say unreachable with the reason (host rows "
+            "still work with the home cluster down; a missing login profile of "
+            "the home cluster shows profile-not-found with a piceli login hint). Exit 0: every target "
+            "reachable, none failed; 1: a target failed, rolled back, is "
+            "unreachable or its checks failed; 2: no module and no controller "
+            "named (targets-input-required) or a module that does not load.",
+        ),
         "host wait": _C(
             "Wait until a Nix host runs a commit or tag with its checks passed.",
             reads=(
@@ -1374,16 +1397,18 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "piceli.host.rollback.",
         ),
         "host secrets": _C(
-            "Put a Nix host's age identity (its sops-nix key) on the host: "
-            "plan, then --approve DIGEST.",
+            "Put a Nix host's age identity (its sops-nix key) and the cache's "
+            "read keys Piceli created on the host: plan, then --approve DIGEST.",
             reads=(
-                "MODULE:ATTR (piceli.infra.NixHost with age_identity=)",
-                "$PICELI_CREDENTIALS_DIR/NAME.json (age-identity)",
-                "the host's key file, by fingerprint only (ssh)",
+                "MODULE:ATTR (piceli.infra.NixHost with age_identity= or a cache "
+                "bucket with S3Key(access='read'))",
+                "$PICELI_CREDENTIALS_DIR/NAME.json (age-identity, s3-keys)",
+                "the host's key file and cache.env, by fingerprint only (ssh)",
             ),
             writes=(
                 "NixHost(age_key_file=) on the host, 0600 root (ssh stdin, "
                 "atomic rename)",
+                "/var/lib/piceli-host/cache.env, 0600 root (0.25.0)",
             ),
             approval_required=True,
             contract="conforms",
@@ -1393,7 +1418,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "the digest; 0 when it has the same). A different key is refused "
             "without --replace (host-secret-exists). The key travels on ssh's "
             "stdin, never in an argument, log or state. After writing, the "
-            "host re-runs switch-to-configuration switch so sops-nix decrypts.",
+            "host re-runs switch-to-configuration switch so sops-nix decrypts. "
+            "0.25.0: with a bucket S3Key(access='read') the plan's cache lists the "
+            "read pair (credential, short digest, same/different/absent); it is "
+            "written without --replace and needs no activation (the agent reads "
+            "it each poll).",
         ),
         "gitops enable": _C(
             "Plan and, with --approve HASH, install the GitOps controller that "
@@ -1451,7 +1480,9 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "approval (auto_approve or gitops approve of the plan hash). An "
             "unknown environment or component is dropped "
             "(gitops-request-invalid in gitops status); --component needs a "
-            "composition controller.",
+            "composition controller. 0.25.0: ENV may name a NixRelease (its host): "
+            "the controller publishes its newest tag now, with the release's "
+            "approval; a sync of every environment also retries failed releases.",
         ),
         "gitops suspects": _C(
             "List the deployed images a build host (or the builder node) built, "
@@ -1642,7 +1673,18 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "client uploads the manifest. Prints the store path, the image's "
             "sha256 and the public key, never a secret. Exit 1: the build "
             "failed, no output (dev-nix-no-output), dev-nix-publish-failed, "
-            "dev-nix-manifest-failed.",
+            "dev-nix-manifest-failed. --tag-pattern GLOB (a NixHost's Tag "
+            "pattern) points the highest version tag of that pattern at the "
+            "commit; a --ref tag of another pattern is refused (dev-nix-invalid). "
+            "A publish of a gated host's attribute to its cache (a NixRelease or "
+            "NixHost with gate= in the --publish module or --composition MODULE; "
+            "--release HOST names it) runs the promotion gate at plan time: the commit's flake.lock must pin the gate's input "
+            "to a commit its environment ran with passed release checks "
+            "(promotion-not-verified, promotion-input-missing); the history is "
+            "read as gitops status reads it (--state-dir, --kubeconfig/--context, "
+            "else the composition cluster's profile) and an unreadable one "
+            "refuses (promotion-history-unreachable). The plan, and the signed "
+            "manifest, carry pinned.",
         ),
         "dev nix gc": _C(
             "Remove the builds of old commits from a Nix cache: keep the manifests "
@@ -1664,7 +1706,9 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "path a kept manifest's closure reaches is never deleted; objects "
             "younger than --grace stay. --approve with another digest is "
             "refused (dev-nix-plan-changed); a failed delete exits 1 "
-            "(dev-nix-gc-failed).",
+            "(dev-nix-gc-failed). --tag-pattern GLOB (repeatable, each host's "
+            "Tag pattern) keeps the newest --keep-tags versions of each pattern, "
+            "compared after its prefix; the plan lists tag_patterns.",
         ),
         "dev run": _C(
             "Run a build or test command on the cluster's builder node for a "
@@ -1708,9 +1752,13 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
                 "credential profile",
                 "the controller's status",
                 "each source with this machine's Git access",
+                "MODULE:ATTR of each --publish NixCache, and its signing key "
+                "and S3 write keys from this machine's credentials (0.25.0)",
             ),
             writes=(
-                "the controller's requests (build-claim, built, build-failed)",
+                "the controller's requests (build-claim, built, build-failed, "
+                "nix-published)",
+                "the binary cache: closure, signed manifest, tag pointer (--publish)",
                 "images in the cluster's registry (through a port-forward)",
                 "~/.cache/piceli/builder (Git mirrors), the piceli-build-cache volume",
                 "the host's health record (piceli-health-* volumes)",
@@ -1723,7 +1771,22 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "delivered image's provenance is pushed as an OCI referrer when the "
             "registry takes it; a build showing a machine-health signature "
             "records a health event on the host, and a quarantined host claims "
-            "nothing (quarantined in --once --json).",
+            "nothing (quarantined in --once --json). 0.25.0: --publish "
+            "MODULE:ATTR (repeatable) also takes the nix-publish builds of the "
+            "NixReleases that name this host as builder, only for those caches; "
+            "every key is read at start (infra-credential-missing, "
+            "dev-nix-key-mismatch refuse it) and never leaves the host: a claim "
+            "carries the cache key's signature over it. A native host with "
+            "--publish only publishes. The publish itself was approved by the "
+            "release's policy or gitops approve of its plan digest. 0.25.0: "
+            "--publish-only (needs --publish, else dev-nix-invalid) claims only "
+            "those publishes on any kind of host, never an image build (said "
+            "once), and needs no cluster registry: a remote publisher is a "
+            "docker host with an SSH context to itself, since a native host is "
+            "the machine running Piceli. A host declared runs=False implies "
+            "--publish-only and is refused without --publish or with "
+            "--no-publish-only (dev-host-publish-only); without --host it is "
+            "never the default.",
         ),
         "dev hosts": _C(
             "Show each declared build host: up or down (and why), its platforms, "
@@ -1917,9 +1980,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
                 "credentials (provider token, state passphrase)",
             ),
             writes=(
-                "resources at the provider (servers, IPs, firewalls, DNS records)",
+                "resources at the provider (servers, IPs, firewalls, DNS records, "
+                "bucket S3 key pairs)",
                 "encrypted OpenTofu state",
-                "state directory records (inventory.json)",
+                "state directory records (inventory.json, s3-keys.json)",
+                "$PICELI_CREDENTIALS_DIR/NAME.json of each S3Key (s3-keys, 0600)",
             ),
             approval_required=True,
             safe_to_retry=True,
@@ -2011,14 +2076,25 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(infra-k3s-not-ready) when k3s does not answer with a Ready node within --wait.",
         ),
         "secrets provider": _C(
-            "Store a provider API token (or a state backend password) as a local credential.",
-            reads=("stdin (--prompt)",),
+            "Store a provider API credential (or a state backend password) as a "
+            "local credential, part by part.",
+            reads=(
+                "stdin (--prompt)",
+                "the provider's variables (--from-env)",
+                "--infra MODULE:ATTR (which provider uses NAME)",
+            ),
             writes=("$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)",),
             contract="conforms",
             exit_codes=(0, 2),
-            notes="The token is read from stdin only (typed without echo, or piped); "
-            "an argument or HCLOUD_TOKEN in the environment is refused "
-            "(infra-credential-refused) without echoing it. Prints the name, never the value.",
+            notes="0.25.0: a two-part credential (Porkbun API key pair, OpenStack "
+            "application credential) is asked for part by part, each checked before "
+            "anything is stored (infra-credential-part-invalid names the part), and "
+            "stored by part; piped, one part per line. The provider is --provider, "
+            "else --infra's provider using NAME, else the one stored before, else "
+            "the name; otherwise one token. --from-env reads the provider's standard "
+            "variables. An argument, or a token variable without --from-env, is "
+            "refused (infra-credential-refused) without echoing it. Replaces a stored "
+            "credential. Prints the name and the parts' names, never a value.",
         ),
         "secrets nix-cache": _C(
             "Generate or import a Nix binary cache's signing key as a local "
@@ -2050,13 +2126,19 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "secrets s3": _C(
             "Store a bucket's S3 access keys (access key id and secret) as a "
             "local credential.",
-            reads=("stdin (--prompt)",),
+            reads=(
+                "stdin (--prompt)",
+                "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (--from-env)",
+            ),
             writes=("$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)",),
             contract="conforms",
             exit_codes=(0, 2),
-            notes="0.24.0. Two lines on stdin (typed without echo, or piped); an "
-            "argument is refused (infra-credential-refused) without echoing it. "
-            "Prints the name, never a value.",
+            notes="0.24.0. Two lines on stdin (the key id echoed, the secret not; "
+            "or piped); since 0.25.0 each part is checked before anything is stored "
+            "(infra-credential-part-invalid names the part) and they are stored by "
+            "part, and --from-env reads AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY. "
+            "An argument is refused (infra-credential-refused) without "
+            "echoing it. Prints the name and the parts' names, never a value.",
         ),
         "secrets user-data": _C(
             "Store a server's user data (a cloud-config, a script or a bootstrap "
@@ -2083,6 +2165,129 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "state-key, nix-cache, s3, age, user-data) refuses another kind "
             "(infra-credential-invalid); a missing one is infra-credential-missing.",
         ),
+        "secrets backup": _C(
+            "Write the whole local secret store and the profiles, encrypted with "
+            "age to the chosen recipients, to one file.",
+            reads=(
+                "$PICELI_CREDENTIALS_DIR (every file)",
+                "$PICELI_PROFILES_DIR",
+                "--recipients-file",
+            ),
+            writes=(
+                "--to PATH (age ciphertext, mode 0600)",
+                "<credentials dir>.backup.json (recipients and the last backup's "
+                "marker; no values)",
+            ),
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.25.0. Runs the age command (PICELI_AGE, else age on PATH; "
+            "secrets-age-missing otherwise): the tar is streamed into age, no "
+            "plaintext touches the disk. Refuses an existing file without --force "
+            "(secrets-backup-exists). Prints names, kinds, the archive's sha256 and "
+            "the staleness, never a value. Exit 1 when age refuses "
+            "(secrets-backup-failed). Needs two recipients: one is refused "
+            "(secrets-backup-single-recipient) unless --single-recipient, which "
+            "the manifest, the marker and the staleness record. --only NAME "
+            "(repeatable) writes just those credentials for another machine (a "
+            "build host): it needs --recipient (never the remembered ones), "
+            "allows one, records only: true in the manifest, changes neither the "
+            "marker nor the remembered recipients, and refuses an unknown name "
+            "(secrets-backup-only-unknown).",
+        ),
+        "secrets status": _C(
+            "List every secret a declaration needs: present, missing, incomplete "
+            "or damaged, who creates it and the next command.",
+            reads=(
+                "MODULE[:ATTR] (Infrastructure, Bucket, NixCache, NixHost, "
+                "NixRelease, DevBuilds, a composition's clusters)",
+                "$PICELI_CREDENTIALS_DIR (kinds and parts; signing keys and age "
+                "identities checked in memory)",
+                "$PICELI_PROFILES_DIR",
+                "the infrastructure's state records (which servers exist)",
+                "<credentials dir>.backup.json (the last backup's marker)",
+            ),
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.25.0. Read-only; safe to retry; never prints a value. For each "
+            "secret: state (present, pending: a pair the next infra apply "
+            "creates, missing, incomplete, damaged, or not-needed: the user data "
+            "of a server that exists), created_by (infra-apply, "
+            "piceli: --generate, owner: --prompt), next (the exact command), "
+            "purpose and where else it must live; then the backup's state "
+            "(empty, none, stale, single-recipient, current) and warnings (an S3 "
+            "read pair the provider does not limit to reading, a spent user-data "
+            "key). --json prints one piceli.secrets-status.v1 object. Exit 0: every "
+            "secret stored and complete or pending (the backup does not count); "
+            "a secret a NixRelease's build host needs gets, once present, the "
+            "backup --only command that carries it there; 1: something "
+            "missing, incomplete or damaged; 2: a module that does not load or "
+            "declares nothing (secrets-nothing-declared).",
+        ),
+        "secrets setup": _C(
+            "Walk through a declaration's missing secrets in order: provider "
+            "credentials, generated keys, user data, S3 pairs, a backup.",
+            reads=(
+                "MODULE[:ATTR]",
+                "stdin (each credential part; on a terminal, confirmations)",
+                "$PICELI_CREDENTIALS_DIR",
+            ),
+            writes=(
+                "$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600) for each secret it "
+                "stores or generates",
+                "on a terminal, when chosen: the offline backup key, the backup and "
+                "<credentials dir>.backup.json",
+            ),
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.25.0. Provider credentials are asked for part by part (piped: "
+            "one part per line, in the order status lists them; stdin at its end "
+            "skips them). Keys Piceli generates (state key, Nix signing key, age "
+            "identity) are generated after a confirmation on a terminal or with "
+            "--yes, printing only public halves; a damaged key is replaced only "
+            "after a confirmation on a terminal, never with --yes. User data is "
+            "offered on a terminal only (default: later, right before infra "
+            "apply); S3 pairs are left to infra apply. --json prints one object "
+            "per step, then a summary. Never prints a value. Exit 0: everything "
+            "stored but what is left for later on purpose (user data, the pairs "
+            "infra apply makes); 1: something still missing, incomplete or "
+            "damaged (a declined generation, a refused part, a profile); 2: a "
+            "module that does not load or declares nothing.",
+        ),
+        "secrets backup-key": _C(
+            "Create the offline age key for backups: write the private key to a "
+            "file and print only its age1 recipient.",
+            reads=("<credentials dir>.backup.json (--add)",),
+            writes=(
+                "--out PATH (the age identity, mode 0600)",
+                "<credentials dir>.backup.json (--add: the remembered recipients)",
+            ),
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.25.0. Runs age-keygen (PICELI_AGE_KEYGEN, next to PICELI_AGE, "
+            "or on PATH; secrets-age-missing otherwise). Refuses a path inside the "
+            "store or in a missing directory (secrets-backup-key-invalid) and an "
+            "existing file without --force (secrets-backup-key-exists). Never "
+            "prints the private key. Exit 1 when age-keygen fails "
+            "(secrets-backup-key-failed).",
+        ),
+        "secrets restore": _C(
+            "Restore the local secret store and the profiles from an encrypted backup.",
+            reads=("PATH (age ciphertext)", "--identity", "the store (digests)"),
+            writes=(
+                "$PICELI_CREDENTIALS_DIR and $PICELI_PROFILES_DIR (files 0600, "
+                "directories 0700; into a used store only with --approve)",
+            ),
+            approval_required=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="0.25.0. Decrypts in memory with age (identity file, plugin or "
+            "passphrase) and refuses an unsafe archive "
+            "(secrets-restore-archive-invalid). Into an empty store it restores "
+            "directly; otherwise it prints what it would add, what is identical "
+            "and what differs, with a digest (exit 3), and writes only with "
+            "--approve DIGEST. Never prints a value. Exit 1 when age cannot "
+            "decrypt (secrets-restore-decrypt-failed).",
+        ),
         "secrets state-key": _C(
             "Store the passphrase that encrypts an Infrastructure's OpenTofu state "
             "(--generate, or --prompt).",
@@ -2104,7 +2309,12 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             notes="Read-only. Reads the ConfigMap piceli-gitops-status and the "
             "controller Deployment (or a local --state-dir). Health: healthy, "
             "degraded (last poll failed), stale (no poll for 3 intervals), "
-            "starting, down. gitops-not-installed without a controller.",
+            "starting, down. gitops-not-installed without a controller. 0.25.0: "
+            "nix_releases lists each NixRelease (latest tag, state, plan digest "
+            "and approve_command, stages with times, the published manifest's "
+            "sha256, failure). A gated release shows pinned (input, commit, "
+            "environment, verified_run, verified_at), or state rejected with its "
+            "reason and refusal.",
         ),
         "gitops wait": _C(
             "Wait until an environment runs a commit: deployed, failed (the "
@@ -2133,7 +2343,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             notes="This is the owner's approval: run it only with the hash the "
             "owner approved. Writes a request to the ConfigMap "
             "piceli-gitops-requests; a hash the environment is no longer "
-            "waiting for is dropped (gitops-approval-stale in gitops status).",
+            "waiting for is dropped (gitops-approval-stale in gitops status). "
+            "0.25.0: ENV may name a NixRelease waiting in approval-required; "
+            "the hash is its plan digest, and approving it lets a build host "
+            "build, sign and publish that tag.",
         ),
         "gitops run": _C(
             "Run the GitOps controller loop (the controller Deployment's "
@@ -2162,17 +2375,46 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "promote": _C(
             "Ask the GitOps controller to deploy BRANCH@SHA to the main "
             "branch's environment, or to a named environment (promote ENV "
-            "BRANCH@SHA).",
-            reads=("kubeconfig or --state-dir",),
-            writes=("--state-dir requests (local controller)",),
+            "BRANCH@SHA); with --from ENV, pin the newest commit ENV ran with "
+            "passed release checks in a NixRelease's flake.lock, commit it, tag "
+            "the next version of the host's Tag pattern and push both (0.25.0).",
+            reads=(
+                "kubeconfig or --state-dir",
+                "with --from: the composition module (--composition; the "
+                "NixRelease and its gate), the controller's history (--state-dir, "
+                "--kubeconfig/--context, or the composition cluster's credential "
+                "profile), the flake's working copy (--repo) and its remote (git "
+                "fetch), nix when on the PATH, else the input's repository (git "
+                "clone into a temporary directory)",
+            ),
+            writes=(
+                "--state-dir requests (local controller)",
+                "with --from --approve: flake.lock, one commit and one annotated "
+                "tag in the working copy; the branch and the tag on the remote, "
+                "pushed atomically",
+            ),
             cluster="writes",
+            approval_required=True,
             contract="conforms",
-            exit_codes=(0, 2),
+            exit_codes=(0, 1, 2, 3),
             notes="Writes a request; the controller accepts only a commit it "
             "saw on that branch (gitops-promote-unknown otherwise), a named "
             "environment only when it follows Promote() "
             "(gitops-promote-not-allowed), and the environment then waits for "
-            "gitops approve of its plan hash.",
+            "gitops approve of its plan hash. 0.25.0, promote HOST --from ENV: "
+            "without --approve it prints the plan (pinned, the lock change old "
+            "rev -> new rev, the commit message, the tag, the remote and branch) "
+            "with its digest and exits 3. A lock that already pins the commit "
+            "exits 0 with state current: with a tag of the pattern at HEAD there "
+            "is nothing to do; without one the plan only tags HEAD and --approve "
+            "tags and pushes the tag. --approve recomputes the plan "
+            "(promote-plan-changed when it differs), commits flake.lock alone, "
+            "tags and pushes with git push --atomic (promote-push-failed exits "
+            "1; the commit and tag stay local). Refuses a dirty working copy "
+            "(promote-dirty), one behind, ahead of or diverged from its upstream "
+            "(promote-not-in-sync), an environment without a passed run "
+            "(promotion-not-verified) and an unreadable history "
+            "(promotion-history-unreachable).",
         ),
         "doctor": _C(
             "Check free disk and memory against the next build's needs, and "

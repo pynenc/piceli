@@ -5,21 +5,31 @@ Skipped unless ``PICELI_OPENSTACK_LIVE=1``. Everything it creates is named
 reachable), a security group with TCP, UDP, port-range and ICMP rules, a
 persistent port on the public network, a key pair, a server on that port
 with secret user data, a bucket and, if the application credential may,
-EC2 credentials for S3. It checks:
+the bucket's two S3 key pairs (``S3Key`` write and read, 0.25.0) through
+``piceli infra apply``. It checks:
 
 - the smallest flavor's real name, and that the plan refuses no other;
 - the server on the port; a replaced server re-attaches the same port and
   keeps its IPv4 and IPv6;
 - the user data: in the plan as a digest only, its SHA-1 in the state, and
   (CirrOS only) the instance running it, from its console;
-- the bucket over S3 with path-style addressing at the endpoint
-  ``NixCache`` uses: put, list, get, delete (Piceli's own SigV4 signer);
+- the key pairs: stored as credentials (never printed), a re-plan changes
+  nothing; the write pair can put, list, get and delete over S3
+  (path-style, at the endpoint ``NixCache`` uses, Piceli's own SigV4
+  signer); the read pair can list and get, and put/delete are refused
+  exactly when the plan says ``read_only_enforced`` (it says not, at
+  OpenStack: the test fails if the cloud proves the plan wrong either way);
+- probes, reported and never failing: which S3 implementation answers
+  (Swift ``s3api`` or Ceph RGW, from its headers and a bucket-policy
+  request), and whether a ``reader``-only application credential can make
+  an EC2 credential and whether that one can read or write;
 - the security group's UDP and port-range rules as the cloud stores them.
 
 Whatever happens (pass, failure, crash), ``finally`` destroys through
 Piceli, then deletes anything left with the prefix through the API, then
 lists the project's servers, ports, security groups, key pairs, images,
-containers and the EC2 credentials it made, and fails if one is left. The
+containers, application credentials and the EC2 credentials it made, and
+fails if one is left. The
 report (``-s``, or ``PICELI_OPENSTACK_LIVE_REPORT=FILE``) lists what was
 created, what was verified and that nothing is left; it holds no secret.
 
@@ -62,10 +72,12 @@ from piceli.infra import (
     OpenStack,
     PrimaryIp,
     Rule,
+    S3Key,
     Server,
     UserData,
 )
 from piceli.infra.machines import credentials
+from piceli.infra.machines.model import InfraError
 from piceli.infra.machines.openstack import INFOMANIAK_AUTH_URL, INFOMANIAK_FLAVORS
 
 from .machines_support import PASSPHRASE, needs_tofu
@@ -177,8 +189,12 @@ class Api:
         path = f"/users/{self.user}/credentials/OS-EC2"
         return list(self.call("GET", "identity", path)["credentials"])
 
-    def left(self, prefix: str, access: str | None) -> dict[str, list[str]]:
-        """Everything in the project named with ``prefix`` (and our EC2 key)."""
+    def app_credentials(self) -> list[dict[str, Any]]:
+        path = f"/users/{self.user}/application_credentials"
+        return list(self.call("GET", "identity", path)["application_credentials"])
+
+    def left(self, prefix: str, access: list[str]) -> dict[str, list[str]]:
+        """Everything in the project named with ``prefix`` (and our EC2 keys)."""
         named: dict[str, Callable[[], list[dict[str, Any]]]] = {
             "servers": self.servers, "ports": self.ports,
             "security_groups": self.groups, "keypairs": self.keypairs,
@@ -191,14 +207,15 @@ class Api:
             )
             for kind, lister in named.items()
         }  # fmt: skip
-        left["ec2_credentials"] = (
-            [access[:4] + "…"]
-            if access and any(item.get("access") == access for item in self.ec2())
-            else []
-        )
+        existing = {item.get("access") for item in self.ec2()}
+        left["ec2_credentials"] = sorted(a[:4] + "…" for a in access if a in existing)
+        left["application_credentials"] = sorted(
+            str(item.get("name")) for item in self.app_credentials()
+            if str(item.get("name") or "").startswith(prefix)
+        )  # fmt: skip
         return left
 
-    def sweep(self, prefix: str, access: str | None) -> None:
+    def sweep(self, prefix: str, access: list[str]) -> None:
         """Delete whatever ``prefix`` names (what a failed destroy left)."""
         for server in self.servers():
             if server["name"].startswith(prefix):
@@ -226,9 +243,13 @@ class Api:
                     obj = urllib.parse.quote(item["name"])
                     self.try_delete("object-store", f"/{name}/{obj}")
                 self.try_delete("object-store", f"/{name}")
-        if access:
-            path = f"/users/{self.user}/credentials/OS-EC2/{access}"
+        for key in access:
+            path = f"/users/{self.user}/credentials/OS-EC2/{key}"
             self.try_delete("identity", path)
+        for made in self.app_credentials():
+            if str(made.get("name") or "").startswith(prefix):
+                path = f"/users/{self.user}/application_credentials/{made['id']}"
+                self.try_delete("identity", path)
 
 
 def _cirros(directory: Path) -> tuple[str, str] | None:
@@ -249,6 +270,13 @@ def _s3(
     method: str, endpoint: str, path: str, keys: tuple[str, str], body: bytes = b""
 ) -> tuple[int, bytes]:
     """One path-style S3 request, signed like the host agent signs them."""
+    status, text, _ = _s3_full(method, endpoint, path, keys, body)
+    return status, text
+
+
+def _s3_full(
+    method: str, endpoint: str, path: str, keys: tuple[str, str], body: bytes = b""
+) -> tuple[int, bytes, dict[str, str]]:
     from piceli.dev.nix_verify import sigv4_headers
 
     url = f"https://{endpoint}{path}"
@@ -261,9 +289,65 @@ def _s3(
     )
     try:
         with urllib.request.urlopen(request, timeout=60) as answer:
-            return answer.status, answer.read()
+            return answer.status, answer.read(), dict(answer.headers)
     except urllib.error.HTTPError as error:
-        return error.code, error.read()
+        return error.code, error.read(), dict(error.headers)
+
+
+def _pair(name: str) -> tuple[str, str]:
+    access, _, secret = credentials.load_credential(name, "s3-keys").partition(":")
+    return access, secret
+
+
+def _backend(endpoint: str, bucket: str, keys: tuple[str, str]) -> dict[str, Any]:
+    """Which S3 implementation answers: headers, and whether it takes a policy."""
+    status, _, headers = _s3_full("GET", endpoint, f"/{bucket}?list-type=2", keys)
+    lowered = {k.lower(): v for k, v in headers.items()}
+    policy = json.dumps({"Version": "2012-10-17", "Statement": []}).encode()
+    put = _s3_full("PUT", endpoint, f"/{bucket}?policy", keys, policy)[0]
+    if put in (200, 204):
+        _s3("DELETE", endpoint, f"/{bucket}?policy", keys)
+    swift = "x-trans-id" in lowered or "x-openstack-request-id" in lowered
+    return {
+        "list_status": status,
+        "server": lowered.get("server"),
+        "swift_headers": swift,
+        "bucket_policy_put": put,
+        "looks_like": "swift-s3api" if swift else "ceph-rgw-or-other",
+    }
+
+
+def _reader_probe(
+    api: Api, region: str, prefix: str, endpoint: str, bucket: str, made: list[str]
+) -> dict[str, Any]:
+    """Can a reader-only application credential make an EC2 credential, and
+    is that one read-only? Reported, never failing; cleaned up by the sweep."""
+    found: dict[str, Any] = {}
+    try:
+        app = api.call("POST", "identity",
+                       f"/users/{api.user}/application_credentials",
+                       {"application_credential": {"name": f"{prefix}-reader",
+                                                   "roles": [{"name": "reader"}]}},
+                       )["application_credential"]  # fmt: skip
+    except urllib.error.HTTPError as error:
+        return {"reader_app_credential": f"refused ({error.code})"}
+    found["reader_app_credential"] = "created"
+    try:
+        reader = Api(api.urls["identity"], region, f"{app['id']}:{app['secret']}")
+        ec2 = reader.call("POST", "identity", f"/users/{reader.user}/credentials/OS-EC2",
+                          {"tenant_id": reader.project})["credential"]  # fmt: skip
+    except urllib.error.HTTPError as error:
+        found["reader_ec2_credential"] = f"refused ({error.code})"
+        return found
+    made.append(ec2["access"])
+    keys = (ec2["access"], ec2["secret"])
+    path = f"/{bucket}/{prefix}/reader-probe.txt"
+    found["reader_ec2_credential"] = "created"
+    found["reader_list"] = _s3("GET", endpoint, f"/{bucket}?list-type=2", keys)[0]
+    found["reader_put"] = _s3("PUT", endpoint, path, keys, b"probe")[0]
+    if found["reader_put"] == 200:
+        _s3("DELETE", endpoint, path, keys)
+    return found
 
 
 def _key(directory: Path, name: str) -> str:
@@ -298,7 +382,7 @@ def test_infomaniak_end_to_end(
     report: dict[str, Any] = {"prefix": prefix, "region": region, "created": [],
                               "verified": {}, "skipped": {}}  # fmt: skip
     verified, skipped = report["verified"], report["skipped"]
-    access: str | None = None
+    access: list[str] = []
 
     flavors = api.call("GET", "compute", "/flavors/detail")["flavors"]
     smallest = min(flavors, key=lambda f: (f["vcpus"], f["ram"], f["disk"], f["name"]))
@@ -322,7 +406,11 @@ def test_infomaniak_end_to_end(
         Rule.tcp(22, sources=["192.0.2.0/24"]), Rule.udp(41641),
         Rule.tcp((8000, 8010), sources=["198.51.100.0/24"]), Rule.icmp(),
     ])  # fmt: skip
-    bucket = Bucket(f"{prefix}-bucket", provider=cloud)
+    write_key, read_key = f"{prefix}-write", f"{prefix}-read"
+    plain = Bucket(f"{prefix}-bucket", provider=cloud)
+    keyed = Bucket(plain.name, provider=cloud,
+                   keys=[S3Key(write_key), S3Key(read_key, access="read")])  # fmt: skip
+    bucket = plain
 
     def declare(key: str) -> Infrastructure:
         server = Server(
@@ -407,30 +495,78 @@ def test_infomaniak_end_to_end(
             else:
                 skipped["user_data_ran"] = "not on the console within 3 minutes"
 
-        # ---------------------------------------------------- S3
+        # ---------------------------------------------------- S3 keys
+        # A second apply adds the bucket's two key pairs (so a refusal
+        # leaves the rest of the run intact).
+        bucket = keyed
+        keyed_infra = declare(first.servers[0].ssh_keys[0])
         try:
-            made = api.call("POST", "identity",
-                            f"/users/{api.user}/credentials/OS-EC2",
-                            {"tenant_id": api.project})["credential"]  # fmt: skip
-        except urllib.error.HTTPError as error:
-            skipped["s3"] = f"EC2 credentials refused ({error.code})"
+            with workspace(keyed_infra) as ws:
+                with_keys = plan(ws, prices=False)
+                listed = {k["name"]: k for k in with_keys.to_dict()["s3_keys"]}
+                assert {k["action"] for k in listed.values()} == {"create"}
+                assert listed[read_key]["read_only_enforced"] is False
+                verified["s3_keys_plan"] = {
+                    name: {k: v for k, v in item.items() if k != "how"}
+                    for name, item in listed.items()
+                }
+                apply(ws, with_keys.plan_hash)
+        except InfraError as error:
+            if error.code != "infra-s3-key-refused":
+                raise
+            skipped["s3"] = (
+                "EC2 credentials refused: a restricted application credential"
+            )
+            bucket = plain
         else:
-            access = made["access"]
-            keys = (access, made["secret"])
-            report["created"].append(
-                {"kind": "ec2_credential", "name": "-", "id": access[:4] + "…"}
-            )
+            infra = keyed_infra
+            writes, reads = _pair(write_key), _pair(read_key)
+            access += [writes[0], reads[0]]
+            report["created"] += [
+                {
+                    "kind": "ec2_credential",
+                    "name": write_key,
+                    "id": writes[0][:4] + "…",
+                },
+                {"kind": "ec2_credential", "name": read_key, "id": reads[0][:4] + "…"},
+            ]
+            printed = capsys.readouterr()
+            for value in (*writes, *reads):
+                assert value not in printed.out + printed.err
+            with workspace(keyed_infra) as ws:
+                assert plan(ws, prices=False).changes == ()
+            verified["s3_keys_reapply"] = "no change; pairs stored as credentials"
             path = f"/{bucket.name}/{prefix}/hello.txt"
-            assert _s3("PUT", endpoint, path, keys, b"hello")[0] == 200
-            status, listing = _s3(
-                "GET", endpoint, f"/{bucket.name}?list-type=2&prefix={prefix}/", keys
-            )
+            listing_path = f"/{bucket.name}?list-type=2&prefix={prefix}/"
+            assert _s3("PUT", endpoint, path, writes, b"hello")[0] == 200
+            status, listing = _s3("GET", endpoint, listing_path, writes)
             assert status == 200 and f"{prefix}/hello.txt".encode() in listing
-            assert _s3("GET", endpoint, path, keys) == (200, b"hello")
-            assert _s3("DELETE", endpoint, path, keys)[0] == 204
-            verified["s3"] = (
-                f"put, list, get, delete at https://{endpoint} (path-style)"
-            )
+            assert _s3("GET", endpoint, path, writes) == (200, b"hello")
+            verified["s3_write_pair"] = f"put, list, get at https://{endpoint}"
+            status, listing = _s3("GET", endpoint, listing_path, reads)
+            assert status == 200 and f"{prefix}/hello.txt".encode() in listing
+            assert _s3("GET", endpoint, path, reads) == (200, b"hello")
+            probe = f"/{bucket.name}/{prefix}/read-pair-put.txt"
+            put = _s3("PUT", endpoint, probe, reads, b"nope")[0]
+            delete = _s3("DELETE", endpoint, path, reads)[0]
+            if listed[read_key]["read_only_enforced"]:
+                assert put == 403 and delete == 403, (put, delete)
+            else:
+                # The plan says the cloud does not enforce it: prove it.
+                assert put == 200, f"the read pair's put was refused ({put}): the "
+                "plan's read_only_enforced=false is wrong, enforce it"
+                _s3("DELETE", endpoint, probe, writes)
+                assert _s3("PUT", endpoint, path, writes, b"hello")[0] == 200
+            verified["s3_read_pair"] = {"list": 200, "get": 200, "put": put,
+                                        "delete": delete}  # fmt: skip
+            assert _s3("DELETE", endpoint, path, writes)[0] == 204
+            verified["s3_write_pair"] += ", delete"
+            report["probes"] = {
+                "backend": _backend(endpoint, bucket.name, writes),
+                "reader": _reader_probe(
+                    api, region, prefix, endpoint, bucket.name, access
+                ),
+            }
 
         # ---------------------------------------------------- replace
         credentials.save_credential(f"{prefix}-boot", "user-data", user_data)

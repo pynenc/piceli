@@ -10,6 +10,10 @@ variable ``user_data_<server>`` (default ``null``): the value reaches
 OpenTofu only through ``TF_VAR_user_data_<server>`` in its environment, when
 a plan creates the server (:mod:`piceli.infra.machines.plan`).
 
+A bucket's :class:`~piceli.infra.machines.model.S3Key` pairs (0.25.0) are
+resources too (``Rendered.s3_keys``); their secrets exist only in the
+encrypted state, never in the configuration.
+
 Every resource is labelled ``piceli.io/managed-by=piceli``,
 ``piceli.io/infra=<name>`` and ``piceli.io/resource=<kind>-<name>``; destroy
 only touches resources that carry them (:mod:`piceli.infra.machines.plan`).
@@ -70,6 +74,8 @@ class Rendered:
     resources: dict[str, tuple[str, str, str]]
     #: Server address -> (its server name, its user data's secret name).
     user_data: dict[str, tuple[str, str]] = field(default_factory=dict)
+    #: S3 key address -> (its credential name, its bucket, its access).
+    s3_keys: dict[str, tuple[str, str, str]] = field(default_factory=dict)
 
     @property
     def config_text(self) -> str:
@@ -196,13 +202,24 @@ def render(infra: Infrastructure) -> Rendered:
             labels(infra, "record", record.resource_name.removeprefix("record-")),
         ):
             add(made, record.provider.name, "record", record.key)
+    s3_keys: dict[str, tuple[str, str, str]] = {}
     for bucket in infra.buckets:
-        add(
+        made_bucket = add(
             bucket.provider.render_bucket(bucket, labels(infra, "bucket", bucket.name)),
             bucket.provider.name,
             "bucket",
             bucket.name,
         )
+        for key in bucket.keys:
+            made = add(
+                bucket.provider.render_s3_key(
+                    key, made_bucket, labels(infra, "s3key", key.name)
+                ),
+                bucket.provider.name,
+                "s3-key",
+                key.name,
+            )
+            s3_keys[made.address] = (key.name, bucket.name, key.access)
     body: dict[str, dict[str, Any]] = {}
     for resource in resources:
         body.setdefault(resource.type, {})[resource.name] = dict(resource.body)
@@ -246,4 +263,4 @@ def render(infra: Infrastructure) -> Rendered:
     lock = LOCK_HEADER + "".join(
         "\n" + pin.lock_block() for pin in sorted(pins, key=lambda p: p.source)
     )
-    return Rendered(config, lock, owners, user_data)
+    return Rendered(config, lock, owners, user_data, s3_keys)

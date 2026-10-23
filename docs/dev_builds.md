@@ -190,6 +190,11 @@ BuildHost.native("macos", quarantine_after=None)   # never quarantined
 The in-cluster builder node's health is the GitOps controller's: see
 {doc}`gitops` (`piceli gitops hosts`, `piceli gitops release-host`).
 
+A host declared `runs=False` (0.25.0) only publishes Nix releases with
+`piceli builder serve --publish` (see {doc}`gitops`): `dev run` and
+`dev nix build` never pick it unless `--host` names it, and `piceli dev
+hosts` shows it as publishing only.
+
 ### The toolchain the source pins
 
 When the source has a `rust-toolchain.toml` (or a legacy `rust-toolchain`)
@@ -659,7 +664,13 @@ the tag at the commit and for the branch `--ref` names (or `--branch NAME`):
 (`schema: piceli.nix-ref.v1`: `ref`, `commit`, `manifest`, the manifest's
 `manifest_sha256`, `store_path`, `system`, `published_at` and the
 signature). `published_at` only grows, even when the publishing clock is
-behind. The plan lists them. A host resolves its ref from them with read
+behind. The plan lists them. When one commit carries tags of several hosts
+(`web-v1.4.0`, `api-v2.0.0`), `--tag-pattern 'web-v*'` (a `NixHost`'s
+`Tag` pattern) names the tag the pointer gets: `--ref` when it is a version
+tag of that pattern (another tag is refused, `dev-nix-invalid`), else the
+highest version at the commit after the pattern's prefix (see
+{doc}`nix_hosts`). Without it, the pointer gets `--ref` when it is a tag,
+else the first tag at the commit. A host resolves its ref from them with read
 access to the cache alone, no Git: see {doc}`nix_hosts`.
 
 A host that follows a tag reads the manifest of the tag's commit and
@@ -680,7 +691,11 @@ narinfos and NAR files it would delete with a digest (exit 3) and deletes
 them only with `--approve <digest>`, manifests first. Branch pointers stay
 and keep the build they name; tag pointers of tags it does not keep go
 first, then their manifests, so a host never finds a pointer whose build is
-gone.
+gone. When the repository releases several hosts by tag prefix, give each
+host's pattern, `--tag-pattern 'web-v*' --tag-pattern 'api-v*'`: gc then
+keeps the newest `--keep-tags` versions of each pattern (compared after its
+prefix) instead of the newest tags by date, so one host's releases never
+push another's out. The plan lists them under `tag_patterns`.
 
 ## Failure codes
 

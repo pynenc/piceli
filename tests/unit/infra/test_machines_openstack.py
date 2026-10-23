@@ -305,13 +305,16 @@ def test_openstack_refuses_what_it_cannot_render() -> None:
 
 
 def test_credentials_go_to_the_environment_only(homes: Path) -> None:
-    env = OS.credential_env(f"{CRED_ID}:{CRED_SECRET}")
+    env = OS.credential_env(
+        {"application_credential_id": CRED_ID,
+         "application_credential_secret": CRED_SECRET}
+    )  # fmt: skip
     assert env == {
         "OS_APPLICATION_CREDENTIAL_ID": CRED_ID,
         "OS_APPLICATION_CREDENTIAL_SECRET": CRED_SECRET,
     }
     with pytest.raises(InfraError) as caught:
-        OS.credential_env(CRED_SECRET)
+        OS.credential_env({"token": CRED_SECRET})
     assert caught.value.code == "infra-credential-invalid"
     assert CRED_SECRET not in str(caught.value)
     credentials.save_credential("cloud", "provider-token", f"{CRED_ID}:{CRED_SECRET}")
