@@ -107,13 +107,8 @@ def _invalid(message: str) -> DevError:
 
 
 def _ed25519() -> Any:
-    try:
-        from cryptography.hazmat.primitives.asymmetric import ed25519
-    except ImportError:  # pragma: no cover - the crypto extra is missing
-        raise DevError(
-            "dev-nix-crypto-unavailable",
-            "Nix cache keys need the cryptography package (pip install 'piceli[crypto]')",
-        ) from None
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
     return ed25519
 
 

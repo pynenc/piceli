@@ -122,7 +122,7 @@ def build(ctx):
 
 def _certificates(host: str) -> tuple[bytes, bytes, bytes]:
     """A CA and a serving certificate for ``host`` (PEM: ca, cert, key)."""
-    x509 = pytest.importorskip("cryptography.x509")
+    from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec
     from cryptography.x509.oid import NameOID

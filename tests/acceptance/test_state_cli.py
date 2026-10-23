@@ -13,11 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from tests.acceptance.test_deploy_shared_state import Runner, shared  # noqa: F401
-
-pytest.importorskip("cryptography")
 
 
 def state(runner: Runner, *args: str) -> tuple[int, dict[str, Any], Any]:

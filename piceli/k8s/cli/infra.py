@@ -69,6 +69,13 @@ TofuOption = Annotated[
 JsonOption = Annotated[
     bool, typer.Option("--json", help="Print one JSON object on stdout")
 ]
+VerboseOption = Annotated[
+    bool,
+    typer.Option(
+        "--verbose",
+        help="When OpenTofu fails, print its whole output (redacted) on stderr",
+    ),
+]
 #: Failures that ran (exit 1) rather than refusals (exit 2).
 FAILED = {
     "infra-apply-failed",
@@ -89,9 +96,19 @@ TOKEN_ENVS = (
 )
 
 
-def _refuse(error: InfraError) -> NoReturn:
+def _refuse(error: InfraError, verbose: bool = False) -> NoReturn:
     for line in error.details:
         say(f"  tofu: {line}")
+    log = error.fields.get("tofu_log")
+    if log and verbose:
+        try:
+            text = Path(log).read_text()
+        except OSError:
+            text = "(unreadable)\n"
+        say("tofu log:")
+        say("\n".join(f"  | {line}" for line in text.splitlines()))
+    elif log:
+        say(f"  OpenTofu's full output (redacted): {log} (or run again with --verbose)")
     for item in error.fields.get("conflicts") or ():
         record = item["record"]
         say(f"  conflict: {record['type']} {record['name']} {record['content']}: "
@@ -116,14 +133,14 @@ def _say_partial(error: InfraError, command: str) -> None:
 
 
 @contextmanager
-def _guard() -> Iterator[None]:
+def _guard(verbose: bool = False) -> Iterator[None]:
     from piceli.infra.machines.model import InfraError
     from piceli.profiles import ProfileError
 
     try:
         yield
     except InfraError as error:
-        _refuse(error)
+        _refuse(error, verbose)
     except ProfileError as error:
         reject(error.code or "profile-invalid", str(error))
 
@@ -207,7 +224,12 @@ def _command(head: str, ref: str, tofu: str | None) -> str:
 
 
 def _plan_or_apply(
-    ref: str, approve: str | None, tofu: str | None, *, destroy: bool
+    ref: str,
+    approve: str | None,
+    tofu: str | None,
+    *,
+    destroy: bool,
+    verbose: bool = False,
 ) -> None:
     from piceli.infra.machines.model import InfraError
     from piceli.infra.machines.plan import apply, plan, workspace
@@ -215,7 +237,7 @@ def _plan_or_apply(
     infra = load_infra(ref)
     head = "piceli infra destroy" if destroy else "piceli infra apply"
     command = _command(head, ref, tofu)
-    with _guard(), workspace(infra, tofu=tofu) as ws:
+    with _guard(verbose), workspace(infra, tofu=tofu) as ws:
         if approve is None:
             result = plan(ws, destroy=destroy)
             _say_plan(result)
@@ -286,25 +308,33 @@ def _profiles_left(infra: Infrastructure) -> list[str]:
 
 
 @app.command("plan")
-def plan_command(ref: InfraArgument, tofu: TofuOption = None) -> None:
+def plan_command(
+    ref: InfraArgument, tofu: TofuOption = None, verbose: VerboseOption = False
+) -> None:
     """Plan the declared machines with OpenTofu; print the changes, estimate and plan hash."""
-    _plan_or_apply(ref, None, tofu, destroy=False)
+    _plan_or_apply(ref, None, tofu, destroy=False, verbose=verbose)
 
 
 @app.command("apply")
 def apply_command(
-    ref: InfraArgument, approve: ApproveOption = None, tofu: TofuOption = None
+    ref: InfraArgument,
+    approve: ApproveOption = None,
+    tofu: TofuOption = None,
+    verbose: VerboseOption = False,
 ) -> None:
     """Apply the plan whose hash is --approve (without it: plan, exit 3)."""
-    _plan_or_apply(ref, approve, tofu, destroy=False)
+    _plan_or_apply(ref, approve, tofu, destroy=False, verbose=verbose)
 
 
 @app.command("destroy")
 def destroy_command(
-    ref: InfraArgument, approve: ApproveOption = None, tofu: TofuOption = None
+    ref: InfraArgument,
+    approve: ApproveOption = None,
+    tofu: TofuOption = None,
+    verbose: VerboseOption = False,
 ) -> None:
     """Destroy what Piceli created for it, with approval of the destroy plan's hash."""
-    _plan_or_apply(ref, approve, tofu, destroy=True)
+    _plan_or_apply(ref, approve, tofu, destroy=True, verbose=verbose)
 
 
 @app.command("status")

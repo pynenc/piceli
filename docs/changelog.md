@@ -4,6 +4,44 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.25.2
+
+- **Infomaniak's public network is found by name.** `Infomaniak()` looked
+  `ext-net1` up as a `router:external` network; it is a shared network that
+  is not, so every plan failed with "Your query returned no results". The
+  preset now matches the name alone. `OpenStack(public_network_external=)`
+  chooses how a generic cloud's network name is matched: `True` (the
+  default, as before) only a `router:external` network, `False` only one
+  that is not, `None` the name alone. The plan hash of an Infomaniak
+  declaration changes (its lookup changed).
+- **An OpenTofu failure names what it failed on.** `infra-tofu-failed` and
+  `infra-apply-failed` say which resource or data source failed (from
+  OpenTofu's JSON diagnostics: `tofu plan failed on
+  data.openstack_networking_network_v2.public-network`), list the addresses
+  in `failed_on`, and start each `tofu:` line on stderr with its address.
+  OpenTofu's whole output, redacted, is kept in `tofu-<command>.log` in the
+  state directory (`tofu_log`); `piceli infra plan|apply|destroy --verbose`
+  prints it.
+- **A destroy removes the images Piceli uploaded to OpenStack.** Glance
+  gives every image a computed `metadata` map, which was read instead of its
+  tags, so `piceli infra destroy` refused Piceli's own image as foreign
+  (`infra-foreign-resource`). An image's labels are now read from its tags.
+- **`cryptography` is a dependency.** Generating keys is core to `piceli
+  secrets setup`, `secrets nix-cache` and `secrets age`, which crashed with
+  `ModuleNotFoundError` when Piceli was installed without the `crypto` extra.
+  `cryptography>=42` is now a base dependency; `piceli[crypto]` still
+  installs (an empty extra). The codes `state-crypto-unavailable` and
+  `dev-nix-crypto-unavailable`, which could no longer happen, are removed.
+
+## Version 0.25.1
+
+- **A reaped forward is stopped only once its exit is confirmed.** The
+  reaper of `piceli access` forwards took a process whose fingerprint no
+  longer matched as gone, but an exiting process reads as unknown for a
+  moment (its command line is released before it becomes a zombie). It now
+  reports a forward stopped only when its pid no longer exists, is a
+  zombie, or is held by another process on two reads in a row.
+
 ## Version 0.25.0
 
 A Nix host's releases need no hand-run publish step: in 0.25.0 the GitOps

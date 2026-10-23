@@ -68,7 +68,7 @@ FIRST_ARGUMENT = {
 }
 # ``_Failure(result, reason)`` in the delivery modules; ``reject_error(error, default)``;
 # ``DryRunUnavailable(resource, reason)`` in ``k8s/ops/dry_run.py``.
-SECOND_ARGUMENT = {"_Failure", "reject_error", "DryRunUnavailable"}
+SECOND_ARGUMENT = {"_Failure", "reject_error", "DryRunUnavailable", "tofu_failure"}
 # ``rejecting((ExceptionTypes, "default-code"), ...)`` in the CLI modules.
 RULES = {"rejecting"}
 

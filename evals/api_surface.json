@@ -4965,6 +4965,7 @@
     "prices_monthly",
     "provider_block",
     "public_network",
+    "public_network_external",
     "record_address",
     "region",
     "render_bucket",
@@ -4998,6 +4999,7 @@
     "ip_prices",
     "prices",
     "public_network",
+    "public_network_external",
     "region"
    ],
    "methods": {
@@ -6567,6 +6569,7 @@
     "prices_monthly",
     "provider_block",
     "public_network",
+    "public_network_external",
     "record_address",
     "region",
     "render_bucket",
@@ -6600,6 +6603,7 @@
     "ip_prices",
     "prices",
     "public_network",
+    "public_network_external",
     "region"
    ],
    "methods": {
@@ -12073,7 +12077,8 @@
     ],
     "flags": [
      "--approve",
-     "--tofu"
+     "--tofu",
+     "--verbose"
     ],
     "subcommands": []
    },
@@ -12083,7 +12088,8 @@
     ],
     "flags": [
      "--approve",
-     "--tofu"
+     "--tofu",
+     "--verbose"
     ],
     "subcommands": []
    },
@@ -12102,7 +12108,8 @@
      "ref"
     ],
     "flags": [
-     "--tofu"
+     "--tofu",
+     "--verbose"
     ],
     "subcommands": []
    },
@@ -13401,7 +13408,6 @@
    "dev-isolation-not-enforced",
    "dev-nix-cache-invalid",
    "dev-nix-cache-key-unset",
-   "dev-nix-crypto-unavailable",
    "dev-nix-gc-failed",
    "dev-nix-host-unsupported",
    "dev-nix-invalid",
@@ -13926,7 +13932,6 @@
    "ssh-tool-required",
    "state-access-denied",
    "state-corrupt",
-   "state-crypto-unavailable",
    "state-export-invalid",
    "state-import-changed",
    "state-import-partial",
@@ -16066,5 +16071,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.25.0"
+ "version": "0.25.2"
 }

@@ -196,7 +196,6 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`dev-isolation-not-enforced`](#error-dev-isolation-not-enforced) | dev | no |
 | [`dev-nix-cache-invalid`](#error-dev-nix-cache-invalid) | dev | no |
 | [`dev-nix-cache-key-unset`](#error-dev-nix-cache-key-unset) | dev | no |
-| [`dev-nix-crypto-unavailable`](#error-dev-nix-crypto-unavailable) | dev | no |
 | [`dev-nix-gc-failed`](#error-dev-nix-gc-failed) | dev | yes |
 | [`dev-nix-host-unsupported`](#error-dev-nix-host-unsupported) | dev | no |
 | [`dev-nix-invalid`](#error-dev-nix-invalid) | dev | no |
@@ -721,7 +720,6 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`ssh-tool-required`](#error-ssh-tool-required) | artifacts-input | no |
 | [`state-access-denied`](#error-state-access-denied) | state | no |
 | [`state-corrupt`](#error-state-corrupt) | state | no |
-| [`state-crypto-unavailable`](#error-state-crypto-unavailable) | state | no |
 | [`state-export-invalid`](#error-state-export-invalid) | state | no |
 | [`state-import-changed`](#error-state-import-changed) | state | no |
 | [`state-import-partial`](#error-state-import-partial) | state | no |
@@ -4013,14 +4011,6 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Do not edit `piceli-state-*` Secrets by hand. Restore the state from an export with `piceli state import`, or ask the owner.
 - **Retry-safe:** no
 
-(error-state-crypto-unavailable)=
-### `state-crypto-unavailable`
-
-**Encryption library missing.** Encrypting or decrypting the secret material of a state export needs the `cryptography` package, which is not installed.
-
-- **Fix:** Install it (`pip install 'piceli[crypto]'`), or export without `--include-secrets`.
-- **Retry-safe:** no
-
 (error-state-export-invalid)=
 ### `state-export-invalid`
 
@@ -5155,14 +5145,6 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Nix cache public key not declared yet.** The `NixCache` names its key with `key_name=` alone (the key does not exist yet), and publishing, `dev nix gc` and a host's module need the public key hosts trust. A `NixRelease` of that cache stays `rejected` with this reason in the controller (its composition still loads), and nothing is published for it.
 
 - **Fix:** Run `piceli secrets setup MODULE` (or `piceli secrets nix-cache NAME --generate`) and put the public key it prints into `NixCache(public_key=)`.
-- **Retry-safe:** no
-
-(error-dev-nix-crypto-unavailable)=
-### `dev-nix-crypto-unavailable`
-
-**Signing library missing.** Generating Nix cache keys and signing build manifests need the `cryptography` package, which is not installed.
-
-- **Fix:** Install it (`pip install 'piceli[crypto]'`).
 - **Retry-safe:** no
 
 (error-dev-nix-gc-failed)=
@@ -6342,7 +6324,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-infra-apply-failed)=
 ### `infra-apply-failed`
 
-**OpenTofu apply failed.** `tofu apply` of the approved plan exited with an error. When part of it was applied, the output has `partially_applied` and lists what was applied (address, action, the provider's id) and what was not; the next plan shows what remains.
+**OpenTofu apply failed.** `tofu apply` of the approved plan exited with an error. When part of it was applied, the output has `partially_applied` and lists what was applied (address, action, the provider's id) and what was not; the next plan shows what remains. `failed_on` names the resources it failed on and `tofu_log` holds OpenTofu's whole output, redacted.
 
 - **Fix:** Read the `tofu:` lines on stderr, fix the cause, then plan again (`piceli infra plan MODULE:ATTR`) and approve the new hash.
 - **Retry-safe:** no
@@ -6638,9 +6620,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-infra-tofu-failed)=
 ### `infra-tofu-failed`
 
-**OpenTofu command failed.** `tofu init`, `plan` or `show` exited with an error (a provider download, a provider API refusal, a wrong state passphrase, an unreachable state backend). Nothing was applied. Its diagnostics are on stderr, with secrets redacted.
+**OpenTofu command failed.** `tofu init`, `plan` or `show` exited with an error (a provider download, a provider API refusal, a data source lookup that found nothing, a wrong state passphrase, an unreachable state backend). Nothing was applied. Its diagnostics are on stderr, each with the address of the resource or data source it failed on (also in `failed_on`), with secrets redacted; OpenTofu's whole output, redacted, is in `tofu_log` in the state directory.
 
-- **Fix:** Read the `tofu:` lines on stderr, fix the cause, and run the command again.
+- **Fix:** Read the `tofu:` lines on stderr (or the file in `tofu_log`, or run again with `--verbose`), fix the cause, and run the command again.
 - **Retry-safe:** yes
 
 (error-infra-tofu-missing)=

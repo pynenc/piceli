@@ -72,7 +72,10 @@ def test_a_failure_after_changes_reports_what_was_applied(tmp_path: Path) -> Non
         tofu_error("Error creating server", "quota exceeded"),
     ])  # fmt: skip
     assert error.code == "infra-apply-failed"
+    log = Path(error.fields.pop("tofu_log"))
+    assert log.name == "tofu-apply.log" and "quota exceeded" in log.read_text()
     assert error.fields == {
+        "failed_on": [],
         "partially_applied": True,
         "applied": [{"address": IP, "action": "create", "id": "ip-123"}],
         "not_applied": [{"address": SERVER, "action": "create", "failed": True}],
@@ -100,7 +103,7 @@ def test_a_failure_before_any_change_keeps_its_behaviour(tmp_path: Path) -> None
         hook("apply_errored", IP, "create"), tofu_error("Error creating IP"),
     ])  # fmt: skip
     assert error.code == "infra-apply-failed"
-    assert error.fields == {}
+    assert set(error.fields) == {"failed_on", "tofu_log"}  # nothing applied
 
 
 def test_a_known_refusal_after_changes_is_partial(tmp_path: Path) -> None:

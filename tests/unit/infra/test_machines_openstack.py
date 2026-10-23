@@ -372,6 +372,17 @@ def test_ownership_uses_tags_metadata_and_descriptions(tmp_path: Path) -> None:
     assert set(foreign) == set(ours)
 
 
+def test_an_image_is_ours_by_its_tags_not_its_glance_metadata() -> None:
+    """Glance gives every image a computed ``metadata`` map (its properties
+    and hashes); Piceli's labels are in its ``tags``. A live destroy refused
+    its own image as foreign while ``metadata`` was read first."""
+    labels = OS.resource_labels("openstack_images_image_v2", {
+        "metadata": {"os_hash_algo": "sha512", "hw_firmware_type": "uefi"},
+        "tags": ["piceli.io:managed-by=piceli", "piceli.io:infra=web"],
+    })  # fmt: skip
+    assert labels == OURS
+
+
 def test_infomaniak_preset() -> None:
     provider = Infomaniak(credentials="cloud")
     assert provider.auth_url == "https://api.pub1.infomaniak.cloud/identity/v3"
@@ -382,6 +393,66 @@ def test_infomaniak_preset() -> None:
     assert provider.describe()["preset"] == "infomaniak"
     assert Infomaniak(credentials="cloud", region="dc4-a").region == "dc4-a"
     assert provider.pin() is OPENSTACK_PIN
+
+
+def test_infomaniak_finds_its_public_network_by_name() -> None:
+    """Infomaniak's ``ext-net1`` is shared but not ``router:external``: a
+    lookup with ``external = true`` finds nothing, so the preset matches the
+    name alone."""
+    provider = Infomaniak(credentials="cloud")
+    assert provider.public_network_external is None
+    server = _server(provider=provider, type="a1-ram2-disk20-perf1", location="dc3-a")
+    config = render(Infrastructure("web", servers=[server])).config
+    lookup = config["data"]["openstack_networking_network_v2"]["public-network"]
+    assert lookup == {"name": "ext-net1"}
+    # The port asks for no address: Neutron gives it one IPv4 and the
+    # network's IPv6 (one address per IP version).
+    port = config["resource"]["openstack_networking_port_v2"]["ip-host-1-ip"]
+    assert not {"fixed_ip", "no_fixed_ip"} & set(port)
+    assert provider.describe()["public_network_external"] is None
+
+
+@pytest.mark.parametrize(
+    ("external", "lookup"),
+    [
+        (True, {"name": "public", "external": True}),
+        (False, {"name": "public", "external": False}),
+        (None, {"name": "public"}),
+    ],
+)
+def test_openstack_chooses_how_the_public_network_is_matched(
+    external: bool | None, lookup: dict[str, Any]
+) -> None:
+    provider = OpenStack(
+        credentials="cloud",
+        auth_url="https://identity.example.net/v3",
+        region="region-1",
+        public_network="public",
+        public_network_external=external,
+        flavors=["small"],
+    )
+    config = render(Infrastructure("web", servers=[_server(provider=provider)])).config
+    assert config["data"]["openstack_networking_network_v2"]["public-network"] == lookup
+
+
+def test_openstack_matches_an_external_network_by_default() -> None:
+    assert OS.public_network_external is True
+    assert OS.describe()["public_network_external"] is True
+    assert Infomaniak(
+        credentials="cloud", public_network_external=True
+    ).public_network_external
+
+
+def test_public_network_external_is_a_bool_or_none() -> None:
+    with _invalid("public_network_external"):
+        OpenStack(
+            credentials="cloud",
+            auth_url="https://identity.example.net/v3",
+            region="region-1",
+            public_network="public",
+            public_network_external="yes",  # type: ignore[arg-type]
+            flavors=["small"],
+        )
 
 
 def test_pin_has_every_platform() -> None:

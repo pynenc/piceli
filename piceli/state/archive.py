@@ -57,13 +57,8 @@ def read_key(path: Path) -> bytes:
 
 
 def _aead(key: bytes, salt: bytes) -> Any:
-    try:
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    except ImportError:
-        raise StateError(
-            "state-crypto-unavailable",
-            "encrypting secret material needs the cryptography package",
-        ) from None
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
     derived = hashlib.scrypt(
         key,
         salt=salt,
