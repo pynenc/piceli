@@ -285,6 +285,8 @@ class Step:
         name: str = "images",
         components: Sequence[str] = (),
         platforms: Sequence[str] = (),
+        repository: str = "",
+        branch: str = "main",
         timeout: float = DEFAULT_TIMEOUT,
     ) -> ImagesStep:
         """On ``--promote``, build the images the GitOps controller of
@@ -293,16 +295,25 @@ class Step:
         key, and offer them to the controller (see :mod:`piceli.train.images`).
 
         :param composition: The composition module (``infra.py``, relative to
-            the repository root; read from the promoted head).
+            the root of the repository holding it; by default this one, read
+            from the promoted head).
         :param components: The components to build (default: every component
             built from a source of this repository).
         :param platforms: The platforms (default: the controller's).
+        :param repository: The composition's own repository when it is not
+            this one: the URL ``piceli gitops enable`` recorded (the
+            controller names that repository by it). The train reads it at
+            the tip of ``branch``, the commit the controller follows, with
+            this machine's Git credentials.
+        :param branch: The branch of ``repository`` the controller follows.
         """
         return ImagesStep(
             name,
             composition=composition,
             components=tuple(components),
             platforms=tuple(platforms),
+            repository=repository,
+            branch=branch,
             timeout=timeout,
         )
 
@@ -370,6 +381,8 @@ class ImagesStep(Step):
     composition: str = ""
     components: tuple[str, ...] = ()
     platforms: tuple[str, ...] = ()
+    repository: str = ""
+    branch: str = "main"
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -392,6 +405,25 @@ class ImagesStep(Step):
         if not all(item in ("linux/amd64", "linux/arm64") for item in platforms):
             raise _invalid(f"step {self.name}: platforms are linux/amd64, linux/arm64")
         object.__setattr__(self, "platforms", platforms)
+        if not isinstance(self.repository, str):
+            raise _invalid(f"step {self.name}: repository is a Git URL")
+        if self.repository:
+            from piceli.infra import CompositionError, Source
+
+            try:
+                Source(self.repository)
+            except CompositionError:
+                raise _invalid(
+                    f"step {self.name}: repository is a Git URL without credentials"
+                ) from None
+        from piceli.envs.model import Branch, EnvError
+
+        try:
+            Branch(self.branch)
+        except (EnvError, TypeError):
+            raise _invalid(
+                f"step {self.name}: branch is one exact branch name"
+            ) from None
         if self.inputs or self.outputs:
             raise _invalid(
                 f"step {self.name}: an images step is keyed by the controller's "
@@ -403,6 +435,11 @@ class ImagesStep(Step):
             "composition": self.composition,
             "components": list(self.components),
             "platforms": list(self.platforms),
+            **(
+                {"repository": self.repository, "branch": self.branch}
+                if self.repository
+                else {}
+            ),
         }
 
 
@@ -503,6 +540,8 @@ def step_from_dict(data: Mapping[str, Any]) -> Step:
             composition=str(data["composition"]),
             components=tuple(data.get("components") or ()),
             platforms=tuple(data.get("platforms") or ()),
+            repository=str(data.get("repository") or ""),
+            branch=str(data.get("branch") or "main"),
             env=common["env"],
             timeout=common["timeout"],
             hosts=common["hosts"],

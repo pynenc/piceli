@@ -170,24 +170,31 @@ and `cancel` start and stop one, and the UI's Builds page shows them all.
   `--train-composition MODULE` for the deployed-by-train join) shows the
   same document, live, with the queue.
 - **The train's images go to the cluster: `Step.images("infra.py")`.** On
-  promote the train computes, for each component built from the
-  repository, the change key the GitOps controller computes for that
-  commit, builds the images from the tested commit with the same
-  host-build code as `piceli builder serve`, pushes them to the cluster's
-  registry with their provenance (naming the train run and host) and
-  offers them to the controller with a new `prebuilt` request, before the
-  push the controller reacts to. Pipeline environments too: for each build
-  spec whose contexts read the composition repository, the train computes
-  every image's key as the controller does (the spec, the selected files,
-  node facts and the controller's platforms), builds it with `builder
-  serve`'s code (one OCI index over the platforms) and offers it the same
-  way. A failure is `train-images-failed`.
+  promote the train computes the change key the GitOps controller will
+  compute once the promoted head is pushed, builds the images with the
+  same host-build code as `piceli builder serve`, pushes them to the
+  cluster's registry with their provenance (naming the train run and host)
+  and offers them to the controller with a new `prebuilt` request, before
+  the push the controller reacts to. It covers each component built from
+  the repository, and each pipeline environment's build spec (the spec,
+  the files its contexts select, node facts and the controller's
+  platforms; one OCI index over the platforms). The composition may live in
+  another repository than the train's, with contexts reading both:
+  `Step.images("infra.py", repository="https://…/infra.git",
+  branch="main")`. The train then takes every source an environment follows
+  at the commit the controller will pick: its own repository at the
+  promoted head, every other one at its current tip, read from the same
+  remote with the machine's Git credentials; the offer records those
+  commits. A failure is `train-images-failed`.
 - **`Controller(prebuilt=True)` uses those images.** Such a controller
   keeps an offer and uses it only when a step's own change key is the
   offered key, the reference names the component's repository in its
   registry, pinned by digest, and the digest is in the registry; it then
   deploys without waiting for a host or a Job. Offers show in the
-  controller's status; only for registry delivery.
+  controller's status with the source commits their key was made with; a
+  component built although an offer exists names, in its status entry
+  (`prebuilt`), the sources whose commits differ (another repository moved
+  after the offer). Only for registry delivery.
 - **Private flake inputs of a Nix build.** A NixRelease (and `piceli dev
   nix build`) whose `flake.lock` pins a private input now builds on a
   build host with no Git credential of its own: before the build, the

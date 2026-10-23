@@ -1502,10 +1502,12 @@
      "timeout"
     ],
     "images": [
+     "branch",
      "components",
      "composition",
      "name",
      "platforms",
+     "repository",
      "timeout"
     ],
     "publish": [
@@ -1572,10 +1574,12 @@
      "timeout"
     ],
     "images": [
+     "branch",
      "components",
      "composition",
      "name",
      "platforms",
+     "repository",
      "timeout"
     ],
     "publish": [
@@ -2140,10 +2144,12 @@
      "timeout"
     ],
     "images": [
+     "branch",
      "components",
      "composition",
      "name",
      "platforms",
+     "repository",
      "timeout"
     ],
     "publish": [
@@ -5259,6 +5265,7 @@
   },
   "ImagesStep": {
    "attrs": [
+    "branch",
     "cargo",
     "command",
     "components",
@@ -5273,11 +5280,13 @@
     "phase",
     "platforms",
     "publish",
+    "repository",
     "timeout",
     "to_dict",
     "uses_cargo"
    ],
    "init": [
+    "branch",
     "components",
     "composition",
     "env",
@@ -5286,6 +5295,7 @@
     "name",
     "outputs",
     "platforms",
+    "repository",
     "timeout"
    ],
    "methods": {
@@ -5300,10 +5310,12 @@
      "timeout"
     ],
     "images": [
+     "branch",
      "components",
      "composition",
      "name",
      "platforms",
+     "repository",
      "timeout"
     ],
     "publish": [
@@ -8336,10 +8348,12 @@
      "timeout"
     ],
     "images": [
+     "branch",
      "components",
      "composition",
      "name",
      "platforms",
+     "repository",
      "timeout"
     ],
     "publish": [
@@ -10731,10 +10745,12 @@
      "timeout"
     ],
     "images": [
+     "branch",
      "components",
      "composition",
      "name",
      "platforms",
+     "repository",
      "timeout"
     ],
     "publish": [

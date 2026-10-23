@@ -86,6 +86,7 @@ class StepContext:
     :param store: The content store (``None``: no reuse).
     :param origin: Who runs it (``train``, ``run``, ``trial``), recorded with
         a passed step's key.
+    :param base_branch: The branch ``--promote`` moves to ``head``.
     """
 
     checkout: Path
@@ -101,6 +102,8 @@ class StepContext:
     own_env: Mapping[str, str] = field(default_factory=dict)
     store: Store | None = None
     origin: Mapping[str, Any] = field(default_factory=dict)
+    #: The branch the train promotes ``head`` to (``Train(base=...)``).
+    base_branch: str = "main"
 
 
 def log_path(ctx: StepContext, step: str) -> Path:

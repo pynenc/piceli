@@ -593,8 +593,14 @@ and the digest is still in the registry: the image is then recorded as
 its own build, with the train's provenance (`builder: "train"`, the run,
 the tag and the host), and the step deploys without asking a host or
 starting a Job. An offer under another key is never used. Current offers
-show in the status (`controller.prebuilt`). Registry delivery only: a
-controller delivering into the nodes refuses offers.
+show in the status (`controller.prebuilt`), each with the commit of every
+source its key was made with (`sources`). When a step builds a component
+although an offer of it exists, the component's status entry says why
+(`prebuilt`: `{"used": false, "key": ..., "differs": {source: {"offered",
+"here"}}}`): typically another repository the build reads moved between
+the train's offer and this controller's poll, so its key differs and it
+builds as before. Registry delivery only: a controller delivering into the
+nodes refuses offers.
 
 (gitops-builds)=
 ### Every build: list, start, cancel (0.26.0)

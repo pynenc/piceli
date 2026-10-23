@@ -498,3 +498,214 @@ def test_a_pipeline_offer_for_other_platforms_is_not_used(
     git(world.infra.work, "push", "-q", "origin", "main")
     world.poll()
     assert world.ports.builder.built[-1] == ["api"]
+
+
+# ------------------------------------------- two repositories (0.26.0)
+
+#: The spec lives in the infra repository; its ``app`` contexts read the
+#: product repository the train runs on.
+TWO_REPO_BUILD = HOST_BUILD.replace(
+    '[context.api]\npath = "api"', '[context.api]\nsource = "product"\npath = "api"'
+).replace(
+    '[context.worker]\npath = "worker"',
+    '[context.worker]\nsource = "product"\npath = "worker"',
+)
+
+TWO_REPO_INFRA = PIPELINE_INFRA.replace(
+    'infra = Source(os.environ["EXAMPLE_INFRA_URL"], name="infra")',
+    'infra = Source(os.environ["EXAMPLE_INFRA_URL"], name="infra")\n'
+    'product = Source(os.environ["EXAMPLE_PRODUCT_URL"], name="product")',
+).replace('follow={infra: "main"}', 'follow={infra: "main", product: "main"}')
+
+TWO_REPO_SPEC = """\
+import os
+import sys
+
+from piceli.train import Step, Train
+
+train = Train(
+    "product",
+    steps=[
+        Step.command("check", [sys.executable, "-c", "print('ok')"]),
+        Step.images(
+            "infra.py",
+            repository=os.environ["EXAMPLE_INFRA_URL"],
+            branch="main",
+            platforms=["linux/amd64", "linux/arm64"],
+        ),
+    ],
+)
+"""
+
+
+class TwoRepoWorld(PipelineWorld):
+    """The composition and its spec in ``infra``; the train on ``product``."""
+
+    def __init__(self, tmp_path: Path) -> None:
+        from piceli.infra.pipelines import RepoSettings
+        from tests.unit.infra.test_pipeline_composition import SUMMARY
+        from tests.unit.infra.test_pipeline_composition import (
+            FakePorts as PipelinePorts,
+        )
+
+        remotes = tmp_path / "remotes"
+        self.infra = Repo(
+            remotes,
+            "infra",
+            {
+                "example_app.py": (PIPELINE_EXAMPLE / "example_app.py").read_text(),
+                "config/api.json": (PIPELINE_EXAMPLE / "config/api.json").read_text(),
+                "config/worker.json": (
+                    PIPELINE_EXAMPLE / "config/worker.json"
+                ).read_text(),
+                "host-build.toml": TWO_REPO_BUILD,
+                "infra.py": TWO_REPO_INFRA,
+            },
+        )
+        self.product = Repo(
+            remotes,
+            "product",
+            {
+                "api/site/index.html": "<h1>api</h1>\n",
+                "worker/jobs/run.sh": "echo work\n",
+                "train_spec.py": TWO_REPO_SPEC,
+            },
+        )
+        for repo in (self.infra, self.product):
+            git(repo.work, "config", "commit.gpgSign", "false")
+        self.registry = set()
+        self.ports = PipelinePorts()
+        self.channel = DirectoryChannel(tmp_path / "controller")
+        self.clock = {"now": 1_000_000.0}
+        settings = RepoSettings(name="infra", url=self.infra.url, entry="infra.py")
+        config = CompositionConfig(
+            composition=SUMMARY, repo=settings.to_dict(), poll_seconds=10,
+            platforms=TWO,
+        )  # fmt: skip
+        state = tmp_path / "controller"
+        self.controller = CompositionController(
+            config,
+            state_dir=state,
+            sources=SourceSet(config.sources, state / "sources"),
+            ports=self.ports,
+            channel=self.channel,
+            clock=lambda: self.clock["now"],
+        )
+        self.controller._in_registry = self.registry.__contains__  # type: ignore[method-assign]
+        self.root = tmp_path
+        self.builds = []
+
+    def train(self, *branches: str) -> dict[str, Any]:
+        loaded, repo, spec_path = locate(
+            f"{self.product.work / 'train_spec.py'}:train", self.product.work
+        )
+        return TrainRun(
+            loaded, repo=repo, spec_path=spec_path, branches=list(branches),
+            state=TrainState.for_train("product", self.root / "train-state"),
+            promote=True, images=self.tools,
+        ).run()  # fmt: skip
+
+    def change_api(self) -> dict[str, Any]:
+        """A product branch changes api; the train tests and promotes it."""
+        self.product.commit({"api/site/index.html": "<h1>v2</h1>\n"}, branch="feat")
+        git(self.product.work, "checkout", "-q", "main")
+        result = self.train("feat")
+        assert result["ok"], result
+        return result
+
+
+@pytest.fixture
+def two_repos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TwoRepoWorld:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("EXAMPLE_INFRA_URL", str(tmp_path / "remotes" / "infra.git"))
+    monkeypatch.setenv("EXAMPLE_PRODUCT_URL", str(tmp_path / "remotes" / "product.git"))
+    return TwoRepoWorld(tmp_path)
+
+
+def test_two_repositories_deploy_the_trains_images_with_no_build(
+    two_repos: TwoRepoWorld,
+) -> None:
+    world = two_repos
+    status = world.poll()
+    assert status["envs"]["main"]["state"] == "deployed", status["envs"]["main"]
+    assert world.ports.builder.built == [["api", "worker"]]
+    infra_tip = git(world.infra.work, "rev-parse", "HEAD")
+    result = world.change_api()
+    (images,) = [s for s in result["promote"]["publish"] if s["name"] == "images"]
+    assert images["verdict"] == "passed", images
+    (wanted,) = world.builds
+    # The spec is the infra repository's; the product at the promoted head,
+    # the infra repository at the tip of the branch the controller follows.
+    assert wanted["spec"] == "host-build.toml" and wanted["repo"] == "infra"
+    assert wanted["commits"] == {"infra": infra_tip, "product": result["head"]}
+    assert wanted["urls"]["infra"] == world.infra.url
+    assert wanted["platforms"] == list(TWO)
+    assert images["detail"]["sources"] == {
+        "infra": infra_tip,
+        "product": result["head"],
+    }
+    api = images["detail"]["images"]["api"]
+    assert api["platforms"] == list(TWO)
+    git(world.product.work, "push", "-q", "origin", "main")
+    status = world.poll()
+    main = status["envs"]["main"]
+    assert main["state"] == "deployed", main
+    assert main["revision"] == {"infra": infra_tip, "product": result["head"]}
+    # The controller's own keys are the offered ones: zero builds.
+    assert world.ports.builder.built == [["api", "worker"]]
+    component = main["components"]["api"]
+    assert component["image"] == api["pull_ref"]
+    assert component["source_digest"] == api["key"]
+    assert component["provenance"]["builder"] == "train"
+    assert component["provenance"]["commits"] == {
+        "infra": infra_tip,
+        "product": result["head"],
+    }
+    assert component["provenance"]["platforms"] == list(TWO)
+    (offer,) = [o for o in status["controller"]["prebuilt"] if o["component"] == "api"]
+    assert offer["sources"] == {"infra": infra_tip, "product": result["head"]}
+
+
+def test_an_offer_is_not_used_when_the_other_repository_moved(
+    two_repos: TwoRepoWorld,
+) -> None:
+    world = two_repos
+    world.poll()
+    offered_at = git(world.infra.work, "rev-parse", "HEAD")
+    result = world.change_api()
+    # The infra repository moves after the offer: api reads its config.
+    moved = world.infra.commit({"config/api.json": '{"greeting": "moved"}\n'})
+    git(world.product.work, "push", "-q", "origin", "main")
+    status = world.poll()
+    main = status["envs"]["main"]
+    assert main["state"] == "deployed", main
+    assert main["revision"] == {"infra": moved, "product": result["head"]}
+    assert world.ports.builder.built[-1] == ["api"]  # built as before
+    api = main["components"]["api"]
+    assert (api.get("provenance") or {}).get("builder") != "train"
+    assert api["prebuilt"] == {
+        "used": False,
+        "key": api["prebuilt"]["key"],
+        "differs": {"infra": {"offered": offered_at, "here": moved}},
+    }
+    assert api["prebuilt"]["key"] != api["source_digest"]
+
+
+def test_the_composition_repository_is_declared_on_the_step() -> None:
+    from piceli.train import Step
+    from piceli.train.model import TrainError, step_from_dict
+
+    step = Step.images(
+        "deploy/infra.py",
+        repository="https://git.example.com/me/infra.git",
+        branch="release",
+    )
+    data = step.to_dict()
+    assert data["repository"] == "https://git.example.com/me/infra.git"
+    assert data["branch"] == "release"
+    assert step_from_dict(data) == step
+    assert "repository" not in Step.images("infra.py").to_dict()
+    with pytest.raises(TrainError, match="without credentials"):
+        Step.images("infra.py", repository="https://user:token@git.example.com/x.git")
+    with pytest.raises(TrainError, match="branch"):
+        Step.images("infra.py", repository="https://git.example.com/x.git", branch="*")

@@ -852,6 +852,7 @@ class TrainRun:
                 own_env=own,
                 store=self.store,
                 origin={"train": self.train.name, "run": self.run_id, "trial": None},
+                base_branch=self.train.base,
             )
             restored = self._restore_tested(train, checkout)
             if restored:

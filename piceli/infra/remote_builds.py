@@ -644,6 +644,7 @@ def offered(
                 f"image {name}: {digest} is not in the registry",
             )
         platforms = image.get("platforms")
+        sources = image.get("sources")
         checked[name] = {
             "key": key,
             "pull_ref": pull_ref,
@@ -651,6 +652,13 @@ def offered(
             "platforms": dict(platforms) if isinstance(platforms, Mapping) else {},
             "source": str(image.get("source") or "")[:100],
             "commit": str(image.get("commit") or "")[:64],
+            # Every source's commit the key was made with (status explains
+            # an offer the controller computed another key for).
+            "sources": {
+                str(k)[:100]: str(v)[:64] for k, v in sorted(sources.items())[:16]
+            }
+            if isinstance(sources, Mapping)
+            else {},
             "host": str(body.get("host") or "?")[:64],
             "provenance": record,
             "at": _iso(now),
@@ -676,6 +684,35 @@ def take_offer(
     return dict(found) if isinstance(found, Mapping) else None
 
 
+def unused_offer(
+    state: Mapping[str, Any],
+    component: str,
+    key: str,
+    sources: Mapping[str, str],
+) -> dict[str, Any] | None:
+    """Why the newest offer of ``component`` was not used for a step whose
+    own change key is ``key``, made with ``sources`` (``{source: commit}``):
+    ``{"used": False, "key": the offered key, "differs": {source:
+    {"offered", "here"}}}`` naming every source whose commit differs (none:
+    the same commits, other inputs such as the platforms or the spec), or
+    ``None`` when no offer of it is kept or the newest has this key."""
+    kept = (state.get(OFFERS_KEY) or {}).get(component) or {}
+    if not kept:
+        return None
+    newest = max(kept.values(), key=lambda item: float(item.get("epoch") or 0))
+    if newest.get("key") == key:
+        return None
+    offered = dict(newest.get("sources") or {})
+    if not offered and newest.get("source"):
+        offered = {str(newest["source"]): str(newest.get("commit") or "")}
+    differs = {
+        name: {"offered": offered.get(name), "here": sources.get(name)}
+        for name in sorted(set(offered) | set(sources))
+        if offered.get(name) != sources.get(name)
+    }
+    return {"used": False, "key": str(newest.get("key")), "differs": differs}
+
+
 def public_offers(state: Mapping[str, Any]) -> list[dict[str, Any]]:
     """``prebuilt`` in the controller's status: each offer, newest first."""
     found = []
@@ -688,6 +725,7 @@ def public_offers(state: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "image": item.get("pull_ref"),
                     "host": item.get("host"),
                     "train": (item.get("provenance") or {}).get("train"),
+                    **({"sources": item["sources"]} if item.get("sources") else {}),
                     "at": item.get("at"),
                 }
             )

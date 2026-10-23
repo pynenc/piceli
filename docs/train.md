@@ -89,7 +89,7 @@ The steps:
 | `CargoCheck(select=Impact(), args=("--all-targets",))` | `cargo check` on the selected packages | it exits 0 (skipped when nothing selected) |
 | `CargoTests(select=Impact(), args=(), retry=1)` | `cargo test --no-fail-fast` on the selected packages, then the failed tests again by exact name | every test passed, first time or on a retry |
 | `Step.publish(name, argv, env=None, timeout=3600, cargo=False)` | `argv` in a checkout of the promoted head, only with `--promote` | it exits 0; it never judges a candidate |
-| `Step.images("infra.py", components=(), platforms=())` | builds the GitOps controller's images of the promoted head and offers them to it, only with `--promote` | the images were built, pushed and offered (see [Images for the cluster](#images-for-the-cluster)) |
+| `Step.images("infra.py", components=(), platforms=(), repository="", branch="main")` | builds the GitOps controller's images of the promoted head and offers them to it, only with `--promote` | the images were built, pushed and offered (see [Images for the cluster](#images-for-the-cluster)) |
 
 Every step also takes `hosts=` (where it may run, in order; empty: the
 train's `hosts`), `inputs=` and `outputs=` (see
@@ -451,27 +451,31 @@ controller sees the push, waits for a build host or starts a build Job,
 then deploys. `Step.images("infra.py")` makes the train build those
 images on `--promote`, before the push:
 
-1. It loads the composition module from the promoted head and computes the
-   **change key** the controller computes for that commit, with the same
-   functions:
+1. It loads the composition module the controller will load (from the
+   promoted head, or from another repository: see
+   [Two repositories](#train-images-two-repositories)) and computes the
+   **change key** the controller will compute once the promoted head is
+   pushed, with the same functions:
    - for each component built from this repository (its source's URL is
      one of the repository's remotes; or `components=[...]`): its contract
      in `piceli.toml` and the Git object id of every path its build reads
      (`contract_digest`);
-   - for each build spec of a pipeline environment (`Build.spec(...,
-     builder="host")`: `[build]` commands and shared commands, contexts,
-     images with their target and shared files, toolchains): each image's
-     key from the spec, the files its contexts select at that commit, the
-     declared node facts and the controller's platforms (`image_keys`).
-2. It builds them from the promoted head with the same host-build code as
+   - for each build spec of a pipeline environment that deploys the
+     promoted head (`Build.spec(..., builder="host")`: `[build]` commands
+     and shared commands, contexts, images with their target and shared
+     files, toolchains): each image's key from the spec, the files its
+     contexts select at each source's commit, the declared node facts and
+     the controller's platforms (`image_keys`).
+2. It builds them from those commits with the same host-build code as
    `piceli builder serve`, on a docker build host of the composition's
    cluster (`Cluster(dev=DevBuilds(hosts=[...]))`; the step's `hosts`
    choose), for the cluster's platforms (or `platforms=`), pushes them to
    the cluster's registry, and attaches their provenance (in-toto, naming
    the train run, tag and host) as OCI referrers.
 3. It offers them to the controller: a `prebuilt` request with each
-   image's component, key, source, commit, reference and digest, and a
-   receipt.
+   image's component, key, source, commit, the commit of every source the
+   key was made with, reference and digest, and a receipt (its `commits`
+   are in the provenance).
 
 The controller takes offers only when declared `Controller(prebuilt=True)`.
 It keeps an offer after checking it names a declared component, points
@@ -491,22 +495,141 @@ the time to see the push plus the deploy (about 30 s + 3 s of the measured
 334 s median, which had 122 s of host wait and 171 s of build Job); the
 images are built while the train promotes, off the critical path.
 
+Which commit of each source the key is made with, as the controller picks
+it for an environment (the same rules: `Branch`, `Tag`, the per-branch
+`{branch}` of the promoted branch):
+
+- **The train's own repository: the promoted head.** `--push` moves the
+  branch the train promotes (`Train(base=...)`) to it, and the controller
+  sees that commit. An environment that follows another ref of this
+  repository does not deploy the promoted head: it is skipped.
+- **Every other source: its current tip**, read from the same remote the
+  controller reads (`git ls-remote`, then a shallow fetch of that one
+  commit into a temporary directory the step removes).
+- **The composition repository, when the environment does not follow it**:
+  the commit the controller loaded the module from (the promoted head, or
+  the tip of `branch=`).
+
+An environment following a source by `Promote()` (the commit is in the
+controller's state) is skipped; so is one that does not deploy the
+promoted head. The spec's contexts read their files from each source at
+those commits.
+
 What a pipeline environment's build spec needs for this:
 
-- **Its contexts read only the composition repository** (the repository
-  the train runs in, holding `infra.py` and the spec): a context with
-  `source = "other"` makes the key depend on the commit the controller
-  will follow of that other repository, which the train cannot know. Such
-  a spec fails the step (`train-images-failed`) and the controller builds
-  as before.
-- **The repository's `origin` remote is the URL `piceli gitops enable`
+- **Each context reads a source the environment follows** (or the
+  composition repository), as for the controller itself.
+- **The composition repository's URL is the one `piceli gitops enable`
   recorded** (the controller names the composition repository by it, and
-  the source name is part of the key).
+  the source name is part of the key): the repository's `origin` remote
+  when the composition is in this repository, else `repository=`.
 - **The same platforms as the controller**: the key covers them. The
   default is the controller's own default, `linux/<arch>` of every node of
   the cluster, sorted; when the controller was enabled with other
   `--platform`s, give the same ones to `Step.images(platforms=[...])`. An
   offer for other platforms has another key and is never used.
+
+(train-images-two-repositories)=
+### Two repositories: the composition elsewhere
+
+A common layout keeps the composition (`infra.py`) and its build spec in an
+infrastructure repository, while the train runs on the product
+repository, and the spec's contexts read both. Name the composition's
+repository on the step, with the URL `piceli gitops enable` recorded and
+the branch the controller follows:
+
+```python
+# train_spec.py, in the product repository
+from piceli.train import CargoTests, Step, Train
+
+train = Train(
+    "product",
+    base="main",
+    steps=[
+        CargoTests(),
+        Step.images(
+            "infra.py",  # relative to the infra repository's root
+            repository="https://git.example.com/me/infra.git",
+            branch="main",
+        ),
+    ],
+)
+```
+
+```python
+# infra.py, in the infra repository
+from piceli.envs import Environment, Stack
+from piceli.infra import Cluster, Controller, Source
+
+from app import pipeline, registry  # Build.spec("host-build.toml", builder="host")
+
+cluster = Cluster(
+    "my-cluster",
+    api="https://203.0.113.10:6443",
+    credentials="my-cluster",
+    registry=registry,
+    controller=Controller(on="node-a", prebuilt=True),
+)
+workspace = Source("https://git.example.com/me/infra.git", name="workspace")
+product = Source("https://git.example.com/me/product.git", name="product")
+environments = [
+    Environment(
+        "main",
+        namespace="my-app",
+        pipeline=pipeline,
+        stack=Stack("full", workloads=["api"]),
+        cluster=cluster,
+        follow={workspace: "main", product: "main"},
+        auto_approve=True,
+    ),
+]
+```
+
+```toml
+# host-build.toml, next to infra.py
+revision = "piceli.host-build.v1"
+name = "my-app"
+
+[build]
+tools = ["cargo"]
+commands = [["cargo", "build", "--release", "--manifest-path", "app/Cargo.toml"]]
+
+[context.workspace]   # the infra repository (no source: the composition's)
+include = ["config/**"]
+
+[context.app]
+source = "product"
+include = ["Cargo.toml", "Cargo.lock", "src/**"]
+
+[[output.image]]
+name = "api"
+repository = "my-app/api"
+contexts = ["app", "workspace"]
+# base, files, user, entrypoint ...
+```
+
+On `--promote` the train fetches the infra repository at the tip of
+`main`, imports `infra.py` from it, takes `product` at the promoted head
+and `workspace` at that tip, computes each image's key as the controller
+will, builds and offers. After `--push`, the controller sees `product`
+move, computes the same key from the same commits, and deploys the
+offered image: no host wait and no build Job.
+
+If the infra repository moves between the offer and the controller's
+poll, the controller computes another key (it reads every source's commit
+itself) and builds as before: nothing wrong is ever deployed. Its status
+says why the offer was not used: the component's entry carries
+`prebuilt` with the offered key and each source whose commit differs
+(`{"workspace": {"offered": "<sha>", "here": "<sha>"}}`).
+
+**Credentials.** The train reads the other repositories with the Git of
+the machine it runs on, as `piceli builder serve` fetches: your credential
+helper for HTTPS, your SSH agent for SSH, never a prompt, and an HTTPS URL
+is tried over SSH (`git@host:path`) too. A private infra repository works
+when `git ls-remote https://git.example.com/me/infra.git` works on that
+machine; to read it over SSH while keeping the HTTPS URL the controller
+knows, add `git config --global url."git@git.example.com:".insteadOf
+"https://git.example.com/"`. The build host fetches the same way.
 
 The build itself is `piceli builder serve`'s: every platform, one OCI index
 over them, the build receipt's toolchains in the provenance.

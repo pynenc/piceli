@@ -2163,6 +2163,32 @@ class CompositionController:
         )
         return image
 
+    def _unused_offer(
+        self,
+        entry: dict[str, Any],
+        component: str,
+        key: str,
+        sources: Mapping[str, str],
+    ) -> None:
+        """0.26.0: a component built although a train offered it: the
+        offer's key is not this controller's, and the sources whose commits
+        differ say why (``prebuilt`` in its status entry)."""
+        from piceli.infra import remote_builds
+
+        why = remote_builds.unused_offer(self.state, component, key, sources)
+        if why is None:
+            return
+        entry["prebuilt"] = why
+        differs = ", ".join(
+            f"{name} {str(item['offered'] or '-')[:12]} offered, "
+            f"{str(item['here'] or '-')[:12]} here"
+            for name, item in why["differs"].items()
+        )
+        self.log(
+            f"{component}: prebuilt offer not used, its key differs"
+            + (f" ({differs})" if differs else " (same commits, other inputs)")
+        )
+
     def _remember(self, component: str, digest: str, image: BuiltImage) -> None:
         write_json(self._cache_path(component, digest), image.to_dict())
         self._built.append(component)  # built (or mirrored) in this step
@@ -2259,6 +2285,11 @@ class CompositionController:
                 "health": (previous.get(component.name) or {}).get("health", "unknown"),
                 "updated_at": now,
             }
+            if cached is None and source and commit:
+                self._unused_offer(
+                    components[component.name], component.name, digest,
+                    {source: commit},
+                )  # fmt: skip
         record["components"] = components
         if to_build or to_mirror:
             self._stage(record, "build")  # show "building" while it runs
@@ -2408,6 +2439,10 @@ class CompositionController:
                     "health": (previous.get(image.name) or {}).get("health", "unknown"),
                     "updated_at": now,
                 }
+                if cached is None:
+                    self._unused_offer(
+                        components[image.name], image.name, key.key, key.sources
+                    )
             if changed:
                 commits = {
                     source: revision[source] for source, _ in spec.contexts.values()
