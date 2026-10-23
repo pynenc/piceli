@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from piceli.k8s import owned_processes as owned
 from piceli.k8s.owned_processes import OwnedProcessRegistry, process_identity
 from piceli.k8s.ui_state import private_ui_state_dir
 
@@ -160,8 +161,10 @@ def test_a_sigkilled_servers_forward_is_reaped_at_the_next_start(
         assert _accepting(port)
 
         assert OwnedProcessRegistry(registry).reap_orphans() == (child,)
+        # A hang guard, not a bound: on a busy runner the stopped forward may
+        # take a moment to finish exiting after its socket is closed.
         deadline = time.monotonic() + 60
-        while _accepting(port) and time.monotonic() < deadline:
+        while (_accepting(port) or _alive(child)) and time.monotonic() < deadline:
             time.sleep(0.05)
         assert not _accepting(port)
         assert not _alive(child)
@@ -289,3 +292,44 @@ def test_a_zombie_has_no_identity(
         (tmp_path / str(pid) / "cmdline").write_bytes(b"kubectl\0port-forward\0")
     assert process_identity(41, proc=tmp_path) is not None
     assert process_identity(42, proc=tmp_path) is None
+
+
+def _entry(identity: str = "recorded") -> owned._Entry:
+    return owned._Entry(pid=4242, identity=identity, owner_pid=1, owner_identity="o")
+
+
+@pytest.mark.parametrize(
+    ("reads", "exists", "gone"),
+    [
+        (["recorded"], True, False),  # still the recorded process
+        ([None], True, False),  # unreadable for a moment (exiting): wait
+        ([None], False, True),  # the pid no longer exists, or is a zombie
+        (["other", "other"], True, True),  # another process holds the pid
+        (["other", "recorded"], True, False),  # a flicker, not a reuse
+        (["other", None], True, False),  # changed, then unreadable: not proof
+    ],
+)
+def test_a_process_is_gone_only_when_that_is_confirmed(
+    monkeypatch: pytest.MonkeyPatch,
+    reads: list[str | None],
+    exists: bool,
+    gone: bool,
+) -> None:
+    pending = list(reads)
+    monkeypatch.setattr(owned, "process_identity", lambda pid: pending.pop(0))
+    monkeypatch.setattr(owned, "_exists", lambda pid: exists)
+    monkeypatch.setattr(owned.time, "sleep", lambda seconds: None)
+    assert owned._gone(_entry()) is gone
+
+
+def test_an_exiting_process_has_no_fingerprint(tmp_path: Path) -> None:
+    proc = tmp_path / "proc"
+    (proc / "77").mkdir(parents=True)
+    fields = " ".join(["S", *["0"] * 19])
+    (proc / "77" / "stat").write_text(f"77 (python) {fields}")
+    (proc / "77" / "cmdline").write_bytes(b"python\0-c\0x\0")
+    if not sys.platform.startswith("linux"):
+        pytest.skip("the /proc reading is Linux's")
+    assert process_identity(77, proc=proc) is not None
+    (proc / "77" / "cmdline").write_bytes(b"")
+    assert process_identity(77, proc=proc) is None
