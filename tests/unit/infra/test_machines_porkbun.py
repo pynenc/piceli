@@ -222,12 +222,12 @@ def test_porkbun_validation() -> None:
 
 
 def test_credentials_go_to_the_environment_only() -> None:
-    assert DNS.credential_env(f"{API_KEY}:{SECRET_KEY}") == {
+    assert DNS.credential_env({"api_key": API_KEY, "secret_api_key": SECRET_KEY}) == {
         "PORKBUN_API_KEY": API_KEY,
         "PORKBUN_SECRET_API_KEY": SECRET_KEY,
     }
     with pytest.raises(InfraError) as caught:
-        DNS.credential_env(SECRET_KEY)
+        DNS.credential_env({"token": SECRET_KEY})
     assert caught.value.code == "infra-credential-invalid"
     assert SECRET_KEY not in str(caught.value)
     assert _secret_name("PORKBUN_API_KEY") and _secret_name("PORKBUN_SECRET_API_KEY")

@@ -7,7 +7,7 @@ files are encrypted and unencrypted ones refused (``infra-state-unencrypted``;
 Piceli always configures that, the check keeps it so). After an apply
 (also a partial one) :func:`store_keys` reads each pair out of the state and
 stores it as the local credential of the key's name (kind ``s3-keys``,
-``ACCESS_KEY_ID:SECRET``, ``0600``), where ``NixCache`` and ``piceli host
+by part: ``access_key_id`` and ``secret_access_key``, ``0600``), where ``NixCache`` and ``piceli host
 secrets`` load it; a pair whose resource is gone is deleted from the store,
 if it still holds what Piceli wrote. ``s3-keys.json`` in the state directory
 records, per key, its credential name and a short digest of what was stored
@@ -25,7 +25,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from piceli.infra.machines.model import InfraError, Infrastructure
@@ -154,6 +154,9 @@ def plan_entries(
     return tuple(entries)
 
 
+_S3_PARTS = ("access_key_id", "secret_access_key")
+
+
 def store_keys(ws: Workspace) -> list[str]:
     """Store each key pair the state holds; delete those it no longer
     holds. Returns the new values (for redaction); prints nothing."""
@@ -161,7 +164,7 @@ def store_keys(ws: Workspace) -> list[str]:
         credential_present,
         delete_credential,
         load_credential,
-        save_credential,
+        save_parts,
     )
     from piceli.infra.machines.state import write_record
 
@@ -201,7 +204,7 @@ def store_keys(ws: Workspace) -> list[str]:
         digest = value_digest(value)
         current = load_credential(name, KIND) if credential_present(name) else None
         if current != value:
-            save_credential(name, KIND, value)
+            save_parts(name, "s3", dict(zip(_S3_PARTS, pair, strict=True)))
             fresh += [value, *pair]
         kept[address] = {"name": name, "bucket": bucket, "access": access,
                          "digest": digest}  # fmt: skip
@@ -236,7 +239,10 @@ class NeededSecret:
     """One secret a declaration needs: where it is stored, who creates it.
 
     ``created_by`` is ``"infra-apply"`` (``piceli infra apply`` creates and
-    stores it) or ``"operator"`` (someone runs ``setup``).
+    stores it) or ``"operator"`` (someone runs ``setup``). ``provider`` is
+    the provider a ``provider-token`` is for (its ``Provider.name``);
+    ``where`` says where else the secret must live or when it is needed
+    (the host, a build host, "read once at creation"), when that matters.
     """
 
     name: str
@@ -244,33 +250,48 @@ class NeededSecret:
     created_by: str
     setup: str
     purpose: str
+    provider: str | None = None
+    where: str | None = None
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, str | None]:
         return {
             "name": self.name,
             "kind": self.kind,
             "created_by": self.created_by,
             "setup": self.setup,
             "purpose": self.purpose,
+            "provider": self.provider,
+            "where": self.where,
         }
 
 
-def _operator(name: str, kind: str, purpose: str) -> NeededSecret:
+def _operator(
+    name: str,
+    kind: str,
+    purpose: str,
+    *,
+    provider: str | None = None,
+    where: str | None = None,
+) -> NeededSecret:
     from piceli.infra.machines.credentials import _SET_UP
 
-    return NeededSecret(name, kind, "operator", _SET_UP[kind].format(name), purpose)
+    return NeededSecret(
+        name, kind, "operator", _SET_UP[kind].format(name), purpose, provider, where
+    )
 
 
 def _of_infra(infra: Infrastructure) -> Iterable[NeededSecret]:
     assert infra.state_key is not None
     yield _operator(
-        infra.state_key, "state-key", f"state of infrastructure {infra.name}"
-    )
+        infra.state_key, "state-key", f"state of infrastructure {infra.name}",
+        where="only in this store: back it up, the state cannot be read without it",
+    )  # fmt: skip
     for provider in infra.providers():
         if provider.credentials is not None:
             yield _operator(
-                provider.credentials, "provider-token", f"{provider.name} API"
-            )
+                provider.credentials, "provider-token", f"{provider.name} API",
+                provider=provider.name,
+            )  # fmt: skip
     backend = infra.backend
     credentials = getattr(backend, "credentials", None)
     if isinstance(credentials, str):
@@ -278,8 +299,10 @@ def _of_infra(infra: Infrastructure) -> Iterable[NeededSecret]:
     for server in infra.servers:
         if server.user_data is not None:
             yield _operator(
-                server.user_data.secret, "user-data", f"user data of {server.name}"
-            )
+                server.user_data.secret, "user-data", f"user data of {server.name}",
+                where=f"read once, when infra apply creates {server.name}: store "
+                "a short-lived key right before that apply",
+            )  # fmt: skip
     for bucket in infra.buckets:
         yield from _of_bucket(bucket)
 
@@ -293,34 +316,63 @@ def _of_bucket(bucket: Any) -> Iterable[NeededSecret]:
         )  # fmt: skip
 
 
-def _of_cache(cache: Any) -> Iterable[NeededSecret]:
-    yield _operator(
-        cache.signing_credential, "nix-signing-key", f"signs {cache.store_url}"
+def _of_cache(cache: Any, builder: str | None = None) -> Iterable[NeededSecret]:
+    there = (
+        f"also in the Piceli secrets of build host {builder}: piceli builder "
+        f"serve --host {builder} --publish signs and pushes there"
+        if builder is not None
+        else None
     )
+    yield _operator(
+        cache.signing_credential, "nix-signing-key", f"signs {cache.store_url}",
+        where=there,
+    )  # fmt: skip
     if cache.bucket is not None:
-        yield from _of_bucket(cache.bucket)
+        for secret in _of_bucket(cache.bucket):
+            if there is not None and secret.name == cache.write_credentials:
+                secret = replace(secret, where=there)
+            yield secret
     if cache.write_credentials and not cache.creates(cache.write_credentials):
         yield _operator(
-            cache.write_credentials, KIND, f"write S3 keys of {cache.store_url}"
-        )
+            cache.write_credentials, KIND, f"write S3 keys of {cache.store_url}",
+            where=there,
+        )  # fmt: skip
 
 
-def _of_host(host: Any) -> Iterable[NeededSecret]:
-    yield from _of_cache(host.cache)
+def _of_host(host: Any, builder: str | None = None) -> Iterable[NeededSecret]:
+    yield from _of_cache(host.cache, builder)
+    read = host.cache.read_credentials
+    if read is not None:
+        yield NeededSecret(
+            read, KIND, "infra-apply",
+            "piceli infra apply (the infrastructure declaring the bucket)",
+            f"read S3 keys of bucket {host.cache.bucket_name}",
+            where=f"on host {host.name} too: piceli host secrets {host.name} "
+            "writes it to /var/lib/piceli-host/cache.env",
+        )  # fmt: skip
     if host.age_identity is not None:
-        yield _operator(host.age_identity, "age-identity", f"sops-nix on {host.name}")
+        yield _operator(
+            host.age_identity, "age-identity", f"sops-nix on {host.name}",
+            where=f"on host {host.name} too: piceli host secrets {host.name} puts "
+            "it there; its age1 public key goes in .sops.yaml",
+        )  # fmt: skip
 
 
 def needed_secrets(*declarations: Any) -> list[NeededSecret]:
     """Every secret the declarations need, once per name (first purpose
-    wins; an ``infra-apply`` one over an ``operator`` one).
+    wins; an ``infra-apply`` one over an ``operator`` one; a ``where`` that
+    a later one names is kept).
 
     Takes :class:`~piceli.infra.Infrastructure`, ``Bucket``, ``NixCache``,
-    ``NixHost``, or lists of them. Nothing is read: this is the declaration.
+    ``NixHost``, ``NixRelease`` (its host's secrets; the cache's signing and
+    write keys also on its build host), ``DevBuilds`` (none of its own), or
+    lists of them. Nothing is read: this is the declaration.
     """
+    from piceli.dev.model import DevBuilds
     from piceli.dev.nix import NixCache
     from piceli.hosts.model import NixHost
     from piceli.infra.machines.model import Bucket
+    from piceli.infra.nix_releases import NixRelease
 
     found: dict[str, NeededSecret] = {}
 
@@ -333,6 +385,10 @@ def needed_secrets(*declarations: Any) -> list[NeededSecret]:
             yield from _of_cache(item)
         elif isinstance(item, NixHost):
             yield from _of_host(item)
+        elif isinstance(item, NixRelease):
+            yield from _of_host(item.host, item.builder)
+        elif isinstance(item, DevBuilds):
+            return
         elif isinstance(item, (list, tuple, set, frozenset)):
             for each in item:
                 yield from walk(each)
@@ -341,8 +397,10 @@ def needed_secrets(*declarations: Any) -> list[NeededSecret]:
 
     for secret in walk(declarations):
         seen = found.get(secret.name)
-        if seen is None or (
-            seen.created_by == "operator" and secret.created_by == "infra-apply"
-        ):
+        if seen is None:
             found[secret.name] = secret
+        elif seen.created_by == "operator" and secret.created_by == "infra-apply":
+            found[secret.name] = replace(secret, where=secret.where or seen.where)
+        elif seen.where is None and secret.where is not None:
+            found[secret.name] = replace(seen, where=secret.where)
     return list(found.values())

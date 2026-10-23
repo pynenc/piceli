@@ -855,25 +855,37 @@ def s3_secret(
             "--prompt", help="Read the access key id, then the secret, from stdin"
         ),
     ] = False,
+    from_env: Annotated[
+        bool,
+        typer.Option(
+            "--from-env",
+            help="Read AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY instead of "
+            "stdin (for scripts)",
+        ),
+    ] = False,
 ) -> None:
     """Store a bucket's S3 access keys, part by part (never printed).
 
     Asks for the S3 access key id (echoed: an identifier), then the S3 secret
-    access key (not echoed); piped, one per line. Each part is checked before
-    anything is stored (not empty, no space around it, no ':' inside), and
-    they are stored under their own names. Running it again replaces them.
+    access key (not echoed); piped, one per line. --from-env reads them from
+    AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY instead. Each part is checked
+    before anything is stored (not empty, no space around it, no ':' inside),
+    and they are stored under their own names. Running it again replaces them.
     """
     from piceli.infra.machines.credential_parts import SHAPES
     from piceli.infra.machines.credentials import credential_present, save_parts
     from piceli.k8s.cli.infra import _ask_parts, _guard, _no_secret_arguments
 
-    _no_secret_arguments(context)
-    if not prompt:
-        reject("infra-prompt-required", "pass --prompt: the keys are read from stdin")
+    _no_secret_arguments(context, from_env=from_env)
+    if prompt == from_env:
+        reject(
+            "infra-prompt-required",
+            "pass --prompt (the keys are read from stdin) or --from-env",
+        )
     shape = SHAPES["s3"]
     with _guard():
         replaced = credential_present(name)
-        save_parts(name, "s3", _ask_parts(shape, from_env=False))
+        save_parts(name, "s3", _ask_parts(shape, from_env=from_env))
     say(
         f"stored credential {name} (s3-keys): {shape.names()}; the secret was not printed"
     )

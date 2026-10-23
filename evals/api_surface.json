@@ -4352,7 +4352,7 @@
      "server"
     ],
     "credential_env": [
-     "value"
+     "parts"
     ],
     "data_sources": [],
     "describe": [],
@@ -5009,7 +5009,7 @@
      "server"
     ],
     "credential_env": [
-     "value"
+     "parts"
     ],
     "data_sources": [],
     "describe": [],
@@ -6607,7 +6607,7 @@
      "server"
     ],
     "credential_env": [
-     "value"
+     "parts"
     ],
     "data_sources": [],
     "describe": [],
@@ -7477,7 +7477,7 @@
      "server"
     ],
     "credential_env": [
-     "value"
+     "parts"
     ],
     "data_sources": [],
     "describe": [],
@@ -12790,7 +12790,9 @@
      "provider",
      "restore",
      "s3",
+     "setup",
      "state-key",
+     "status",
      "user-data"
     ]
    },
@@ -12904,7 +12906,18 @@
      "name"
     ],
     "flags": [
+     "--from-env",
      "--prompt"
+    ],
+    "subcommands": []
+   },
+   "secrets setup": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--json",
+     "--yes"
     ],
     "subcommands": []
    },
@@ -12916,6 +12929,15 @@
      "--generate",
      "--prompt",
      "--replace"
+    ],
+    "subcommands": []
+   },
+   "secrets status": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--json"
     ],
     "subcommands": []
    },
@@ -13865,6 +13887,7 @@
    "secrets-backup-recipients-missing",
    "secrets-backup-single-recipient",
    "secrets-invalid",
+   "secrets-nothing-declared",
    "secrets-prompt-required",
    "secrets-restore-archive-invalid",
    "secrets-restore-decrypt-failed",
@@ -15784,6 +15807,7 @@
   "piceli.infra.machines.register",
   "piceli.infra.machines.render",
   "piceli.infra.machines.secrets_backup",
+  "piceli.infra.machines.secrets_status",
   "piceli.infra.machines.state",
   "piceli.infra.machines.status",
   "piceli.infra.machines.tofu",
@@ -15834,6 +15858,7 @@
   "piceli.k8s.cli.render",
   "piceli.k8s.cli.restore",
   "piceli.k8s.cli.secrets_backup",
+  "piceli.k8s.cli.secrets_status",
   "piceli.k8s.cli.state",
   "piceli.k8s.cli.targets",
   "piceli.k8s.cli.ui",

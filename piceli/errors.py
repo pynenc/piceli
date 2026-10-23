@@ -5628,6 +5628,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "infra",
     ),
     _E(
+        "secrets-nothing-declared",
+        "No declaration that needs secrets",
+        "`piceli secrets status` or `setup` got a module (or `MODULE:ATTR`) that declares no `Infrastructure`, `Bucket`, `NixCache`, `NixHost`, `NixRelease`, `DevBuilds` or `Cluster`. Nothing was read or stored.",
+        "Name the module that declares them (`piceli secrets status web_1.py`), or the attribute of one declaration (`web_1.py:host`).",
+        True,
+        "infra",
+    ),
+    _E(
         "secrets-backup-key-invalid",
         "Offline key destination refused",
         "`piceli secrets backup-key --out PATH` would write the key inside the secret store or the profiles it protects, or PATH's directory does not exist. Nothing was written.",

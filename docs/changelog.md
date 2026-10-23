@@ -186,6 +186,43 @@ environment and host in one view.
   replaces it. `piceli.infra.machines.credential_parts.credential_reports()`
   reports every stored credential's completeness; `secrets backup --json`
   lists the incomplete ones (`incomplete`).
+- **`piceli secrets status MODULE[:ATTR]` and `piceli secrets setup`.**
+  `status` lists every secret a module's declarations need
+  (`Infrastructure`, `Bucket`, `NixCache`, `NixHost`, `NixRelease`,
+  `DevBuilds`, and a composition's clusters, whose credentials are `piceli
+  login` profiles): `present`, `missing`, `incomplete` (a credential that
+  lacks a part), `damaged` (unreadable, readable by others, another kind, a
+  signing key whose public key is not the declared one) or `not-needed`
+  (the user data of a server that exists); who creates it (`infra-apply`,
+  `piceli` with `--generate`, or `owner` with `--prompt`); the exact next
+  command; what it is for and where else it must live (the host, a build
+  host, "read once at creation"). Then the backup's state (`none`, `stale`
+  with the newer names, `single-recipient`, `current`) and warnings (an S3
+  read pair the cloud does not limit to reading, a spent user-data key).
+  `--json` prints one `piceli.secrets-status.v1` object; exit 0 when every
+  secret is stored and complete, 1 otherwise, 2 for a module that declares
+  nothing (`secrets-nothing-declared`). `setup` walks the missing ones in
+  order: provider credentials part by part, the keys Piceli generates
+  (printing only the public halves to copy into the declaration or
+  `.sops.yaml`; `--yes` without a terminal), the user data (offered, left
+  for right before `infra apply` by default), the S3 pairs (left to `infra
+  apply`) and a backup. It never replaces a stored key without a typed
+  confirmation; `--json` prints one object per step. Never prints a value.
+- **`needed_secrets()`** also takes `NixRelease` (its cache's signing and
+  write keys are needed on its build host too) and `DevBuilds`, and each
+  `NeededSecret` carries `provider` and `where`.
+- **S3 pairs from `infra apply` are stored by part**, as `piceli secrets
+  s3` stores them, so `credential_report()` sees them complete. Plans pass
+  OpenStack and Porkbun credentials to OpenTofu from their stored parts
+  (`Provider.credential_env(parts)` now takes the parts by name, not an
+  `ID:SECRET` string). `piceli secrets s3 NAME --from-env` reads
+  `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+- **Upgrade note: credentials stored by part need 0.25.0.** A credential
+  that 0.25.0 stores by part (a Porkbun key pair or an OpenStack
+  application credential from `secrets provider`, S3 keys from `secrets s3`
+  or `infra apply`) cannot be read by an earlier Piceli, which expects one
+  `A:B` value. Credentials stored before still read in 0.25.0. Keep every
+  machine that shares a secret store (or restores its backup) on 0.25.0.
 
 ## Version 0.24.0
 

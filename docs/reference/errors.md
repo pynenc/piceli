@@ -689,6 +689,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`secrets-backup-recipients-missing`](#error-secrets-backup-recipients-missing) | infra | no |
 | [`secrets-backup-single-recipient`](#error-secrets-backup-single-recipient) | infra | no |
 | [`secrets-invalid`](#error-secrets-invalid) | cluster | no |
+| [`secrets-nothing-declared`](#error-secrets-nothing-declared) | infra | yes |
 | [`secrets-prompt-required`](#error-secrets-prompt-required) | cluster | no |
 | [`secrets-restore-archive-invalid`](#error-secrets-restore-archive-invalid) | infra | no |
 | [`secrets-restore-decrypt-failed`](#error-secrets-restore-decrypt-failed) | infra | no |
@@ -6743,6 +6744,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Add a second recipient kept apart: an offline age key (`piceli secrets backup-key --out PATH --add`, kept on paper or USB) or an `age-plugin-yubikey` identity, next to the age key in your password manager. To accept one recipient anyway, pass `--single-recipient` (recorded in the backup and its marker).
 - **Retry-safe:** no
+
+(error-secrets-nothing-declared)=
+### `secrets-nothing-declared`
+
+**No declaration that needs secrets.** `piceli secrets status` or `setup` got a module (or `MODULE:ATTR`) that declares no `Infrastructure`, `Bucket`, `NixCache`, `NixHost`, `NixRelease`, `DevBuilds` or `Cluster`. Nothing was read or stored.
+
+- **Fix:** Name the module that declares them (`piceli secrets status web_1.py`), or the attribute of one declaration (`web_1.py:host`).
+- **Retry-safe:** yes
 
 (error-secrets-restore-archive-invalid)=
 ### `secrets-restore-archive-invalid`

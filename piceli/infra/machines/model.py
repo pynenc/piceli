@@ -508,7 +508,7 @@ class S3Key:
 
     The pair is a resource of the infrastructure's OpenTofu state (always
     encrypted); after the apply Piceli stores it as the local credential
-    ``name`` (kind ``s3-keys``, ``ACCESS_KEY_ID:SECRET``), where
+    ``name`` (kind ``s3-keys``, by part: access key id and secret), where
     ``NixCache`` and ``piceli host secrets`` read it. It is never printed.
 
     :param name: The credential name it is stored under (``cache-write``).

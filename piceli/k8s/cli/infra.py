@@ -874,5 +874,7 @@ def register(root: typer.Typer) -> None:
     secrets_app.command("user-data", context_settings=settings)(user_data_secret)
     secrets_app.command("delete")(delete_secret)
     from piceli.k8s.cli.secrets_backup import register as register_backup
+    from piceli.k8s.cli.secrets_status import register as register_status
 
     register_backup(secrets_app)
+    register_status(secrets_app)

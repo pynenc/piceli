@@ -94,8 +94,8 @@ def test_infomaniak_is_an_openstack_application_credential(homes: Path) -> None:
         "application_credential_secret",
     ]
     provider = Infomaniak(credentials="infomaniak")
-    value = credentials.load_credential("infomaniak", "provider-token")
-    assert provider.credential_env(value) == {
+    parts = cp.load_parts("infomaniak", provider.name)
+    assert provider.credential_env(parts) == {
         "OS_APPLICATION_CREDENTIAL_ID": CRED_ID,
         "OS_APPLICATION_CREDENTIAL_SECRET": CRED_SECRET,
     }
@@ -333,6 +333,28 @@ def test_s3_keys_are_stored_by_part(homes: Path) -> None:
     assert credentials.load_credential("cache-s3", "s3-keys") == (
         "AKIDEXAMPLE:s3-secret-0123"
     )
+
+
+def test_s3_keys_from_the_aws_variables(
+    homes: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
+    missing = _run("s3", "cache-s3", "--from-env")
+    assert _rejected(missing, "infra-credential-part-invalid")["part"] == (
+        "secret_access_key"
+    )
+    assert "AWS_SECRET_ACCESS_KEY is not set" in missing.stderr
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "s3-secret-0123")
+    result = _run("s3", "cache-s3", "--from-env")
+    assert result.exit_code == 0, result.output
+    assert "s3-secret-0123" not in result.stdout + result.stderr
+    assert _stored("cache-s3")["parts"] == {
+        "access_key_id": "AKIDEXAMPLE",
+        "secret_access_key": "s3-secret-0123",
+    }
+    both = _run("s3", "cache-s3", "--from-env", "--prompt")
+    _rejected(both, "infra-prompt-required")
 
 
 @pytest.mark.parametrize(

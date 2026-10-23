@@ -132,15 +132,26 @@ class Provider(ABC):
         """The environment variable the OpenTofu provider reads its token from."""
         return None
 
-    def credential_env(self, value: str) -> dict[str, str]:
-        """The environment OpenTofu gets from the stored credential ``value``.
+    def credential_env(self, parts: Mapping[str, str]) -> dict[str, str]:
+        """The environment OpenTofu gets from the stored credential's parts
+        (:func:`~piceli.infra.machines.credential_parts.load_parts`: by key,
+        such as ``{"token": ...}`` or ``{"api_key": ..., "secret_api_key":
+        ...}``).
 
-        Default: the value in :meth:`token_env`. A provider whose credential
-        has several parts (an id and a secret) splits it here; a malformed
-        value is refused without echoing it (``infra-credential-invalid``).
+        Default: the one part in :meth:`token_env`. A provider whose
+        credential has several parts (an id and a secret) maps each to its
+        variable; a missing part is refused without echoing anything
+        (``infra-credential-invalid``).
         """
         variable = self.token_env()
-        return {variable: value} if variable is not None else {}
+        if variable is None:
+            return {}
+        if len(parts) != 1:
+            raise InfraError(
+                "infra-credential-invalid",
+                f"credential {self.credentials!r} is not one API token",
+            )
+        return {variable: next(iter(parts.values()))}
 
     def provider_block(self) -> dict[str, Any] | None:
         """The ``provider "<local name>"`` body (never the token)."""

@@ -143,7 +143,7 @@ def workspace(infra: Infrastructure, *, tofu: str | None = None) -> Iterator[Wor
 
     A provider credential that lacks a part (one part of a key pair) is
     refused first (``infra-credential-incomplete``), before any API call."""
-    from piceli.infra.machines.credential_parts import require_complete
+    from piceli.infra.machines.credential_parts import load_parts, require_complete
     from piceli.infra.machines.credentials import load_credential
 
     for provider in infra.providers():
@@ -163,7 +163,9 @@ def workspace(infra: Infrastructure, *, tofu: str | None = None) -> Iterator[Wor
                 tokens[provider.name] = load_credential(
                     provider.credentials, "provider-token"
                 )
-                provided = provider.credential_env(tokens[provider.name])
+                provided = provider.credential_env(
+                    load_parts(provider.credentials, provider.name)
+                )
                 env.update(provided)
                 parts.extend(provided.values())
         env.update(infra.backend.env())

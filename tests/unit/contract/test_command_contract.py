@@ -777,6 +777,14 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["secrets", "backup-key", "--out", str(p / "no" / "dir" / "k")],
         "secrets-backup-key-invalid",
     ),
+    "secrets status": (
+        lambda p: ["secrets", "status", "no_such_module:infra"],
+        "infra-not-found",
+    ),
+    "secrets setup": (
+        lambda p: ["secrets", "setup", "no_such_module"],
+        "infra-not-found",
+    ),
     "secrets restore": (
         lambda p: ["secrets", "restore", str(p / "missing.age")],
         "secrets-restore-archive-invalid",

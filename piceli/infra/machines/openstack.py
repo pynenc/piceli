@@ -2,8 +2,8 @@
 
 Rendered for the ``terraform-provider-openstack/openstack`` OpenTofu
 provider, pinned to one version and its lock-file hashes. The credential is
-an OpenStack application credential stored as ``ID:SECRET`` (``piceli
-secrets provider NAME --prompt``); OpenTofu reads it from
+an OpenStack application credential, stored by part (its ID and its secret:
+``piceli secrets provider NAME --prompt``); OpenTofu reads it from
 ``OS_APPLICATION_CREDENTIAL_ID`` and ``OS_APPLICATION_CREDENTIAL_SECRET`` in
 its environment, never from the configuration, a plan or the state.
 
@@ -166,8 +166,9 @@ def _from_pairs(pairs: Any) -> dict[str, str]:
 class OpenStack(Provider):
     """An OpenStack cloud, authenticated with an application credential.
 
-    :param credentials: The local credential holding ``ID:SECRET`` of an
-        application credential (``piceli secrets provider NAME --prompt``).
+    :param credentials: The local credential holding an application
+        credential, its ID and its secret stored by part (``piceli secrets
+        provider NAME --prompt``).
     :param auth_url: The identity (Keystone v3) URL.
     :param region: The region every resource goes into (also the servers'
         default location; one region per declaration).
@@ -284,12 +285,14 @@ class OpenStack(Provider):
     def token_env(self) -> str:
         return SECRET_ENV
 
-    def credential_env(self, value: str) -> dict[str, str]:
-        identifier, separator, secret = value.partition(":")
-        if not separator or not identifier or not secret:
+    def credential_env(self, parts: Mapping[str, str]) -> dict[str, str]:
+        identifier = parts.get("application_credential_id")
+        secret = parts.get("application_credential_secret")
+        if not identifier or not secret:
             raise InfraError(
                 "infra-credential-invalid",
-                f"credential {self.credentials!r} is not APPLICATION_CREDENTIAL_ID:SECRET",
+                f"credential {self.credentials!r} is not an application credential "
+                "(its ID and its secret)",
             )
         return {ID_ENV: identifier, SECRET_ENV: secret}
 

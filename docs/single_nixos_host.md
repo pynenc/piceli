@@ -150,7 +150,10 @@ after installing Tailscale.
 ## Steps
 
 1. **Secrets.** Each is stored once, `0600`, in Piceli's credentials
-   directory, and never printed.
+   directory, and never printed. `piceli secrets status web_1.py` lists
+   them with their state and the next command, and `piceli secrets setup
+   web_1.py` walks through the missing ones in this order
+   ({ref}`host-secrets-setup`); one by one:
 
    ```sh
    piceli secrets state-key web-1-state --generate        # encrypts the OpenTofu state

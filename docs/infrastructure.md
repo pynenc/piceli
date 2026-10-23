@@ -420,6 +420,10 @@ server types and primary IPs; without them it is left out, never an error.
 
 ## Secrets
 
+`piceli secrets status MODULE` lists every secret a declaration needs, with
+who creates it and the next command, and `piceli secrets setup MODULE` walks
+through the missing ones: see {ref}`host-secrets-setup`.
+
 Provider tokens are local credentials, like cluster credentials are local
 profiles: `piceli secrets provider NAME --prompt` reads the token from stdin
 (typed without echo, or piped) into `$PICELI_CREDENTIALS_DIR/NAME.json`
@@ -487,7 +491,10 @@ stored credential porkbun (provider-token, Porkbun API key pair): API key and se
   `secrets backup --json` lists the incomplete ones in `incomplete`.
 
 `piceli secrets s3 NAME --prompt` does the same for a bucket's S3 keys: the
-S3 access key id (echoed), then the S3 secret access key, stored by part.
+S3 access key id (echoed), then the S3 secret access key, stored by part
+(`--from-env` reads `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`). The
+pairs `infra apply` creates are stored by part the same way. A credential
+stored by part needs Piceli 0.25.0 or later to read it.
 
 ## Back the secret store up
 

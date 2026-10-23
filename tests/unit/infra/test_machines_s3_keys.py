@@ -197,9 +197,16 @@ def test_apply_stores_the_pairs_reapply_is_a_noop_removal_deletes(
     assert done.exit_code == 0, done.output
     write, read = _stored("cache-write"), _stored("cache-read")
     assert write["kind"] == read["kind"] == "s3-keys"
-    access, _, secret = read["value"].partition(":")
+    # Stored by part, as `piceli secrets s3` stores them: reported complete.
+    assert "value" not in read and set(read["parts"]) == {
+        "access_key_id", "secret_access_key"}  # fmt: skip
+    access, secret = read["parts"]["access_key_id"], read["parts"]["secret_access_key"]
     assert access.startswith("FAKE") and secret.startswith("fake-secret-")
-    assert write["value"] != read["value"]
+    assert write["parts"] != read["parts"]
+    from piceli.infra.machines.credential_parts import credential_report
+
+    assert credential_report("cache-read")["complete"] is True
+    assert credentials.load_credential("cache-read", "s3-keys") == f"{access}:{secret}"
     printed = capsys.readouterr()
     for output in (planned.output, done.output, printed.out + printed.err):
         assert secret not in output
@@ -224,7 +231,7 @@ def test_apply_stores_the_pairs_reapply_is_a_noop_removal_deletes(
         rotated = plan(ws)
         assert {k["action"] for k in rotated.s3_keys} == {"update"}  # fake: new input
         apply(ws, rotated.plan_hash)
-    assert _stored("cache-read")["value"] != read["value"]
+    assert _stored("cache-read")["parts"] != read["parts"]
     # Removing the read key deletes the pair and its credential.
     smaller = _infra(homes, KEYS[:1], generation=1)
     with workspace(smaller) as ws:

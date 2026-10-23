@@ -341,12 +341,13 @@ class Porkbun(Provider):
     def token_env(self) -> str:
         return SECRET_ENV
 
-    def credential_env(self, value: str) -> dict[str, str]:
-        key, separator, secret = value.partition(":")
-        if not separator or not key or not secret:
+    def credential_env(self, parts: Mapping[str, str]) -> dict[str, str]:
+        key, secret = parts.get("api_key"), parts.get("secret_api_key")
+        if not key or not secret:
             raise InfraError(
                 "infra-credential-invalid",
-                f"credential {self.credentials!r} is not APIKEY:SECRETKEY",
+                f"credential {self.credentials!r} is not a Porkbun API key pair "
+                "(its API key and its secret API key)",
             )
         return {KEY_ENV: key, SECRET_ENV: secret}
 

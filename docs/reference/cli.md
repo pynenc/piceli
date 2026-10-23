@@ -153,7 +153,9 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli secrets provider`](#cli-secrets-provider) | Store a provider's API credential, part by part (never printed). | none | no |
 | [`piceli secrets restore`](#cli-secrets-restore) | Restore the secret store from an encrypted backup (plans first when not empty). | none | yes |
 | [`piceli secrets s3`](#cli-secrets-s3) | Store a bucket's S3 access keys, part by part (never printed). | none | no |
+| [`piceli secrets setup`](#cli-secrets-setup) | Walk through the missing secrets of a declaration, in order. | none | no |
 | [`piceli secrets state-key`](#cli-secrets-state-key) | Store the passphrase that encrypts an infrastructure's OpenTofu state. | none | no |
+| [`piceli secrets status`](#cli-secrets-status) | Every secret a declaration needs: present or missing, who creates it, the next command. | none | no |
 | [`piceli secrets user-data`](#cli-secrets-user-data) | Store a server's user data (a cloud-config, a script or a bootstrap key). | none | no |
 | [`piceli state export`](#cli-state-export) | Write the release's state to one file (secret material excluded unless asked). | reads | no |
 | [`piceli state import`](#cli-state-import) | Replace the release's state with an export (needs --approve DIGEST). | writes | yes |
@@ -3569,17 +3571,40 @@ Store a bucket's S3 access keys, part by part (never printed).
 | --- | --- | --- | --- |
 | `NAME` | text | required |  |
 | `--prompt` | boolean | `False` | Read the access key id, then the secret, from stdin |
+| `--from-env` | boolean | `False` | Read AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY instead of stdin (for scripts) |
 
 **Contract**
 
-- **Reads:** stdin (--prompt)
+- **Reads:** stdin (--prompt), AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (--from-env)
 - **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)
 - **Cluster:** none
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.24.0. Two lines on stdin (the key id echoed, the secret not; or piped); since 0.25.0 each part is checked before anything is stored (infra-credential-part-invalid names the part) and they are stored by part. An argument is refused (infra-credential-refused) without echoing it. Prints the name and the parts' names, never a value.
+- **Notes:** 0.24.0. Two lines on stdin (the key id echoed, the secret not; or piped); since 0.25.0 each part is checked before anything is stored (infra-credential-part-invalid names the part) and they are stored by part, and --from-env reads AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY. An argument is refused (infra-credential-refused) without echoing it. Prints the name and the parts' names, never a value.
+
+(cli-secrets-setup)=
+### `piceli secrets setup`
+
+Walk through the missing secrets of a declaration, in order.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `REF` | text | required |  |
+| `--yes` | boolean | `False` | Generate the keys Piceli generates without asking (never replaces one, never answers a prompt) |
+| `--json` | boolean | `False` | Print one JSON object per step on stdout |
+
+**Contract**
+
+- **Reads:** MODULE[:ATTR], stdin (each credential part; on a terminal, confirmations), $PICELI_CREDENTIALS_DIR
+- **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600) for each secret it stores or generates, on a terminal, when chosen: the offline backup key, the backup and <credentials dir>.backup.json
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.25.0. Provider credentials are asked for part by part (piped: one part per line, in the order status lists them; stdin at its end skips them). Keys Piceli generates (state key, Nix signing key, age identity) are generated after a confirmation on a terminal or with --yes, printing only public halves; a damaged key is replaced only after a confirmation on a terminal, never with --yes. User data is offered on a terminal only (default: later, right before infra apply); S3 pairs are left to infra apply. --json prints one object per step, then a summary. Never prints a value. Exit 0: everything stored but what is left for later on purpose (user data, the pairs infra apply makes); 1: something still missing, incomplete or damaged (a declined generation, a refused part, a profile); 2: a module that does not load or declares nothing.
 
 (cli-secrets-state-key)=
 ### `piceli secrets state-key`
@@ -3603,6 +3628,27 @@ Store the passphrase that encrypts an infrastructure's OpenTofu state.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Never printed; back the file up, the state cannot be read without it. Refuses to replace an existing key without --replace (infra-credential-exists).
+
+(cli-secrets-status)=
+### `piceli secrets status`
+
+Every secret a declaration needs: present or missing, who creates it, the next command.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `REF` | text | required |  |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE[:ATTR] (Infrastructure, Bucket, NixCache, NixHost, NixRelease, DevBuilds, a composition's clusters), $PICELI_CREDENTIALS_DIR (kinds and parts; signing keys and age identities checked in memory), $PICELI_PROFILES_DIR, the infrastructure's state records (which servers exist), <credentials dir>.backup.json (the last backup's marker)
+- **Writes:** nothing (read-only)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.25.0. Read-only; safe to retry; never prints a value. For each secret: state (present, missing, incomplete, damaged, or not-needed: the user data of a server that exists), created_by (infra-apply, piceli: --generate, owner: --prompt), next (the exact command), purpose and where else it must live; then the backup's state (empty, none, stale, single-recipient, current) and warnings (an S3 read pair the provider does not limit to reading, a spent user-data key). --json prints one piceli.secrets-status.v1 object. Exit 0: every secret stored and complete (the backup does not count); 1: something missing, incomplete or damaged; 2: a module that does not load or declares nothing (secrets-nothing-declared).
 
 (cli-secrets-user-data)=
 ### `piceli secrets user-data`
