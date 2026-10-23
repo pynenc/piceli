@@ -320,10 +320,10 @@ class NixHost:
     :param read_credentials_file: A root-only file on the host with the
         cache's read S3 keys (``AWS_ACCESS_KEY_ID=`` and
         ``AWS_SECRET_ACCESS_KEY=`` lines). Default (0.25.0) when the cache's
-        bucket declares ``S3Key(access="read")``:
+        bucket declares ``S3Key(access="read")``, or (0.25.3) the cache names
+        a pair the owner made (``NixCache(read_credentials=)``):
         ``/var/lib/piceli-host/cache.env``, which ``piceli host secrets``
-        writes from the pair ``piceli infra apply`` created (the agent reads
-        it on each poll). Otherwise ``/run/secrets/piceli/cache.env``
+        writes from that pair (the agent reads it on each poll). Otherwise ``/run/secrets/piceli/cache.env``
         (``sops.secrets."piceli/cache.env"``, decrypted by sops-nix) for an
         ``s3://`` cache, none for a ``file://`` or ``https://`` one. A path
         given here is the host's own file: ``host secrets`` leaves it alone.

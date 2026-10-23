@@ -88,7 +88,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli host module`](#cli-host-module) | Render the NixOS module that installs the host agent (commit it, import it). | none | no |
 | [`piceli host pin`](#cli-host-pin) | Deploy a tag's build (an older one too) and hold it: no newer build until unpin. | none | no |
 | [`piceli host rollback`](#cli-host-rollback) | Switch back to the previous system (in the store) and hold it until unpin. | none | no |
-| [`piceli host secrets`](#cli-host-secrets) | Put the host's age identity where sops-nix reads it, and the cache's read keys Piceli created where the agent reads them: plan, then --approve. | none | yes |
+| [`piceli host secrets`](#cli-host-secrets) | Put the host's age identity where sops-nix reads it, and the cache's read keys (Piceli's or yours) where the agent reads them: plan, then --approve. | none | yes |
 | [`piceli host status`](#cli-host-status) | Read the host agent's status over SSH (current build, last attempt, checks). | none | no |
 | [`piceli host unpin`](#cli-host-unpin) | Drop a pin or rollback hold: the host follows its declared ref again. | none | no |
 | [`piceli host wait`](#cli-host-wait) | Wait until the host runs REV with its checks passed (exit 1: failed or timeout). | none | no |
@@ -1963,7 +1963,7 @@ Switch back to the previous system (in the store) and hold it until unpin.
 (cli-host-secrets)=
 ### `piceli host secrets`
 
-Put the host's age identity where sops-nix reads it, and the cache's read keys Piceli created where the agent reads them: plan, then --approve.
+Put the host's age identity where sops-nix reads it, and the cache's read keys (Piceli's or yours) where the agent reads them: plan, then --approve.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -1975,14 +1975,14 @@ Put the host's age identity where sops-nix reads it, and the cache's read keys P
 
 **Contract**
 
-- **Reads:** MODULE:ATTR (piceli.infra.NixHost with age_identity= or a cache bucket with S3Key(access='read')), $PICELI_CREDENTIALS_DIR/NAME.json (age-identity, s3-keys), the host's key file and cache.env, by fingerprint only (ssh)
+- **Reads:** MODULE:ATTR (piceli.infra.NixHost with age_identity= or a cache with a read pair: the bucket's S3Key(access='read') or NixCache(read_credentials=)), $PICELI_CREDENTIALS_DIR/NAME.json (age-identity, s3-keys), the host's key file and cache.env, by fingerprint only (ssh)
 - **Writes:** NixHost(age_key_file=) on the host, 0600 root (ssh stdin, atomic rename), /var/lib/piceli-host/cache.env, 0600 root (0.25.0)
 - **Cluster:** none
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** 0.24.0. The plan lists host, path, mode, owner, public key and whether the host has the same, a different or no key (exit 3 with the digest; 0 when it has the same). A different key is refused without --replace (host-secret-exists). The key travels on ssh's stdin, never in an argument, log or state. After writing, the host re-runs switch-to-configuration switch so sops-nix decrypts. 0.25.0: with a bucket S3Key(access='read') the plan's cache lists the read pair (credential, short digest, same/different/absent); it is written without --replace and needs no activation (the agent reads it each poll).
+- **Notes:** 0.24.0. The plan lists host, path, mode, owner, public key and whether the host has the same, a different or no key (exit 3 with the digest; 0 when it has the same). A different key is refused without --replace (host-secret-exists). The key travels on ssh's stdin, never in an argument, log or state. After writing, the host re-runs switch-to-configuration switch so sops-nix decrypts. 0.25.0: with a bucket S3Key(access='read') the plan's cache lists the read pair (credential, short digest, same/different/absent); it is written without --replace and needs no activation (the agent reads it each poll). 0.25.3: an owner-made pair, NixCache(read_credentials=NAME), is planned, digested, compared and written the same way; missing, it is refused infra-credential-missing with the command that stores it (piceli secrets s3 NAME --prompt).
 
 (cli-host-status)=
 ### `piceli host status`
@@ -2123,13 +2123,13 @@ Apply the plan whose hash is --approve (without it: plan, exit 3).
 **Contract**
 
 - **Reads:** MODULE:ATTR (piceli.infra.Infrastructure), tofu binary, credentials (provider token, state passphrase)
-- **Writes:** resources at the provider (servers, IPs, firewalls, DNS records, bucket S3 key pairs), encrypted OpenTofu state, state directory records (inventory.json, s3-keys.json), $PICELI_CREDENTIALS_DIR/NAME.json of each S3Key (s3-keys, 0600)
+- **Writes:** resources at the provider (servers, IPs, firewalls, DNS records, images, bucket S3 key pairs), encrypted OpenTofu state, state directory records (inventory.json, s3-keys.json, images.json, image-upload-NAME.log), $PICELI_CREDENTIALS_DIR/NAME.json of each S3Key (s3-keys, 0600)
 - **Cluster:** none
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Without --approve it plans (exit 3). A hash that is not the fresh plan's is refused (infra-plan-changed). A failed tofu apply exits 1 (infra-apply-failed); one that changed something first exits 1 whatever its code, with partially_applied, applied (address, action, id) and not_applied; plan again to continue. One command at a time per state (infra-state-locked).
+- **Notes:** Without --approve it plans (exit 3). A hash that is not the fresh plan's is refused (infra-plan-changed). A failed tofu apply exits 1 (infra-apply-failed); one that changed something first exits 1 whatever its code, with partially_applied, applied (address, action, id) and not_applied; plan again to continue. One command at a time per state (infra-state-locked). 0.25.3: an OpenStack Image is uploaded by Piceli (from the build host of an Image.from_build, else this machine), retried, its progress on stderr, verified and adopted (tofu import) before tofu apply; a failed upload deletes its image (infra-image-upload-failed, exit 1) and the log's path is printed.
 
 (cli-infra-destroy)=
 ### `piceli infra destroy`
@@ -2196,7 +2196,7 @@ Plan the declared machines with OpenTofu; print the changes, estimate and plan h
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Never changes a resource. Exit 3 with the plan and approve_command (piceli infra apply ... --approve HASH); 0 and state unchanged when nothing changes. Refuses a plan that would change or delete a resource Piceli did not create (infra-foreign-resource). A plan that changes Porkbun records checks API access for each domain (infra-dns-api-disabled; infra-dns-check-failed when it cannot) and records it in checks. Tokens and the state passphrase reach tofu through its environment only; its output is redacted.
+- **Notes:** Never changes a resource. Exit 3 with the plan and approve_command (piceli infra apply ... --approve HASH); 0 and state unchanged when nothing changes. Refuses a plan that would change or delete a resource Piceli did not create (infra-foreign-resource). A plan that changes Porkbun records checks API access for each domain (infra-dns-api-disabled; infra-dns-check-failed when it cannot) and records it in checks. Tokens and the state passphrase reach tofu through its environment only; its output is redacted. 0.25.3: a Bucket(keys=[S3Key(...)]) at a provider that cannot create S3 keys (the Infomaniak preset) is refused before anything runs (infra-s3-keys-unsupported), with the commands that make and store each pair by hand.
 
 (cli-infra-register)=
 ### `piceli infra register`
@@ -3652,7 +3652,7 @@ Every secret a declaration needs: present or missing, who creates it, the next c
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.25.0. Read-only; safe to retry; never prints a value. For each secret: state (present, pending: a pair the next infra apply creates, missing, incomplete, damaged, or not-needed: the user data of a server that exists), created_by (infra-apply, piceli: --generate, owner: --prompt), next (the exact command), purpose and where else it must live; then the backup's state (empty, none, stale, single-recipient, current) and warnings (an S3 read pair the provider does not limit to reading, a spent user-data key). --json prints one piceli.secrets-status.v1 object. Exit 0: every secret stored and complete or pending (the backup does not count); a secret a NixRelease's build host needs gets, once present, the backup --only command that carries it there; 1: something missing, incomplete or damaged; 2: a module that does not load or declares nothing (secrets-nothing-declared).
+- **Notes:** 0.25.0. Read-only; safe to retry; never prints a value. For each secret: state (present, pending: a pair the next infra apply creates, or an S3 pair the owner makes by hand and has not stored (0.25.3; next: piceli secrets s3 NAME --prompt, detail: how to make it, e.g. openstack ec2 credentials create signed in as the project's user), missing, incomplete, damaged, or not-needed: the user data of a server that exists), created_by (infra-apply, piceli: --generate, owner: --prompt), next (the exact command), purpose and where else it must live; then the backup's state (empty, none, stale, single-recipient, current) and warnings (an S3 read pair the provider does not limit to reading, a spent user-data key). --json prints one piceli.secrets-status.v1 object. Exit 0: every secret stored and complete or pending (the backup does not count); a secret a NixRelease's build host needs gets, once present, the backup --only command that carries it there; 1: something missing, incomplete or damaged; 2: a module that does not load or declares nothing (secrets-nothing-declared).
 
 (cli-secrets-user-data)=
 ### `piceli secrets user-data`

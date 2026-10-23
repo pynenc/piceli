@@ -501,7 +501,8 @@ def build(
     if found_image is not None:
         found_image["build"] = str(
             _image_sidecar(artifacts_dir, label or "image", found_image, store_path,
-                           rev, target)
+                           rev, target,
+                           built_on=_built_on(chosen, chosen_profile))
         )  # fmt: skip
         say(f"image {found_image['file']} (sha256 {found_image['sha256']})")
         say(f"  Image.from_build(NAME, {found_image['build']!r}) reads it")
@@ -592,6 +593,30 @@ def _gate(covering: Any, root: Path, rev: str, **reach: Any) -> dict[str, Any]:
         reject(error.code, str(error), **error.detail)
 
 
+def _built_on(host: Any, profile: Any) -> dict[str, Any] | None:
+    """How ``piceli infra apply`` reaches the image on a remote docker host
+    (0.25.3: it uploads from there): the host, its CLI and context, the run
+    image (it has Python). ``None`` for a local or native host: the local
+    copy is the image."""
+    image = getattr(host, "image", None) or getattr(profile, "image", None)
+    if getattr(host, "kind", None) != "docker" or not host.context or not image:
+        return None
+    return {"host": host.name, "kind": "docker", "context": host.context,
+            "cli": host.cli, "image": str(image)}  # fmt: skip
+
+
+def _store_file(image: dict[str, Any], store_path: str) -> str | None:
+    """The image file in the host's store: the store path plus its path
+    under the out-link (``piceli-nix-out/nixos.qcow2``)."""
+    from piceli.dev.nix import OUT_LINK
+
+    parts = Path(str(image["file"])).parts
+    if OUT_LINK not in parts:
+        return None
+    rest = parts[len(parts) - parts[::-1].index(OUT_LINK) :]
+    return "/".join([store_path, *rest]) if rest else None
+
+
 def _image_sidecar(
     directory: Path,
     name: str,
@@ -599,14 +624,21 @@ def _image_sidecar(
     store_path: str,
     rev: str | None,
     target: str,
+    *,
+    built_on: dict[str, Any] | None = None,
 ) -> Path:
     """``DIR/NAME.image.json``: what ``Image.from_build`` reads (the image's
-    path relative to it, its sha256 and format, the store path, the rev)."""
+    path relative to it, its sha256 and format, the store path, the rev;
+    0.25.3: the build host it can be uploaded from and the file there)."""
     import json
     import os
 
     path = directory / f"{name}.image.json"
-    body = {
+    store_file = _store_file(image, store_path)
+    extra: dict[str, Any] = {}
+    if built_on is not None and store_file is not None:
+        extra = {"built_on": built_on, "store_file": store_file}
+    body = extra | {
         "schema": IMAGE_SCHEMA,
         "file": os.path.relpath(image["file"], directory),
         "sha256": image["sha256"],

@@ -436,7 +436,8 @@ def host_secrets(
         str,
         typer.Argument(
             help="MODULE:ATTR of a piceli.infra.NixHost with age_identity= or a "
-            "cache whose bucket declares S3Key(access='read')",
+            "cache with a read pair (the bucket's S3Key(access='read') or "
+            "NixCache(read_credentials=))",
             show_default=False,
         ),
     ],
@@ -455,7 +456,7 @@ def host_secrets(
     as_json: JsonOption = False,
 ) -> None:
     """Put the host's age identity where sops-nix reads it, and the cache's
-    read keys Piceli created where the agent reads them: plan, then --approve."""
+    read keys (Piceli's or yours) where the agent reads them: plan, then --approve."""
     import hashlib
     import json
 
@@ -472,7 +473,8 @@ def host_secrets(
         reject(
             "host-secret-undeclared",
             "give a NixHost with age_identity= (piceli secrets age NAME --generate) "
-            "or a cache whose bucket declares S3Key(access='read')",
+            "or a cache with a read pair (the bucket's S3Key(access='read') or "
+            "NixCache(read_credentials=))",
         )
     plan: dict[str, Any] = {
         "host": host.name, "target": ssh.address, "port": ssh.port,
@@ -498,10 +500,17 @@ def host_secrets(
         if host.cache_credentials is not None:
             name = host.cache_credentials
             if not credential_present(name):
+                from piceli.infra.machines.keys import _by_hand
+
                 raise InfraError(
                     "infra-credential-missing",
                     f"no credential {name!r}: piceli infra apply creates it "
-                    f"(the S3Key of bucket {host.cache.bucket_name})",
+                    f"(the S3Key of bucket {host.cache.bucket_name})"
+                    if host.cache.creates(name)
+                    # Owner-made (0.25.3): Piceli cannot create it.
+                    else f"no credential {name!r}: the read pair of "
+                    f"{host.cache.bucket_name}, {_by_hand(host.cache)}; store "
+                    f"it with piceli secrets s3 {name} --prompt",
                 )
             pair = load_credential(name, "s3-keys")
             access, _, secret = pair.partition(":")

@@ -405,6 +405,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`infra-image-build-invalid`](#error-infra-image-build-invalid) | infra | no |
 | [`infra-image-checksum`](#error-infra-image-checksum) | infra | no |
 | [`infra-image-unavailable`](#error-infra-image-unavailable) | infra | yes |
+| [`infra-image-upload-failed`](#error-infra-image-upload-failed) | infra | yes |
 | [`infra-install-changed`](#error-infra-install-changed) | infra | yes |
 | [`infra-install-failed`](#error-infra-install-failed) | infra | no |
 | [`infra-install-unavailable`](#error-infra-install-unavailable) | infra | no |
@@ -419,6 +420,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`infra-prompt-required`](#error-infra-prompt-required) | infra | no |
 | [`infra-register-changed`](#error-infra-register-changed) | infra | yes |
 | [`infra-s3-key-refused`](#error-infra-s3-key-refused) | infra | yes |
+| [`infra-s3-keys-unsupported`](#error-infra-s3-keys-unsupported) | infra | no |
 | [`infra-server-unknown`](#error-infra-server-unknown) | infra | no |
 | [`infra-ssh-missing`](#error-infra-ssh-missing) | infra | no |
 | [`infra-ssh-unreachable`](#error-infra-ssh-unreachable) | infra | yes |
@@ -6436,7 +6438,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-infra-image-checksum)=
 ### `infra-image-checksum`
 
-**Image checksum mismatch.** The file or download of an `Image` does not have the declared `sha256`; nothing was uploaded and nothing was applied.
+**Image checksum mismatch.** The file or download of an `Image` does not have the declared `sha256`; nothing was uploaded and nothing was applied. Since 0.25.3 also: after an upload, the image service's checksum (`checksum`, `os_hash_value`) was not the hash of the bytes sent; that image was deleted.
 
 - **Fix:** Check that `file=` or `url=` is the image you meant and that `sha256=` is its checksum (`sha256sum FILE`), then plan and approve again.
 - **Retry-safe:** no
@@ -6444,9 +6446,17 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-infra-image-unavailable)=
 ### `infra-image-unavailable`
 
-**Image file unavailable.** The `file=` of an `Image` cannot be read, or its `url=` cannot be downloaded; nothing was applied.
+**Image file unavailable.** The `file=` of an `Image` cannot be read, or its `url=` cannot be downloaded, or (0.25.3) the build host that built it no longer holds it (its Nix store collected it); nothing was uploaded.
 
-- **Fix:** Make the file readable or the URL reachable from this machine, then run the apply again.
+- **Fix:** Make the file readable or the URL reachable from this machine, or build the image again (`piceli dev nix build ... --image`), or upload the local copy with `Image.from_build(..., upload="local")`; then plan and apply again.
+- **Retry-safe:** yes
+
+(error-infra-image-upload-failed)=
+### `infra-image-upload-failed`
+
+**Image upload failed.** Piceli sent the image to the cloud's image service (Glance) and every attempt failed (a dropped connection, a refused request), or Glance did not make it active. Each failed attempt's half-made image was deleted; nothing else was applied. The full log is `image-upload-<name>.log` in the state directory.
+
+- **Fix:** Read the log, check the link from where the image is sent (the build host, or this machine), then plan and apply again: the upload starts over.
 - **Retry-safe:** yes
 
 (error-infra-install-changed)=
@@ -6560,6 +6570,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Create an unrestricted application credential and store it (`piceli secrets provider NAME --prompt`), then plan again; or remove `keys=`, create the keys yourself (`openstack ec2 credentials create`) and store them with `piceli secrets s3 NAME --prompt`.
 - **Retry-safe:** yes
+
+(error-infra-s3-keys-unsupported)=
+### `infra-s3-keys-unsupported`
+
+**Provider cannot create S3 keys.** The declaration has `Bucket(keys=[S3Key(...)])` at a provider where Piceli cannot create S3 key pairs. At Infomaniak the API lets only the account's own user create S3 (EC2) credentials, never an application credential, restricted or not (0.25.3).
+
+- **Fix:** Remove `keys=` and make each pair by hand: signed in as the project's user (not an application credential), run `openstack ec2 credentials create`; store it with `piceli secrets s3 NAME --prompt`; then declare `NixCache(bucket=..., write_credentials=WRITE, read_credentials=READ)`. `piceli host secrets` installs the read pair on the host, and `piceli secrets status` lists both until they are stored.
+- **Retry-safe:** no
 
 (error-infra-server-unknown)=
 ### `infra-server-unknown`

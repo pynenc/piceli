@@ -239,12 +239,15 @@ class NeededSecret:
     """One secret a declaration needs: where it is stored, who creates it.
 
     ``created_by`` is ``"infra-apply"`` (``piceli infra apply`` creates and
-    stores it) or ``"operator"`` (someone runs ``setup``). ``provider`` is
-    the provider a ``provider-token`` is for (its ``Provider.name``);
-    ``where`` says where else the secret must live or when it is needed
-    (the host, a build host, "read once at creation"), when that matters;
-    ``build_host`` names the ``NixRelease`` builder whose own store needs
-    it too.
+    stores it), ``"operator"`` (someone runs ``setup``) or ``"owner"``
+    (0.25.3: an S3 pair the owner makes by hand, outside Piceli, and
+    stores with ``setup``). ``provider`` is the provider a
+    ``provider-token`` is for (its ``Provider.name``); ``where`` says where
+    else the secret must live or when it is needed (the host, a build
+    host, "read once at creation"), when that matters; ``build_host``
+    names the ``NixRelease`` builder whose own store needs it too;
+    ``hint`` says how the owner makes it (``openstack ec2 credentials
+    create``).
     """
 
     name: str
@@ -255,6 +258,7 @@ class NeededSecret:
     provider: str | None = None
     where: str | None = None
     build_host: str | None = None
+    hint: str | None = None
 
     def to_dict(self) -> dict[str, str | None]:
         return {
@@ -266,6 +270,7 @@ class NeededSecret:
             "provider": self.provider,
             "where": self.where,
             "build_host": self.build_host,
+            "hint": self.hint,
         }
 
 
@@ -320,7 +325,35 @@ def _of_bucket(bucket: Any) -> Iterable[NeededSecret]:
         )  # fmt: skip
 
 
-def _of_cache(cache: Any, builder: str | None = None) -> Iterable[NeededSecret]:
+def _by_hand(cache: Any) -> str:
+    """How the owner makes an S3 pair of ``cache`` (the bucket's provider's
+    command when it is known)."""
+    provider = getattr(cache.bucket, "provider", None)
+    command = getattr(provider, "s3_keys_by_hand", None)
+    if command:
+        return f"made by hand, signed in as the project's user: {command}"
+    return "made by hand at the object storage (its console or API)"
+
+
+def _owner(
+    cache: Any,
+    name: str,
+    purpose: str,
+    where: str | None,
+    builder: str | None = None,
+) -> NeededSecret:
+    """An S3 pair of ``cache`` that the owner makes and stores (0.25.3)."""
+    from piceli.infra.machines.credentials import _SET_UP
+
+    return NeededSecret(
+        name, KIND, "owner", _SET_UP[KIND].format(name), purpose, where=where,
+        build_host=builder, hint=_by_hand(cache),
+    )  # fmt: skip
+
+
+def _of_cache(
+    cache: Any, builder: str | None = None, host: Any = None
+) -> Iterable[NeededSecret]:
     there = (
         f"also in the Piceli secrets of build host {builder}: piceli builder "
         f"serve --host {builder} --publish signs and pushes there; move it "
@@ -341,19 +374,30 @@ def _of_cache(cache: Any, builder: str | None = None) -> Iterable[NeededSecret]:
                 secret = replace(secret, where=there, build_host=builder)
             yield secret
     if cache.write_credentials and not cache.creates(cache.write_credentials):
-        yield replace(
-            _operator(
-                cache.write_credentials, KIND, f"write S3 keys of {cache.store_url}",
-                where=there,
-            ),
-            build_host=builder,
+        yield _owner(
+            cache, cache.write_credentials, f"write S3 keys of {cache.store_url}",
+            there, builder,
         )  # fmt: skip
+    read = cache.read_credentials
+    if read and not cache.creates(read):
+        # A cache alone names no host: the host that uses it says where.
+        where: str | None = None
+        if host is not None and host.cache_credentials is not None:
+            where = (
+                f"on host {host.name} too: piceli host secrets {host.name} "
+                f"writes it to {host.read_credentials_file}"
+            )
+        elif host is not None:
+            where = (
+                f"on host {host.name} too, in its own file {host.read_credentials_file}"
+            )
+        yield _owner(cache, read, f"read S3 keys of {cache.store_url}", where)
 
 
 def _of_host(host: Any, builder: str | None = None) -> Iterable[NeededSecret]:
-    yield from _of_cache(host.cache, builder)
+    yield from _of_cache(host.cache, builder, host)
     read = host.cache.read_credentials
-    if read is not None:
+    if read is not None and host.cache.creates(read):
         yield NeededSecret(
             read, KIND, "infra-apply",
             "piceli infra apply (the infrastructure declaring the bucket)",

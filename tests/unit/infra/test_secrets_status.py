@@ -45,11 +45,16 @@ PUBLIC = "example-cache-1:jXbGkEMPpvXtlVqGBrqfsnU8Jyn1cZB9u0QhGhvsKP0="
 DECLARATION = """
 from pathlib import Path
 from piceli.infra import (
-    Bucket, BuildHost, DevBuilds, DevProfile, Image, Infomaniak, Infrastructure,
-    NixCache, NixHost, Porkbun, DnsRecord, S3Key, Server, Ssh, Tag, UserData,
+    Bucket, BuildHost, DevBuilds, DevProfile, Image, Infrastructure, NixCache,
+    NixHost, OpenStack, Porkbun, DnsRecord, S3Key, Server, Ssh, Tag, UserData,
 )
 
-cloud = Infomaniak(credentials="infomaniak", prices={"a1-ram2-disk20-perf1": 4.70})
+# A generic OpenStack cloud: the Infomaniak preset creates no S3 keys (0.25.3).
+cloud = OpenStack(
+    credentials="infomaniak", auth_url="https://identity.example.org/v3",
+    region="region-1", public_network="public", flavors=["a1-ram2-disk20-perf1"],
+    prices={"a1-ram2-disk20-perf1": 4.70},
+)
 dns = Porkbun(credentials="porkbun")
 web = Server(
     "web-1", provider=cloud, type="a1-ram2-disk20-perf1",
@@ -59,7 +64,7 @@ web = Server(
 )
 nix_bucket = Bucket("example-nix-cache", provider=cloud, keys=[
     S3Key("nix-cache-write"), S3Key("nix-cache-read", access="read")])
-cache = NixCache(PUBLIC, bucket=nix_bucket)
+cache = NixCache(PUBLIC, bucket=nix_bucket, endpoint="s3.example.org")
 infra = Infrastructure(
     "web-1", servers=[web], buckets=[nix_bucket],
     records=[DnsRecord("example.org", "@", "A", server=web, provider=dns)],

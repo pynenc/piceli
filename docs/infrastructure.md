@@ -95,7 +95,7 @@ declaration fails at import, never halfway through a plan.
 | `DnsRecord(zone, name, type, value=… \| server=… \| servers=[…], ttl=, provider=)` | One record set (`A`, `AAAA`, `CNAME`, `TXT`; `@` is the apex) in a zone you already have at the provider (default: the first server's). Several servers give one record set with every address; the servers may be at another provider than the record. `ttl` defaults to the provider's (300 s; Porkbun 600 s). Piceli never creates or deletes the zone. |
 | `Hook(argv, timeout=3600)` | The command that installs the OS. Placeholders `{name}`, `{id}`, `{ipv4}`, `{ipv6}`, `{address}`. |
 | `Ssh(user="root", address=None, port=22, kubeconfig_path="/etc/rancher/k3s/k3s.yaml")` | How Piceli reaches the server to read its k3s kubeconfig. |
-| `Image(name, file= \| url=, sha256=, format="qcow2", min_disk_gb=, properties=)` | A disk image to upload (OpenStack). `sha256` is required and checked before the upload (`infra-image-checksum`). |
+| `Image(name, file= \| url=, sha256=, format="qcow2", min_disk_gb=, properties=)` | A disk image to upload (OpenStack). `sha256` is required and checked before the upload (`infra-image-checksum`). `Image.from_build(name, sidecar, upload="host")` reads `piceli dev nix build --image`'s sidecar and (0.25.3) uploads from the build host that built it; `ImageHost` is that host. |
 | `Bucket(name, provider=, protect=False, keys=[])` | An S3-compatible object-storage bucket (OpenStack Swift). Never emptied: destroying one that holds objects fails. `keys=` (0.25.0): the `S3Key` pairs Piceli creates for it (below). |
 | `S3Key(name, access="write")` | An S3 key pair of a bucket, created by `infra apply` and stored as the local credential `name` (`s3-keys`); `access="read"` for the hosts' pair. |
 | `Infrastructure(name, servers=, records=, state_dir=, state_key=, backend=, home=, buckets=)` | Everything one OpenTofu state holds. |
@@ -147,7 +147,8 @@ Infomaniak Public Cloud's values: `auth_url`
 `ext-net1` (a public IPv4 and IPv6 per port), found by its name alone
 (`public_network_external=None`: it is not `router:external`), prices in
 CHF, and `flavors=["a1-ram2-disk20-perf1"]`, its smallest (1 vCPU, 2 GB);
-`dc4-a` is the other region.
+`dc4-a` is the other region. It creates no S3 keys (0.25.3): see
+[pairs you make yourself](#s3-pairs-you-make-yourself).
 
 ```python
 from piceli.infra import Bucket, Image, Infomaniak, Infrastructure, PrimaryIp, Rule, Server
@@ -168,7 +169,7 @@ infra = Infrastructure("web", servers=[host], buckets=[Bucket("my-cache", provid
 | `PrimaryIp` | `openstack_networking_port_v2` on the public network; the server attaches to it, so a replaced server gets the same port and addresses, without a floating IP. `protect=True`: `prevent_destroy`, a destroy plan fails |
 | `Firewall`, `Rule` | `openstack_networking_secgroup_v2` (on the port), one ingress `openstack_networking_secgroup_rule_v2` per rule and source; the group's default egress rules stay, so outbound is not filtered |
 | `ssh_keys` | `openstack_compute_keypair_v2`; one key per server (Nova boots with one key pair) |
-| `Image` | `openstack_images_image_v2`, private, named by its checksum: at apply time Piceli copies the file (or downloads the URL) into the state directory, verifies it, uploads it, then removes the copy |
+| `Image` | `openstack_images_image_v2`, private, tagged with its sha256 (`piceli.io:image-sha256=…`): Piceli uploads it itself and OpenTofu adopts it (0.25.3, {ref}`below <image-uploads>`) |
 | `Bucket` | `openstack_objectstorage_container_v1` (Swift) |
 | `S3Key` | `openstack_identity_ec2_credential_v3`: an EC2 credential of the application credential's user in its project (0.25.0) |
 | `user_data=UserData(NAME)` | `user_data` from the sensitive variable `user_data_<server>`, with `ignore_changes`: read at creation only |
@@ -181,8 +182,9 @@ asks for the application credential ID, then its secret (see
 `OS_APPLICATION_CREDENTIAL_ID` and `OS_APPLICATION_CREDENTIAL_SECRET`; both
 are redacted from its output. S3 access to a bucket needs EC2 credentials
 (at Infomaniak the endpoint is `https://s3.pub1.infomaniak.cloud`): declare
-them as `S3Key`s (below), or create them yourself (`openstack ec2
-credentials create`) and store them with `piceli secrets s3 NAME --prompt`.
+them as `S3Key`s (below; not at Infomaniak), or create them yourself
+(`openstack ec2 credentials create`) and store them with `piceli secrets s3
+NAME --prompt`.
 OpenStack has no price API here: `prices=` (monthly net per flavor) and
 `ip_prices=` (`{"ipv4": …}`) are your own table, shown as the plan's
 estimate. One region per declaration; `ipv4=False` and `ipv6=PrimaryIp` are
@@ -203,6 +205,55 @@ value never replaces the server. A creating plan without it fails with
 the (encrypted) state. The instance's metadata service serves the user data
 to any process on it, so a key in it should be single-use and short-lived.
 {doc}`single_nixos_host` uses one to join a tailnet on first boot.
+
+(image-uploads)=
+**Image uploads** (0.25.3). OpenTofu's image resource uploads from the
+machine that runs `tofu apply` in one stream: no retry, no progress, and a
+dropped connection leaves a half-made image (`saving`) that the next plan
+replaces. Glance has no resumable upload (`PUT /v2/images/{id}/file` and
+the import API's `glance-direct` staging are each one stream), so Piceli
+uploads the image itself, before `tofu apply`, and OpenTofu adopts it
+(`tofu import`):
+
+- **From where it was built.** `Image.from_build(name, sidecar)` of an
+  image built on a remote docker host (the sidecar's `built_on` and
+  `store_file`) is sent from that host: a short `docker run --rm -i` of the
+  run image, the host's `/nix` read-only, over the container CLI's SSH
+  transport. It gets a fresh Keystone token on its stdin (never in an
+  argument, a log or the state), revoked after each attempt. Any other
+  `Image` (and `upload="local"`) is sent from this machine.
+- **In the plan,** each upload is a line, and the plan hash covers it:
+
+  ```text
+    create   image web-1-nixos (openstack_images_image_v2.image-web-1-nixos)
+    image web-1-nixos: upload, upload from build host build-1 (451.0 MB, sha256 0d5c8c55e1f2…)
+  ```
+
+  An image in the state that a failed upload left unfinished, or whose
+  sha256 tag is not the declared one, is replaced: `image web-1-nixos:
+  replace (a failed upload left it in saving), …`. Images at the cloud with
+  this image's ownership tags that the state does not hold (an upload that
+  was killed) are listed as `stale_images` and deleted before the upload.
+- **Retries.** An attempt that fails is retried (three attempts, 10 s and
+  30 s apart), on the same image record when Glance put it back to
+  `queued`, else on a new one after deleting the old (Infomaniak leaves a
+  dropped upload in `saving`). When all fail: `infra-image-upload-failed`
+  (exit 1), the half-made image deleted.
+- **Progress** on stderr, at most once a second on a terminal (every 10 s
+  otherwise): `image web-1-nixos: 212.0 MB of 451.0 MB (47%), 38.2 MB/s,
+  ETA 6s`. Its first line names the full log, `image-upload-NAME.log` in
+  the state directory. stdout keeps one JSON object with
+  `uploaded_images` (id, bytes, seconds, rate, attempts, from).
+- **Clean-up.** A failed or interrupted upload (`Ctrl-C` too) deletes the
+  image record it created, once its tags show it is Piceli's.
+- **Integrity.** The bytes sent must have the declared sha256, and Glance's
+  `checksum` (MD5) and `os_hash_value` (SHA-512 at Infomaniak) must be
+  their hashes; otherwise the image is deleted (`infra-image-checksum`).
+
+After the uploads OpenTofu plans again: that plan must be the approved one
+less the uploads (`infra-plan-changed` otherwise; the uploaded images stay
+adopted), and only it is applied. A replaced active image is deleted after
+the apply succeeded (until then `images.json` lists it as `retired`).
 
 Ownership marks: metadata on servers and buckets, tags on ports, security
 groups and images, the description of security group rules. Key pairs and
@@ -268,6 +319,48 @@ keys yourself), and a `reader`-only identity may not either.
 **Rotation** is not a command yet: remove the key, apply, add it back and
 apply (a new pair, stored over the old one), then run `piceli host secrets`
 again for a read key.
+
+(s3-pairs-you-make-yourself)=
+**S3 pairs you make yourself** (0.25.3). Infomaniak's API lets only the
+account's own user create EC2 credentials, never an application
+credential, restricted or not. The `Infomaniak` preset therefore creates
+no S3 keys (`supports_s3_keys` is false), and a `Bucket(keys=[...])` there
+is refused when the module loads, before any plan:
+
+```text
+infra-s3-keys-unsupported: Bucket my-cache: Piceli cannot create S3 keys at
+infomaniak: its API lets only the account's own user create S3 credentials,
+not an application credential. Remove keys= and make each pair by hand,
+signed in as the project's user: openstack ec2 credentials create; store
+it: piceli secrets s3 cache-write --prompt (write), piceli secrets s3
+cache-read --prompt (read); then declare NixCache(bucket=...,
+write_credentials="cache-write", read_credentials="cache-read")
+```
+
+Make each pair signed in as the project's user (the OpenStack CLI with
+that user's password, not an application credential), store it, and
+name both in the cache:
+
+```sh
+openstack ec2 credentials create        # once for the build host, once for the hosts
+piceli secrets s3 cache-write --prompt  # access key id, then secret
+piceli secrets s3 cache-read --prompt
+```
+
+```python
+nix_bucket = Bucket("my-cache", provider=cloud)   # no keys=
+cache = NixCache("cache-1:…", bucket=nix_bucket,
+                 write_credentials="cache-write", read_credentials="cache-read")
+```
+
+`piceli secrets status` lists both `pending`, created by `owner`, with
+`piceli secrets s3 NAME --prompt` as the next command, until they are
+stored; `piceli host secrets` installs the read pair on the host exactly as
+it installs a bucket's read key (see {doc}`nix_hosts`). Both pairs have
+the user's project roles: the read pair is separate, not read-only, as
+described above. `read_credentials=` and a bucket's `S3Key(access="read")`
+are alternatives (giving both is refused), and it may not name the write
+pair.
 
 To move to a newer OpenStack provider, change `OPENSTACK_PIN` in
 `piceli/infra/machines/openstack.py` and take its hashes from `tofu

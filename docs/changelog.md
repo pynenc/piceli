@@ -4,6 +4,72 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.25.3
+
+- **The Infomaniak preset refuses `S3Key`.** Infomaniak's API lets only the
+  account's own user create S3 (EC2) credentials, never an application
+  credential, restricted or not: `infra apply` failed with a 403 on
+  `OS-EC2`. `Infomaniak` now creates no S3 keys (`supports_s3_keys` is
+  false), and `Bucket(keys=[S3Key(...)])` there is refused when the module
+  loads, before any plan, with the new code `infra-s3-keys-unsupported`.
+  Its message gives the commands for each pair: `openstack ec2 credentials
+  create` signed in as the project's user, `piceli secrets s3 NAME
+  --prompt`, and the `NixCache(write_credentials=, read_credentials=)` to
+  declare. A generic `OpenStack` still creates them.
+- **`NixCache(read_credentials=NAME)` names a read pair you made.** It is
+  the alternative to the bucket's `S3Key(access="read")` (giving both, or
+  naming the write pair or another key of the bucket, is refused; only for
+  an `s3://` cache). `NixHost` and `piceli host secrets` install it exactly
+  as they install a bucket's read key: `/var/lib/piceli-host/cache.env` by
+  default, the same plan, digest and comparison; while it is not stored,
+  `host secrets` refuses with `infra-credential-missing` and the command
+  that stores it. `write_credentials=` works without `keys=` as before.
+- **`secrets status` lists owner-made pairs `pending`.** Both pairs are
+  reported with `created_by: "owner"`, state `pending` until stored (exit
+  0, like the pairs the next `infra apply` creates), next command `piceli
+  secrets s3 NAME --prompt`, and a detail naming how to make them
+  (`openstack ec2 credentials create`, signed in as the project's user);
+  `where` names the build host of a `NixRelease` for the write pair and
+  the host for the read pair. `needed_secrets()` rows gain `hint`. `secrets
+  setup` asks for them (piped: one part per line). The owner-made read pair
+  gets the same `s3-read-not-enforced` warning as a bucket's read key. An
+  `s3://` cache's own `write_credentials=` is now `pending` by `owner` too,
+  instead of `missing`.
+- **Piceli uploads OpenStack images itself, from where they were built.**
+  OpenTofu's image resource sent the file from the machine running `tofu
+  apply` in one stream: a dropped connection after minutes left a
+  half-made image in `saving` and the next plan replaced it. Glance cannot
+  resume an upload (`PUT /v2/images/{id}/file` and `glance-direct` staging
+  are each one stream), so `piceli infra apply` now creates the image
+  record, sends the file and lets OpenTofu adopt it (`tofu import`), then
+  plans again and applies that plan, which must be the approved one less
+  the upload (`infra-plan-changed` otherwise).
+  - `Image.from_build` of an image built on a docker host over SSH uploads
+    it from that host (a short `docker run --rm -i` of the run image with
+    the host's `/nix` read-only); `piceli dev nix build --image` records
+    the host and the store file in the sidecar (`built_on`,
+    `store_file`). `upload="local"` keeps the local copy. A fresh Keystone
+    token reaches the host on stdin only and is revoked after each attempt.
+  - The plan lists each upload (`images`: action, from where, size,
+    sha256), covered by its hash; images a killed upload left at the cloud
+    are listed as `stale_images` and deleted before the upload.
+  - Three attempts, on the same record when Glance put it back to
+    `queued`, else on a new one after deleting the old; then
+    `infra-image-upload-failed` (new code, exit 1).
+  - Progress on stderr (bytes sent, total, rate, ETA; at most once a
+    second), the log's path when it starts (`image-upload-NAME.log` in the
+    state directory), `uploaded_images` in the JSON result.
+  - A failed or interrupted upload (`Ctrl-C` too) deletes the image it
+    made, by its tags. Glance's `checksum` and `os_hash_value` must be the
+    hashes of the bytes sent, and those the declared sha256
+    (`infra-image-checksum`).
+- **A half-made image is replaced, and a new sha256 too.** An image in the
+  state whose status is not `active`, or whose sha256 is not the declared
+  one, is planned with `-replace`: `replace (a failed upload left it in
+  saving)`. Images carry their sha256 as a tag (`piceli.io:image-sha256=…`)
+  and ignore `local_file_path`, so an image uploaded by 0.25.2 is kept: its
+  first plan updates its tags in place.
+
 ## Version 0.25.2
 
 - **Infomaniak's public network is found by name.** `Infomaniak()` looked

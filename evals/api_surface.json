@@ -4300,6 +4300,9 @@
     "describe",
     "endpoint",
     "hides_id",
+    "image_record",
+    "image_replace_reason",
+    "image_service",
     "known_error",
     "labels_of",
     "ledger_owned",
@@ -4325,6 +4328,8 @@
     "resource_labels",
     "s3_key_enforcement",
     "s3_key_values",
+    "s3_keys_by_hand",
+    "s3_keys_refused_because",
     "server_id",
     "server_status",
     "server_types",
@@ -4334,7 +4339,8 @@
     "supports_s3_keys",
     "supports_servers",
     "supports_user_data",
-    "token_env"
+    "token_env",
+    "uploads_images"
    ],
    "init": [
     "credentials",
@@ -4358,6 +4364,16 @@
     "describe": [],
     "hides_id": [
      "type_"
+    ],
+    "image_record": [
+     "body"
+    ],
+    "image_replace_reason": [
+     "before",
+     "image"
+    ],
+    "image_service": [
+     "env"
     ],
     "known_error": [
      "diagnostics"
@@ -4666,25 +4682,32 @@
    }
   },
   "Image": {
+   "attr_types": {
+    "host": "ImageHost"
+   },
    "attrs": [
     "describe",
     "file",
     "format",
     "from_build",
+    "host",
     "local_path",
     "min_disk_gb",
     "name",
     "properties",
     "sha256",
+    "size",
     "url"
    ],
    "init": [
     "file",
     "format",
+    "host",
     "min_disk_gb",
     "name",
     "properties",
     "sha256",
+    "size",
     "url"
    ],
    "methods": {
@@ -4693,7 +4716,8 @@
      "build",
      "min_disk_gb",
      "name",
-     "properties"
+     "properties",
+     "upload"
     ]
    },
    "returns": {
@@ -4818,6 +4842,26 @@
    "methods": {
     "add_note": null,
     "with_traceback": null
+   }
+  },
+  "ImageHost": {
+   "attrs": [
+    "cli",
+    "context",
+    "describe",
+    "image",
+    "name",
+    "path"
+   ],
+   "init": [
+    "cli",
+    "context",
+    "image",
+    "name",
+    "path"
+   ],
+   "methods": {
+    "describe": []
    }
   },
   "ImageOutput": {
@@ -4951,6 +4995,9 @@
     "describe",
     "flavors",
     "hides_id",
+    "image_record",
+    "image_replace_reason",
+    "image_service",
     "ip_prices",
     "known_error",
     "labels_of",
@@ -4981,6 +5028,8 @@
     "resource_labels",
     "s3_key_enforcement",
     "s3_key_values",
+    "s3_keys_by_hand",
+    "s3_keys_refused_because",
     "server_id",
     "server_status",
     "supports_buckets",
@@ -4989,7 +5038,8 @@
     "supports_s3_keys",
     "supports_servers",
     "supports_user_data",
-    "token_env"
+    "token_env",
+    "uploads_images"
    ],
    "init": [
     "auth_url",
@@ -5017,6 +5067,16 @@
     "describe": [],
     "hides_id": [
      "type_"
+    ],
+    "image_record": [
+     "body"
+    ],
+    "image_replace_reason": [
+     "before",
+     "image"
+    ],
+    "image_service": [
+     "env"
     ],
     "known_error": [
      "diagnostics"
@@ -6008,6 +6068,7 @@
     "endpoint",
     "key_name",
     "public_key",
+    "read_credentials",
     "region",
     "signing_key",
     "url",
@@ -6555,6 +6616,9 @@
     "describe",
     "flavors",
     "hides_id",
+    "image_record",
+    "image_replace_reason",
+    "image_service",
     "ip_prices",
     "known_error",
     "labels_of",
@@ -6585,6 +6649,8 @@
     "resource_labels",
     "s3_key_enforcement",
     "s3_key_values",
+    "s3_keys_by_hand",
+    "s3_keys_refused_because",
     "server_id",
     "server_status",
     "supports_buckets",
@@ -6593,7 +6659,8 @@
     "supports_s3_keys",
     "supports_servers",
     "supports_user_data",
-    "token_env"
+    "token_env",
+    "uploads_images"
    ],
    "init": [
     "auth_url",
@@ -6621,6 +6688,16 @@
     "describe": [],
     "hides_id": [
      "type_"
+    ],
+    "image_record": [
+     "body"
+    ],
+    "image_replace_reason": [
+     "before",
+     "image"
+    ],
+    "image_service": [
+     "env"
     ],
     "known_error": [
      "diagnostics"
@@ -7438,6 +7515,9 @@
     "default_ttl",
     "describe",
     "hides_id",
+    "image_record",
+    "image_replace_reason",
+    "image_service",
     "known_error",
     "labels_of",
     "ledger_owned",
@@ -7462,6 +7542,8 @@
     "resource_labels",
     "s3_key_enforcement",
     "s3_key_values",
+    "s3_keys_by_hand",
+    "s3_keys_refused_because",
     "server_id",
     "server_status",
     "supports_buckets",
@@ -7470,7 +7552,8 @@
     "supports_s3_keys",
     "supports_servers",
     "supports_user_data",
-    "token_env"
+    "token_env",
+    "uploads_images"
    ],
    "init": [
     "credentials",
@@ -7491,6 +7574,16 @@
     "describe": [],
     "hides_id": [
      "type_"
+    ],
+    "image_record": [
+     "body"
+    ],
+    "image_replace_reason": [
+     "before",
+     "image"
+    ],
+    "image_service": [
+     "env"
     ],
     "known_error": [
      "diagnostics"
@@ -13617,6 +13710,7 @@
    "infra-image-build-invalid",
    "infra-image-checksum",
    "infra-image-unavailable",
+   "infra-image-upload-failed",
    "infra-install-changed",
    "infra-install-failed",
    "infra-install-unavailable",
@@ -13631,6 +13725,7 @@
    "infra-prompt-required",
    "infra-register-changed",
    "infra-s3-key-refused",
+   "infra-s3-keys-unsupported",
    "infra-server-unknown",
    "infra-ssh-missing",
    "infra-ssh-unreachable",
@@ -14880,6 +14975,9 @@
    "Image": {
     "class": "Image"
    },
+   "ImageHost": {
+    "class": "ImageHost"
+   },
    "Infomaniak": {
     "class": "Infomaniak"
    },
@@ -15809,7 +15907,10 @@
   "piceli.infra.machines",
   "piceli.infra.machines.credential_parts",
   "piceli.infra.machines.credentials",
+  "piceli.infra.machines.glance",
   "piceli.infra.machines.hetzner",
+  "piceli.infra.machines.image_sender",
+  "piceli.infra.machines.image_upload",
   "piceli.infra.machines.images",
   "piceli.infra.machines.install",
   "piceli.infra.machines.keys",
@@ -16071,5 +16172,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.25.2"
+ "version": "0.25.3"
 }

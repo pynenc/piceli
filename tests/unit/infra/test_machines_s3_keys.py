@@ -156,7 +156,7 @@ def test_needed_secrets_lists_who_creates_each() -> None:
     own = NixCache(PUBLIC, bucket=Bucket("nix-cache", provider=OS), endpoint="s3.example.org",
                    write_credentials="my-keys")  # fmt: skip
     mine = {s.name: s for s in needed_secrets(own)}
-    assert mine["my-keys"].created_by == "operator"
+    assert mine["my-keys"].created_by == "owner"  # made by hand (0.25.3)
     assert mine["my-keys"].setup == "piceli secrets s3 my-keys --prompt"
     with pytest.raises(TypeError):
         needed_secrets("not a declaration")

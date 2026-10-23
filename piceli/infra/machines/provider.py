@@ -108,6 +108,8 @@ class Provider(ABC):
     location: str | None
     #: Whether a ``Server(image=Image(...))`` can be uploaded to this provider.
     supports_images: bool = False
+    #: Piceli uploads the images itself (:meth:`image_service`; 0.25.3).
+    uploads_images: bool = False
     #: Whether ``Bucket(provider=...)`` can be created at this provider.
     supports_buckets: bool = False
     #: Whether this provider serves ``DnsRecord`` s.
@@ -118,7 +120,15 @@ class Provider(ABC):
     #: Whether ``Server(user_data=UserData(...))`` is passed at creation.
     supports_user_data: bool = False
     #: Whether ``Bucket(keys=[S3Key(...)])`` pairs are created here (0.25.0).
+    #: A bucket that declares keys at a provider that cannot is refused
+    #: (``infra-s3-keys-unsupported``, 0.25.3).
     supports_s3_keys: bool = False
+    #: Why this provider's pairs cannot be created by Piceli, for that
+    #: refusal (``None``: no reason known).
+    s3_keys_refused_because: str | None = None
+    #: The command the account's own user runs to make an S3 key pair by
+    #: hand (``None``: not known), for that refusal and ``secrets status``.
+    s3_keys_by_hand: str | None = None
     #: The TTL of a ``DnsRecord`` that gives none, and the shortest accepted.
     default_ttl: int = 300
     min_ttl: int = 60
@@ -201,6 +211,22 @@ class Provider(ABC):
 
     def render_image(self, image: Image, labels: Mapping[str, str]) -> Resource:
         """The uploaded image (only when :attr:`supports_images`)."""
+        raise NotImplementedError(f"{self.name} does not upload images")
+
+    def image_service(self, env: Mapping[str, str]) -> Any:
+        """The client Piceli uploads images with (0.25.3; ``None``: OpenTofu
+        uploads them). ``env`` holds the provider's credential parts."""
+        return None
+
+    def image_replace_reason(
+        self, before: Mapping[str, Any], image: Image
+    ) -> str | None:
+        """Why an image in the state must be uploaded again (``None``: it
+        need not): a half-made upload, a different sha256."""
+        return None
+
+    def image_record(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        """The image record to create, from the rendered resource's ``body``."""
         raise NotImplementedError(f"{self.name} does not upload images")
 
     def render_bucket(self, bucket: Bucket, labels: Mapping[str, str]) -> Resource:
