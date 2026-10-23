@@ -566,7 +566,8 @@ def offered(
     the components offered.
 
     :param repository: The component's repository in this registry.
-    :param components: The components the composition declares.
+    :param components: The images an offer may name: the composition's
+        components and its pipeline build specs' images.
     :param registry: The registry's host (``None``: not checked).
     :raises GitOpsError: ``gitops-request-invalid``.
     """
@@ -584,7 +585,8 @@ def offered(
             raise GitOpsError("gitops-request-invalid", f"image {name}: not an object")
         if name not in components:
             raise GitOpsError(
-                "gitops-request-invalid", f"image {name}: not a declared component"
+                "gitops-request-invalid",
+                f"image {name}: not a component or build-spec image of the composition",
             )
         key = str(image.get("key") or "")
         if not _KEY.fullmatch(key):

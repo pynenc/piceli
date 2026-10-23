@@ -101,8 +101,12 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   step's own change key is the offered key, the reference names the
   component's repository in its registry, pinned by digest, and the digest
   is in the registry; it then deploys without waiting for a host or a
-  Job. New codes `train-images-failed`, `train-host-unavailable`,
-  `train-run-unknown`.
+  Job. Pipeline environments too: for each build spec whose contexts
+  read the composition repository, the train computes every image's key
+  as the controller does (the spec, the selected files, node facts and
+  the controller's platforms), builds it with `builder serve`'s code (one
+  OCI index over the platforms) and offers it the same way. New codes
+  `train-images-failed`, `train-host-unavailable`, `train-run-unknown`.
 
 ## Version 0.25.3
 

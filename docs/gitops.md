@@ -578,12 +578,14 @@ what it took; a host that built nothing deployed is a rejected request.
 
 ### Images a merge train built: `prebuilt` (0.26.0)
 
-A merge train that promotes a commit can build its images first
-(`Step.images`, see {doc}`train`) and offer them with a `prebuilt` request
+A merge train that promotes a commit can build its images first, for
+components and for pipeline environments' build specs (`Step.images`, see
+{doc}`train`), and offer them with a `prebuilt` request
 before the push this controller reacts to. Declare
 `Controller(on="node-a", prebuilt=True)` to take them (off by default).
 The controller keeps an offer after checking that it names a declared
-component, that its reference points into that component's repository of
+component or an image of a pipeline build spec, that its reference points
+into that image's repository of
 this registry and is pinned by its digest, and that the digest is in the
 registry. It uses an offer only when a step's own change key for the
 component (computed from its own clone of the commit) is the offered key,

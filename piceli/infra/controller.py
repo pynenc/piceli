@@ -1526,12 +1526,38 @@ class CompositionController:
             body,
             present=self._in_registry,
             repository=self._repository,
-            components=[item.name for item in self.composition.components],
+            components=self._offerable(),
             registry=getattr(registry, "host", None),
             now=self.clock(),
         )
         self.log(f"prebuilt offer from {body.get('host')}: {', '.join(names)}")
         self._wake_waiting()
+
+    def _offerable(self) -> list[str]:
+        """The images an offer may name: the composition's components and
+        the images of its pipeline environments' build specs (read from the
+        composition repository's checkout)."""
+        names = {item.name for item in self.composition.components}
+        checkout = None if self.repo is None else self.repo.checkout
+        if checkout is None:
+            return sorted(names)
+        from piceli.infra.pipelines import load_spec, spec_paths
+
+        for env in self.composition.environments:
+            pipeline = getattr(env, "pipeline", None)
+            if pipeline is None:
+                continue
+            try:
+                for path, _build in spec_paths(pipeline, checkout):
+                    spec = load_spec(
+                        (checkout / path).read_bytes(),
+                        path,
+                        repo=self.repo.settings.name,  # type: ignore[union-attr]
+                    )
+                    names |= {image.name for image in spec.spec.images}
+            except (CompositionError, OSError):
+                continue
+        return sorted(names)
 
     def _wake_waiting(self) -> None:
         """Environments waiting for a build go at once, not at their next try."""

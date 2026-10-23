@@ -436,12 +436,18 @@ controller sees the push, waits for a build host or starts a build Job,
 then deploys. `Step.images("infra.py")` makes the train build those
 images on `--promote`, before the push:
 
-1. It loads the composition module from the promoted head and, for each
-   component built from this repository (its source's URL is one of the
-   repository's remotes; or `components=[...]`), computes the **change
-   key** the controller computes for that commit: the component's contract
-   in `piceli.toml` and the Git object id of every path its build reads
-   (the same function, `contract_digest`).
+1. It loads the composition module from the promoted head and computes the
+   **change key** the controller computes for that commit, with the same
+   functions:
+   - for each component built from this repository (its source's URL is
+     one of the repository's remotes; or `components=[...]`): its contract
+     in `piceli.toml` and the Git object id of every path its build reads
+     (`contract_digest`);
+   - for each build spec of a pipeline environment (`Build.spec(...,
+     builder="host")`: `[build]` commands and shared commands, contexts,
+     images with their target and shared files, toolchains): each image's
+     key from the spec, the files its contexts select at that commit, the
+     declared node facts and the controller's platforms (`image_keys`).
 2. It builds them from the promoted head with the same host-build code as
    `piceli builder serve`, on a docker build host of the composition's
    cluster (`Cluster(dev=DevBuilds(hosts=[...]))`; the step's `hosts`
@@ -470,10 +476,30 @@ the time to see the push plus the deploy (about 30 s + 3 s of the measured
 334 s median, which had 122 s of host wait and 171 s of build Job); the
 images are built while the train promotes, off the critical path.
 
+What a pipeline environment's build spec needs for this:
+
+- **Its contexts read only the composition repository** (the repository
+  the train runs in, holding `infra.py` and the spec): a context with
+  `source = "other"` makes the key depend on the commit the controller
+  will follow of that other repository, which the train cannot know. Such
+  a spec fails the step (`train-images-failed`) and the controller builds
+  as before.
+- **The repository's `origin` remote is the URL `piceli gitops enable`
+  recorded** (the controller names the composition repository by it, and
+  the source name is part of the key).
+- **The same platforms as the controller**: the key covers them. The
+  default is the controller's own default, `linux/<arch>` of every node of
+  the cluster, sorted; when the controller was enabled with other
+  `--platform`s, give the same ones to `Step.images(platforms=[...])`. An
+  offer for other platforms has another key and is never used.
+
+The build itself is `piceli builder serve`'s: every platform, one OCI index
+over them, the build receipt's toolchains in the provenance.
+
 A failed images step (no `Controller(prebuilt=True)`, no build host, a
-failed build or push) fails with `train-images-failed`; the promotion
-stands and the controller builds the images itself. Pipeline environments
-(build specs) and delivery into the nodes are not handed over yet.
+key that cannot be computed here, a failed build or push) fails with
+`train-images-failed`; the promotion stands and the controller builds the
+images itself. Delivery into the nodes is not handed over yet.
 
 ## Hooks for later
 

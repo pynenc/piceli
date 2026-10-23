@@ -269,3 +269,232 @@ def test_an_offer_missing_from_the_registry_is_refused() -> None:
     )  # fmt: skip
     assert remote_builds.take_offer(state, "api", "sha256:" + "1" * 64)
     assert remote_builds.take_offer(state, "api", "sha256:" + "2" * 64) is None
+
+
+# ------------------------------------------------- pipeline environments
+
+PIPELINE_EXAMPLE = EXAMPLE.parents[0] / "python_composition" / "infra"
+
+#: The example's host build, its contexts all in the composition repository.
+HOST_BUILD = """\
+revision = "piceli.host-build.v1"
+name = "example"
+
+[build]
+tools = ["true"]
+commands = [["true"]]
+
+[context.infra]
+include = ["config/**"]
+
+[context.api]
+path = "api"
+include = ["site/**"]
+
+[context.worker]
+path = "worker"
+include = ["jobs/**"]
+
+[[output.image]]
+name = "api"
+repository = "example/api"
+contexts = ["api", "infra"]
+base = { image = "docker.io/library/busybox:1.37.0", digest = "sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e" }
+files = { "api/site" = "/srv/site", "infra/config/api.json" = "/srv/site/config.json" }
+user = "65534:65534"
+entrypoint = ["httpd", "-f", "-p", "8080", "-h", "/srv/site"]
+
+[[output.image]]
+name = "worker"
+repository = "example/worker"
+contexts = ["worker"]
+base = { image = "docker.io/library/busybox:1.37.0", digest = "sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e" }
+files = { "worker/jobs" = "/opt/worker" }
+user = "65534:65534"
+entrypoint = ["sh", "/opt/worker/run.sh"]
+"""
+
+PIPELINE_INFRA = """\
+import os
+
+from example_app import REGISTRY_NODE, pipeline, registry
+
+from piceli.envs import Environment, Stack
+from piceli.infra import Cluster, Controller, Source
+
+name = "example"
+
+cluster = Cluster(
+    "my-cluster",
+    api="https://127.0.0.1:6443",
+    credentials="my-cluster",
+    registry=registry,
+    controller=Controller(on=REGISTRY_NODE, prebuilt=True),
+)
+infra = Source(os.environ["EXAMPLE_INFRA_URL"], name="infra")
+environments = [
+    Environment(
+        "main",
+        namespace="example-main",
+        pipeline=pipeline,
+        stack=Stack("full", workloads=["api", "worker", "cache"]),
+        cluster=cluster,
+        follow={infra: "main"},
+        auto_approve=True,
+    ),
+]
+"""
+
+PIPELINE_SPEC = """\
+import sys
+
+from piceli.train import Step, Train
+
+train = Train(
+    "example",
+    steps=[
+        Step.command("check", [sys.executable, "-c", "print('ok')"]),
+        Step.images("infra.py", platforms=["linux/amd64", "linux/arm64"]),
+    ],
+)
+"""
+
+TWO = ("linux/amd64", "linux/arm64")
+
+
+class PipelineWorld:
+    def __init__(self, tmp_path: Path, platforms: tuple[str, ...] = TWO) -> None:
+        from piceli.infra.pipelines import RepoSettings
+        from tests.unit.infra.test_pipeline_composition import SUMMARY
+        from tests.unit.infra.test_pipeline_composition import (
+            FakePorts as PipelinePorts,
+        )
+
+        files = {
+            "example_app.py": (PIPELINE_EXAMPLE / "example_app.py").read_text(),
+            "config/api.json": (PIPELINE_EXAMPLE / "config/api.json").read_text(),
+            "config/worker.json": (PIPELINE_EXAMPLE / "config/worker.json").read_text(),
+            "api/site/index.html": "<h1>api</h1>\n",
+            "worker/jobs/run.sh": "echo work\n",
+            "host-build.toml": HOST_BUILD,
+            "infra.py": PIPELINE_INFRA,
+            "train_spec.py": PIPELINE_SPEC,
+        }
+        self.infra = Repo(tmp_path / "remotes", "infra", files)
+        git(self.infra.work, "config", "commit.gpgSign", "false")
+        self.registry: set[str] = set()
+        self.ports = PipelinePorts()
+        self.channel = DirectoryChannel(tmp_path / "controller")
+        self.clock = {"now": 1_000_000.0}
+        settings = RepoSettings(name="infra", url=self.infra.url, entry="infra.py")
+        config = CompositionConfig(
+            composition=SUMMARY, repo=settings.to_dict(), poll_seconds=10,
+            platforms=platforms,
+        )  # fmt: skip
+        state = tmp_path / "controller"
+        self.controller = CompositionController(
+            config,
+            state_dir=state,
+            sources=SourceSet(config.sources, state / "sources"),
+            ports=self.ports,
+            channel=self.channel,
+            clock=lambda: self.clock["now"],
+        )
+        self.controller._in_registry = self.registry.__contains__  # type: ignore[method-assign]
+        self.root = tmp_path
+        self.builds: list[Mapping[str, Any]] = []
+
+    @contextmanager
+    def tools(self, composition: Any, _step: Any, _ctx: Any) -> Iterator[ImageTools]:
+        def build(wanted: Mapping[str, Any], _tail: Any) -> dict[str, Any]:
+            self.builds.append(wanted)
+            images = {}
+            for name, item in wanted["keys"].items():
+                per = {
+                    p: "sha256:"
+                    + hashlib.sha256(f"{item['key']}{p}".encode()).hexdigest()
+                    for p in wanted["platforms"]
+                }
+                index = "sha256:" + hashlib.sha256(item["key"].encode()).hexdigest()
+                ref = f"{composition.registry.host}/{item['repository']}@{index}"
+                self.registry.add(ref)
+                images[name] = {
+                    "key": item["key"], "pull_ref": ref, "manifest_digest": index,
+                    "platforms": per,
+                }  # fmt: skip
+            return images
+
+        yield ImageTools(
+            host="server", image=IMAGE, build=build, offer=self.channel.add_request,
+            toolchains=lambda: {"rustc": "1.90.0"},
+        )  # fmt: skip
+
+    def train(self, *branches: str) -> dict[str, Any]:
+        loaded, repo, spec_path = locate(
+            f"{self.infra.work / 'train_spec.py'}:train", self.infra.work
+        )
+        return TrainRun(
+            loaded, repo=repo, spec_path=spec_path, branches=list(branches),
+            state=TrainState.for_train("example", self.root / "train-state"),
+            promote=True, images=self.tools,
+        ).run()  # fmt: skip
+
+    def poll(self) -> dict[str, Any]:
+        self.clock["now"] += 60
+        return self.controller.poll_once()
+
+
+@pytest.fixture
+def pipeline_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> PipelineWorld:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("EXAMPLE_INFRA_URL", str(tmp_path / "remotes" / "infra.git"))
+    return PipelineWorld(tmp_path)
+
+
+def test_a_pipeline_environment_deploys_the_trains_two_platform_images(
+    pipeline_world: PipelineWorld,
+) -> None:
+    world = pipeline_world
+    status = world.poll()
+    assert status["envs"]["main"]["state"] == "deployed", status["envs"]["main"]
+    assert world.ports.builder.built == [["api", "worker"]]
+    world.infra.commit({"api/site/index.html": "<h1>api v2</h1>\n"}, branch="feat")
+    git(world.infra.work, "checkout", "-q", "main")
+    result = world.train("feat")
+    assert result["ok"], result
+    (images,) = [s for s in result["promote"]["publish"] if s["name"] == "images"]
+    assert images["verdict"] == "passed", images
+    (wanted,) = world.builds
+    assert wanted["kind"] == "spec" and wanted["spec"] == "host-build.toml"
+    assert wanted["repo"] == "infra" and wanted["platforms"] == list(TWO)
+    api = images["detail"]["images"]["api"]
+    assert api["platforms"] == list(TWO)
+    git(world.infra.work, "push", "-q", "origin", "main")
+    status = world.poll()
+    main = status["envs"]["main"]
+    assert main["state"] == "deployed", main
+    # The controller's own key for each image is the offered one: no build.
+    assert world.ports.builder.built == [["api", "worker"]]
+    component = main["components"]["api"]
+    assert component["image"] == api["pull_ref"]
+    assert component["source_digest"] == api["key"]
+    assert component["provenance"]["builder"] == "train"
+    assert component["provenance"]["toolchains"] == {"rustc": "1.90.0"}
+    assert component["provenance"]["train"]["run"] == result["run"]
+
+
+def test_a_pipeline_offer_for_other_platforms_is_not_used(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("EXAMPLE_INFRA_URL", str(tmp_path / "remotes" / "infra.git"))
+    # The controller builds for amd64 only; the train offers both platforms:
+    # the keys differ, so the controller builds as before.
+    world = PipelineWorld(tmp_path, platforms=("linux/amd64",))
+    world.poll()
+    world.infra.commit({"api/site/index.html": "<h1>api v2</h1>\n"}, branch="feat")
+    git(world.infra.work, "checkout", "-q", "main")
+    assert world.train("feat")["ok"]
+    git(world.infra.work, "push", "-q", "origin", "main")
+    world.poll()
+    assert world.ports.builder.built[-1] == ["api"]
