@@ -66,6 +66,7 @@ piceli gitops enable infra.py …                         # plan, then --approve
 | `headers_secret` | A Secret whose keys are header names and values header values (`authorization`). Mounted read-only into the controller at `/var/run/piceli-gitops/otlp-headers`. |
 | `ca_secret` | A Secret with `ca.crt`, the CA that signs the endpoint's certificate (mounted at `/var/run/piceli-gitops/otlp-ca`). |
 | `insecure` | `True` to send without TLS to an `http://` endpoint (an in-cluster Collector). Plain `http://` is refused without it, except on loopback. |
+| `ca_file` | A CA file on the machine that exports, for a merge train ({ref}`train-telemetry`). The controller refuses it: give it `ca_secret` instead. |
 
 `gitops enable` puts the setting in the controller's configuration (only
 when it is set, so the configuration hash of a controller without telemetry

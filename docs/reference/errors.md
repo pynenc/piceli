@@ -783,6 +783,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`train-step-failed`](#error-train-step-failed) | train | no |
 | [`train-step-timeout`](#error-train-step-timeout) | train | yes |
 | [`train-telemetry-failed`](#error-train-telemetry-failed) | train | yes |
+| [`train-telemetry-unavailable`](#error-train-telemetry-unavailable) | train | no |
 | [`train-unknown`](#error-train-unknown) | train | no |
 | [`train-wait-timeout`](#error-train-wait-timeout) | train | yes |
 | [`transport-error`](#error-transport-error) | kubernetes | yes |
@@ -7387,6 +7388,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Check that the collector listens on the configured OTLP/HTTP endpoint and OTEL_EXPORTER_OTLP_* settings.
 - **Retry-safe:** yes
+
+(error-train-telemetry-unavailable)=
+### `train-telemetry-unavailable`
+
+**Train telemetry needs the telemetry extra.** The spec declares `Train(telemetry=Otlp(..., protocol="http/protobuf"))`, which is sent as protobuf, and the OTLP protobuf classes (`opentelemetry-proto`) are not installed. The train refuses before it runs rather than send JSON a protobuf-only collector would reject.
+
+- **Fix:** Install the extra (`pip install 'piceli[telemetry]'`, or `uv tool install 'piceli[telemetry]'`), or remove `telemetry=` from the spec.
+- **Retry-safe:** no
 
 (error-train-unknown)=
 ### `train-unknown`

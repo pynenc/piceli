@@ -7287,6 +7287,7 @@
   },
   "Otlp": {
    "attrs": [
+    "ca_file",
     "ca_secret",
     "endpoint",
     "from_dict",
@@ -7296,6 +7297,7 @@
     "to_dict"
    ],
    "init": [
+    "ca_file",
     "ca_secret",
     "endpoint",
     "headers_secret",
@@ -14986,6 +14988,7 @@
    "train-step-failed",
    "train-step-timeout",
    "train-telemetry-failed",
+   "train-telemetry-unavailable",
    "train-unknown",
    "train-wait-timeout",
    "transport-error",

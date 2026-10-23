@@ -125,6 +125,10 @@ class Otlp:
     :param ca_secret: A Secret with ``ca.crt``: the CA that signs the
         endpoint's certificate.
     :param insecure: Send without TLS (an ``http://`` endpoint).
+    :param ca_file: A CA file on this machine (PEM) that signs the
+        endpoint's certificate, for exporters that run here (a merge train,
+        ``piceli.train``). The controller runs in the cluster: it refuses
+        ``ca_file`` and takes ``ca_secret``.
 
     See ``docs/opentelemetry.md`` for every span, event and metric.
     """
@@ -134,6 +138,7 @@ class Otlp:
     headers_secret: str | None = None
     ca_secret: str | None = None
     insecure: bool = False
+    ca_file: str | None = None
 
     def __post_init__(self) -> None:
         from piceli.gitops.otel import OtlpConfigError, check_otlp
@@ -146,6 +151,7 @@ class Otlp:
                 self.headers_secret,
                 self.ca_secret,
                 self.insecure,
+                ca_file=self.ca_file,
             )
         except OtlpConfigError as error:
             raise ClusterError("cluster-invalid", str(error)) from None
@@ -158,6 +164,8 @@ class Otlp:
             "headers_secret": self.headers_secret,
             "ca_secret": self.ca_secret,
             "insecure": self.insecure,
+            # absent when unset: the controller's config hashes stay the same
+            **({"ca_file": self.ca_file} if self.ca_file is not None else {}),
         }
 
     @classmethod
@@ -172,6 +180,7 @@ class Otlp:
             headers_secret=value.get("headers_secret"),
             ca_secret=value.get("ca_secret"),
             insecure=value.get("insecure", False),
+            ca_file=value.get("ca_file"),
         )
 
 

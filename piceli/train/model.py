@@ -644,9 +644,11 @@ class Train:
         (:class:`Retention`; pruned at the end of each run).
     :param telemetry: Export each run as one OpenTelemetry trace (spans
         ``piceli.dev.train``, ``.trial``, ``.step``) with logs, over OTLP/HTTP:
-        ``Otlp("http://localhost:4318", protocol="http/protobuf")``. Without
-        it, the standard ``OTEL_EXPORTER_OTLP_*`` variables apply, as for
-        ``piceli deploy``. A collector that is down never slows or fails a run.
+        ``Otlp("http://localhost:4318", protocol="http/protobuf")`` (sent as
+        protobuf: needs the ``piceli[telemetry]`` extra; a collector behind a
+        private CA: ``Otlp(..., ca_file=PATH)``). Without it, the standard
+        ``OTEL_EXPORTER_OTLP_*`` variables apply, as for ``piceli deploy``. A
+        collector that is down never slows or fails a run.
     :param notify: Notifications sent when a run ends
         (:class:`~piceli.train.notify.Notify`): a command, a webhook, the desktop.
 
@@ -773,10 +775,16 @@ class Train:
                 raise _invalid(
                     'a train exports over OTLP/HTTP: Otlp(..., protocol="http/protobuf")'
                 )
-            if self.telemetry.headers_secret or self.telemetry.ca_secret:
+            if self.telemetry.headers_secret:
                 raise _invalid(
-                    "a train runs outside the cluster: Otlp headers_secret and "
-                    "ca_secret are cluster Secrets; set OTEL_EXPORTER_OTLP_HEADERS instead"
+                    "a train runs outside the cluster: Otlp(headers_secret=) is a "
+                    "cluster Secret; set OTEL_EXPORTER_OTLP_HEADERS instead"
+                )
+            if self.telemetry.ca_secret:
+                raise _invalid(
+                    "a train runs outside the cluster: Otlp(ca_secret=) is a "
+                    "cluster Secret; give the CA file with Otlp(ca_file=PATH) or "
+                    "OTEL_EXPORTER_OTLP_CERTIFICATE instead"
                 )
         if isinstance(self.notify, Notify) or not isinstance(self.notify, Sequence):
             raise _invalid("notify must be a list of Notify objects")

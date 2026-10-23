@@ -118,6 +118,8 @@ def check_otlp(
     headers_secret: Any,
     ca_secret: Any,
     insecure: Any,
+    *,
+    ca_file: Any = None,
 ) -> None:
     """Refuse an unusable ``Otlp(...)`` (:class:`OtlpConfigError`)."""
     if not isinstance(endpoint, str):
@@ -152,6 +154,13 @@ def check_otlp(
             raise OtlpConfigError(f"Otlp({name}=) must name a Secret (a DNS label)")
     if ca_secret is not None and insecure:
         raise OtlpConfigError("Otlp(ca_secret=) needs TLS (an https:// endpoint)")
+    if ca_file is not None:
+        if not isinstance(ca_file, str) or not ca_file.strip():
+            raise OtlpConfigError("Otlp(ca_file=) must be a file path")
+        if insecure or parts.scheme != "https":
+            raise OtlpConfigError("Otlp(ca_file=) needs TLS (an https:// endpoint)")
+        if ca_secret is not None:
+            raise OtlpConfigError("Otlp() takes one of ca_secret= and ca_file=")
 
 
 def _loopback(host: str) -> bool:

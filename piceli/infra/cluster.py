@@ -118,6 +118,11 @@ def check_controller(controller: Controller) -> None:
 
     if controller.telemetry is not None and not isinstance(controller.telemetry, Otlp):
         raise _invalid("Controller(telemetry=) must be Otlp(...)")
+    if controller.telemetry is not None and controller.telemetry.ca_file is not None:
+        raise _invalid(
+            "the controller runs in the cluster: Otlp(ca_file=) is a file on this "
+            "machine; give the CA as a Secret with Otlp(ca_secret=)"
+        )
     builds = tuple(controller.builds) if not isinstance(controller.builds, str) else ()
     if (
         not builds

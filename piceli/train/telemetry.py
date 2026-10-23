@@ -1,7 +1,9 @@
 """A train run as one OpenTelemetry trace, with logs (``piceli.dev.*``).
 
 :class:`TrainTelemetry` is an event sink (:data:`~piceli.train.runner.EventSink`)
-that turns a run's events into OTLP/HTTP requests (JSON encoding, no SDK):
+that turns a run's events into OTLP/HTTP requests (no SDK): protobuf for
+``http/protobuf`` (with the ``opentelemetry-proto`` classes of the
+``piceli[telemetry]`` extra), JSON for ``http/json``:
 
 - a root span ``piceli.dev.train`` for the run, with span events for each
   verdict (``branch-joined``, ``branch-ejected``, ``branch-included``) and
@@ -30,21 +32,31 @@ for the queue to drain.
 
 Configure it with ``Train(telemetry=Otlp("http://localhost:4318",
 protocol="http/protobuf"))``, or with the standard ``OTEL_EXPORTER_OTLP_*``
-variables (as ``piceli deploy``). Headers come from
+variables (as ``piceli deploy``; ``OTEL_EXPORTER_OTLP_PROTOCOL`` unset is
+JSON there). A collector behind a private CA: ``Otlp(..., ca_file=PATH)`` or
+``OTEL_EXPORTER_OTLP_CERTIFICATE``. Headers come from
 ``OTEL_EXPORTER_OTLP_HEADERS`` only and are never printed.
+
+A spec that declares ``http/protobuf`` without the extra installed is
+refused before the run starts (``train-telemetry-unavailable``,
+:func:`check_export`): a collector that takes protobuf only would reject
+JSON, so a fallback would export nothing.
 
 Importing this module is side-effect free.
 """
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 import queue
 import secrets
 import threading
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from piceli.deploy_events import (
@@ -53,9 +65,9 @@ from piceli.deploy_events import (
     _attrs,
     _ns,
     _pairs,
-    _post,
     resolve,
 )
+from piceli.train.model import TrainError
 
 if TYPE_CHECKING:
     from piceli.infra import Otlp
@@ -88,11 +100,62 @@ _ROOT_EVENTS = frozenset(
 )
 
 
+#: The extra that provides the protobuf classes.
+EXTRA = "piceli[telemetry]"
+_IDS = frozenset({"traceId", "spanId", "parentSpanId"})
+_PROTOBUF_MODULES = (
+    "google.protobuf.json_format",
+    "opentelemetry.proto.collector.logs.v1.logs_service_pb2",
+    "opentelemetry.proto.collector.trace.v1.trace_service_pb2",
+)
+
+
+@dataclass(frozen=True)
+class TrainOtlpConfig(OtlpConfig):
+    """Where and how a train exports: :class:`OtlpConfig` plus the
+    encoding (``http/protobuf`` or ``http/json``) and a CA file."""
+
+    protocol: str = "http/json"
+    ca_file: str | None = field(default=None, repr=False)
+
+
+def protobuf_available() -> bool:
+    """Whether the OTLP protobuf classes (the ``piceli[telemetry]`` extra)
+    can be imported."""
+    from importlib import import_module
+
+    try:
+        for module in _PROTOBUF_MODULES:
+            import_module(module)
+    except ImportError:
+        return False
+    return True
+
+
+def _ca_file(value: str | None) -> str | None:
+    """The CA file as an absolute path (``~`` expanded, relative to the
+    current directory); it must be a readable file."""
+    if not value or not value.strip():
+        return None
+    path = Path(value.strip()).expanduser().resolve()
+    try:
+        with path.open("rb") as handle:
+            handle.read(1)
+    except OSError:
+        raise DeployEventsConfigError("certificate") from None
+    return str(path)
+
+
 def config_for(
     telemetry: Otlp | None, environ: Mapping[str, str] | None = None
-) -> OtlpConfig | None:
+) -> TrainOtlpConfig | None:
     """The export configuration: the train's ``Otlp``, else the standard
     environment variables; ``None`` when neither asks for export.
+
+    The train's ``Otlp`` sends protobuf (its protocol is ``http/protobuf``);
+    with the variables, ``OTEL_EXPORTER_OTLP_PROTOCOL`` decides
+    (``http/protobuf``, else JSON). The CA file is ``Otlp(ca_file=)``, else
+    ``OTEL_EXPORTER_OTLP_CERTIFICATE``.
 
     Raises :class:`~piceli.deploy_events.DeployEventsConfigError` for a
     configuration that cannot work.
@@ -100,23 +163,134 @@ def config_for(
     env = os.environ if environ is None else environ
     if env.get("OTEL_SDK_DISABLED", "").strip().lower() == "true":
         return None
+    certificate = env.get("OTEL_EXPORTER_OTLP_CERTIFICATE", "")
     if telemetry is None:
         found = resolve(None, env)
-        return (
-            None
-            if found is None
-            else replace(found, timeout=min(found.timeout, DEFAULT_TIMEOUT))
+        if found is None:
+            return None
+        protocol = env.get("OTEL_EXPORTER_OTLP_PROTOCOL", "").strip()
+        return TrainOtlpConfig(
+            found.traces_url,
+            found.logs_url,
+            found.headers,
+            found.service_name,
+            found.resource,
+            min(found.timeout, DEFAULT_TIMEOUT),
+            protocol="http/protobuf" if protocol == "http/protobuf" else "http/json",
+            ca_file=_ca_file(certificate),
         )
     base = telemetry.endpoint.rstrip("/")
     name = env.get("OTEL_SERVICE_NAME", "").strip() or "piceli"
-    return OtlpConfig(
+    return TrainOtlpConfig(
         f"{base}/v1/traces",
         f"{base}/v1/logs",
         _pairs(env.get("OTEL_EXPORTER_OTLP_HEADERS", ""), header=True),
         name,
         _pairs(env.get("OTEL_RESOURCE_ATTRIBUTES", ""), header=False),
         DEFAULT_TIMEOUT,
+        protocol=telemetry.protocol,
+        ca_file=_ca_file(telemetry.ca_file or certificate),
     )
+
+
+def check_export(
+    telemetry: Otlp | None, environ: Mapping[str, str] | None = None
+) -> None:
+    """Refuse, before a run starts, a spec's ``telemetry=`` that cannot
+    export (:class:`~piceli.train.model.TrainError`):
+    ``train-telemetry-unavailable`` for ``http/protobuf`` without the
+    extra, ``train-invalid`` for a CA file this machine cannot read. The
+    standard variables are never refused here: they only warn when the run
+    starts (:func:`telemetry_for`)."""
+    if telemetry is None:
+        return
+    env = os.environ if environ is None else environ
+    if env.get("OTEL_SDK_DISABLED", "").strip().lower() == "true":
+        return
+    if telemetry.protocol == "http/protobuf" and not protobuf_available():
+        raise TrainError(
+            "train-telemetry-unavailable",
+            'Otlp(protocol="http/protobuf") sends protobuf, which needs the '
+            f"telemetry extra: pip install '{EXTRA}'",
+        )
+    try:
+        config_for(telemetry, env)
+    except DeployEventsConfigError as error:
+        what = {
+            "certificate": "Otlp(ca_file=) (or OTEL_EXPORTER_OTLP_CERTIFICATE) is "
+            "not a readable file",
+        }.get(str(error), f"the telemetry configuration is unusable ({error})")
+        raise TrainError("train-invalid", what) from None
+
+
+def encode(signal: str, body: Mapping[str, Any], protocol: str) -> tuple[bytes, str]:
+    """``(request bytes, content type)`` of an OTLP JSON body
+    (``resourceSpans`` or ``resourceLogs``) in ``protocol``.
+
+    Protobuf is the same request parsed into the generated classes: the
+    OTLP JSON mapping is protobuf's, except that trace and span ids are hex
+    in OTLP JSON and base64 in protobuf's (so they are converted first).
+    """
+    if protocol != "http/protobuf":
+        return json.dumps(body).encode(), "application/json"
+    from google.protobuf.json_format import ParseDict
+    from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import (
+        ExportLogsServiceRequest,
+    )
+    from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
+        ExportTraceServiceRequest,
+    )
+
+    request: Any = (
+        ExportTraceServiceRequest()
+        if signal == "traces"
+        else ExportLogsServiceRequest()
+    )
+    message = ParseDict(_base64_ids(body), request)
+    return message.SerializeToString(), "application/x-protobuf"
+
+
+def _base64_ids(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            key: base64.b64encode(bytes.fromhex(item)).decode()
+            if key in _IDS and isinstance(item, str)
+            else _base64_ids(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_base64_ids(item) for item in value]
+    return value
+
+
+def send(
+    config: TrainOtlpConfig, url: str, signal: str, body: Mapping[str, Any]
+) -> None:
+    """POST one request within the timeout; raises on any failure."""
+    from urllib3 import PoolManager, Timeout
+
+    payload, content_type = encode(signal, body, config.protocol)
+    deadline = time.monotonic() + config.timeout
+    pool = (
+        PoolManager(cert_reqs="CERT_REQUIRED", ca_certs=config.ca_file)
+        if config.ca_file
+        else PoolManager()
+    )
+    try:
+        remaining = max(0.001, deadline - time.monotonic())
+        response = pool.request(
+            "POST",
+            url,
+            body=payload,
+            headers={**config.headers, "Content-Type": content_type},
+            timeout=Timeout(total=remaining, connect=remaining, read=remaining),
+            retries=False,
+            redirect=False,
+        )
+        if not 200 <= response.status < 300:
+            raise OSError("status")
+    finally:
+        pool.clear()
 
 
 def log_tail(path: Any, lines: int = TAIL_LINES, limit: int = TAIL_BYTES) -> str:
@@ -129,10 +303,10 @@ def log_tail(path: Any, lines: int = TAIL_LINES, limit: int = TAIL_BYTES) -> str
 class _Exporter:
     """Posts requests from a bounded queue in a daemon thread."""
 
-    def __init__(self, config: OtlpConfig, warn: Callable[[str], None]) -> None:
+    def __init__(self, config: TrainOtlpConfig, warn: Callable[[str], None]) -> None:
         self.config = config
         self.warn = warn
-        self.queue: queue.Queue[tuple[str, dict[str, Any]] | None] = queue.Queue(
+        self.queue: queue.Queue[tuple[str, str, dict[str, Any]] | None] = queue.Queue(
             QUEUE_SIZE
         )
         self.failures = 0
@@ -145,12 +319,12 @@ class _Exporter:
         )
         self.thread.start()
 
-    def put(self, url: str, body: dict[str, Any]) -> None:
+    def put(self, url: str, signal: str, body: dict[str, Any]) -> None:
         if self.failures >= MAX_FAILURES:
             self.dropped += 1
             return
         try:
-            self.queue.put_nowait((url, body))
+            self.queue.put_nowait((url, signal, body))
         except queue.Full:
             self.dropped += 1
 
@@ -162,14 +336,9 @@ class _Exporter:
             if self.failures >= MAX_FAILURES:
                 self.dropped += 1
                 continue
-            url, body = item
+            url, signal, body = item
             try:
-                _post(
-                    url,
-                    body,
-                    self.config.headers,
-                    time.monotonic() + self.config.timeout,
-                )
+                send(self.config, url, signal, body)
             except Exception:
                 self.failures += 1
                 self._warn_once()
@@ -207,7 +376,10 @@ class TrainTelemetry:
     """
 
     def __init__(
-        self, config: OtlpConfig, *, warn: Callable[[str], None] = lambda _m: None
+        self,
+        config: TrainOtlpConfig,
+        *,
+        warn: Callable[[str], None] = lambda _m: None,
     ) -> None:
         self.config = config
         self.exporter = _Exporter(config, warn)
@@ -323,6 +495,7 @@ class TrainTelemetry:
         scope = {"name": "piceli.dev.train", "version": "1"}
         self.exporter.put(
             self.config.traces_url,
+            "traces",
             {
                 "resourceSpans": [
                     {
@@ -355,6 +528,7 @@ class TrainTelemetry:
         scope = {"name": "piceli.dev.train", "version": "1"}
         self.exporter.put(
             self.config.logs_url,
+            "logs",
             {
                 "resourceLogs": [
                     {
@@ -518,10 +692,21 @@ def telemetry_for(
     telemetry: Otlp | None, warn: Callable[[str], None]
 ) -> TrainTelemetry | None:
     """A sink when export is configured, else ``None``; a configuration that
-    cannot work only warns (``train-telemetry-failed``)."""
+    cannot work (protobuf asked for by the standard variables without the
+    extra, a CA file that cannot be read) only warns
+    (``train-telemetry-failed``)."""
     try:
         config = config_for(telemetry)
     except DeployEventsConfigError:
+        config = None
+        unusable = True
+    else:
+        unusable = (
+            config is not None
+            and config.protocol == "http/protobuf"
+            and not protobuf_available()
+        )
+    if unusable:
         warn("warning: train telemetry configuration unusable [train-telemetry-failed]")
         return None
     return None if config is None else TrainTelemetry(config, warn=warn)

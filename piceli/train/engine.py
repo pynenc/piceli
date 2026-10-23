@@ -262,6 +262,10 @@ class TrainRun:
         """
         if self.start:
             return
+        if self.observe:
+            from piceli.train.telemetry import check_export
+
+            check_export(self.train.telemetry)
         if self.promote_run_of is not None:
             self._prepare_promote(self.promote_run_of)
             return

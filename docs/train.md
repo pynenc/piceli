@@ -845,9 +845,13 @@ from piceli.infra import Otlp
 train = Train("shop", steps=[...], telemetry=Otlp("http://localhost:4318", protocol="http/protobuf"))
 ```
 
-Each run is one trace, sent over OTLP/HTTP (JSON) to `/v1/traces` and
-`/v1/logs` of the endpoint, so the product's own Logs & Traces shows a train
-like any other request:
+Each run is one trace, sent over OTLP/HTTP to `/v1/traces` and `/v1/logs`
+of the endpoint, so the product's own Logs & Traces shows a train like any
+other request. `Otlp(protocol="http/protobuf")` sends protobuf, which needs
+the `piceli[telemetry]` extra (`opentelemetry-proto`, as the controller's
+export): a spec that declares it without the extra is refused before the
+run starts (`train-telemetry-unavailable`), rather than sending JSON a
+protobuf-only collector would reject.
 
 ```text
 piceli.dev.train                     run: train, run id, branches; at the end state, ok, joined,
@@ -868,14 +872,26 @@ Attributes are named `piceli.train.*`. A failed step, trial or run has
 status `ERROR`; a `reused` step is ok. Spans are sent as they end, so a long run is visible while
 it runs.
 
+A collector behind a private CA: give the CA file (PEM) with
+`Otlp(..., ca_file="~/certs/collector-ca.crt")` or the standard
+`OTEL_EXPORTER_OTLP_CERTIFICATE` (a relative path is relative to the
+directory you run `piceli train` in). A CA file this machine cannot read
+refuses the run before it starts (`train-invalid`).
+
 Without `telemetry=`, the standard variables apply, as for `piceli
 deploy`: `OTEL_EXPORTER_OTLP_ENDPOINT` (or the per-signal ones),
-`OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME`,
-`OTEL_RESOURCE_ATTRIBUTES`; `OTEL_SDK_DISABLED=true` turns it off. A
-train runs outside the cluster, so `Otlp(protocol="grpc")`,
-`headers_secret=` and `ca_secret=` are refused (`train-invalid`): put
-headers in `OTEL_EXPORTER_OTLP_HEADERS`. A composition's `Otlp` can be
-reused when it is an HTTP endpoint this machine reaches.
+`OTEL_EXPORTER_OTLP_PROTOCOL` (`http/protobuf` sends protobuf; `http/json`
+or unset, JSON), `OTEL_EXPORTER_OTLP_HEADERS`,
+`OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_SERVICE_NAME`,
+`OTEL_RESOURCE_ATTRIBUTES`; `OTEL_SDK_DISABLED=true` turns it off.
+Variables that ask for protobuf without the extra only warn
+(`train-telemetry-failed`) and the run goes on. A train runs outside the
+cluster, so `Otlp(protocol="grpc")` and the cluster Secrets are refused
+(`train-invalid`), each with its local alternative: `headers_secret=` by
+`OTEL_EXPORTER_OTLP_HEADERS`, `ca_secret=` by `ca_file=` or
+`OTEL_EXPORTER_OTLP_CERTIFICATE`. A composition's `Otlp` can be reused
+when it is an HTTP endpoint this machine reaches. The controller, which
+runs in the cluster, refuses `ca_file=` and takes `ca_secret=`.
 
 A collector that is down never slows or fails a train: requests go
 through a bounded queue to a background thread, each with a 2 s timeout;

@@ -6693,6 +6693,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         True,
         "train",
     ),
+    _E(
+        "train-telemetry-unavailable",
+        "Train telemetry needs the telemetry extra",
+        'The spec declares `Train(telemetry=Otlp(..., protocol="http/protobuf"))`, which is sent as protobuf, and the OTLP protobuf classes (`opentelemetry-proto`) are not installed. The train refuses before it runs rather than send JSON a protobuf-only collector would reject.',
+        "Install the extra (`pip install 'piceli[telemetry]'`, or `uv tool install 'piceli[telemetry]'`), or remove `telemetry=` from the spec.",
+        False,
+        "train",
+    ),
 )
 
 

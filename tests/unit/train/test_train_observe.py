@@ -6,8 +6,10 @@ OTLP collector and the webhook are in-process HTTP receivers.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
+import ssl
 import sys
 import threading
 import time
@@ -33,14 +35,53 @@ from tests.train_toy import Toy, make_toy
 # ---------------------------------------------------------------- helpers
 
 
+def decode(path: str, content_type: str, raw: bytes) -> dict[str, Any]:
+    """An OTLP/HTTP request body as OTLP JSON, whichever encoding it came in
+    (protobuf is decoded with the generated classes, ids back to hex)."""
+    if content_type != "application/x-protobuf":
+        return dict(json.loads(raw))
+    from google.protobuf.json_format import MessageToDict
+    from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import (
+        ExportLogsServiceRequest,
+    )
+    from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
+        ExportTraceServiceRequest,
+    )
+
+    message: Any = (
+        ExportTraceServiceRequest()
+        if path == "/v1/traces"
+        else ExportLogsServiceRequest()
+    )
+    message.ParseFromString(raw)
+    body = MessageToDict(message, use_integers_for_enums=True)
+
+    def hexed(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: base64.b64decode(item).hex()
+                if key in {"traceId", "spanId", "parentSpanId"}
+                else hexed(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [hexed(item) for item in value]
+        return value
+
+    return dict(hexed(body))
+
+
 @contextmanager
-def receiver(status: int = 200, delay: float = 0) -> Iterator[Any]:
+def receiver(status: int = 200, delay: float = 0, tls: Any = None) -> Iterator[Any]:
     requests: list[tuple[str, dict[str, str], dict[str, Any]]] = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:
             raw = self.rfile.read(int(self.headers["Content-Length"]))
-            requests.append((self.path, dict(self.headers), json.loads(raw)))
+            kind = str(self.headers.get("Content-Type"))
+            requests.append(
+                (self.path, dict(self.headers), decode(self.path, kind, raw))
+            )
             time.sleep(delay)
             self.send_response(status)
             self.send_header("Content-Length", "2")
@@ -54,10 +95,14 @@ def receiver(status: int = 200, delay: float = 0) -> Iterator[Any]:
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    scheme = "http"
+    if tls is not None:
+        server.socket = tls.wrap_socket(server.socket, server_side=True)
+        scheme = "https"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://127.0.0.1:{server.server_port}", requests
+        yield f"{scheme}://127.0.0.1:{server.server_port}", requests
     finally:
         server.shutdown()
         server.server_close()
@@ -491,7 +536,7 @@ def test_observer_declarations_are_checked() -> None:
     steps = [Step.command("unit", ["true"])]
     with pytest.raises(TrainError, match="OTLP/HTTP"):
         Train("t", steps=steps, telemetry=Otlp("http://localhost:4317"))
-    with pytest.raises(TrainError, match="cluster Secrets"):
+    with pytest.raises(TrainError, match="cluster Secret"):
         Train(
             "t",
             steps=steps,
@@ -684,3 +729,249 @@ def test_standard_environment_configures_export(
     otlp = Otlp("http://127.0.0.1:4318/", protocol="http/protobuf")
     assert config_for(otlp, {"OTEL_SDK_DISABLED": "true"}) is None
     assert config_for(otlp, {}).logs_url == "http://127.0.0.1:4318/v1/logs"  # type: ignore[union-attr]
+
+
+def _sink_run(config: Any, warn: Any = lambda _m: None) -> TrainTelemetry:
+    """A sink that saw one short run (a step and the end), closed."""
+    sink = TrainTelemetry(config, warn=warn)
+    sink(
+        {
+            "event": "run-started",
+            "at": "2026-10-23T10:00:00Z",
+            "run": "r",
+            "train": "t",
+            "branches": ["a"],
+        }
+    )
+    sink(
+        {
+            "event": "step-finished",
+            "at": "2026-10-23T10:00:02Z",
+            "trial": None,
+            "step": "unit",
+            "kind": "command",
+            "verdict": "passed",
+            "duration": 1.0,
+            "host": "local",
+        }
+    )
+    sink({"event": "run-finished", "at": "2026-10-23T10:00:03Z", "state": "joined", "ok": True,
+          "duration": 3.0, "summary": {"train": "t", "ok": True, "joined": ["a"]}})  # fmt: skip
+    sink.close()
+    return sink
+
+
+def test_http_protobuf_sends_protobuf_and_http_json_sends_json() -> None:
+    with receiver() as (url, requests):
+        config = config_for(Otlp(url, protocol="http/protobuf"), {})
+        _sink_run(config)
+    assert {h["Content-Type"] for _p, h, _b in requests} == {"application/x-protobuf"}
+    names = {s["name"] for s in spans(requests)}
+    assert names == {"piceli.dev.train", "piceli.dev.train.step"}
+    (root,) = [s for s in spans(requests) if s["name"] == "piceli.dev.train"]
+    assert len(root["traceId"]) == 32 and len(root["spanId"]) == 16
+    assert attrs(root["attributes"])["piceli.train.run"] == "r"
+    assert {r["spanId"] for r in logs(requests)} >= {root["spanId"]}
+    # The standard variables: protobuf when asked, JSON when asked or unset.
+    for protocol, expected in (
+        ("http/protobuf", "application/x-protobuf"),
+        ("http/json", "application/json"),
+        ("", "application/json"),
+    ):
+        with receiver() as (url, requests):
+            env = {"OTEL_EXPORTER_OTLP_ENDPOINT": url}
+            if protocol:
+                env["OTEL_EXPORTER_OTLP_PROTOCOL"] = protocol
+            _sink_run(config_for(None, env))
+        assert {h["Content-Type"] for _p, h, _b in requests} == {expected}
+        assert len(spans(requests)) == 2
+
+
+def test_a_protobuf_train_without_the_extra_is_refused_at_load(
+    toy: Toy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = (toy.repo / "train_spec.py").read_text()
+    observe_spec(toy, 'telemetry=Otlp("http://127.0.0.1:9", protocol="http/protobuf"),')
+    good(toy, "feat-a")
+    monkeypatch.setitem(
+        sys.modules, "opentelemetry.proto.collector.trace.v1.trace_service_pb2", None
+    )
+    status, body, err = run(toy, "--branches", "feat-a")
+    assert status == 2 and body["reason"] == "train-telemetry-unavailable"
+    assert "piceli[telemetry]" in err
+    # The standard variables asking for protobuf only warn: the run goes on.
+    toy.commit({"train_spec.py": original}, "no telemetry in the spec")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:9")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
+    status, body, err = run(toy, "--branches", "feat-a")
+    assert status == 0 and err.count("[train-telemetry-failed]") == 1
+
+
+def _test_ca(directory: Path) -> tuple[Path, ssl.SSLContext]:
+    """A CA file and a TLS server context with a certificate it signed for
+    127.0.0.1."""
+    import ipaddress
+    from datetime import UTC, datetime, timedelta
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    now = datetime.now(UTC)
+    ca_key = ec.generate_private_key(ec.SECP256R1())
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "test-ca")])
+    ca = (
+        x509.CertificateBuilder()
+        .subject_name(ca_name)
+        .issuer_name(ca_name)
+        .public_key(ca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(hours=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()),
+            critical=False,
+        )
+        .sign(ca_key, hashes.SHA256())
+    )
+    key = ec.generate_private_key(ec.SECP256R1())
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "collector")]))
+        .issuer_name(ca_name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(hours=1))
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
+            ),
+            critical=False,
+        )
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()),
+            critical=False,
+        )
+        .add_extension(
+            x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]),
+            critical=False,
+        )
+        .sign(ca_key, hashes.SHA256())
+    )
+    ca_file = directory / "ca.crt"
+    ca_file.write_bytes(ca.public_bytes(serialization.Encoding.PEM))
+    chain = directory / "server.pem"
+    chain.write_bytes(
+        cert.public_bytes(serialization.Encoding.PEM)
+        + key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(chain)
+    return ca_file, context
+
+
+def test_a_collector_behind_a_private_ca(tmp_path: Path) -> None:
+    ca_file, context = _test_ca(tmp_path)
+    with receiver(tls=context) as (url, requests):
+        _sink_run(
+            config_for(Otlp(url, protocol="http/protobuf", ca_file=str(ca_file)), {})
+        )
+        assert len(spans(requests)) == 2
+        requests.clear()
+        # The standard variable names the CA too.
+        _sink_run(
+            config_for(
+                Otlp(url, protocol="http/protobuf"),
+                {"OTEL_EXPORTER_OTLP_CERTIFICATE": str(ca_file)},
+            )
+        )
+        assert len(spans(requests)) == 2
+        requests.clear()
+        # Without it the system's CAs do not trust the collector: one warning.
+        warnings: list[str] = []
+        _sink_run(config_for(Otlp(url, protocol="http/protobuf"), {}), warnings.append)
+        assert not requests and len(warnings) == 1
+        assert "train-telemetry-failed" in warnings[0]
+
+
+def test_cluster_only_otlp_fields_are_refused_with_the_local_alternative(
+    tmp_path: Path,
+) -> None:
+    steps = [Step.command("unit", ["true"])]
+    with pytest.raises(TrainError, match=r"Otlp\(ca_file=PATH\)") as caught:
+        Train(
+            "t",
+            steps=steps,
+            telemetry=Otlp(
+                "https://collector.example:4318",
+                protocol="http/protobuf",
+                ca_secret="otel-ca",
+            ),
+        )
+    assert caught.value.code == "train-invalid"
+    assert "OTEL_EXPORTER_OTLP_CERTIFICATE" in str(caught.value)
+    with pytest.raises(TrainError, match="OTEL_EXPORTER_OTLP_HEADERS"):
+        Train(
+            "t",
+            steps=steps,
+            telemetry=Otlp(
+                "https://collector.example:4318",
+                protocol="http/protobuf",
+                headers_secret="otel",
+            ),
+        )
+    otlp = Otlp(
+        "https://collector.example:4318", protocol="http/protobuf", ca_file="ca.crt"
+    )
+    train = Train("t", steps=steps, telemetry=otlp)
+    assert Train.from_dict(json.loads(json.dumps(train.to_dict()))) == train
+    # ca_file without TLS, and both CAs at once, are refused.
+    from piceli.infra.cluster import ClusterError
+
+    with pytest.raises(ClusterError, match="TLS"):
+        Otlp(
+            "http://127.0.0.1:4318",
+            protocol="http/protobuf",
+            insecure=True,
+            ca_file="c",
+        )
+    with pytest.raises(ClusterError, match="one of"):
+        Otlp("https://c.example:4318", ca_secret="ca", ca_file="c")
+    # The controller runs in the cluster: a local file is no use to it.
+    from piceli.infra import Controller
+
+    with pytest.raises(ClusterError, match="ca_secret"):
+        Controller(on="n1", telemetry=Otlp("https://c.example:4317", ca_file="c"))
+    # A CA file the machine cannot read refuses the run before it starts.
+    from piceli.train.telemetry import check_export
+
+    missing = Otlp(
+        "https://c.example:4318",
+        protocol="http/protobuf",
+        ca_file=str(tmp_path / "none.crt"),
+    )
+    with pytest.raises(TrainError) as refused:
+        check_export(missing, {})
+    assert refused.value.code == "train-invalid"
+    assert "none.crt" not in str(refused.value)

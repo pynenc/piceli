@@ -158,6 +158,13 @@ and `cancel` start and stop one, and the UI's Builds page shows them all.
   tail and the event `piceli.dev.train.finished`. Spans go out as they end,
   through a bounded queue with a 2 s timeout: a collector that is down
   never slows or fails a run (one `train-telemetry-failed` warning).
+  `http/protobuf` is sent as protobuf (the `piceli[telemetry]` extra; a
+  spec that declares it without the extra is refused before the run with
+  `train-telemetry-unavailable`), `OTEL_EXPORTER_OTLP_PROTOCOL=http/json`
+  (or unset) as JSON. A collector behind a private CA takes
+  `Otlp(..., ca_file=PATH)` or `OTEL_EXPORTER_OTLP_CERTIFICATE`; the
+  cluster-only `headers_secret=` and `ca_secret=` are refused with the
+  local alternative named (the controller, in turn, refuses `ca_file=`).
 - **Notifications when a train ends.** `Train(notify=[Notify.command(argv),
   Notify.webhook(url or url_env=, headers_env=), Notify.desktop()])`, each
   `when="always"` or `"failure"`: the command gets the summary JSON on
@@ -295,7 +302,8 @@ and `cancel` start and stop one, and the UI's Builds page shows them all.
   `train-wait-timeout`, `train-interrupted`, `train-run-failed`,
   `train-run-cancelled`, `train-queue-not-found`,
   `train-queue-not-waiting`, `train-queue-cancelled`,
-  `train-notify-failed` and `train-telemetry-failed`; in `gitops`:
+  `train-notify-failed`, `train-telemetry-failed` and
+  `train-telemetry-unavailable`; in `gitops`:
   `gitops-build-ref-unknown`, `gitops-build-not-running` and
   `gitops-build-cancelled`; in `infra`: `infra-nix-input-unreachable`.
 
