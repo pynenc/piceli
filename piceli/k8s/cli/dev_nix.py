@@ -262,11 +262,13 @@ def build(
         ),
     ] = None,
     composition: Annotated[
-        Path,
+        Path | None,
         typer.Option(
-            "--composition", help="The composition module declaring --release"
+            "--composition",
+            help="The composition module declaring the gated NixRelease (default: "
+            "the --publish module; --release's default: infra.py)",
         ),
-    ] = Path("infra.py"),
+    ] = None,
     gitops_kubeconfig: Annotated[
         Path | None,
         typer.Option(
@@ -371,13 +373,24 @@ def build(
         except DevError as error:
             reject(error.code, str(error))
         gated = ""
-        if release is not None:
+        covering = (
+            _named_release(release, composition or Path("infra.py"), target)
+            if release is not None
+            else _covering(str(publish), composition, cache, target)
+        )
+        if covering is not None:  # a gated host: the gate always runs
             plan["pinned"] = _gate(
-                release, composition, target, root_dir, str(rev),
+                covering, root_dir, str(rev),
                 kubeconfig=gitops_kubeconfig, context=gitops_context,
                 state_dir=gitops_state_dir, namespace=gitops_namespace,
             )  # fmt: skip
-            gated = f" --release {release} --composition {composition}" + (
+            gated = (
+                f" --release {release} --composition {composition or 'infra.py'}"
+                if release is not None
+                else f" --composition {composition}"
+                if composition is not None
+                else ""
+            ) + (
                 f" --state-dir {gitops_state_dir}"
                 if gitops_state_dir is not None
                 else f" --kubeconfig {gitops_kubeconfig} --context {gitops_context}"
@@ -501,21 +514,9 @@ def build(
         emit_json(body)
 
 
-def _gate(
-    release: str,
-    composition: Path,
-    target: str,
-    root: Path,
-    rev: str,
-    **reach: Any,
-) -> dict[str, Any]:
-    """The promotion gate of a hand-run publish: ``flake.lock`` at ``rev``
-    pins the input to a commit the environment verified (else a refusal;
-    an unreadable history refuses too)."""
-    import subprocess
-
-    from piceli.infra.promotion import LOCK_FILE, PromotionError, locked_rev, verify
-    from piceli.k8s.cli.promote import gated_release, read_history
+def _named_release(release: str, composition: Path, target: str) -> Any:
+    """``(host, gate, composition)`` of ``--release HOST``."""
+    from piceli.k8s.cli.promote import gated_release
 
     found, owner = gated_release(composition, release)
     if found.attribute != target:
@@ -523,20 +524,68 @@ def _gate(
             "dev-nix-invalid",
             f"--release {release} builds {found.attribute}, not {target}",
         )
+    return found.name, found.gate, owner
+
+
+def _covering(publish: str, composition: Path | None, cache: Any, target: str) -> Any:
+    """``(host, gate, composition or None)`` of the gated NixRelease (or
+    NixHost with ``gate=``) that covers this publish: the same cache and
+    attribute, declared in ``--composition`` or the ``--publish`` module.
+    ``None``: no gated host is published."""
+    from piceli.cli_contract import describe_user_error
+    from piceli.hosts.model import NixHost
+    from piceli.infra.composition import _import, composition_from
+    from piceli.infra.nix_releases import NixRelease
+
+    path = composition or Path(publish.rsplit(":", 1)[0])
+    if composition is None and (path.suffix != ".py" or not path.is_file()):
+        return None
+    try:
+        module = _import(path.resolve())
+    except Exception as error:  # never publish past a gate it cannot read
+        reject(
+            "composition-invalid",
+            f"importing {path} failed: {describe_user_error(error)}",
+        )
+    found = []
+    for value in vars(module).values():
+        host = value.host if isinstance(value, NixRelease) else value
+        gate = getattr(value, "gate", None)
+        if (
+            isinstance(value, NixRelease | NixHost)
+            and gate is not None
+            and host.attribute == target
+            and host.cache.store_url == cache.store_url
+            and host.cache.public_key == cache.public_key
+        ):
+            found.append((host.name, gate))
+    if not found:
+        return None
+    try:
+        owner = composition_from(module, default_name=path.stem)
+    except Exception:  # not a composition: --state-dir or --kubeconfig reach it
+        owner = None
+    return (*found[0], owner)
+
+
+def _gate(covering: Any, root: Path, rev: str, **reach: Any) -> dict[str, Any]:
+    """The promotion gate of a hand-run publish: ``flake.lock`` at ``rev``
+    pins the input to a commit the environment verified (else a refusal;
+    an unreadable history refuses too)."""
+    import subprocess
+
+    from piceli.infra.promotion import LOCK_FILE, PromotionError, locked_rev, verify
+    from piceli.k8s.cli.promote import read_history
+
+    name, gate, owner = covering
     history = read_history(owner, **reach)
     shown = subprocess.run(
         ["git", "show", f"{rev}:{LOCK_FILE}"],
         cwd=root, capture_output=True, check=False,
     )  # fmt: skip
     try:
-        return verify(
-            found.gate,
-            locked_rev(
-                shown.stdout if shown.returncode == 0 else None, found.gate.input
-            ),
-            history,
-            host=release,
-        )
+        lock = shown.stdout if shown.returncode == 0 else None
+        return verify(gate, locked_rev(lock, gate.input), history, host=name)
     except PromotionError as error:
         reject(error.code, str(error), **error.detail)
 

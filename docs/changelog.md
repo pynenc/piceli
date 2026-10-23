@@ -167,8 +167,16 @@ and rollback.
   --override-input`, or a direct edit with the computed narHash without
   nix), the commit and the next tag of the host's pattern, and with
   `--approve DIGEST` commits, tags and pushes atomically; it refuses a
-  dirty working copy or one out of sync with its upstream. New codes
-  `promotion-*` and `promote-*`; see `docs/gitops.md`.
+  dirty working copy or one out of sync with its upstream. A hand-run
+  publish of a gated host's attribute to its cache runs the gate without
+  `--release` (found in the `--publish` module or `--composition`). The
+  controller keeps a record of the commits each gated environment passed
+  (the last 200 per source; `passed_commits` in the history), so a verified
+  commit keeps qualifying after it left the 20 listed runs.
+  `NixHost(gate=Promotion(...))` makes the host agent refuse a build
+  without that verified pin (`host-promotion-missing`); its `NixRelease`
+  takes the host's gate. New codes `promotion-*`, `promote-*`; see
+  `docs/gitops.md`.
 - **Tag prefixes per host.** `Tag("web-v*")` orders tags by the version
   after the pattern's literal prefix (`Tag.prefix`, `Tag.version(tag)`):
   `web-v1.10.0` is above `web-v1.9.0`, and two hosts released from one

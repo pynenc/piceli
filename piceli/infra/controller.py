@@ -3964,7 +3964,20 @@ class CompositionController:
             document = self._history_document()
         except (GitOpsError, OSError, ValueError):
             document = None
-        return promotion.verify(gate, rev, document, host=target.name)
+        record = self._passed_commits(document)
+        return promotion.verify(gate, rev, document, host=target.name, record=record)
+
+    def _passed_commits(self, document: Any) -> dict[str, Any]:
+        """The record of passed commits of the gated environments (0.24.0,
+        :func:`piceli.infra.promotion.remember`), updated from ``document``;
+        kept in the state, published in the history for a hand-run gate."""
+        from piceli.infra import promotion
+
+        record: dict[str, Any] = self.state.setdefault("passed_commits", {})
+        releases = self._composition.nix_releases if self._composition else ()
+        gates = [item.gate for item in releases if item.gate is not None]
+        promotion.remember(record, document, gates)
+        return record
 
     def _history_document(self) -> dict[str, Any]:
         """``piceli.gitops-history.v1``: an environment on several clusters
@@ -4008,6 +4021,9 @@ class CompositionController:
                 self._runs = history.RunReader()
             history.forget_gone(self.state, self._envs())
             document = self._history_document()
+            passed = self._passed_commits(document)
+            if passed:  # 0.24.0: only with a promotion gate
+                document = {**document, "passed_commits": passed}
             digest = hashlib.sha256(
                 json.dumps(document, sort_keys=True).encode()
             ).hexdigest()

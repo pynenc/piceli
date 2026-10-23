@@ -347,6 +347,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`host-pin-not-found`](#error-host-pin-not-found) | hosts | no |
 | [`host-pinned`](#error-host-pinned) | hosts | no |
 | [`host-pointer-replayed`](#error-host-pointer-replayed) | hosts | no |
+| [`host-promotion-missing`](#error-host-promotion-missing) | hosts | no |
 | [`host-prune-failed`](#error-host-prune-failed) | hosts | yes |
 | [`host-realise-failed`](#error-host-realise-failed) | hosts | yes |
 | [`host-report-failed`](#error-host-report-failed) | hosts | yes |
@@ -6732,6 +6733,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Old ref pointer refused.** The ref pointer's `published_at` is older than one the agent already saw for that ref: an old, validly signed pointer was put back.
 
 - **Fix:** Publish the build again (a new pointer is newer); check who can write to the cache.
+- **Retry-safe:** no
+
+(error-host-promotion-missing)=
+### `host-promotion-missing`
+
+**Build without its verified pin.** The host declares `gate=Promotion(...)` and the build's signed manifest carries no `pinned` of that input and environment: it was published without the promotion gate (an older Piceli, or a publish that skipped it). The agent does not switch to it.
+
+- **Fix:** Publish the build through the gate: the controller's `NixRelease`, or `piceli dev nix build --publish` of the gated host (the gate runs automatically), after `piceli promote HOST --from ENV` pinned a verified commit.
 - **Retry-safe:** no
 
 (error-host-prune-failed)=

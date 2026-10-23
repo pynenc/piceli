@@ -99,6 +99,15 @@ versions `dev nix gc --tag-pattern 'web-v*' --tag-pattern 'api-v*'` keeps
 `Tag(...).version(tag)` gives a tag's sort key, `None` when it does not
 count.
 
+### Only verified products: `gate=`
+
+`NixHost(..., gate=Promotion(input="app", environment="main"))` (0.24.0)
+makes the agent switch only to a build whose signed manifest carries the
+promotion gate's verified `pinned` for that flake input and GitOps
+environment; any other build is refused (`host-promotion-missing`). The
+gate and `piceli promote` are described in {doc}`gitops` (Nix host
+releases).
+
 ## Install the agent
 
 ```sh

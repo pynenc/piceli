@@ -147,6 +147,13 @@ class NixRelease:
 
         if self.gate is not None and not isinstance(self.gate, Promotion):
             raise _invalid("NixRelease(gate=) is a piceli.infra.Promotion")
+        declared = getattr(self.host, "gate", None)
+        if self.gate is None and declared is not None:
+            object.__setattr__(self, "gate", declared)
+        elif declared is not None and declared != self.gate:
+            raise _invalid(
+                f"NixRelease {self.host.name}: gate= differs from the host's gate"
+            )
 
     @property
     def name(self) -> str:

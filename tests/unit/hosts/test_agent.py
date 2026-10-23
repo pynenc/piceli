@@ -72,6 +72,7 @@ def publish(
     system: str = SYSTEM,
     attribute: str = ATTRIBUTE,
     name: str = "web-1",
+    pinned: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """What ``piceli dev nix build --publish`` leaves in a file cache."""
     path = store_path(commit)
@@ -81,7 +82,7 @@ def publish(
         published={"store_path": path, "system": system,
                    "nar_hash": nar_hash_of(path), "nar_size": 1234,
                    "closure_size": 5678},
-        host="nix-1", key="cache-1", now=when,
+        host="nix-1", key="cache-1", now=when, pinned=pinned,
     )  # fmt: skip
     signed = nix.sign_manifest(body, secret)
     nix.upload_manifest(cache, signed, s3_keys=None)
@@ -807,3 +808,29 @@ def test_a_rollback_needs_a_previous_system_in_the_store(
     agent.runner = gone
     assert agent.control("rollback")["reason"] == "host-rollback-unavailable"
     assert os.readlink(fake.current) == store_path(commit_of(1))
+
+
+def test_a_gated_host_switches_only_to_a_build_with_its_verified_pin(
+    tmp_path: Path, cache_dir: Path, fake: FakeHost
+) -> None:
+    from piceli.infra.promotion import Promotion
+
+    declared = host(cache_dir, gate=Promotion(input="app", environment="main"))
+    assert agent_config(declared)["gate"] == {
+        "input": "app", "environment": "main", "source": "app",
+    }  # fmt: skip
+    assert "gate" not in agent_config(host(cache_dir))  # ungated: unchanged
+    publish(cache_dir, commit_of(1), tag="v1.0.0")  # published without the gate
+    poll = make_agent(tmp_path, declared, fake).run_once()
+    assert poll["reason"] == "host-promotion-missing" and fake.calls == []
+    other = {"input": "app", "commit": "e" * 40, "environment": "rc",
+             "verified_run": "r1", "verified_at": "2026-10-23T10:00:00Z"}  # fmt: skip
+    publish(cache_dir, commit_of(2), tag="v1.1.0", pinned=other,
+            when=T0 + dt.timedelta(minutes=1))  # fmt: skip
+    poll = make_agent(tmp_path, declared, fake).run_once()
+    assert poll["reason"] == "host-promotion-missing" and fake.calls == []
+    publish(cache_dir, commit_of(3), tag="v1.2.0",
+            pinned={**other, "environment": "main"},
+            when=T0 + dt.timedelta(minutes=2))  # fmt: skip
+    poll = make_agent(tmp_path, declared, fake).run_once()
+    assert poll["state"] == "deployed", poll

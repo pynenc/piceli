@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -215,9 +215,93 @@ def passed_runs(history: Any, gate: Promotion) -> list[dict[str, Any]]:
     return found
 
 
-def newest(history: Any, gate: Promotion) -> dict[str, Any] | None:
-    """The newest qualifying run (what ``piceli promote`` pins), or ``None``."""
-    runs = passed_runs(history, gate)
+# ---------------------------------------------------------------- the record
+
+#: Commits kept per environment and source in the record of passed commits.
+MAX_COMMITS = 200
+
+
+def remember(
+    store: dict[str, Any],
+    history: Any,
+    gates: Sequence[Promotion],
+    *,
+    limit: int = MAX_COMMITS,
+) -> None:
+    """Merge the qualifying runs of ``history`` into ``store``, the record
+    of passed commits (``{environment: {source: {commit: {first_run,
+    first_at, last_run, last_at}}}}``), for the environments and sources
+    ``gates`` name; others are dropped. Each source keeps its ``limit``
+    commits passed last, so a verified commit still qualifies after it
+    rolled out of the history's runs."""
+    wanted = {(gate.environment, gate.source_key) for gate in gates}
+    for env in list(store):
+        sources = store[env] if isinstance(store[env], dict) else {}
+        for source in [key for key in sources if (env, key) not in wanted]:
+            del sources[source]
+        if not sources:
+            del store[env]
+    for gate in gates:
+        try:
+            runs = passed_runs(history, gate)
+        except PromotionError:
+            runs = []
+        commits = store.setdefault(gate.environment, {}).setdefault(gate.source_key, {})
+        for run in reversed(runs):  # oldest first
+            at, run_id = str(run["verified_at"] or ""), run["run_id"]
+            entry = commits.setdefault(
+                run["commit"],
+                {"first_run": run_id, "first_at": at, "last_run": run_id,
+                 "last_at": at},
+            )  # fmt: skip
+            if at < str(entry.get("first_at") or ""):
+                entry.update(first_run=run_id, first_at=at)
+            if at >= str(entry.get("last_at") or ""):
+                entry.update(last_run=run_id, last_at=at)
+        kept = sorted(
+            commits, key=lambda key: str(commits[key].get("last_at")), reverse=True
+        )[: max(0, limit)]
+        for commit in [key for key in commits if key not in kept]:
+            del commits[commit]
+        if not commits:
+            del store[gate.environment][gate.source_key]
+            if not store[gate.environment]:
+                del store[gate.environment]
+
+
+def recorded_runs(record: Any, gate: Promotion) -> list[dict[str, Any]]:
+    """The record's commits of the gate, as runs (their last passed run)."""
+    commits = ((record or {}).get(gate.environment) or {}).get(gate.source_key) or {}
+    return [
+        {"commit": commit, "run_id": str(entry.get("last_run") or ""),
+         "verified_at": entry.get("last_at")}
+        for commit, entry in commits.items()
+        if isinstance(entry, Mapping) and _REV.fullmatch(str(commit))
+    ]  # fmt: skip
+
+
+def _runs(history: Any, gate: Promotion, record: Any) -> tuple[list[Any], bool]:
+    """The qualifying runs of the history and the record, newest first, and
+    whether the history was readable. :raises PromotionError: neither is."""
+    if record is None and isinstance(history, Mapping):
+        record = history.get("passed_commits")
+    recorded = recorded_runs(record, gate)
+    try:
+        runs, readable = passed_runs(history, gate), True
+    except PromotionError:
+        if not recorded:
+            raise
+        runs, readable = [], False
+    found = runs + recorded
+    found.sort(key=lambda item: str(item["verified_at"] or ""), reverse=True)
+    return found, readable
+
+
+def newest(history: Any, gate: Promotion, record: Any = None) -> dict[str, Any] | None:
+    """The newest qualifying run (what ``piceli promote`` pins), or ``None``.
+    ``record``: the record of passed commits (default: the history's
+    ``passed_commits``)."""
+    runs, _ = _runs(history, gate, record)
     return runs[0] if runs else None
 
 
@@ -233,16 +317,29 @@ def pinned(gate: Promotion, run: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def verify(
-    gate: Promotion, rev: str, history: Any, *, host: str | None = None
+    gate: Promotion,
+    rev: str,
+    history: Any,
+    *,
+    host: str | None = None,
+    record: Any = None,
 ) -> dict[str, Any]:
-    """``pinned`` of ``rev`` (the newest qualifying run of it).
+    """``pinned`` of ``rev`` (the newest qualifying run of it, in the
+    history's runs or the record of passed commits, :func:`remember`).
 
     :raises PromotionError: ``promotion-not-verified`` with the newest
-        qualifying commit as a hint; ``promotion-history-unreachable``."""
-    runs = passed_runs(history, gate)
+        qualifying commit as a hint; ``promotion-history-unreachable``
+        (an unreadable history and no record of ``rev``)."""
+    runs, readable = _runs(history, gate, record)
     for run in runs:
         if run["commit"] == rev:
             return pinned(gate, run)
+    if not readable:
+        raise PromotionError(
+            "promotion-history-unreachable",
+            "the controller's history could not be read",
+            {"environment": gate.environment},
+        )
     best = runs[0] if runs else None
     hint = (
         f"; the newest it passed is {best['commit'][:12]} (run {best['run_id']})"

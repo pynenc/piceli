@@ -640,6 +640,19 @@ class Agent:
         attribute = self.config.get("attribute")
         if attribute and manifest.get("attribute") != attribute:
             raise Failure("host-manifest-mismatch", "a build of another attribute")
+        gate = self.config.get("gate")
+        if gate:  # 0.24.0: the publish passed the promotion gate
+            pinned = manifest.get("pinned")
+            if not (
+                isinstance(pinned, dict)
+                and pinned.get("input") == gate.get("input")
+                and pinned.get("environment") == gate.get("environment")
+                and re.fullmatch(r"[0-9a-f]{40}", str(pinned.get("commit")))
+                and pinned.get("verified_run")
+            ):
+                raise Failure(
+                    "host-promotion-missing", "a build without its verified pin"
+                )
         system = self.config.get("system")
         if system and manifest.get("system") != system:
             raise Failure("host-system-mismatch", "a build for another system")

@@ -332,6 +332,10 @@ class NixHost:
         puts on the host for sops-nix; ``None``: the host gets its key
         another way.
     :param age_key_file: Where it goes: sops-nix's ``sops.age.keyFile``.
+    :param gate: A :class:`~piceli.infra.Promotion` (0.24.0): the agent
+        switches only to a build whose signed manifest carries the gate's
+        verified ``pinned`` (input and environment); a ``NixRelease`` of
+        this host takes it as its gate.
     """
 
     name: str
@@ -348,6 +352,7 @@ class NixHost:
     generations: int = GENERATIONS
     age_identity: str | None = None
     age_key_file: str = AGE_KEY_FILE
+    gate: Any = None
     attribute: str = field(init=False, default="")
 
     def __post_init__(self) -> None:
@@ -422,6 +427,11 @@ class NixHost:
             self.age_key_file
         ):
             raise _invalid("NixHost(age_key_file=) is an absolute path")
+        if self.gate is not None:
+            from piceli.infra.promotion import Promotion
+
+            if not isinstance(self.gate, Promotion):
+                raise _invalid("NixHost(gate=) is a piceli.infra.Promotion")
 
     def ssh_target(self, address: str | None = None) -> SshTarget:
         """Where its status is read: the SSH target, or the server's ``Ssh``
@@ -474,4 +484,6 @@ def agent_config(host: NixHost) -> dict[str, Any]:
         "history": host.history,
         "generations": host.generations,
         "state_dir": STATE_DIR,
+        # 0.24.0, only when declared: the build must carry a verified pin.
+        **({"gate": host.gate.to_dict()} if host.gate is not None else {}),
     }

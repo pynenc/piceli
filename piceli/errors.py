@@ -6044,6 +6044,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "hosts",
     ),
     _E(
+        "host-promotion-missing",
+        "Build without its verified pin",
+        "The host declares `gate=Promotion(...)` and the build's signed manifest carries no `pinned` of that input and environment: it was published without the promotion gate (an older Piceli, or a publish that skipped it). The agent does not switch to it.",
+        "Publish the build through the gate: the controller's `NixRelease`, or `piceli dev nix build --publish` of the gated host (the gate runs automatically), after `piceli promote HOST --from ENV` pinned a verified commit.",
+        False,
+        "hosts",
+    ),
+    _E(
         "host-system-mismatch",
         "Build is for another system",
         "The manifest's system (`x86_64-linux`, `aarch64-linux`) is not the host's.",

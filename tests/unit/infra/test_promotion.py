@@ -312,3 +312,95 @@ def test_a_hand_run_publish_runs_the_gate(
     other = _invoke(*[a if a != ATTR else "nixosConfigurations.api.config.system"
                       ".build.toplevel" for a in args])  # fmt: skip
     assert json.loads(other.stdout)["reason"] == "dev-nix-invalid"
+
+
+# ------------------------------------------------------------------ passed commits
+
+
+def test_the_record_keeps_verified_commits_past_the_history() -> None:
+    from piceli.infra.promotion import remember
+
+    store: dict[str, Any] = {}
+    remember(store, history(run(A, "r1", "2026-10-20T10:00:00Z")), [GATE])
+    remember(store, history(run(A, "r2", "2026-10-21T10:00:00Z")), [GATE])
+    assert store == {"main": {"app": {A: {
+        "first_run": "r1", "first_at": "2026-10-20T10:00:00Z",
+        "last_run": "r2", "last_at": "2026-10-21T10:00:00Z",
+    }}}}  # fmt: skip
+    rolled = history(*(run(B, f"x{i}", f"2026-10-22T10:{i:02d}:00Z", passed=False)
+                       for i in range(25)))  # fmt: skip
+    remember(store, rolled, [GATE])
+    assert verify(GATE, A, rolled, record=store)["verified_run"] == "r2"
+    assert verify(GATE, A, None, record=store)["commit"] == A  # own state suffices
+    with pytest.raises(PromotionError) as refused:
+        verify(GATE, B, rolled, record=store)
+    assert refused.value.detail["newest_passed"]["commit"] == A
+    commits = [f"{i:040x}" for i in range(5)]
+    small: dict[str, Any] = {}
+    remember(small, history(*(run(c, f"r{i}", f"2026-10-2{i}T10:00:00Z")
+                              for i, c in enumerate(commits))), [GATE], limit=3)  # fmt: skip
+    assert set(small["main"]["app"]) == set(commits[2:])  # the newest 3
+    remember(small, history(), [])  # no gate names main any more
+    assert small == {}
+
+
+def test_a_verified_commit_outlives_the_controller_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    found = support.world(tmp_path, monkeypatch)
+    controller = _controller(found, monkeypatch)
+    b = found["b"]
+    found["history"]["value"] = history(run(b, "r3", "2026-10-21T12:00:00Z"))
+    controller.poll_once()
+    published = json.loads((found["controller_state"] / "history.json").read_text())
+    assert published["passed_commits"]["main"]["app"][b]["last_run"] == "r3"
+    found["history"]["value"] = history(  # r3 rolled out of the 20 runs
+        run(found["c"], "r9", "2026-10-22T12:00:00Z", passed=False)
+    )
+    found["hosts"].commit({"flake.lock": support.lock(found["app"].url, b)})
+    found["hosts"].tag("web-v1.1.0")
+    record = controller.poll_once()["nix_releases"]["web-1"]
+    assert record["state"] == "waiting-build", record.get("refusal")
+    assert record["pinned"]["verified_run"] == "r3"
+
+
+def test_a_hand_run_publish_of_a_gated_host_is_gated_without_release(
+    cli_env: dict[str, Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.unit.dev.test_nix import PUBLIC as CLI_PUBLIC
+
+    found = support.world(tmp_path / "w", monkeypatch)
+    monkeypatch.setenv("PROMO_PUBLIC", CLI_PUBLIC)  # the cache dev nix build uses
+    monkeypatch.setenv("PROMO_CACHE", str(cli_env["cache"]))
+    flake = cli_env["app"]
+    (flake / "flake.lock").write_text(support.lock(found["app"].url, found["b"]))
+    git(flake, "add", "flake.lock")
+    git(flake, "commit", "-q", "-m", "pin b")
+    args = ("dev", "nix", "build", ATTR, "--cluster", "infra.py:c", "--ref", "HEAD",
+            "--name", "web-1", "--publish", f"{found['infra']}:cache", "--json")  # fmt: skip
+
+    unreachable = _invoke(*args)  # the composition declares no cluster
+    assert json.loads(unreachable.stdout)["reason"] == "promotion-history-unreachable"
+    state = ("--state-dir", str(found["state"]))
+    support.publish_history(
+        found["state"], history(run(found["a"], "r1", "2026-10-20T10:00:00Z"))
+    )
+    refused = _invoke(*args, *state)
+    assert json.loads(refused.stdout)["reason"] == "promotion-not-verified"
+    document = history(run(found["a"], "r1", "2026-10-20T10:00:00Z"))
+    document["passed_commits"] = {"main": {"app": {found["b"]: {
+        "first_run": "r0", "first_at": "2026-10-01T10:00:00Z",
+        "last_run": "r0", "last_at": "2026-10-01T10:00:00Z"}}}}  # fmt: skip
+    support.publish_history(found["state"], document)
+    planned = _invoke(*args, *state)
+    assert planned.exit_code == 3, planned.stdout + planned.stderr
+    assert json.loads(planned.stdout)["plan"]["pinned"]["verified_run"] == "r0"
+    explicit = _invoke(*args, *state, "--composition", str(found["infra"]))
+    assert json.loads(explicit.stdout)["plan"]["pinned"]["commit"] == found["b"]
+
+    monkeypatch.setenv("PROMO_PUBLIC", support.PUBLIC)  # another cache: not covered
+    plain = _invoke(*args)
+    assert plain.exit_code == 3, plain.stdout + plain.stderr
+    assert "pinned" not in json.loads(plain.stdout)["plan"]

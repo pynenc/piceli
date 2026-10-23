@@ -761,10 +761,12 @@ environment without checks.
   is asked of a build host. It checks again on every poll, so the tag
   publishes once the environment passed that commit. A flake without the
   input is `promotion-input-missing`.
-- **A hand-run publish** runs the same gate with `--release HOST
-  --composition infra.py`: `piceli dev nix build ATTR --ref web-v1.4.0
-  --publish infra.py:cache --release web-1 --composition infra.py`. It
-  reads the history as `piceli gitops status` does (`--state-dir`,
+- **A hand-run publish** of a gated host runs the same gate, always:
+  `piceli dev nix build ATTR --ref web-v1.4.0 --publish infra.py:cache`
+  finds the gated `NixRelease` (or `NixHost` with `gate=`) of the same
+  cache and attribute in the `--publish` module, or in `--composition
+  MODULE` when given; `--release HOST` names it explicitly. It reads the
+  history as `piceli gitops status` does (`--state-dir`,
   `--kubeconfig FILE --context NAME`, else the composition cluster's
   credential profile from `piceli login`, `--namespace`) and refuses before
   any build. A history it cannot read refuses too
@@ -781,6 +783,29 @@ unchanged) and into `piceli gitops status` under the release:
 
 `verified_run` is the newest qualifying run of that commit and
 `verified_at` when it finished.
+
+**Passed commits outlive the history.** The history lists the last 20 runs
+of an environment, so the controller also keeps, in its state, a record of
+the commits each gated environment passed: per environment and source,
+each commit's first and last passed run and their times, for the last 200
+commits per source (the oldest by last pass drop out). The gate checks the
+record as well as the runs, so a verified commit keeps qualifying after
+many deploys. The record is published in the history document as
+`passed_commits` (only for gated environments), where a hand-run gate and
+`piceli promote` read it:
+
+```json
+"passed_commits": {"main": {"app": {"9b1e…": {
+  "first_run": "20261021T090000Z-1a2b3c4d", "first_at": "2026-10-21T09:05:00Z",
+  "last_run": "20261023T101500Z-3f2c9a10", "last_at": "2026-10-23T10:20:00Z"}}}}
+```
+
+**The host checks it too.** `NixHost(..., gate=Promotion(input="app",
+environment="main"))` puts the gate into the agent's configuration: the
+agent switches only to a build whose signed manifest carries a `pinned` of
+that input and environment, and refuses any other (`host-promotion-missing`,
+nothing is realised). A `NixRelease` of that host takes the host's gate
+(giving another one is refused), so the gate is declared once.
 
 **`piceli promote HOST --from ENV`** writes the pin for you:
 

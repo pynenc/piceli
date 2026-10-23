@@ -77,7 +77,7 @@ def read_history(
             document = DirectoryChannel(state_dir).read_history()
         else:
             if kubeconfig is None:
-                if composition.cluster is None:
+                if getattr(composition, "cluster", None) is None:
                     unreachable(
                         "the composition declares no cluster; give --kubeconfig"
                     )
