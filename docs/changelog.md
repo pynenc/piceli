@@ -6,6 +6,18 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.26.0
 
+0.26.0 brings a pre-merge train: `piceli train` merges candidate branches
+onto the base, judges them by the checks of the commit under test (impact
+tests, with a retry of only the failed tests), bisects out the branches
+that fail, and runs its steps on build hosts with warm and reused builds,
+behind a queue per train, seen with `piceli trains`, OpenTelemetry and
+notifications. A promoted train hands the images it built to the GitOps
+controller (`prebuilt`), which deploys them without building again. Nix
+builds fetch private flake inputs with the build host's or the
+controller's Git credentials, and builds are now something you can see and
+start: NixReleases follow a branch or a schedule, `piceli gitops build`
+and `cancel` start and stop one, and the UI's Builds page shows them all.
+
 - **A pre-merge train: `piceli train`.** Declare a `Train` in Python
   (`piceli.train`: `Train(name, steps=[...], base="main", tested="tested",
   tag="tested/{date}.{n}", remote="origin")`) with `Step.command`,
@@ -22,81 +34,27 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 - **Impact selection and flaky tests.** `Impact()` tests the cargo packages
   with changed files plus their dependents (from `cargo metadata`), and
   every package when a root file changes (`Cargo.toml`, `Cargo.lock`, the
-  toolchain and cargo configuration by default; configurable).
-  `CargoTests` runs every test binary, then retries **only the failed
-  tests**, by exact name; a test that passes on the retry joins and is
-  recorded as flaky with its failure output.
+  toolchain and cargo configuration by default; configurable). With
+  `Impact(dev_targets=True)`, a member that reaches a changed package only
+  through a dev-dependency runs only its integration test targets that
+  name the changed library (the whole member when its unit tests or shared
+  test code name it). `CargoTests` runs every test binary, then retries
+  **only the failed tests**, by exact name; a test that passes on the retry
+  joins and is recorded as flaky with its failure output.
 - **Promote and push, only when asked.** `--promote` tags `tested/<date>.N`
   and moves `tested` and the base by fast-forward only (refused with
   `train-not-fast-forward` or `train-checkout-dirty`, before anything
   moves), then runs the publish steps; `--push` (with `--promote`) pushes
   the tag and both branches atomically. Without them no ref changes and
   nothing is pushed.
-- **History.** Each run's result (`piceli.train.v1`: every branch's
-  verdict, every step's start, duration, host, verdict and log) is kept in
-  `$XDG_STATE_HOME/piceli/train/<name>/runs/`, with an append-only flaky
-  registry (`flaky.jsonl`: count, first and last seen, last failure tail).
-  Steps run through a runner interface and report to an event sink, for
-  build hosts and observability later.
-- **See a train: `piceli trains [NAME]`.** One view of the trains on this
-  machine (`piceli.trains.v1`, `--json`): the run in progress with its
-  branches, the steps done and the running step's start, elapsed time, host
-  and log tail (`--follow` streams the log until the run ends); recent runs
-  with their verdicts and seconds per step; per-step trends (median of the
-  last N executions, the last one against it: `slower`, `faster`,
-  `steady`); flaky tests with their counts and last failure; and, with
-  `--composition`/`--infra`, which run produced what each environment and
-  NixHost runs (its tag, its commit or the product commit it pins, matched
-  to a run's promoted tag or head). A killed run shows as `interrupted`.
-  Every event of a run is appended to `runs/<id>/events.jsonl`, and the
-  lock names the run and process holding it, so the view never takes it.
-- **`piceli train-wait RUN`.** Blocks until a run (its id, or a train's
-  name) ends and exits with its verdict, printing the run's summary
-  (`piceli.train.summary.v1`): `train-interrupted` for a killed run,
-  `train-wait-timeout` after `--timeout`, `train-run-not-found`.
-- **A train is a trace.** `Train(telemetry=Otlp(url,
-  protocol="http/protobuf"))`, or the standard `OTEL_EXPORTER_OTLP_*`
-  variables, exports each run over OTLP/HTTP: a root span
-  `piceli.dev.train`, a span per trial and per step
-  (`piceli.dev.train.trial`, `piceli.dev.train.step`: branches, step, kind,
-  host, verdict, duration, impact selection), span events for verdicts,
-  promotion, push and flaky tests, a log record with each step's output
-  tail and the event `piceli.dev.train.finished`. Spans go out as they end,
-  through a bounded queue with a 2 s timeout: a collector that is down
-  never slows or fails a run (one `train-telemetry-failed` warning).
-- **Notifications when a train ends.** `Train(notify=[Notify.command(argv),
-  Notify.webhook(url or url_env=, headers_env=), Notify.desktop()])`, each
-  `when="always"` or `"failure"`: the command gets the summary JSON on
-  stdin, the webhook a `POST` of it, the desktop a headline (`osascript`,
-  `notify-send`). The summary names the joined and ejected branches (with
-  step and reason), the promotion, tag and push, the duration and the flaky
-  tests, never step output. A failing notifier never changes the result: one
-  `train-notify-failed` warning, and the run record's `notify` list.
-- **A queue per train.** `piceli train … --queue` on a busy train queues
-  the request with its flags (`--promote`, `--push`) and returns at once
-  with its id and position (`piceli.train.queued.v1`). Every `piceli
-  train` serves the queue in order when its run ends; `piceli train-queue
-  NAME` lists it, `--cancel ID` cancels a waiting request and `--drain`
-  serves it here. A request whose process died is resumed by the next
-  server; one whose branches are gone is rejected when it starts.
-  `piceli train-wait Q-ID` waits for the run that serves a request, and
-  `piceli trains` and the page show the queue.
-- **`run-failed`.** A run that raises midway (`train-git-failed`,
-  `train-run-failed`, Ctrl-C: `train-run-cancelled`) is recorded
-  `failed` with its reason and what had joined, emits `run-failed`, and
-  sends its notifications and OpenTelemetry `finished` event; `train-wait`
-  exits 1 for it.
-- **The UI's Trains view.** `piceli ui serve --trains` (with
-  `--train-composition MODULE` for the deployed-by-train join) shows the
-  same document, live, with the queue.
-- **Fix:** the UI's breadcrumb named the Machines page "Page not found".
-- New error codes in the `train` area: `train-not-found`,
-  `train-load-failed`, `train-invalid`, `train-repo-invalid`,
-  `train-branches-required`, `train-branch-unknown`,
-  `train-push-needs-promote`, `train-busy`, `train-merge-conflict`,
-  `train-step-failed`, `train-step-timeout`, `train-spec-invalid`,
-  `train-not-fast-forward`, `train-checkout-dirty`, `train-publish-failed`,
-  `train-push-failed`, `train-git-failed`.
+- **Keep the tested head; promote a reviewed run.** Every run that joined
+  something points `refs/piceli/train/<name>/last` at its head.
+  `piceli train APP --promote-run RUN` (or `last`) promotes that head
+  without running the train again, refused when the base is no ancestor of
+  it (`train-not-fast-forward`) or the run is unknown (`train-run-unknown`).
+  It is an ordinary run of the train: it can be queued (`--promote-run last
+  --queue` pins the run it means when it queues), and one that raises
+  midway is `run-failed`.
 - **Train steps on build hosts.** `Train(builds=..., hosts=[...])` names
   where steps run: `"local"` and the `BuildHost`s of a `DevBuilds` (or
   `MODULE:ATTR` of one, or of a `Cluster` with `dev=`); a step's own
@@ -132,15 +90,85 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   discarded and the right half judged again. `Train(parallel="auto")`
   does it when two slots are free (`"on"`, `"off"`). The verdicts are the
   sequential ones.
-- **Keep the tested head; promote a reviewed run.** Every run that joined
-  something points `refs/piceli/train/<name>/last` at its head.
-  `piceli train APP --promote-run RUN` (or `last`) promotes that head
-  without running the train again, refused when the base is no ancestor of
-  it (`train-not-fast-forward`) or the run is unknown (`train-run-unknown`).
-- **`Impact(dev_targets=True)`**: a member that reaches a changed package
-  only through a dev-dependency runs only its integration test targets
-  that name the changed library (the whole member when its unit tests or
-  shared test code name it).
+- **Bounded caches: `Train(retention=Retention(...))` and `piceli
+  train-prune`.** At the end of every run the train prunes leftover trial
+  worktrees, cargo target directories unused for 14 days or beyond 100 GiB
+  per train and repository (least recently used first), content-store
+  records unused for 30 days or beyond 20 GiB (shared by the machine) and
+  the bytes no record keeps, and runs older than 30 days beyond the newest
+  20; never what a running trial holds, and never the queue, the lock, the
+  run in progress, the runs queued requests name or the newest promoted
+  runs. The result reports the sizes kept (`prune`). `piceli train-prune
+  NAME|SPEC [--dry-run] [--json]` does the same by hand. The cache layout
+  is now `checkouts/<train>/<repo>/` and `targets/<train>/<repo>/`.
+- **History.** Each run's result (`piceli.train.v1`: every branch's
+  verdict, every step's start, duration, host, verdict and log) is kept in
+  `$XDG_STATE_HOME/piceli/train/<name>/runs/`, with an append-only flaky
+  registry (`flaky.jsonl`: count, first and last seen, last failure tail).
+  Steps run through a runner interface and report to an event sink. Every
+  event of a run is appended to `runs/<id>/events.jsonl`, and the lock
+  names the run and process holding it.
+- **A queue per train.** `piceli train … --queue` on a busy train queues
+  the request with its flags (`--promote`, `--push`) and returns at once
+  with its id and position (`piceli.train.queued.v1`). Every `piceli
+  train` serves the queue in order when its run ends; `piceli train-queue
+  NAME` lists it, `--cancel ID` cancels a waiting request and `--drain`
+  serves it here. A request whose process died is resumed by the next
+  server; one whose branches are gone is rejected when it starts.
+  `piceli train-wait Q-ID` waits for the run that serves a request, and
+  `piceli trains` and the UI show the queue.
+- **`run-failed`.** A run that raises midway (`train-git-failed`,
+  `train-run-failed`, Ctrl-C: `train-run-cancelled`), or whose build hosts
+  are all gone (`train-host-unavailable`), is recorded `failed` with its
+  reason and what had joined, emits `run-failed`, and sends its
+  notifications and OpenTelemetry `finished` event; `train-wait` exits 1
+  for it.
+- **See a train: `piceli trains [NAME]`.** One view of the trains on this
+  machine (`piceli.trains.v1`, `--json`), read from the events without
+  ever taking the lock: the run in progress with its branches, the steps
+  done and the running step's start, elapsed time, host and log tail
+  (`--follow` streams the log until the run ends); recent runs with their
+  verdicts and seconds per step; per-step trends (median of the last N
+  executions, the last one against it: `slower`, `faster`, `steady`);
+  flaky tests with their counts and last failure; and, with
+  `--composition`/`--infra`, which run produced what each environment and
+  NixHost runs (its tag, its commit or the product commit it pins, matched
+  to a run's promoted tag or head). A killed run shows as `interrupted`.
+- **Fast trains are seen too.** A step on a build host emits `step-placed`
+  with the host its command went to, so `piceli trains` shows it running
+  there, and its span and run row name it (`hosts` in each recent run). A
+  reused step is `reused` in its event (with the run, trial and host it
+  came from), in the status (`reused` per run; no trend sample) and in the
+  trace (an ok span with `piceli.train.reused_from`). Parallel halves show
+  both trials and steps at once (`trials`, `steps`, the right half
+  `speculative`, a discarded one in `discarded`), and `halves-parallel`,
+  `trial-discarded`, `outputs-restored` and `pruned` are span events of
+  the run.
+- **`piceli train-wait RUN`.** Blocks until a run (its id, or a train's
+  name) ends and exits with its verdict, printing the run's summary
+  (`piceli.train.summary.v1`): `train-interrupted` for a killed run,
+  `train-wait-timeout` after `--timeout`, `train-run-not-found`.
+- **A train is a trace.** `Train(telemetry=Otlp(url,
+  protocol="http/protobuf"))`, or the standard `OTEL_EXPORTER_OTLP_*`
+  variables, exports each run over OTLP/HTTP: a root span
+  `piceli.dev.train`, a span per trial and per step
+  (`piceli.dev.train.trial`, `piceli.dev.train.step`: branches, step, kind,
+  host, verdict, duration, impact selection), span events for verdicts,
+  promotion, push and flaky tests, a log record with each step's output
+  tail and the event `piceli.dev.train.finished`. Spans go out as they end,
+  through a bounded queue with a 2 s timeout: a collector that is down
+  never slows or fails a run (one `train-telemetry-failed` warning).
+- **Notifications when a train ends.** `Train(notify=[Notify.command(argv),
+  Notify.webhook(url or url_env=, headers_env=), Notify.desktop()])`, each
+  `when="always"` or `"failure"`: the command gets the summary JSON on
+  stdin, the webhook a `POST` of it, the desktop a headline (`osascript`,
+  `notify-send`). The summary names the joined and ejected branches (with
+  step and reason), the promotion, tag and push, the duration and the flaky
+  tests, never step output. A failing notifier never changes the result: one
+  `train-notify-failed` warning, and the run record's `notify` list.
+- **The UI's Trains view.** `piceli ui serve --trains` (with
+  `--train-composition MODULE` for the deployed-by-train join) shows the
+  same document, live, with the queue.
 - **The train's images go to the cluster: `Step.images("infra.py")`.** On
   promote the train computes, for each component built from the
   repository, the change key the GitOps controller computes for that
@@ -148,82 +176,18 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   host-build code as `piceli builder serve`, pushes them to the cluster's
   registry with their provenance (naming the train run and host) and
   offers them to the controller with a new `prebuilt` request, before the
-  push the controller reacts to. A controller declared
-  `Controller(prebuilt=True)` keeps the offer and uses it only when a
-  step's own change key is the offered key, the reference names the
-  component's repository in its registry, pinned by digest, and the digest
-  is in the registry; it then deploys without waiting for a host or a
-  Job. Pipeline environments too: for each build spec whose contexts
-  read the composition repository, the train computes every image's key
-  as the controller does (the spec, the selected files, node facts and
-  the controller's platforms), builds it with `builder serve`'s code (one
-  OCI index over the platforms) and offers it the same way. New codes
-  `train-images-failed`, `train-host-unavailable`, `train-run-unknown`.
-- **Bounded caches: `Train(retention=Retention(...))` and `piceli
-  train-prune`.** At the end of every run the train prunes leftover trial
-  worktrees, cargo target directories unused for 14 days or beyond 100 GiB
-  per train and repository (least recently used first), content-store
-  records unused for 30 days or beyond 20 GiB (shared by the machine) and
-  the bytes no record keeps, and runs older than 30 days beyond the newest
-  20; never what a running trial holds. The result reports the sizes kept
-  (`prune`). `piceli train-prune NAME|SPEC [--dry-run] [--json]` does the
-  same by hand. The cache layout is now `checkouts/<train>/<repo>/` and
-  `targets/<train>/<repo>/`.
-- **Fast trains are seen too.** A step on a build host emits
-  `step-placed` with the host its command went to, so `piceli trains` shows
-  it running there, and its span and run row name it (`hosts` in each
-  recent run). A reused step is `reused` in its event (with the run, trial
-  and host it came from), in the status (`reused` per run; no trend
-  sample) and in the trace (an ok span with `piceli.train.reused_from`).
-  Parallel halves show both trials and steps at once (`trials`, `steps`,
-  the right half `speculative`, a discarded one in `discarded`), and
-  `halves-parallel`, `trial-discarded`, `outputs-restored` and `pruned`
-  are span events of the run. `--promote-run` is an ordinary run of the
-  train: it can be queued (`--promote-run last --queue` pins the run it
-  means when it queues), and one that raises midway is `run-failed`, as is
-  a run whose build hosts are all gone (`train-host-unavailable`). Pruning
-  keeps the queue, the lock, the run in progress, the runs queued requests
-  name and the newest promoted runs.
-- **A NixRelease follows a branch, or a schedule.** `NixRelease` accepts a
-  host that follows `Branch("main")`: each new head of the branch is
-  planned with the branch's pointer and no tag, and the build host checks
-  the commit is on the branch before it builds. `schedule="daily"`
-  (`hourly`, `weekly` or five cron fields, UTC) plans the newest tag or
-  head again at that time. Each one goes through the promotion gate, the
-  plan and the approval as a new tag does; the record names its
-  `trigger_kind` (`tag`, `branch`, `schedule`, `sync`, `cli`, `ui`).
-- **Builds started by hand: `piceli gitops build NAME [--ref TAG|COMMIT]
-  [--approve DIGEST]`.** A NixRelease plans that tag, its branch or a full
-  commit (the newest without one); an environment rebuilds every image at
-  the commit it follows. It is recorded as triggered by `cli` with the
-  requester (`--by`, else the user name); `--approve` approves the plan in
-  one go when its digest is that one, otherwise it waits for `piceli gitops
-  approve` as usual. An unknown ref is `gitops-build-ref-unknown`.
-- **`piceli gitops cancel NAME`.** A planned or queued build is dropped; a
-  build host that holds one stops before its next stage and its answer is
-  refused (`gitops-build-cancelled`). A cancelled image build fails its step
-  until `piceli gitops sync`. Nothing to cancel: `gitops-build-not-running`.
-- **Build hosts report their progress.** `piceli builder serve` sends a
-  `build-progress` request at each stage (fetch, build, publish or push)
-  and at most every 15 seconds while it logs: the stage and the last 4000
-  characters of its log, kept on the wanted build in `builds_wanted`. A
-  build that is no longer wanted (cancelled, or superseded by a newer
-  commit) stops at its next stage instead of building on.
-- **One record per build: `piceli gitops builds [--target NAME] [--state
-  STAGE|active] [--json]`.** NixRelease publishes, image builds and train
-  handoffs share one record, `piceli.builds.v1`: the trigger (kind, who,
-  text), the commit, tag and branch, the build host, the stage (from
-  `approval-required` and `queued` through `fetching-inputs`, `building`,
-  `signing` and `uploading` to `published`, `failed`, `cancelled` or
-  `rejected`) with a time for each, the log tail, the duration, the plan
-  digest and the targets that run it now, joined with `piceli targets`.
-- **A Builds page in the UI.** Delivery → Builds lists every build with
-  those fields, filters by target and state, a live log tail polled every
-  three seconds, and approve (the plan and its exact digest, confirmed),
-  retry and cancel buttons for sessions that may sync. "Build now" takes a
-  target and a tag or commit and writes the request `piceli gitops build`
-  writes.
-
+  push the controller reacts to. Pipeline environments too: for each build
+  spec whose contexts read the composition repository, the train computes
+  every image's key as the controller does (the spec, the selected files,
+  node facts and the controller's platforms), builds it with `builder
+  serve`'s code (one OCI index over the platforms) and offers it the same
+  way. A failure is `train-images-failed`.
+- **`Controller(prebuilt=True)` uses those images.** Such a controller
+  keeps an offer and uses it only when a step's own change key is the
+  offered key, the reference names the component's repository in its
+  registry, pinned by digest, and the digest is in the registry; it then
+  deploys without waiting for a host or a Job. Offers show in the
+  controller's status; only for registry delivery.
 - **Private flake inputs of a Nix build.** A NixRelease (and `piceli dev
   nix build`) whose `flake.lock` pins a private input now builds on a
   build host with no Git credential of its own: before the build, the
@@ -273,6 +237,79 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 - **`piceli dev nix build --input NAME[=CREDENTIAL]`** adds private inputs
   to a hand-run build; with `--publish`, the composition's `NixRelease` of
   the output adds its own, and the plan lists them.
+- **A NixRelease follows a branch, or a schedule.** `NixRelease` accepts a
+  host that follows `Branch("main")`: each new head of the branch is
+  planned with the branch's pointer and no tag, and the build host checks
+  the commit is on the branch before it builds. `schedule="daily"`
+  (`hourly`, `weekly` or five cron fields, UTC) plans the newest tag or
+  head again at that time. Each one goes through the promotion gate, the
+  plan and the approval as a new tag does; the record names its
+  `trigger_kind` (`tag`, `branch`, `schedule`, `sync`, `cli`, `ui`).
+- **Builds started by hand: `piceli gitops build NAME [--ref TAG|COMMIT]
+  [--approve DIGEST]`.** A NixRelease plans that tag, its branch or a full
+  commit (the newest without one); an environment rebuilds every image at
+  the commit it follows. It is recorded as triggered by `cli` with the
+  requester (`--by`, else the user name); `--approve` approves the plan in
+  one go when its digest is that one, otherwise it waits for `piceli gitops
+  approve` as usual. An unknown ref is `gitops-build-ref-unknown`.
+- **`piceli gitops cancel NAME`.** A planned or queued build is dropped; a
+  build host that holds one stops before its next stage and its answer is
+  refused (`gitops-build-cancelled`). A cancelled image build fails its step
+  until `piceli gitops sync`. Nothing to cancel: `gitops-build-not-running`.
+- **Build hosts report their progress.** `piceli builder serve` sends a
+  `build-progress` request at each stage (fetch, build, publish or push)
+  and at most every 15 seconds while it logs: the stage and the last 4000
+  characters of its log, kept on the wanted build in `builds_wanted`. A
+  build that is no longer wanted (cancelled, or superseded by a newer
+  commit) stops at its next stage instead of building on.
+- **One record per build: `piceli gitops builds [--target NAME] [--state
+  STAGE|active] [--json]`.** NixRelease publishes, image builds and train
+  handoffs share one record, `piceli.builds.v1`: the trigger (kind, who,
+  text), the commit, tag and branch, the build host, the stage (from
+  `approval-required` and `queued` through `fetching-inputs`, `building`,
+  `signing` and `uploading` to `published`, `failed`, `cancelled` or
+  `rejected`) with a time for each, the log tail, the duration, the plan
+  digest and the targets that run it now, joined with `piceli targets`.
+- **A Builds page in the UI.** Delivery → Builds lists every build with
+  those fields, filters by target and state, a live log tail polled every
+  three seconds, and approve (the plan and its exact digest, confirmed),
+  retry and cancel buttons for sessions that may sync. "Build now" takes a
+  target and a tag or commit and writes the request `piceli gitops build`
+  writes.
+- **Fix:** the UI's breadcrumb named the Machines page "Page not found".
+- **New error codes.** In the new `train` area: `train-not-found`,
+  `train-unknown`, `train-load-failed`, `train-invalid`,
+  `train-repo-invalid`, `train-branches-required`, `train-branch-unknown`,
+  `train-push-needs-promote`, `train-busy`, `train-merge-conflict`,
+  `train-step-failed`, `train-step-timeout`, `train-spec-invalid`,
+  `train-not-fast-forward`, `train-checkout-dirty`, `train-publish-failed`,
+  `train-push-failed`, `train-git-failed`, `train-host-unavailable`,
+  `train-run-unknown`, `train-images-failed`, `train-run-not-found`,
+  `train-wait-timeout`, `train-interrupted`, `train-run-failed`,
+  `train-run-cancelled`, `train-queue-not-found`,
+  `train-queue-not-waiting`, `train-queue-cancelled`,
+  `train-notify-failed` and `train-telemetry-failed`; in `gitops`:
+  `gitops-build-ref-unknown`, `gitops-build-not-running` and
+  `gitops-build-cancelled`; in `infra`: `infra-nix-input-unreachable`.
+
+**Upgrade notes**
+
+- **Plan digests of gated NixReleases change once.** A release plan now
+  lists the private inputs the build host fetches first (`inputs`; the
+  promotion gate's input is always among them), so the first plan after
+  upgrading has a new digest for every gated release, and for any release
+  with a covered input: an approval of the old digest no longer matches;
+  approve the new one (or let `auto_approve` do it).
+- **Upgrade build hosts with the controller.** Only a 0.26.0 `piceli
+  builder serve` fetches private inputs before the build, and the claim of
+  a `credentials="controller"` release from a build host that sends no key
+  is refused.
+- **`Controller(prebuilt=True)` is opt-in.** Without it the controller
+  keeps no offer and builds the images as before, even when a train hands
+  them over.
+- **A superseded or cancelled build stops at its next stage.** A build
+  host no longer builds on a build that is no longer wanted; a cancelled
+  image build fails its step until `piceli gitops sync`.
 
 ## Version 0.25.3
 
