@@ -223,11 +223,15 @@ def _env_row(
     return row
 
 
-def _gate(release: Mapping[str, Any]) -> dict[str, Any] | None:
-    """A release's ``pinned`` (the promotion gate's), else ``None``."""
-    for value in (release.get("pinned"), _dict(release.get("published")).get("pinned")):
-        if isinstance(value, Mapping) and value.get("commit"):
-            return {key: value.get(key) for key in PINNED_KEYS}
+def _gate(release: Mapping[str, Any], commit: Any = None) -> dict[str, Any] | None:
+    """The promotion gate's ``pinned`` of a release (``nix_releases.<name>.
+    pinned``: the gate's result for the release's latest ``commit``), only
+    when that is ``commit`` (any commit when ``None``); else ``None``."""
+    value = release.get("pinned")
+    if commit is not None and release.get("commit") != commit:
+        return None
+    if isinstance(value, Mapping) and value.get("commit"):
+        return {key: value.get(key) for key in PINNED_KEYS}
     return None
 
 
@@ -291,8 +295,8 @@ def _host_row(
     """A NixHost: its agent's facts when ``read`` holds its status; else
     what the controller published of its release."""
     status = _dict((read or {}).get("status"))
-    gate = _gate(release) if release is not None else None
     view = _release_view(release) if release is not None else None
+    gate = _gate(release, view["commit"]) if release and view else None
     if not status:
         row = _row("nix-host", name, where, "controller")
         if view is not None and view["commit"]:
@@ -311,16 +315,8 @@ def _host_row(
     own = current.get("pinned")
     if isinstance(own, Mapping) and own.get("commit"):
         row["pinned"] = {key: own.get(key) for key in PINNED_KEYS}
-    elif (
-        gate is not None
-        and view is not None
-        and current.get("commit")
-        in (
-            view["commit"],
-            (release or {}).get("commit"),
-        )
-    ):
-        row["pinned"], row["facts"]["pinned"] = gate, "controller"
+    elif release and (found := _gate(release, current.get("commit") or "")):
+        row["pinned"], row["facts"]["pinned"] = found, "controller"
     row["checks"] = _host_checks(status)
     row["state"], row["reason"] = _host_state(status)
     row["as_of"] = _dict(status.get("poll")).get("at") or _dict(

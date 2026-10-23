@@ -117,12 +117,6 @@ def test_without_a_gate_every_source_commit_is_listed_and_pinned_is_null() -> No
     assert main["pinned"] == {"source": None, "commit": None,
                               "commits": {"assets": ASSETS, "product": PRODUCT}}  # fmt: skip
     assert rows[("web-1", None)]["pinned"] is None
-    # A gate written into the signed manifest only (published.pinned) counts.
-    published = {**release, "published": {"pinned": GATE}}
-    document = targets.build(
-        _status(**{"web-1": published}), hosts={"web-1": {"status": _agent()}}
-    )
-    assert _rows(document)[("web-1", None)]["pinned"]["verified_run"] == "run-7"
 
 
 def test_a_host_running_another_build_does_not_borrow_the_release_pin() -> None:
@@ -131,6 +125,34 @@ def test_a_host_running_another_build_does_not_borrow_the_release_pin() -> None:
         _status(**{"web-1": RELEASE}), hosts={"web-1": {"status": agent}}
     )
     assert _rows(document)[("web-1", None)]["pinned"] is None
+
+
+def test_the_pin_of_a_newer_tag_is_not_the_published_builds() -> None:
+    """``nix_releases.*.pinned`` is the gate's result for the release's latest
+    ``commit``: a newer tag in flight never lends it to the published build."""
+    newer = {**RELEASE, "state": "approval-required", "tag": "web-v1.3.0",
+             "commit": NEW, "pinned": {**GATE, "commit": "f" * 40}}  # fmt: skip
+    for hosts in ({"web-1": {"status": _agent()}}, None):
+        document = targets.build(_status(**{"web-1": newer}), hosts=hosts)
+        assert _rows(document)[("web-1", None)]["pinned"] is None
+
+
+def test_the_hosts_own_pin_wins_and_is_a_host_agent_fact() -> None:
+    own = {**GATE, "verified_run": "run-9"}
+    agent = _agent(current={"commit": HOSTS_COMMIT, "tag": "web-v1.2.0",
+                            "pinned": own})  # fmt: skip
+    document = targets.build(
+        _status(**{"web-1": RELEASE}), hosts={"web-1": {"status": agent}}
+    )
+    row = _rows(document)[("web-1", None)]
+    assert row["pinned"] == own and row["facts"]["pinned"] == "host-agent"
+    # An agent status without the field (before 0.24.0) falls back.
+    legacy = _agent()
+    document = targets.build(
+        _status(**{"web-1": RELEASE}), hosts={"web-1": {"status": legacy}}
+    )
+    row = _rows(document)[("web-1", None)]
+    assert row["pinned"] == GATE and row["facts"]["pinned"] == "controller"
 
 
 @pytest.mark.parametrize(
