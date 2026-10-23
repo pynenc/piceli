@@ -144,11 +144,13 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli restore-points`](#cli-restore-points) | List a pipeline's restore points, newest first (read-only, offline). | none | no |
 | [`piceli runs`](#cli-runs) | List the deploy runs of a pipeline, newest first, with their state, release, duration and summary files. Read-only (with shared state it reads the local working copy: run `piceli state pull` first). | none | no |
 | [`piceli secrets age`](#cli-secrets-age) | A host's age identity for sops-nix: generate or import it; print its public key. | none | no |
+| [`piceli secrets backup`](#cli-secrets-backup) | Write the whole secret store, encrypted with age, to one file (never printed). | none | no |
 | [`piceli secrets cluster`](#cli-secrets-cluster) | Store another cluster's credentials for the GitOps controller (never printed). | writes | no |
 | [`piceli secrets delete`](#cli-secrets-delete) | Delete a stored credential (a spent bootstrap key, an old token); never printed. | none | yes |
 | [`piceli secrets git`](#cli-secrets-git) | Store the Git token the controller and cluster builds use (read from stdin, never printed). | writes | no |
 | [`piceli secrets nix-cache`](#cli-secrets-nix-cache) | A Nix binary cache's signing key: generate or import it; print its public key. | none | no |
 | [`piceli secrets provider`](#cli-secrets-provider) | Store a provider API token (read from stdin, never printed). | none | no |
+| [`piceli secrets restore`](#cli-secrets-restore) | Restore the secret store from an encrypted backup (plans first when not empty). | none | yes |
 | [`piceli secrets s3`](#cli-secrets-s3) | Store a bucket's S3 access keys (an access key id and its secret). | none | no |
 | [`piceli secrets state-key`](#cli-secrets-state-key) | Store the passphrase that encrypts an infrastructure's OpenTofu state. | none | no |
 | [`piceli secrets user-data`](#cli-secrets-user-data) | Store a server's user data (a cloud-config, a script or a bootstrap key). | none | no |
@@ -3363,6 +3365,30 @@ A host's age identity for sops-nix: generate or import it; print its public key.
 - **Output contract:** conforms
 - **Notes:** 0.24.0. Prints the public key (age1...) for .sops.yaml, never the identity. Without --generate or --prompt it only reads. Refuses to replace an identity without --replace (infra-credential-exists).
 
+(cli-secrets-backup)=
+### `piceli secrets backup`
+
+Write the whole secret store, encrypted with age, to one file (never printed).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--to` | path | required | The encrypted archive to write (age format) |
+| `--recipient` | text (repeatable) |  | An age (age1...), plugin (age1yubikey1...) or SSH public key; repeatable; remembered for later backups |
+| `--recipients-file` | path |  | A file of recipients, one per line (age -R) |
+| `--force` | boolean | `False` | Replace an existing backup file |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** $PICELI_CREDENTIALS_DIR (every file), $PICELI_PROFILES_DIR, --recipients-file
+- **Writes:** --to PATH (age ciphertext, mode 0600), <credentials dir>.backup.json (recipients and the last backup's marker; no values)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.25.0. Runs the age command (PICELI_AGE, else age on PATH; secrets-age-missing otherwise): the tar is streamed into age, no plaintext touches the disk. Refuses an existing file without --force (secrets-backup-exists). Prints names, kinds, the archive's sha256 and the staleness, never a value. Exit 1 when age refuses (secrets-backup-failed).
+
 (cli-secrets-cluster)=
 ### `piceli secrets cluster`
 
@@ -3482,6 +3508,29 @@ Store a provider API token (read from stdin, never printed).
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** The token is read from stdin only (typed without echo, or piped); an argument or HCLOUD_TOKEN in the environment is refused (infra-credential-refused) without echoing it. Prints the name, never the value.
+
+(cli-secrets-restore)=
+### `piceli secrets restore`
+
+Restore the secret store from an encrypted backup (plans first when not empty).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `PATH` | path | required |  |
+| `--identity` | path |  | An age identity file (age -i); without it age asks for a passphrase or uses its plugins |
+| `--approve` | text |  | The plan digest, to restore into a used store |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** PATH (age ciphertext), --identity, the store (digests)
+- **Writes:** $PICELI_CREDENTIALS_DIR and $PICELI_PROFILES_DIR (files 0600, directories 0700; into a used store only with --approve)
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** 0.25.0. Decrypts in memory with age (identity file, plugin or passphrase) and refuses an unsafe archive (secrets-restore-archive-invalid). Into an empty store it restores directly; otherwise it prints what it would add, what is identical and what differs, with a digest (exit 3), and writes only with --approve DIGEST. Never prints a value. Exit 1 when age cannot decrypt (secrets-restore-decrypt-failed).
 
 (cli-secrets-s3)=
 ### `piceli secrets s3`

@@ -97,6 +97,22 @@ environment and host in one view.
   previous build's), `piceli host status --json` shows it, and `piceli
   targets` prefers it (`facts.pinned: host-agent`) over the controller's
   release. Status files without the field still read.
+- **An encrypted backup of the secret store.** `piceli secrets backup --to
+  PATH [--recipient R]... [--recipients-file F] [--force]` streams every
+  file of `$PICELI_CREDENTIALS_DIR` (whatever its kind, the registered
+  clusters' kubeconfigs included) and the profiles into `age`, to the
+  recipients you choose (`age1...` keys, hardware keys through their age
+  plugin, SSH keys); no plaintext touches the disk. The recipients and a
+  marker of the last backup (time, sha256, names) are kept, without
+  values, in `credentials.backup.json` next to the store, so later backups
+  need no flags. `piceli secrets restore PATH [--identity FILE]` decrypts
+  in memory, refuses an unsafe archive (`secrets-restore-archive-invalid`)
+  and restores `0600` files in `0700` directories; into a store that is
+  not empty it lists what it would add, what is identical and what
+  differs, and writes only with `--approve DIGEST` (exit 3 otherwise).
+  `piceli.infra.machines.secrets_backup.staleness()` tells when the last
+  backup is older than the newest secret; `backup --json` includes it.
+  Needs the `age` command (`secrets-age-missing` otherwise).
 
 ## Version 0.24.0
 

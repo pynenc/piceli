@@ -673,8 +673,18 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`secret-source-tool-missing`](#error-secret-source-tool-missing) | secrets | no |
 | [`secret-template-invalid`](#error-secret-template-invalid) | secrets | no |
 | [`secret-unknown-reference`](#error-secret-unknown-reference) | secrets | no |
+| [`secrets-age-missing`](#error-secrets-age-missing) | infra | no |
+| [`secrets-backup-empty`](#error-secrets-backup-empty) | infra | no |
+| [`secrets-backup-exists`](#error-secrets-backup-exists) | infra | no |
+| [`secrets-backup-failed`](#error-secrets-backup-failed) | infra | no |
+| [`secrets-backup-invalid`](#error-secrets-backup-invalid) | infra | no |
+| [`secrets-backup-recipient-invalid`](#error-secrets-backup-recipient-invalid) | infra | no |
+| [`secrets-backup-recipients-missing`](#error-secrets-backup-recipients-missing) | infra | no |
 | [`secrets-invalid`](#error-secrets-invalid) | cluster | no |
 | [`secrets-prompt-required`](#error-secrets-prompt-required) | cluster | no |
+| [`secrets-restore-archive-invalid`](#error-secrets-restore-archive-invalid) | infra | no |
+| [`secrets-restore-decrypt-failed`](#error-secrets-restore-decrypt-failed) | infra | no |
+| [`secrets-restore-plan-changed`](#error-secrets-restore-plan-changed) | infra | no |
 | [`secrets-token-empty`](#error-secrets-token-empty) | cluster | no |
 | [`secrets-token-refused`](#error-secrets-token-refused) | cluster | no |
 | [`server-target-identity-mismatch`](#error-server-target-identity-mismatch) | kubernetes | no |
@@ -6308,7 +6318,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Retry-safe:** no
 
 
-## Machines provisioned with OpenTofu (`piceli.infra.Infrastructure`, `piceli infra …`, `piceli secrets provider|state-key`)
+## Machines provisioned with OpenTofu (`piceli.infra.Infrastructure`, `piceli infra …`, `piceli secrets provider|state-key|backup|restore`)
 
 (error-infra-apply-failed)=
 ### `infra-apply-failed`
@@ -6605,6 +6615,86 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Store it, then plan again: `piceli secrets user-data NAME --file PATH` (or `--prompt`). For a bootstrap key, mint a single-use key that expires within the hour just before.
 - **Retry-safe:** yes
+
+(error-secrets-age-missing)=
+### `secrets-age-missing`
+
+**age is not installed.** `piceli secrets backup|restore` encrypt and decrypt with the `age` command (the standard age format, plugins for hardware keys), and it is not on `PATH` or at `$PICELI_AGE`.
+
+- **Fix:** Install age (`nix profile install nixpkgs#age`, `brew install age`, `apt install age`) or set `PICELI_AGE` to its path.
+- **Retry-safe:** no
+
+(error-secrets-backup-empty)=
+### `secrets-backup-empty`
+
+**Secret store empty.** `$PICELI_CREDENTIALS_DIR` holds no file, so there is nothing to back up.
+
+- **Fix:** Store a credential first (`piceli secrets provider|state-key|...`), or point `PICELI_CREDENTIALS_DIR` at the store.
+- **Retry-safe:** no
+
+(error-secrets-backup-exists)=
+### `secrets-backup-exists`
+
+**Backup file exists.** `piceli secrets backup --to PATH` never replaces an existing file on its own.
+
+- **Fix:** Choose another path, or pass `--force` to replace it.
+- **Retry-safe:** no
+
+(error-secrets-backup-failed)=
+### `secrets-backup-failed`
+
+**age refused to encrypt.** age exited with an error: a recipient it cannot use (a missing plugin such as `age-plugin-yubikey`) or a write error. Nothing was written.
+
+- **Fix:** Check the recipients and that each plugin is on `PATH`, then run the backup again.
+- **Retry-safe:** no
+
+(error-secrets-backup-invalid)=
+### `secrets-backup-invalid`
+
+**Backup destination refused.** The backup would be written inside the secret store or the profiles, or its directory does not exist.
+
+- **Fix:** Choose a file outside the store in an existing directory (an external drive, a synced folder).
+- **Retry-safe:** no
+
+(error-secrets-backup-recipient-invalid)=
+### `secrets-backup-recipient-invalid`
+
+**Backup recipient not a public key.** A recipient is not an age (`age1...`, `age1yubikey1...`) or SSH (`ssh-ed25519 ...`, `ssh-rsa ...`) public key, or the recipients file is unreadable. The value is not printed: a pasted identity must not reach a log.
+
+- **Fix:** Pass the public key (`age-keygen -y KEY`, `age-plugin-yubikey --list`), never an identity.
+- **Retry-safe:** no
+
+(error-secrets-backup-recipients-missing)=
+### `secrets-backup-recipients-missing`
+
+**No backup recipients.** `piceli secrets backup` got no `--recipient` or `--recipients-file`, and no earlier backup remembered any.
+
+- **Fix:** Pass `--recipient age1...` (repeatable, at least two keys kept apart) or `--recipients-file FILE`; later backups reuse them.
+- **Retry-safe:** no
+
+(error-secrets-restore-archive-invalid)=
+### `secrets-restore-archive-invalid`
+
+**Backup archive refused.** The file is missing, is not a Piceli secret-store backup, or holds an unsafe member (an absolute path, `..`, a link, a special file, a name twice, a file outside the store). Nothing was written.
+
+- **Fix:** Restore from a file written by `piceli secrets backup`; never extract a crafted archive into the store.
+- **Retry-safe:** no
+
+(error-secrets-restore-decrypt-failed)=
+### `secrets-restore-decrypt-failed`
+
+**Backup not decrypted.** age could not decrypt the backup: the identity is not one of its recipients, the passphrase or hardware key was refused, or the file is damaged. Nothing was written.
+
+- **Fix:** Pass `--identity FILE` with a key the backup was made for (or plug in the hardware key with its plugin on `PATH`).
+- **Retry-safe:** no
+
+(error-secrets-restore-plan-changed)=
+### `secrets-restore-plan-changed`
+
+**Restore plan changed.** `--approve` does not match the restore plan of this archive and this store: the store or the archive changed since the plan was shown.
+
+- **Fix:** Run `piceli secrets restore PATH` without `--approve` and approve the digest it prints.
+- **Retry-safe:** no
 
 
 ## Nix host releases (`piceli.infra.NixHost`, the host agent, `piceli host …`)

@@ -762,6 +762,21 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["secrets", "s3", "cache-s3"],
         "infra-prompt-required",
     ),
+    "secrets backup": (
+        lambda p: [
+            "secrets",
+            "backup",
+            "--to",
+            str(p / "junk"),
+            "--recipient",
+            "AGE-SECRET-KEY-1",
+        ],
+        "secrets-backup-recipient-invalid",
+    ),
+    "secrets restore": (
+        lambda p: ["secrets", "restore", str(p / "missing.age")],
+        "secrets-restore-archive-invalid",
+    ),
     "secrets delete": (
         lambda p: ["secrets", "delete", "../web-1-boot", "--yes"],
         "infra-credential-invalid",

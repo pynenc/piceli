@@ -2140,6 +2140,46 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "state-key, nix-cache, s3, age, user-data) refuses another kind "
             "(infra-credential-invalid); a missing one is infra-credential-missing.",
         ),
+        "secrets backup": _C(
+            "Write the whole local secret store and the profiles, encrypted with "
+            "age to the chosen recipients, to one file.",
+            reads=(
+                "$PICELI_CREDENTIALS_DIR (every file)",
+                "$PICELI_PROFILES_DIR",
+                "--recipients-file",
+            ),
+            writes=(
+                "--to PATH (age ciphertext, mode 0600)",
+                "<credentials dir>.backup.json (recipients and the last backup's "
+                "marker; no values)",
+            ),
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.25.0. Runs the age command (PICELI_AGE, else age on PATH; "
+            "secrets-age-missing otherwise): the tar is streamed into age, no "
+            "plaintext touches the disk. Refuses an existing file without --force "
+            "(secrets-backup-exists). Prints names, kinds, the archive's sha256 and "
+            "the staleness, never a value. Exit 1 when age refuses "
+            "(secrets-backup-failed).",
+        ),
+        "secrets restore": _C(
+            "Restore the local secret store and the profiles from an encrypted backup.",
+            reads=("PATH (age ciphertext)", "--identity", "the store (digests)"),
+            writes=(
+                "$PICELI_CREDENTIALS_DIR and $PICELI_PROFILES_DIR (files 0600, "
+                "directories 0700; into a used store only with --approve)",
+            ),
+            approval_required=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="0.25.0. Decrypts in memory with age (identity file, plugin or "
+            "passphrase) and refuses an unsafe archive "
+            "(secrets-restore-archive-invalid). Into an empty store it restores "
+            "directly; otherwise it prints what it would add, what is identical "
+            "and what differs, with a digest (exit 3), and writes only with "
+            "--approve DIGEST. Never prints a value. Exit 1 when age cannot "
+            "decrypt (secrets-restore-decrypt-failed).",
+        ),
         "secrets state-key": _C(
             "Store the passphrase that encrypts an Infrastructure's OpenTofu state "
             "(--generate, or --prompt).",

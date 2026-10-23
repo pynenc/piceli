@@ -367,6 +367,55 @@ to OpenTofu in its environment only (`HCLOUD_TOKEN`), never as an argument,
 closes OpenTofu's stdin, passes no `TF_LOG`, and redacts every token and the
 passphrase from OpenTofu's output before it is shown.
 
+## Back the secret store up
+
+The store (`$PICELI_CREDENTIALS_DIR`) is the only copy of your provider
+tokens, state passphrases and the registered clusters' kubeconfigs: a lost
+laptop without a backup means an unreadable OpenTofu state. Keep an
+encrypted copy elsewhere:
+
+```console
+$ piceli secrets backup --to /Volumes/backup/piceli-secrets.age \
+    --recipient age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p \
+    --recipient age1yubikey1q2w3e...
+$ piceli secrets backup --to /Volumes/backup/piceli-secrets.age --force   # later: no flags
+```
+
+- **What it holds.** Every file under `$PICELI_CREDENTIALS_DIR`, whatever
+  its kind (the `NAME.json` credentials, `kubeconfigs/`, kinds a later
+  version adds), and the profiles of `$PICELI_PROFILES_DIR` (pointers; one
+  pointing into the store is moved with it on restore). Not the
+  `known_hosts` of an infrastructure: it sits next to its state, and
+  `piceli infra register` pins the keys again.
+- **How it is encrypted.** With the [age](https://age-encryption.org)
+  command, so `age -d -i KEY FILE | tar t` reads it without Piceli. The
+  tar is streamed into age; no plaintext touches the disk. An existing
+  file is replaced only with `--force`.
+- **Which recipients.** At least two, kept apart, so one lost key is not
+  the end: one age key whose identity lives in your password manager
+  (`age-keygen`, store the `AGE-SECRET-KEY-1...` line there, pass the
+  `age1...` public key), plus a hardware key (`age-plugin-yubikey`, a
+  `age1yubikey1...` recipient) or an SSH key (`ssh-ed25519 ...`). Pass
+  public keys only. `--recipients-file FILE` takes them one per line; the
+  recipients are remembered in `credentials.backup.json` next to the store,
+  with the time, sha256 and names of the last backup (never a value).
+- **Is it current?** `backup --json` reports `staleness`: the last backup's
+  time, the newest file's, and the names changed or added since.
+
+On a new machine, install Piceli and age, then:
+
+```console
+$ piceli secrets restore piceli-secrets.age --identity ~/backup.key   # or the hardware key's plugin
+```
+
+Into an empty store it restores at once (files `0600`, directories `0700`)
+and remembers the recipients. Into a store that is not empty it lists what
+it would add, what is identical and what differs, with a digest, exits 3
+and writes nothing; `--approve DIGEST` restores those. An archive with an
+absolute path, `..`, a link or a file outside the store is refused
+(`secrets-restore-archive-invalid`). Read the identity from the password
+manager into a file only for the restore, and delete it afterwards.
+
 ## The OS hand-off and the cluster
 
 1. **Install.** `piceli infra install machines.py:infra edge-1` renders the
@@ -425,6 +474,8 @@ the command line with their approvals.
 | `piceli secrets provider NAME --prompt` | Store a provider token | 0, 2 |
 | `piceli secrets state-key NAME --generate\|--prompt` | Store the state passphrase | 0, 2 |
 | `piceli secrets delete NAME [--kind KIND] [--yes]` | Delete a stored credential (asks first; never printed) | 0, 2, 3 |
+| `piceli secrets backup --to PATH [--recipient R] [--force]` | Back the store up, encrypted with age | 0, 1, 2 |
+| `piceli secrets restore PATH [--identity F] [--approve DIGEST]` | Restore it (plans first into a used store) | 0, 1, 2, 3 |
 
 `--tofu PATH` (or `$PICELI_TOFU`) chooses the OpenTofu binary; otherwise
 `tofu` on `PATH`. Error codes: area `infra` in {doc}`reference/errors`.

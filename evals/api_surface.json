@@ -12670,11 +12670,13 @@
     "flags": [],
     "subcommands": [
      "age",
+     "backup",
      "cluster",
      "delete",
      "git",
      "nix-cache",
      "provider",
+     "restore",
      "s3",
      "state-key",
      "user-data"
@@ -12688,6 +12690,17 @@
      "--generate",
      "--prompt",
      "--replace"
+    ],
+    "subcommands": []
+   },
+   "secrets backup": {
+    "arguments": [],
+    "flags": [
+     "--force",
+     "--json",
+     "--recipient",
+     "--recipients-file",
+     "--to"
     ],
     "subcommands": []
    },
@@ -12746,6 +12759,17 @@
     ],
     "flags": [
      "--prompt"
+    ],
+    "subcommands": []
+   },
+   "secrets restore": {
+    "arguments": [
+     "path"
+    ],
+    "flags": [
+     "--approve",
+     "--identity",
+     "--json"
     ],
     "subcommands": []
    },
@@ -13699,8 +13723,18 @@
    "secret-source-tool-missing",
    "secret-template-invalid",
    "secret-unknown-reference",
+   "secrets-age-missing",
+   "secrets-backup-empty",
+   "secrets-backup-exists",
+   "secrets-backup-failed",
+   "secrets-backup-invalid",
+   "secrets-backup-recipient-invalid",
+   "secrets-backup-recipients-missing",
    "secrets-invalid",
    "secrets-prompt-required",
+   "secrets-restore-archive-invalid",
+   "secrets-restore-decrypt-failed",
+   "secrets-restore-plan-changed",
    "secrets-token-empty",
    "secrets-token-refused",
    "server-target-identity-mismatch",
@@ -15610,6 +15644,7 @@
   "piceli.infra.machines.provider",
   "piceli.infra.machines.register",
   "piceli.infra.machines.render",
+  "piceli.infra.machines.secrets_backup",
   "piceli.infra.machines.state",
   "piceli.infra.machines.status",
   "piceli.infra.machines.tofu",
@@ -15659,6 +15694,7 @@
   "piceli.k8s.cli.release",
   "piceli.k8s.cli.render",
   "piceli.k8s.cli.restore",
+  "piceli.k8s.cli.secrets_backup",
   "piceli.k8s.cli.state",
   "piceli.k8s.cli.targets",
   "piceli.k8s.cli.ui",

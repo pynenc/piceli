@@ -70,7 +70,13 @@ JsonOption = Annotated[
     bool, typer.Option("--json", help="Print one JSON object on stdout")
 ]
 #: Failures that ran (exit 1) rather than refusals (exit 2).
-FAILED = {"infra-apply-failed", "infra-install-failed", "infra-k3s-not-ready"}
+FAILED = {
+    "infra-apply-failed",
+    "infra-install-failed",
+    "infra-k3s-not-ready",
+    "secrets-backup-failed",
+    "secrets-restore-decrypt-failed",
+}
 #: Variables a token is never read from.
 TOKEN_ENVS = (
     "HCLOUD_TOKEN",
@@ -683,3 +689,6 @@ def register(root: typer.Typer) -> None:
     secrets_app.command("state-key", context_settings=settings)(state_key_secret)
     secrets_app.command("user-data", context_settings=settings)(user_data_secret)
     secrets_app.command("delete")(delete_secret)
+    from piceli.k8s.cli.secrets_backup import register as register_backup
+
+    register_backup(secrets_app)
