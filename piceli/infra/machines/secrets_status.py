@@ -58,7 +58,11 @@ STATES = (
 )  # fmt: skip
 #: The order ``setup`` walks them in: what the owner types, what Piceli
 #: generates, the user data (right before apply), the S3 pairs.
-GROUPS = ("provider", "profile", "generated", "user-data", "s3")
+GROUPS = ("provider", "profile", "generated", "user-data", "s3", "git")
+#: 0.26.0: a build host's Git credential of private flake inputs (either kind
+#: serves), and the composition's Git Secret, which lives in the cluster.
+GIT_KINDS = ("git-token", "git-ssh-key")
+CLUSTER_GIT_KIND = "cluster-git-secret"
 _REPLACE = {"state-key", "nix-signing-key", "age-identity"}
 PENDING = "created by the next infra apply"
 #: An S3 pair the owner makes by hand (0.25.3), after its ``hint``.
@@ -91,6 +95,8 @@ class Item:
             return "user-data"
         if kind == "s3-keys":
             return "s3"
+        if kind in (*GIT_KINDS, CLUSTER_GIT_KIND):
+            return "git"
         return "provider"
 
     @property
@@ -353,6 +359,11 @@ def _state(secret: NeededSecret, index: _Index) -> tuple[str, str | None]:
 
     if secret.kind == "profile":
         return _profile_state(secret.name)
+    if secret.kind == CLUSTER_GIT_KIND:
+        return "pending", (
+            "in the cluster (Secret piceli-build-git), not in this store; "
+            "piceli cluster status shows whether it is there"
+        )
     body, why = _read(secret.name)
     if why is not None:
         return "damaged", why
@@ -370,6 +381,8 @@ def _state(secret: NeededSecret, index: _Index) -> tuple[str, str | None]:
                 )
         return "missing", None
     stored = body.get("kind")
+    if secret.kind in GIT_KINDS and stored in GIT_KINDS:
+        return "present", None
     if stored != secret.kind:
         held = f"a {stored}" if isinstance(stored, str) else "no known kind"
         return "damaged", f"holds {held}, not a {secret.kind}"

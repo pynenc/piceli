@@ -413,6 +413,44 @@ def _of_host(host: Any, builder: str | None = None) -> Iterable[NeededSecret]:
         )  # fmt: skip
 
 
+#: The composition's Git Secret (``piceli secrets git``), in the cluster.
+CLUSTER_GIT = "piceli-build-git"
+
+
+def _of_inputs(release: Any) -> Iterable[NeededSecret]:
+    """0.26.0: the Git credentials of a NixRelease's private flake inputs:
+    with ``credentials="host"`` each name ``inputs=`` declares (a
+    ``git-token`` or a ``git-ssh-key``), made by the owner and needed in the
+    build host's own store; with ``credentials="controller"`` the
+    composition's Git Secret in the cluster."""
+    from piceli.infra.machines.credentials import _SET_UP
+
+    builder = release.builder
+    if release.credentials == "controller":
+        yield NeededSecret(
+            CLUSTER_GIT, "cluster-git-secret", "owner",
+            "piceli secrets git --cluster MODULE:ATTR --prompt",
+            f"Git token NixRelease {release.name} fetches its private flake "
+            "inputs with (credentials=\"controller\": sealed per build)",
+            where="in the cluster, not this store: piceli cluster status shows it",
+        )  # fmt: skip
+        return
+    names: dict[str, list[str]] = {}
+    for name, credential in release.inputs:
+        names.setdefault(credential, []).append(name)
+    for credential, inputs in names.items():
+        yield NeededSecret(
+            credential, "git-token", "owner",
+            _SET_UP["git-token"].format(credential),
+            f"Git credential (git-token or git-ssh-key) of flake input "
+            f"{', '.join(inputs)} of NixRelease {release.name}",
+            where=f"in the Piceli secrets of build host {builder}: it fetches the "
+            "input before each build; move it with piceli secrets backup --only "
+            "and restore",
+            build_host=builder,
+        )  # fmt: skip
+
+
 def needed_secrets(*declarations: Any) -> list[NeededSecret]:
     """Every secret the declarations need, once per name (first purpose
     wins; an ``infra-apply`` one over an ``operator`` one; a ``where`` that
@@ -442,6 +480,7 @@ def needed_secrets(*declarations: Any) -> list[NeededSecret]:
             yield from _of_host(item)
         elif isinstance(item, NixRelease):
             yield from _of_host(item.host, item.builder)
+            yield from _of_inputs(item)
         elif isinstance(item, DevBuilds):
             return
         elif isinstance(item, (list, tuple, set, frozenset)):

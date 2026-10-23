@@ -220,9 +220,17 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 - **`builder serve` checks them:** at start it warns per release of an
   input whose credential the host lacks, and `builder serve --check`
   claims nothing and prints `piceli.builder-check.v1` (each release's mode,
-  inputs and credential states; exit 1 when one is missing). `piceli
-  secrets status MODULE` lists each NixRelease's mode and credentials
-  (`nix_inputs`).
+  inputs and credential states; exit 1 when one is missing).
+- **`needed_secrets()`, `secrets status` and `secrets setup`** list each
+  credential a NixRelease declares in `inputs=` as an owner-made secret
+  needed on its builder (`where` names the build host; once stored, the next
+  step is the `secrets backup --only ... --recipient` transfer and `restore`
+  there), and, with `credentials="controller"`, the composition's Git Secret
+  `piceli-build-git` (in the cluster) instead; `secrets status` also gives
+  each release's mode (`nix_inputs`).
+- **GC roots for fetched inputs.** On a native build host each fetched tree
+  gets an indirect GC root, held from the fetch until the build ended, then
+  removed with its temporary directory.
 - **`piceli dev nix build --input NAME[=CREDENTIAL]`** adds private inputs
   to a hand-run build; with `--publish`, the composition's `NixRelease` of
   the output adds its own, and the plan lists them.

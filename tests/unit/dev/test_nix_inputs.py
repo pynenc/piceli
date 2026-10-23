@@ -249,10 +249,14 @@ class FakeNix:
 
     def __init__(self, fail: set[str] | None = None) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.roots: list[list[str]] = []
         self.fail = fail or set()
 
     def __call__(self, argv: list[str], **kwargs: Any) -> Any:
         env = kwargs["env"]
+        if "--out-link" in argv:  # a GC root of a fetched tree
+            self.roots.append(argv[argv.index("--out-link") + 1 :])
+            return subprocess.CompletedProcess(argv, 0, b"", b"")
         locked = json.loads(_unquote(argv[-1]))
         seen = {"argv": argv, "env": dict(env), "locked": locked}
         if env.get("GIT_ASKPASS"):
@@ -469,3 +473,64 @@ def test_secrets_status_says_each_releases_mode_and_credentials(
 
     with pytest.raises(CompositionError):
         NixRelease(host, source=source, builder="mini", credentials="cluster")
+
+
+def test_each_fetched_tree_gets_a_gc_root_until_the_caller_removes_it(
+    tmp_path: Path,
+) -> None:
+    request, _ = _request()
+    fake = FakeNix()
+    (tmp_path / "nix").write_text("#!/bin/sh\n")
+    (tmp_path / "nix").chmod(0o755)
+    roots = tmp_path / "roots"
+    roots.mkdir()
+    outcome = nix_fetch.fetch({**request, "roots": str(roots)}, runner=fake,
+                              environ={"PATH": str(tmp_path)})  # fmt: skip
+    assert [item["rooted"] for item in outcome["inputs"]] == [True, True]
+    store = f"/nix/store/{'b' * 32}-source"
+    assert fake.roots == [[str(roots / "0-app"), store], [str(roots / "1-lib"), store]]
+    plain = nix_fetch.fetch(request, runner=FakeNix(), environ={"PATH": str(tmp_path)})
+    assert "rooted" not in plain["inputs"][0]
+
+
+def test_needed_secrets_list_each_releases_input_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.infra import NixCache, NixHost, NixRelease, Source, Tag
+    from piceli.infra.machines.keys import needed_secrets
+    from piceli.infra.machines.secrets_status import report
+
+    monkeypatch.setenv("PICELI_CREDENTIALS_DIR", str(tmp_path / "credentials"))
+    cache = NixCache("cache-1:" + "A" * 43 + "=", url="file:///tmp/c")
+    host = NixHost("web-1", server="ssh://root@web-1.example.org", flake=".#web-1",
+                   follow=Tag("web-v*"), cache=cache)  # fmt: skip
+    source = Source("https://github.com/org/hosts", name="hosts")
+    own = NixRelease(host, source=source, builder="mini",
+                     inputs={"app": "app-key", "lib": "app-key"})  # fmt: skip
+    found = {s.name: s for s in needed_secrets(own)}
+    secret = found["app-key"]
+    assert (secret.kind, secret.created_by, secret.build_host) == (
+        "git-token",
+        "owner",
+        "mini",
+    )
+    assert "flake input app, lib of NixRelease web-1" in secret.purpose
+    assert "build host mini" in str(secret.where)
+    sealed = NixRelease(host, source=source, builder="mini", credentials="controller")
+    names = {s.name: s for s in needed_secrets(sealed)}
+    assert names["piceli-build-git"].kind == "cluster-git-secret"
+    assert "app-key" not in names
+
+    rows = {r["name"]: r for r in report("infra.py", {"own": own})["secrets"]}
+    assert rows["app-key"]["state"] == "pending"
+    assert rows["app-key"]["next"].startswith("piceli secrets git-token app-key")
+    # Stored here (a deploy key serves too): present, and carried to mini.
+    key = "-----BEGIN OPENSSH PRIVATE KEY-----\nx\n-----END OPENSSH PRIVATE KEY-----\n"
+    nix_inputs.save_git_ssh_key("app-key", "github.com", key)
+    rows = {r["name"]: r for r in report("infra.py", {"own": own})["secrets"]}
+    assert rows["app-key"]["state"] == "present"
+    assert rows["app-key"]["next"].startswith("piceli secrets backup --only app-key")
+    assert "AGE_RECIPIENT_OF_mini" in rows["app-key"]["next"]
+    rows = {r["name"]: r for r in report("infra.py", {"s": sealed})["secrets"]}
+    assert rows["piceli-build-git"]["state"] == "pending"
+    assert "piceli cluster status" in rows["piceli-build-git"]["detail"]

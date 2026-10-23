@@ -15,7 +15,8 @@ host:
   no output, no log, and no file of the published closure or the fetched
   tree.
 
-Everything lives in ``tmp_path``; the store paths it created are deleted at
+A tree fetched with a roots directory survives ``nix store delete`` until
+that directory is removed. Everything lives in ``tmp_path``; the store paths it created are deleted at
 the end when Nix allows it.
 """
 
@@ -269,6 +270,25 @@ def test_a_private_input_is_fetched_on_the_host_and_never_reaches_the_build(
         assert token not in manifest
         assert not list((tmp_path / "xdg-cache").rglob("app*"))  # no clone kept
         assert git(source, "status", "--porcelain") == ""
+
+        # 5. A fetched tree has a GC root until its directory goes.
+        from piceli.dev import nix_inputs
+
+        for link in (tmp_path / "state").rglob(nix.OUT_LINK):
+            link.unlink()  # the build no longer holds the tree's dependents
+        _nix("store", "delete", store_path, check=False)
+        _nix("store", "delete", tree, check=False)
+        pairs = nix_inputs.resolve(
+            nix_inputs.covered(json.dumps(lock), declared={"app": "app-token"}),
+            json.dumps(lock),
+        )
+        roots = tmp_path / "roots"
+        roots.mkdir()
+        nix_inputs.fetch_inputs(host, IMAGE)(pairs, lambda _l: None, roots=roots)
+        held = _nix("store", "delete", tree, check=False)
+        assert held.returncode != 0 and Path(tree).is_dir()
+        shutil.rmtree(roots)
+        assert _nix("store", "delete", tree, check=False).returncode == 0
     finally:
         for link in (tmp_path / "state").rglob(nix.OUT_LINK):
             link.unlink()

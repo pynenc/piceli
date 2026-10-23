@@ -134,7 +134,7 @@ def _worker(
         build=build or fake_build,
         push=fake_push,
         host=host,
-        fetch=(lambda pairs, _say: {"state": "fetched", "inputs": []})
+        fetch=(lambda pairs, _say, **_kw: {"state": "fetched", "inputs": []})
         if fetch == "fake"
         else fetch,  # type: ignore[arg-type]
     )
@@ -825,7 +825,7 @@ def test_the_plan_names_the_private_inputs_and_the_host_fetches_them_first(
     }
     order: list[str] = []
 
-    def fetch(pairs: Any, say: Any) -> dict[str, Any]:
+    def fetch(pairs: Any, say: Any, **_kw: Any) -> dict[str, Any]:
         ((entry, locked),) = pairs
         order.append("fetch")
         assert entry["credential"] == "app-token" and locked["url"] == APP
@@ -851,7 +851,7 @@ def test_an_unreachable_input_fails_the_release_before_any_build(
     controller.poll_once()
     built: list[str] = []
 
-    def fetch(pairs: Any, say: Any) -> dict[str, Any]:
+    def fetch(pairs: Any, say: Any, **_kw: Any) -> dict[str, Any]:
         raise DevError(
             "infra-nix-input-unreachable",
             f"app git+{APP} (credential app-token over HTTPS): fatal: "
@@ -950,7 +950,9 @@ def test_a_controller_release_seals_its_git_token_to_the_claiming_host_only(
 
     seen: list[Any] = []
 
-    def fetch(pairs: Any, say: Any, controller: Any = None) -> dict[str, Any]:
+    def fetch(
+        pairs: Any, say: Any, controller: Any = None, **_kw: Any
+    ) -> dict[str, Any]:
         seen.append(controller)
         return {"state": "fetched", "inputs": []}
 

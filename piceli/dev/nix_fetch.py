@@ -30,7 +30,10 @@ ever reaches the input it was given for:
 - ``none``: the host's own access (a public input, or its own Git
   credential helpers and SSH agent on a native host).
 
-Nix's fetcher cache (``XDG_CACHE_HOME``) is in the temporary directory
+With ``roots`` (a directory of the build host the client removes when the
+build ended; a native host's), each fetched tree also gets an indirect GC
+root there, so a garbage collection between the fetch and the build cannot
+take it. Nix's fetcher cache (``XDG_CACHE_HOME``) is in the temporary directory
 too, so no clone of a private repository stays on the host; the directory is
 removed on every exit. The fetched trees land in the host's store (through
 its daemon), where the build finds them by their ``narHash`` without
@@ -92,6 +95,12 @@ def fetch_expr(locked: Mapping[str, Any]) -> str:
 
 def eval_argv(nix: str, locked: Mapping[str, Any]) -> list[str]:
     return [nix, *FEATURES, "eval", "--raw", "--expr", fetch_expr(locked)]
+
+
+def root_argv(nix: str, link: str, path: str) -> list[str]:
+    """An indirect GC root ``link`` of the fetched tree ``path`` (registered
+    with the daemon; it holds while ``link`` exists)."""
+    return [nix, *FEATURES, "build", "--out-link", link, path]
 
 
 def check_locked(locked: Any) -> dict[str, Any] | None:
@@ -233,7 +242,19 @@ def fetch(
             if result.returncode != 0 or not path.startswith("/nix/store/"):
                 return {"state": "failed", "input": name, "failure": "unreachable",
                         "detail": reason(lines), "inputs": done}  # fmt: skip
-            done.append({"name": name, "store_path": path})
+            entry: dict[str, Any] = {"name": name, "store_path": path}
+            roots = request.get("roots")
+            if isinstance(roots, str) and roots:
+                # Held until the client removes ``roots`` after the build: a
+                # garbage collection in between cannot take the tree.
+                link = os.path.join(roots, f"{index}-{name or 'input'}")
+                rooted = runner(root_argv(nix, link, path), env=env,
+                                capture_output=True, timeout=600)  # fmt: skip
+                entry["rooted"] = rooted.returncode == 0
+                if not entry["rooted"]:
+                    emit(f"warning: no GC root for input {name}; a garbage "
+                         "collection before the build would refetch it")  # fmt: skip
+            done.append(entry)
     return {"state": "fetched", "inputs": done}
 
 

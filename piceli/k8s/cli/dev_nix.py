@@ -468,8 +468,18 @@ def build(
             "dev-host-unavailable",
             f"build host {chosen.name}: {state.detail or state.quarantined}",
         )
+    import contextlib
+
+    from piceli.tempfiles import temporary_directory
+
+    held = contextlib.ExitStack()  # 0.26.0: the inputs' GC roots, until built
     if private:
-        _fetch_private(private, chosen, chosen_profile, root_dir, rev)
+        roots = Path(held.enter_context(temporary_directory("nix-input-roots")))
+        try:
+            _fetch_private(private, chosen, chosen_profile, root_dir, rev, roots)
+        except BaseException:  # a refusal exits: the directory still goes
+            held.close()
+            raise
     request = RunRequest(
         root=SourceRequest(repository_name(root_dir), root_dir, rev),
         command=build_argv(target),
@@ -492,7 +502,8 @@ def build(
         DockerPort(chosen, dev) if chosen.kind == "docker" else NativePort(chosen, dev)
     )
     try:
-        result = run_on(port, dev, request, say=say, log=log, host=chosen)
+        with held:
+            result = run_on(port, dev, request, say=say, log=log, host=chosen)
     except DevError as error:
         reject(error.code, str(error))
     say(run_summary(result))
@@ -646,7 +657,12 @@ def _release_of(
 
 
 def _fetch_private(
-    private: list[dict[str, str]], host: Any, profile: Any, root: Path, rev: str | None
+    private: list[dict[str, str]],
+    host: Any,
+    profile: Any,
+    root: Path,
+    rev: str | None,
+    roots: Path | None = None,
 ) -> None:
     """Fetch the private inputs on the build host with this machine's
     credentials, before the build (else ``infra-nix-input-unreachable``)."""
@@ -655,7 +671,7 @@ def _fetch_private(
 
     try:
         pairs = resolve(private, _lock_of(root, rev))
-        fetch_inputs(host, str(profile.image))(pairs, say)
+        fetch_inputs(host, str(profile.image))(pairs, say, roots=roots)
     except DevError as error:
         reject(error.code, str(error))
 

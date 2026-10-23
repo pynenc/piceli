@@ -1134,9 +1134,15 @@ class Publisher:
         cache = self.cache_for(entry)
         if cache is None:
             raise DevError("dev-nix-cache-invalid", "no key for the plan's cache")
-        self.fetch_inputs(plan, checkout, say, stage, controller=controller)
-        with stage("build"):
-            store_path = self.build(checkout, plan["attribute"], say)
+        from piceli.tempfiles import temporary_directory
+
+        # 0.26.0: the fetched inputs' GC roots live here until the build ended.
+        with temporary_directory("nix-input-roots") as roots:
+            self.fetch_inputs(
+                plan, checkout, say, stage, controller=controller, roots=Path(roots)
+            )
+            with stage("build"):
+                store_path = self.build(checkout, plan["attribute"], say)
         with stage("publish"):
             secret, s3_keys = cache_keys(cache)
             done = publish_closure(
@@ -1154,6 +1160,7 @@ class Publisher:
         stage: Callable[[str], Any],
         *,
         controller: Mapping[str, Any] | None = None,
+        roots: Path | None = None,
     ) -> None:
         """Fetch the plan's private inputs on this host, before any build
         (0.26.0): each one as ``flake.lock`` of the checkout locks it.
@@ -1175,7 +1182,10 @@ class Publisher:
                     f"{first['input']} {first['url']}: this build host fetches no "
                     "flake inputs (Publisher(fetch=))",
                 )
-            self.fetch(pairs, say, **({"controller": controller} if controller else {}))
+            options: dict[str, Any] = {"controller": controller} if controller else {}
+            if roots is not None:
+                options["roots"] = roots
+            self.fetch(pairs, say, **options)
 
 
 def cache_keys(cache: Any) -> tuple[str, tuple[str, str] | None]:

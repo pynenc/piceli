@@ -167,12 +167,12 @@ machine, then carried over):
 ```sh
 # A fine-grained token with Contents: read, for that host only:
 piceli secrets git-token git --host github.com --prompt
-# Or a read-only deploy key, with the host's key pinned:
+# Or a read-only deploy key, with the host key pinned:
 ssh-keyscan github.com > github.known_hosts
 piceli secrets git-ssh-key git --host github.com --file deploy_key \
   --known-hosts github.known_hosts
-# Made elsewhere: carry it as the cache's keys go.
-piceli secrets backup --only git --to git.age --recipient <the build host's age1...>
+# Made elsewhere: carry it as the cache keys go.
+piceli secrets backup --only git --to git.age --recipient AGE_RECIPIENT_OF_mini
 piceli secrets restore git.age                        # on the build host
 piceli builder serve --cluster infra.py:cluster --host mini \
   --publish infra.py:cache --check                     # every credential present?
@@ -183,8 +183,16 @@ token once (`piceli secrets git --cluster infra.py:cluster --prompt`, as
 for its sources), declare `NixRelease(..., credentials="controller")`, and
 run `builder serve` on the build host as before: nothing is stored there.
 
-`piceli secrets status MODULE` lists, per `NixRelease`, its mode and the
-credentials it names (`nix_inputs`), and whether this machine holds them.
+`piceli secrets status MODULE` lists each credential a `NixRelease`
+declares in `inputs=` as an owner-made secret (`git-token`; a stored
+`git-ssh-key` serves too) needed on its build host: `pending` with the
+command that stores it, then, once stored here, the transfer as its next
+step (`piceli secrets backup --only NAME --to PATH --recipient <the build
+host's age1...>`, then `piceli secrets restore PATH` there), as for the
+cache's signing key; `piceli secrets setup` leaves them for you to store
+(a token needs its `--host`). With `credentials="controller"` it lists the
+composition's Git Secret `piceli-build-git` instead, which lives in the
+cluster. Its `nix_inputs` section gives each release's mode.
 
 How each input is fetched, by the fetch step (a native host's Python, or a
 `docker run --rm -i` of the run image with the host's `/nix`, as the
@@ -203,7 +211,12 @@ publisher; the credential on its stdin only, written to `0600` files in a
   host's own credential helpers and SSH agent).
 
 Nix's fetcher cache lives in the temporary directory too, so no clone of
-the private repository stays on the host. On a docker host the run image
+the private repository stays on the host. On a native build host each
+fetched tree gets an indirect GC root in a temporary directory, held until
+the build ended, so a garbage collection in between cannot take it. A docker
+host's fetch step has no directory of that host to keep a root in: there a
+collection between the fetch and the build (seconds) makes the build fail
+on the input, and a retry fetches it again. On a docker host the run image
 needs `git` (and `python3`). An input that cannot be fetched fails the
 release before any build, naming the input, its URL (never a credential)
 and the credential tried:

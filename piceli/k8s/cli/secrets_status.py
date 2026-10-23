@@ -51,6 +51,7 @@ _TITLES = {
     "generated": "2. Keys Piceli generates",
     "user-data": "3. User data: needed only when infra apply creates the server",
     "s3": "4. S3 key pairs",
+    "git": "4. Git credentials of private flake inputs (0.26.0)",
 }
 
 
@@ -319,6 +320,12 @@ def _user_data(walk: _Walk, item: Item) -> None:
 
 
 def _step(walk: _Walk, item: Item, key_names: Mapping[str, list[str]]) -> None:
+    if item.group == "git" and item.state != "present":
+        # A token needs its host (--host), a deploy key its file: the owner
+        # runs the next command here or on the build host.
+        say(f"  {item.secret.name}: {item.secret.purpose}; next: {item.next}")
+        walk.result(item, "later", next=item.next)
+        return
     if item.state == "pending" and item.created_by == "owner":
         # An S3 pair the owner made by hand (0.25.3): stored here if given.
         say(f"  {item.secret.name}: {item.secret.purpose}; {item.detail}")

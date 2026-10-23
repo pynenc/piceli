@@ -613,15 +613,24 @@ def run_fetcher(
 
 
 def fetch_inputs(host: Any, image: str) -> Callable[..., dict[str, Any]]:
-    """``(pairs, say) -> outcome``: fetch the covered inputs (:func:`resolve`)
-    on ``host`` with this machine's credentials (:func:`plan_fetch`)."""
+    """``(pairs, say, controller=None, roots=None) -> outcome``: fetch the
+    covered inputs (:func:`resolve`) on ``host`` with this machine's
+    credentials (:func:`plan_fetch`); on a native host, with ``roots`` (a
+    directory the caller removes when the build ended), each tree gets a GC
+    root there."""
 
     def run(
         pairs: Sequence[tuple[Mapping[str, str], Mapping[str, Any]]],
         say: Callable[[str], None],
         controller: Mapping[str, Any] | None = None,
+        roots: Any = None,
     ) -> dict[str, Any]:
         request, tried = plan_fetch(pairs, controller=controller)
+        if roots is not None and host.kind == "native":
+            # GC roots of the fetched trees, held until the caller removes
+            # ``roots`` after the build. A docker host's fetch step has no
+            # directory of that host to keep a root in.
+            request["roots"] = str(roots)
         for item in tried:
             say(f"input {item['input']} {item['url']} ({item['tried']})")
         outcome = run_fetcher(fetcher_argv(host, image), request, tried, say=say)
