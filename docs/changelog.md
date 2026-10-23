@@ -107,6 +107,16 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   the controller's platforms), builds it with `builder serve`'s code (one
   OCI index over the platforms) and offers it the same way. New codes
   `train-images-failed`, `train-host-unavailable`, `train-run-unknown`.
+- **Bounded caches: `Train(retention=Retention(...))` and `piceli
+  train-prune`.** At the end of every run the train prunes leftover trial
+  worktrees, cargo target directories unused for 14 days or beyond 100 GiB
+  per train and repository (least recently used first), content-store
+  records unused for 30 days or beyond 20 GiB (shared by the machine) and
+  the bytes no record keeps, and runs older than 30 days beyond the newest
+  20; never what a running trial holds. The result reports the sizes kept
+  (`prune`). `piceli train-prune NAME|SPEC [--dry-run] [--json]` does the
+  same by hand. The cache layout is now `checkouts/<train>/<repo>/` and
+  `targets/<train>/<repo>/`.
 
 ## Version 0.25.3
 

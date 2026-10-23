@@ -85,6 +85,110 @@ def _summary(result: Mapping[str, Any]) -> None:
         b["verdict"] == "joined" for b in result["branches"]
     ):
         say("  nothing moved: run with --promote to tag and fast-forward")
+    pruned = result.get("prune") or {}
+    if pruned.get("sizes"):
+        say("  cache: " + _sizes_line(pruned))
+
+
+def _sizes_line(pruned: Mapping[str, Any]) -> str:
+    from piceli.maintenance.cache import format_size
+
+    sizes, limits = pruned["sizes"], pruned.get("limits") or {}
+    line = (
+        f"store {format_size(sizes['store'])} of {limits.get('store_size')}, "
+        f"targets {format_size(sizes['targets'])} of {limits.get('targets_size')}, "
+        f"runs {format_size(sizes['runs'])}"
+    )
+    if pruned.get("freed"):
+        line += f"; pruned {format_size(pruned['freed'])}"
+    return line
+
+
+def train_prune(
+    train: Annotated[
+        str,
+        typer.Argument(
+            help="The train's name, or its spec (MODULE[:ATTR] or file.py[:ATTR]) "
+            "to use its Train(retention=, cache=)"
+        ),
+    ],
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Say what would go; remove nothing")
+    ] = False,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Print the result object on stdout")
+    ] = False,
+    state_dir: Annotated[
+        Path | None,
+        typer.Option("--state-dir", help="Train state root (as for piceli train)"),
+    ] = None,
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--cache-dir",
+            help="The train cache (default $XDG_CACHE_HOME/piceli/train, else "
+            "~/.cache/piceli/train; a spec's Train(cache=) wins)",
+        ),
+    ] = None,
+) -> None:
+    """Bound what a train keeps: worktrees, cargo targets, the content store, runs."""
+    import re
+
+    from piceli.maintenance.cache import format_size
+    from piceli.train.local import cache_root
+    from piceli.train.model import Retention, TrainError
+    from piceli.train.prune import prune
+    from piceli.train.state import TrainState
+
+    retention = Retention()
+    cache = cache_root(str(cache_dir) if cache_dir else None)
+    name = train
+    if ":" in train or train.endswith(".py"):
+        from piceli.train.engine import locate
+
+        try:
+            loaded, _repo, _path = locate(train, Path.cwd())
+        except TrainError as error:
+            reject(error.code, str(error))
+        name, retention = loaded.train.name, loaded.train.retention
+        if loaded.train.cache:
+            cache = cache_root(loaded.train.cache)
+    elif not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?", train):
+        reject("train-not-found", f"{train!r} is neither a train name nor a spec")
+    result = prune(
+        name,
+        cache=cache,
+        state_root=TrainState.for_train(name, state_dir).root,
+        retention=retention,
+        dry_run=dry_run,
+    )
+    verb = "would remove" if dry_run else "removed"
+    say(
+        f"train {name}: {verb} {len(result['removed'])} "
+        f"({format_size(result['freed'])})"
+    )
+    limits = result["limits"]
+    sizes = result["sizes"]
+    say(
+        f"  store      {format_size(sizes['store']):>10} of {limits['store_size']} "
+        f"(unused {limits['store_days']} days go)"
+    )
+    say(
+        f"  targets    {format_size(sizes['targets']):>10} of {limits['targets_size']} "
+        f"(unused {limits['target_days']} days go)"
+    )
+    say(f"  checkouts  {format_size(sizes['checkouts']):>10}")
+    say(
+        f"  runs       {format_size(sizes['runs']):>10} (the newest "
+        f"{limits['keep_runs']} kept; older than {limits['log_days']} days go)"
+    )
+    for item in result["removed"]:
+        say(
+            f"  - {item['kind']:<13} {format_size(int(item['bytes'])):>10}  "
+            f"{item['path']}  ({item['why']})"
+        )
+    if as_json:
+        emit_json(result)
 
 
 def train(
@@ -205,3 +309,4 @@ def train(
 
 def register(root: typer.Typer) -> None:
     root.command("train")(train)
+    root.command("train-prune")(train_prune)

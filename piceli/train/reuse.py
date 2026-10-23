@@ -20,8 +20,12 @@ recorded: a failing or flaky step runs again.
 
 Layout under ``<cache>/store`` (``piceli.train.local.cache_root``)::
 
-    keys/<key>.json          the record of a passed step
+    keys/<key>.json          the record of a passed step (its mtime: last use)
     blobs/<aa>/<sha256>      output bytes, by digest
+
+The store is bounded (``Train(retention=)``, :mod:`piceli.train.prune`):
+records unused for ``store_days`` go, then the least recently used until
+the bytes they keep fit ``store_size``; unreferenced bytes go with them.
 
 Importing this module is side-effect free.
 """
@@ -142,6 +146,10 @@ class Store:
         for item in record.get("outputs") or ():
             if not self._blob(str(item.get("sha256"))).is_file():
                 return None
+        try:  # its last use, for the least-recently-used prune
+            os.utime(self._record(key))
+        except OSError:
+            pass
         return record
 
     def _put(self, path: Path) -> str:

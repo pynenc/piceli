@@ -512,6 +512,52 @@ def step_from_dict(data: Mapping[str, Any]) -> Step:
     return kind(data["name"], **common, **extra)
 
 
+_SIZE = re.compile(r"\d+(\.\d+)?\s*([KMGT]i?B?|B)?", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class Retention:
+    """How much a train keeps on this machine (pruned at the end of each
+    run, and by ``piceli train-prune``).
+
+    :param store_size: The content store's bytes (shared by every train of
+        the machine), least recently used first beyond it.
+    :param store_days: A content-store record unused this long goes.
+    :param targets_size: The cargo target directories of this train and
+        repository, least recently used first beyond it.
+    :param target_days: A target directory unused this long goes.
+    :param log_days: A run's record and logs older than this go...
+    :param keep_runs: ...except the newest ``keep_runs`` runs.
+    """
+
+    store_size: str = "20GiB"
+    store_days: int = 30
+    targets_size: str = "100GiB"
+    target_days: int = 14
+    log_days: int = 30
+    keep_runs: int = 20
+
+    def __post_init__(self) -> None:
+        for name in ("store_size", "targets_size"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not _SIZE.fullmatch(value.strip()):
+                raise _invalid(f"retention {name} is a size like 20GiB")
+        for name in ("store_days", "target_days", "log_days", "keep_runs"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 1:
+                raise _invalid(f"retention {name} is a positive integer")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "store_size": self.store_size,
+            "store_days": self.store_days,
+            "targets_size": self.targets_size,
+            "target_days": self.target_days,
+            "log_days": self.log_days,
+            "keep_runs": self.keep_runs,
+        }
+
+
 @dataclass(frozen=True)
 class Train:
     """A merge train: candidates join ``base`` one tested merge at a time.
@@ -551,6 +597,8 @@ class Train:
     :param cache: Where the shared target directories, the content store and
         the slot locks live (default ``$XDG_CACHE_HOME/piceli/train``, else
         ``~/.cache/piceli/train``).
+    :param retention: How much of it, and of the run history, is kept
+        (:class:`Retention`; pruned at the end of each run).
 
     The train's identity (``name``, ``repo``, ``base``, ``tested``, ``tag``,
     ``remote``) and where it runs (``builds``, ``hosts``, ``local_slots``,
@@ -574,6 +622,7 @@ class Train:
     sccache: bool | str = "auto"
     parallel: str = "auto"
     cache: str | None = None
+    retention: Retention = field(default_factory=Retention)
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _NAME.fullmatch(self.name):
@@ -642,6 +691,8 @@ class Train:
             raise _invalid('sccache is "auto", True or False')
         if self.parallel not in PARALLEL:
             raise _invalid('parallel is "auto", "on" or "off"')
+        if not isinstance(self.retention, Retention):
+            raise _invalid("retention is a Retention(...)")
         if self.cache is not None and (
             not isinstance(self.cache, str) or not self.cache
         ):
@@ -701,6 +752,8 @@ class Train:
             value = getattr(self, key)
             if value != default:
                 body[key] = list(value) if isinstance(value, tuple) else value
+        if self.retention != Retention():
+            body["retention"] = self.retention.to_dict()
         return body
 
     @classmethod
@@ -721,6 +774,7 @@ class Train:
             sccache=data.get("sccache", "auto"),
             parallel=data.get("parallel", "auto"),
             cache=data.get("cache"),
+            retention=Retention(**(data.get("retention") or {})),
         )
 
 

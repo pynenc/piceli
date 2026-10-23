@@ -165,6 +165,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli support-bundle`](#cli-support-bundle) | Collect a read-only, redacted snapshot of a namespace (no Secrets, no env values). | reads | no |
 | [`piceli targets`](#cli-targets) | Every environment and NixHost: commit or tag, pinned product commit, checks, state. | reads | no |
 | [`piceli train`](#cli-train) | Merge branches onto the base one tested merge at a time; eject failures. | none | yes |
+| [`piceli train-prune`](#cli-train-prune) | Bound what a train keeps: worktrees, cargo targets, the content store, runs. | none | no |
 | [`piceli ui backup`](#cli-ui-backup) | Back up an offline UI control store and its release journal. | none | no |
 | [`piceli ui cluster-observe`](#cli-ui-cluster-observe) | Serve OIDC-scoped cluster observation and configured delivery. | writes | yes |
 | [`piceli ui cluster-serve`](#cli-ui-cluster-serve) | Serve OIDC-scoped cluster observation and configured delivery. | writes | yes |
@@ -3868,6 +3869,30 @@ Merge branches onto the base one tested merge at a time; eject failures.
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** 0.26.0. Runs the train's steps, which run code: the explicit branch list is the approval, and --promote/--push the approval to move refs and push. Without --promote no ref changes; nothing is pushed without --push (which needs --promote). Each candidate set is merged with git merge --no-ff onto the train's head in a temporary worktree; its steps come from the merged tree's spec. A failing set is bisected. --json prints one piceli.train.v1 object. Exit 0: every branch joined (or was already in) and the promotion and push asked for succeeded; 1: a branch was ejected (train-step-failed, train-step-timeout, train-merge-conflict, train-spec-invalid), the promotion was refused (train-not-fast-forward, train-checkout-dirty), a publish step or the push failed; 2: rejected before anything ran (train-not-found, train-branch-unknown, train-busy, ...). Steps may run on the train's build hosts (Train(builds=, hosts=)) through the dev run machinery; a step with inputs that passed before is reused. --promote-run RUN promotes an earlier run's head without running it (train-run-unknown, train-not-fast-forward); no host for a step fails the run (train-host-unavailable).
+
+(cli-train-prune)=
+### `piceli train-prune`
+
+Bound what a train keeps: worktrees, cargo targets, the content store, runs.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TRAIN` | text | required |  |
+| `--dry-run` | boolean | `False` | Say what would go; remove nothing |
+| `--json` | boolean | `False` | Print the result object on stdout |
+| `--state-dir` | path |  | Train state root (as for piceli train) |
+| `--cache-dir` | path |  | The train cache (default $XDG_CACHE_HOME/piceli/train, else ~/.cache/piceli/train; a spec's Train(cache=) wins) |
+
+**Contract**
+
+- **Reads:** the train cache ($XDG_CACHE_HOME/piceli/train), the train's state directory (runs), a train spec, when given instead of a name (its retention)
+- **Writes:** removes leftover worktrees, unused or least recently used target directories and store records, unreferenced store bytes, old runs
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. Never removes what a running trial holds, the newest runs (keep_runs) or flaky.jsonl. --dry-run removes nothing. Every train run prunes the same way at its end. --json prints one piceli.train-prune.v1 object (removed: path, kind, bytes, why; sizes and limits).
 
 (cli-ui-backup)=
 ### `piceli ui backup`

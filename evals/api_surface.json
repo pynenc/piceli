@@ -9458,6 +9458,28 @@
    },
    "pydantic": true
   },
+  "Retention": {
+   "attrs": [
+    "keep_runs",
+    "log_days",
+    "store_days",
+    "store_size",
+    "target_days",
+    "targets_size",
+    "to_dict"
+   ],
+   "init": [
+    "keep_runs",
+    "log_days",
+    "store_days",
+    "store_size",
+    "target_days",
+    "targets_size"
+   ],
+   "methods": {
+    "to_dict": []
+   }
+  },
   "Role": {
    "attr_types": {
     "verbs": "APIRequestVerb"
@@ -10922,6 +10944,7 @@
   },
   "Train": {
    "attr_types": {
+    "retention": "Retention",
     "steps": "Step"
    },
    "attrs": [
@@ -10938,6 +10961,7 @@
     "publish_steps",
     "remote",
     "repo",
+    "retention",
     "sccache",
     "steps",
     "tag",
@@ -10958,6 +10982,7 @@
     "parallel",
     "remote",
     "repo",
+    "retention",
     "sccache",
     "steps",
     "tag",
@@ -11442,6 +11467,7 @@
      "support-bundle",
      "targets",
      "train",
+     "train-prune",
      "ui",
      "watch"
     ]
@@ -13641,6 +13667,18 @@
      "--promote",
      "--promote-run",
      "--push",
+     "--state-dir"
+    ],
+    "subcommands": []
+   },
+   "train-prune": {
+    "arguments": [
+     "train"
+    ],
+    "flags": [
+     "--cache-dir",
+     "--dry-run",
+     "--json",
      "--state-dir"
     ],
     "subcommands": []
@@ -16314,6 +16352,9 @@
    "PublishStep": {
     "class": "PublishStep"
    },
+   "Retention": {
+    "class": "Retention"
+   },
    "Step": {
     "class": "Step"
    },
@@ -16700,6 +16741,7 @@
   "piceli.train.impact",
   "piceli.train.local",
   "piceli.train.model",
+  "piceli.train.prune",
   "piceli.train.reuse",
   "piceli.train.runner",
   "piceli.train.spec",

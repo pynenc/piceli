@@ -220,6 +220,7 @@ class TrainRun:
         self.finished: float | None = None
         self.last: dict[str, Any] | None = None
         self.promoted_from: str | None = None
+        self.pruned: dict[str, Any] | None = None
 
     # ----------------------------------------------------------- the run
 
@@ -290,12 +291,40 @@ class TrainRun:
             self.flakes = self.state.record_flakes(
                 self._observed_flakes(), self.run_id, at
             )
-            result = self.result()
-            self.state.write_record(self.run_id, result)
+            result = self._finish()
             self.emit(
                 "run-finished", state=result["state"], duration=result["duration"]
             )
             return result
+
+    def _finish(self) -> dict[str, Any]:
+        """Write the record, prune what the train keeps (never failing the
+        run), and write the record again with the sizes."""
+        self.state.write_record(self.run_id, self.result())
+        try:
+            from piceli.train.local import cache_root
+            from piceli.train.prune import prune
+
+            done = prune(
+                self.train.name,
+                cache=cache_root(self.train.cache),
+                state_root=self.state.root,
+                retention=self.train.retention,
+                current=self.run_id,
+            )
+            self.pruned = {
+                "freed": done["freed"],
+                "removed": len(done["removed"]),
+                "sizes": done["sizes"],
+                "limits": done["limits"],
+            }
+        except Exception as error:  # a prune never fails the run
+            self.pruned = {"state": "failed", "message": type(error).__name__}
+        if self.pruned:
+            self.emit("pruned", **self.pruned)
+        result = self.result()
+        self.state.write_record(self.run_id, result)
+        return result
 
     def _resolve(
         self, head: str, group: list[Candidate], premerged: str | None = None
@@ -821,6 +850,7 @@ class TrainRun:
             "record": str(self.state.runs / self.run_id / "run.json"),
             **({"last": self.last} if self.last else {}),
             **({"promoted_from": self.promoted_from} if self.promoted_from else {}),
+            **({"prune": self.pruned} if self.pruned else {}),
         }
 
     # ------------------------------------------------- promote a past run
@@ -860,8 +890,7 @@ class TrainRun:
             }:
                 self.pushed = self._push(self.promotion["tag"])
             self.finished = time.time()
-            result = self.result()
-            self.state.write_record(self.run_id, result)
+            result = self._finish()
             self.emit(
                 "run-finished", state=result["state"], duration=result["duration"]
             )

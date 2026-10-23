@@ -1384,6 +1384,29 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "without running it (train-run-unknown, train-not-fast-forward); "
             "no host for a step fails the run (train-host-unavailable).",
         ),
+        "train-prune": _C(
+            "Bound what a train keeps on this machine: trial worktrees, cargo "
+            "target directories, the content store and old runs.",
+            reads=(
+                "the train cache ($XDG_CACHE_HOME/piceli/train)",
+                "the train's state directory (runs)",
+                "a train spec, when given instead of a name (its retention)",
+            ),
+            writes=(
+                "removes leftover worktrees, unused or least recently used target "
+                "directories and store records, unreferenced store bytes, old runs",
+            ),
+            approval_required=False,
+            safe_to_retry=True,
+            long_running=False,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.26.0. Never removes what a running trial holds, the newest "
+            "runs (keep_runs) or flaky.jsonl. --dry-run removes nothing. Every "
+            "train run prunes the same way at its end. --json prints one "
+            "piceli.train-prune.v1 object (removed: path, kind, bytes, why; "
+            "sizes and limits).",
+        ),
         "host wait": _C(
             "Wait until a Nix host runs a commit or tag with its checks passed.",
             reads=(

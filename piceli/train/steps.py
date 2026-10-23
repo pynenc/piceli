@@ -192,8 +192,13 @@ def run_step(step: Step, ctx: StepContext) -> StepResult:
         key, count = step_key(step.to_dict(), step.inputs, ctx.checkout, extra)
         base = {**base, "key": key, "inputs": count}
         found = ctx.store.lookup(key)
+        restored: list[str] = []
         if found is not None:
-            restored = ctx.store.restore(found, ctx.checkout)
+            try:
+                restored = ctx.store.restore(found, ctx.checkout)
+            except OSError:  # pruned meanwhile: run the step
+                found = None
+        if found is not None:
             origin = {
                 k: found.get(k)
                 for k in ("train", "run", "trial", "host", "at", "head")

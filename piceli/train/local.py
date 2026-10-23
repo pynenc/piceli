@@ -5,11 +5,17 @@ Local cargo commands share a target directory instead, per repository and
 train, under Piceli's cache (``$XDG_CACHE_HOME/piceli/train``, else
 ``~/.cache/piceli/train``)::
 
-    slots/local-<n>.lock               this machine's slots (every train)
-    checkouts/<train>-<repo>/<n>/      a trial's worktree (removed after it)
-    checkouts/<train>-<repo>/<n>.times.json   its files' blobs and mtimes
-    targets/<train>-<repo>/<n>/        the target directory of checkout n
-    store/                             the content store (piceli.train.reuse)
+    slots/local-<n>.lock                 this machine's slots (every train)
+    checkouts/<train>/<repo>/<n>/        a trial's worktree (removed after it)
+    checkouts/<train>/<repo>/lock-<n>.lock   held while a trial uses it
+    checkouts/<train>/<repo>/<n>.times.json  its files' blobs and mtimes
+    targets/<train>/<repo>/<n>/          the target directory of checkout n
+    targets/<train>/<repo>/slot-<n>/     of a local cargo command outside one
+    store/                               the content store (piceli.train.reuse)
+
+``<repo>`` is the repository's directory name and a hash of its path.
+Everything here is bounded and pruned at the end of each run
+(:mod:`piceli.train.prune`).
 
 Cargo fingerprints a workspace member by its absolute path and by the
 modification time of its sources, so a warm target directory only helps a
@@ -119,7 +125,7 @@ class Checkouts:
     gives unchanged files their earlier modification times."""
 
     def __init__(self, root: Path, train: str, repo: Path, count: int = 4) -> None:
-        self.directory = root / "checkouts" / f"{train}-{_repo_key(repo)}"
+        self.directory = root / "checkouts" / train / _repo_key(repo)
         self.slots = Slots(self.directory, count, name="lock")
 
     @contextmanager
@@ -155,6 +161,17 @@ class Checkouts:
         partial.write_text(json.dumps(now, separators=(",", ":")))
         os.replace(partial, record)
         return kept
+
+
+#: A file in a target directory touched whenever a command uses it (its
+#: last use, for pruning).
+USED_MARKER = ".piceli-used"
+
+
+def touch_used(directory: Path) -> None:
+    marker = directory / USED_MARKER
+    marker.touch(exist_ok=True)
+    os.utime(marker)
 
 
 def _repo_key(repo: Path) -> str:
@@ -197,8 +214,8 @@ class CargoCache:
         if self.target == "auto":
             if env.get("CARGO_TARGET_DIR"):
                 return None  # the caller chose one
-            base = self.root / "targets" / f"{self.train}-{_repo_key(self.repo)}"
-            pool = self.root / "checkouts" / f"{self.train}-{_repo_key(self.repo)}"
+            base = self.root / "targets" / self.train / _repo_key(self.repo)
+            pool = self.root / "checkouts" / self.train / _repo_key(self.repo)
             if cwd is not None and cwd.parent == pool:
                 return base / cwd.name
             return base / f"slot-{slot}"
@@ -212,6 +229,7 @@ class CargoCache:
         target = self.target_dir(slot, env, cwd)
         if target is not None:
             target.mkdir(parents=True, exist_ok=True)
+            touch_used(target)
             extra["CARGO_TARGET_DIR"] = str(target)
         wrapper = self._sccache(env)
         if wrapper:

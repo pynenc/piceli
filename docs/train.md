@@ -355,9 +355,9 @@ cold. Instead, here:
 - each command takes one of the machine's `local_slots` (a lock file under
   the cache, shared by every train on the machine and released by the
   operating system when a run dies), so the laptop keeps its limit;
-- trials use a few **stable worktree paths** (`checkouts/<train>-<repo>/N`
+- trials use a few **stable worktree paths** (`checkouts/<train>/<repo>/N`
   under the cache, held while a trial runs, removed after it), each with
-  **its own target directory** (`targets/<train>-<repo>/N`): cargo
+  **its own target directory** (`targets/<train>/<repo>/N`): cargo
   fingerprints a member by its absolute path;
 - every file whose content (Git blob) is the same as at that path's
   previous trial gets that trial's **modification time** back, while a
@@ -500,6 +500,43 @@ A failed images step (no `Controller(prebuilt=True)`, no build host, a
 key that cannot be computed here, a failed build or push) fails with
 `train-images-failed`; the promotion stands and the controller builds the
 images itself. Delivery into the nodes is not handed over yet.
+
+## What a train keeps, and pruning
+
+Whatever a train creates it removes, and what it keeps is bounded by
+`Train(retention=Retention(...))`. At the end of every run, and with
+`piceli train-prune`, it prunes:
+
+| What | Where | Kept |
+| --- | --- | --- |
+| Trial worktrees | `<cache>/checkouts/<train>/<repo>/<n>/` | none: a trial removes its own; one a crashed run left goes |
+| Times records | `<cache>/checkouts/<train>/<repo>/<n>.times.json` | with their target directory |
+| Cargo target directories | `<cache>/targets/<train>/<repo>/<n>/` (and `slot-<n>/`) | unused for `target_days=14` days go, then the least recently used beyond `targets_size="100GiB"` (per train and repository) |
+| Content store | `<cache>/store/keys/*.json`, `<cache>/store/blobs/<aa>/<sha256>` | records unused for `store_days=30` days go, then the least recently used beyond `store_size="20GiB"` (shared by every train of the machine); bytes no record keeps go once an hour old |
+| Run records and logs | `<state>/runs/<run>/` | runs older than `log_days=30` days go, but never the newest `keep_runs=20`; `flaky.jsonl` stays |
+
+`<cache>` is `Train(cache=)`, else `$XDG_CACHE_HOME/piceli/train`, else
+`~/.cache/piceli/train`; `<state>` is `$XDG_STATE_HOME/piceli/train/<name>`
+(`--state-dir`). `<repo>` is the repository's directory name and a hash of
+its path. A target directory's last use is the time of its `.piceli-used`
+file, touched whenever a command uses it; a store record's is its file's
+time, touched whenever it is reused. Nothing a running trial or command
+holds is removed (their lock files are taken first). The slot lock files
+under `<cache>/slots/` are a few bytes and stay.
+
+The run's result reports the sizes kept and what went (`prune`: `freed`,
+`removed`, `sizes` per kind, `limits`), and the human summary prints one
+line (`cache: store 1.2 GiB of 20GiB, targets 14.0 GiB of 100GiB, ...`).
+To prune by hand, or to see what would go:
+
+```sh
+piceli train-prune shop --dry-run          # a train by name: default limits
+piceli train-prune shop/train_spec.py      # its spec: its own Train(retention=, cache=)
+```
+
+It prints the sizes per kind with their limits and each path that goes
+(`--json`: one `piceli.train-prune.v1` object), and exits `0` (`2` when the
+name is neither a train name nor a spec).
 
 ## Hooks for later
 
