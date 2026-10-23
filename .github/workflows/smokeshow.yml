@@ -27,6 +27,44 @@ jobs:
           name: coverage-html
           path: coverage-html
 
+      # Smokeshow refuses a site over 50 MiB, and the full report is larger.
+      # Keep the index, assets and status.json, then the file pages of the
+      # least covered files first, up to 45 MB; the full report stays the
+      # coverage-html artifact of the CI run.
+      - name: Fit the coverage site within smokeshow's size limit
+        shell: python3 {0}
+        run: |
+          import json
+          from pathlib import Path
+
+          site, budget = Path("coverage-html"), 45_000_000
+          files = json.loads((site / "status.json").read_text())["files"]
+
+          def covered(entry):
+              nums = entry["index"]["nums"]
+              total = nums["n_statements"] + nums["n_branches"]
+              done = total - nums["n_missing"] - nums["n_missing_branches"]
+              return done / total if total else 1.0
+
+          pages = {site / item["index"]["url"]: covered(item) for item in files.values()}
+          pages = {path: share for path, share in pages.items() if path.is_file()}
+          used = sum(
+              p.stat().st_size for p in site.rglob("*") if p.is_file() and p not in pages
+          )
+          kept = dropped = 0
+          for path, _ in sorted(pages.items(), key=lambda item: (item[1], item[0].name)):
+              size = path.stat().st_size
+              if used + size <= budget:
+                  used += size
+                  kept += 1
+              else:
+                  path.unlink()
+                  dropped += 1
+          print(
+              f"coverage site: {used / 1e6:.1f} MB, {kept} file pages kept "
+              f"(least covered first), {dropped} left out"
+          )
+
       - run: smokeshow upload coverage-html/
         env:
           SMOKESHOW_GITHUB_STATUS_DESCRIPTION: Coverage {coverage-percentage}
