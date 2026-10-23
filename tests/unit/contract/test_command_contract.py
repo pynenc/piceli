@@ -773,6 +773,10 @@ CASES: dict[str, tuple[Argv, str]] = {
         ],
         "secrets-backup-recipient-invalid",
     ),
+    "secrets backup-key": (
+        lambda p: ["secrets", "backup-key", "--out", str(p / "no" / "dir" / "k")],
+        "secrets-backup-key-invalid",
+    ),
     "secrets restore": (
         lambda p: ["secrets", "restore", str(p / "missing.age")],
         "secrets-restore-archive-invalid",

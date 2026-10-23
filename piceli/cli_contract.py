@@ -2181,7 +2181,26 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "plaintext touches the disk. Refuses an existing file without --force "
             "(secrets-backup-exists). Prints names, kinds, the archive's sha256 and "
             "the staleness, never a value. Exit 1 when age refuses "
-            "(secrets-backup-failed).",
+            "(secrets-backup-failed). Needs two recipients: one is refused "
+            "(secrets-backup-single-recipient) unless --single-recipient, which "
+            "the manifest, the marker and the staleness record.",
+        ),
+        "secrets backup-key": _C(
+            "Create the offline age key for backups: write the private key to a "
+            "file and print only its age1 recipient.",
+            reads=("<credentials dir>.backup.json (--add)",),
+            writes=(
+                "--out PATH (the age identity, mode 0600)",
+                "<credentials dir>.backup.json (--add: the remembered recipients)",
+            ),
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.25.0. Runs age-keygen (PICELI_AGE_KEYGEN, next to PICELI_AGE, "
+            "or on PATH; secrets-age-missing otherwise). Refuses a path inside the "
+            "store or in a missing directory (secrets-backup-key-invalid) and an "
+            "existing file without --force (secrets-backup-key-exists). Never "
+            "prints the private key. Exit 1 when age-keygen fails "
+            "(secrets-backup-key-failed).",
         ),
         "secrets restore": _C(
             "Restore the local secret store and the profiles from an encrypted backup.",

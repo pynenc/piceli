@@ -145,6 +145,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli runs`](#cli-runs) | List the deploy runs of a pipeline, newest first, with their state, release, duration and summary files. Read-only (with shared state it reads the local working copy: run `piceli state pull` first). | none | no |
 | [`piceli secrets age`](#cli-secrets-age) | A host's age identity for sops-nix: generate or import it; print its public key. | none | no |
 | [`piceli secrets backup`](#cli-secrets-backup) | Write the whole secret store, encrypted with age, to one file (never printed). | none | no |
+| [`piceli secrets backup-key`](#cli-secrets-backup-key) | Create the offline age key for backups: prints only its age1... recipient. | none | no |
 | [`piceli secrets cluster`](#cli-secrets-cluster) | Store another cluster's credentials for the GitOps controller (never printed). | writes | no |
 | [`piceli secrets delete`](#cli-secrets-delete) | Delete a stored credential (a spent bootstrap key, an old token); never printed. | none | yes |
 | [`piceli secrets git`](#cli-secrets-git) | Store the Git token the controller and cluster builds use (read from stdin, never printed). | writes | no |
@@ -3376,6 +3377,7 @@ Write the whole secret store, encrypted with age, to one file (never printed).
 | `--recipient` | text (repeatable) |  | An age (age1...), plugin (age1yubikey1...) or SSH public key; repeatable; remembered for later backups |
 | `--recipients-file` | path |  | A file of recipients, one per line (age -R) |
 | `--force` | boolean | `False` | Replace an existing backup file |
+| `--single-recipient` | boolean | `False` | Allow one recipient (losing it loses the store and the backup together); recorded in the backup and its marker |
 | `--json` | boolean | `False` | Print one JSON object on stdout |
 
 **Contract**
@@ -3387,7 +3389,30 @@ Write the whole secret store, encrypted with age, to one file (never printed).
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.25.0. Runs the age command (PICELI_AGE, else age on PATH; secrets-age-missing otherwise): the tar is streamed into age, no plaintext touches the disk. Refuses an existing file without --force (secrets-backup-exists). Prints names, kinds, the archive's sha256 and the staleness, never a value. Exit 1 when age refuses (secrets-backup-failed).
+- **Notes:** 0.25.0. Runs the age command (PICELI_AGE, else age on PATH; secrets-age-missing otherwise): the tar is streamed into age, no plaintext touches the disk. Refuses an existing file without --force (secrets-backup-exists). Prints names, kinds, the archive's sha256 and the staleness, never a value. Exit 1 when age refuses (secrets-backup-failed). Needs two recipients: one is refused (secrets-backup-single-recipient) unless --single-recipient, which the manifest, the marker and the staleness record.
+
+(cli-secrets-backup-key)=
+### `piceli secrets backup-key`
+
+Create the offline age key for backups: prints only its age1... recipient.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--out` | path | required | Where to write the private key (outside the store; offline: a USB drive, or print it and delete the file) |
+| `--add` | boolean | `False` | Add its recipient to the remembered recipients |
+| `--force` | boolean | `False` | Replace an existing file at --out |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** <credentials dir>.backup.json (--add)
+- **Writes:** --out PATH (the age identity, mode 0600), <credentials dir>.backup.json (--add: the remembered recipients)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.25.0. Runs age-keygen (PICELI_AGE_KEYGEN, next to PICELI_AGE, or on PATH; secrets-age-missing otherwise). Refuses a path inside the store or in a missing directory (secrets-backup-key-invalid) and an existing file without --force (secrets-backup-key-exists). Never prints the private key. Exit 1 when age-keygen fails (secrets-backup-key-failed).
 
 (cli-secrets-cluster)=
 ### `piceli secrets cluster`

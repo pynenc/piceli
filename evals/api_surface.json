@@ -12782,6 +12782,7 @@
     "subcommands": [
      "age",
      "backup",
+     "backup-key",
      "cluster",
      "delete",
      "git",
@@ -12811,7 +12812,18 @@
      "--json",
      "--recipient",
      "--recipients-file",
+     "--single-recipient",
      "--to"
+    ],
+    "subcommands": []
+   },
+   "secrets backup-key": {
+    "arguments": [],
+    "flags": [
+     "--add",
+     "--force",
+     "--json",
+     "--out"
     ],
     "subcommands": []
    },
@@ -13846,8 +13858,12 @@
    "secrets-backup-exists",
    "secrets-backup-failed",
    "secrets-backup-invalid",
+   "secrets-backup-key-exists",
+   "secrets-backup-key-failed",
+   "secrets-backup-key-invalid",
    "secrets-backup-recipient-invalid",
    "secrets-backup-recipients-missing",
+   "secrets-backup-single-recipient",
    "secrets-invalid",
    "secrets-prompt-required",
    "secrets-restore-archive-invalid",

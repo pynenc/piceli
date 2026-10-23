@@ -682,8 +682,12 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`secrets-backup-exists`](#error-secrets-backup-exists) | infra | no |
 | [`secrets-backup-failed`](#error-secrets-backup-failed) | infra | no |
 | [`secrets-backup-invalid`](#error-secrets-backup-invalid) | infra | no |
+| [`secrets-backup-key-exists`](#error-secrets-backup-key-exists) | infra | no |
+| [`secrets-backup-key-failed`](#error-secrets-backup-key-failed) | infra | yes |
+| [`secrets-backup-key-invalid`](#error-secrets-backup-key-invalid) | infra | no |
 | [`secrets-backup-recipient-invalid`](#error-secrets-backup-recipient-invalid) | infra | no |
 | [`secrets-backup-recipients-missing`](#error-secrets-backup-recipients-missing) | infra | no |
+| [`secrets-backup-single-recipient`](#error-secrets-backup-single-recipient) | infra | no |
 | [`secrets-invalid`](#error-secrets-invalid) | cluster | no |
 | [`secrets-prompt-required`](#error-secrets-prompt-required) | cluster | no |
 | [`secrets-restore-archive-invalid`](#error-secrets-restore-archive-invalid) | infra | no |
@@ -6655,7 +6659,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-secrets-age-missing)=
 ### `secrets-age-missing`
 
-**age is not installed.** `piceli secrets backup|restore` encrypt and decrypt with the `age` command (the standard age format, plugins for hardware keys), and it is not on `PATH` or at `$PICELI_AGE`.
+**age is not installed.** `piceli secrets backup|restore` encrypt and decrypt with the `age` command (the standard age format, plugins for hardware keys), and it is not on `PATH` or at `$PICELI_AGE`; `piceli secrets backup-key` needs `age-keygen` (`$PICELI_AGE_KEYGEN`, next to `$PICELI_AGE`, or on `PATH`).
 
 - **Fix:** Install age (`nix profile install nixpkgs#age`, `brew install age`, `apt install age`) or set `PICELI_AGE` to its path.
 - **Retry-safe:** no
@@ -6692,6 +6696,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Choose a file outside the store in an existing directory (an external drive, a synced folder).
 - **Retry-safe:** no
 
+(error-secrets-backup-key-exists)=
+### `secrets-backup-key-exists`
+
+**Offline key file exists.** `piceli secrets backup-key --out PATH` never replaces an existing file on its own: it may be the only copy of a key.
+
+- **Fix:** Choose another path, or pass `--force` once you are sure the old key is not needed.
+- **Retry-safe:** no
+
+(error-secrets-backup-key-failed)=
+### `secrets-backup-key-failed`
+
+**Offline key not created.** `age-keygen` exited with an error or printed no key. Nothing was written.
+
+- **Fix:** Check the age installation (`age-keygen` on `PATH`, or `PICELI_AGE_KEYGEN`), then run the command again.
+- **Retry-safe:** yes
+
+(error-secrets-backup-key-invalid)=
+### `secrets-backup-key-invalid`
+
+**Offline key destination refused.** `piceli secrets backup-key --out PATH` would write the key inside the secret store or the profiles it protects, or PATH's directory does not exist. Nothing was written.
+
+- **Fix:** Choose a path outside the store in an existing directory (a USB drive), or one you delete after printing the key.
+- **Retry-safe:** no
+
 (error-secrets-backup-recipient-invalid)=
 ### `secrets-backup-recipient-invalid`
 
@@ -6705,7 +6733,15 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 **No backup recipients.** `piceli secrets backup` got no `--recipient` or `--recipients-file`, and no earlier backup remembered any.
 
-- **Fix:** Pass `--recipient age1...` (repeatable, at least two keys kept apart) or `--recipients-file FILE`; later backups reuse them.
+- **Fix:** Pass `--recipient age1...` (repeatable, at least two keys kept apart: `piceli secrets backup-key --out PATH --add` creates the offline one) or `--recipients-file FILE`; later backups reuse them.
+- **Retry-safe:** no
+
+(error-secrets-backup-single-recipient)=
+### `secrets-backup-single-recipient`
+
+**Backup for one recipient.** `piceli secrets backup` got a single recipient: losing that one key loses the secret store and its backup together. Nothing was written.
+
+- **Fix:** Add a second recipient kept apart: an offline age key (`piceli secrets backup-key --out PATH --add`, kept on paper or USB) or an `age-plugin-yubikey` identity, next to the age key in your password manager. To accept one recipient anyway, pass `--single-recipient` (recorded in the backup and its marker).
 - **Retry-safe:** no
 
 (error-secrets-restore-archive-invalid)=

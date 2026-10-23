@@ -147,6 +147,19 @@ environment and host in one view.
 - **`piceli.infra.machines.keys.needed_secrets(...)`** lists every secret
   a declaration (`Infrastructure`, `Bucket`, `NixCache`, `NixHost`) needs:
   name, kind, who creates it (`infra-apply` or `operator`) and the command.
+- **Backups need two recipients.** `piceli secrets backup` refuses a
+  single recipient (`secrets-backup-single-recipient`): losing that one key
+  loses the store and its backup together. `--single-recipient` allows it,
+  and the backup's manifest, the remembered marker in
+  `credentials.backup.json` and `staleness()` record it
+  (`single_recipient: true`). The recommended pair is an age key kept in
+  the password manager plus an offline age key: `piceli secrets backup-key
+  --out PATH [--add] [--force]` creates it with `age-keygen`, writes the
+  private key to PATH (`0600`; refused inside the store
+  (`secrets-backup-key-invalid`) and over an existing file without
+  `--force` (`secrets-backup-key-exists`)), prints only its `age1...`
+  recipient and, with `--add`, adds it to the remembered recipients.
+  `age-plugin-yubikey` is documented as the hardware alternative.
 - **Two-part credentials are asked for, checked and stored by part.**
   `piceli secrets provider NAME --prompt` asks for a Porkbun API key pair
   as "Porkbun API key (pk1_…)", then "Porkbun secret API key (sk1_…)", and

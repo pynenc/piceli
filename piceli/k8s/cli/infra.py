@@ -75,6 +75,7 @@ FAILED = {
     "infra-install-failed",
     "infra-k3s-not-ready",
     "secrets-backup-failed",
+    "secrets-backup-key-failed",
     "secrets-restore-decrypt-failed",
 }
 #: Variables a token is never read from.

@@ -497,9 +497,9 @@ laptop without a backup means an unreadable OpenTofu state. Keep an
 encrypted copy elsewhere:
 
 ```console
+$ piceli secrets backup-key --out /Volumes/usb/piceli-offline.key --add   # prints age1...
 $ piceli secrets backup --to /Volumes/backup/piceli-secrets.age \
-    --recipient age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p \
-    --recipient age1yubikey1q2w3e...
+    --recipient age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
 $ piceli secrets backup --to /Volumes/backup/piceli-secrets.age --force   # later: no flags
 ```
 
@@ -514,13 +514,31 @@ $ piceli secrets backup --to /Volumes/backup/piceli-secrets.age --force   # late
   tar is streamed into age; no plaintext touches the disk. An existing
   file is replaced only with `--force`.
 - **Which recipients.** At least two, kept apart, so one lost key is not
-  the end: one age key whose identity lives in your password manager
-  (`age-keygen`, store the `AGE-SECRET-KEY-1...` line there, pass the
-  `age1...` public key), plus a hardware key (`age-plugin-yubikey`, a
-  `age1yubikey1...` recipient) or an SSH key (`ssh-ed25519 ...`). Pass
-  public keys only. `--recipients-file FILE` takes them one per line; the
-  recipients are remembered in `credentials.backup.json` next to the store,
-  with the time, sha256 and names of the last backup (never a value).
+  the end: with one, losing that key loses the store and its backup
+  together, and the backup is refused (`secrets-backup-single-recipient`)
+  unless you pass `--single-recipient`, which the backup's manifest, the
+  remembered marker and `staleness()` record (`single_recipient: true`).
+  The recommended pair:
+  1. an age key whose identity lives in your password manager
+     (`age-keygen`, store the `AGE-SECRET-KEY-1...` line there, pass the
+     `age1...` public key);
+  2. an offline age key, made by one command that prints only its
+     recipient: `piceli secrets backup-key --out /Volumes/usb/piceli-offline.key
+     --add` writes the private key (`0600`; refused inside the store, and
+     over an existing file without `--force`) and adds its `age1...`
+     recipient to the remembered ones. It is the only copy: keep it
+     offline, on a USB drive or printed on paper, and delete it from this
+     machine.
+
+  A hardware key is the alternative to the offline file:
+  [age-plugin-yubikey](https://github.com/str4d/age-plugin-yubikey) creates
+  an identity on a YubiKey (`age-plugin-yubikey` to set it up,
+  `age-plugin-yubikey --list` prints its `age1yubikey1...` recipient); pass
+  that with `--recipient`, and keep the plugin on `PATH` for a restore. An
+  SSH key (`ssh-ed25519 ...`) works too. Pass public keys only.
+  `--recipients-file FILE` takes them one per line; the recipients are
+  remembered in `credentials.backup.json` next to the store, with the time,
+  sha256 and names of the last backup (never a value).
 - **Is it current?** `backup --json` reports `staleness`: the last backup's
   time, the newest file's, and the names changed or added since.
 
@@ -596,7 +614,8 @@ the command line with their approvals.
 | `piceli secrets provider NAME --prompt\|--from-env [--provider P] [--infra REF]` | Store a provider credential, part by part | 0, 2 |
 | `piceli secrets state-key NAME --generate\|--prompt` | Store the state passphrase | 0, 2 |
 | `piceli secrets delete NAME [--kind KIND] [--yes]` | Delete a stored credential (asks first; never printed) | 0, 2, 3 |
-| `piceli secrets backup --to PATH [--recipient R] [--force]` | Back the store up, encrypted with age | 0, 1, 2 |
+| `piceli secrets backup --to PATH [--recipient R] [--force] [--single-recipient]` | Back the store up, encrypted with age (two recipients) | 0, 1, 2 |
+| `piceli secrets backup-key --out PATH [--add] [--force]` | Create the offline age key; print only its recipient | 0, 1, 2 |
 | `piceli secrets restore PATH [--identity F] [--approve DIGEST]` | Restore it (plans first into a used store) | 0, 1, 2, 3 |
 
 `--tofu PATH` (or `$PICELI_TOFU`) chooses the OpenTofu binary; otherwise

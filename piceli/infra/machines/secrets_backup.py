@@ -12,6 +12,14 @@ handles them) into memory, validates the archive (no absolute paths, no
 directories; a store that is not empty gets a plan first, written only with
 ``--approve DIGEST``.
 
+A backup needs at least two recipients, kept apart: with one, losing that
+key loses the store and its backup together (``secrets-backup-single-recipient``).
+``--single-recipient`` allows it, and the manifest, the remembered marker
+and :func:`staleness` record it. The recommended pair: an age key whose
+identity lives in the password manager, plus an offline age key (paper or
+USB; :func:`generate_backup_key`, ``piceli secrets backup-key``) or an
+``age-plugin-yubikey`` identity.
+
 The non-secret backup config sits next to the store
 (``~/.config/piceli/credentials.backup.json``): the remembered recipients
 and the marker of the last backup (time, the archive's sha256, the
@@ -47,11 +55,13 @@ __all__ = [
     "SCHEMA",
     "backup",
     "config_path",
+    "generate_backup_key",
     "incomplete_credentials",
     "parse_archive",
     "parse_recipients",
     "plan_restore",
     "record_backup",
+    "remember_recipients",
     "restore",
     "staleness",
     "store_entries",
@@ -61,6 +71,7 @@ SCHEMA = "piceli.secrets-backup.v1"
 CONFIG_SCHEMA = "piceli.secrets-backup-config.v1"
 MANIFEST = "manifest.json"
 AGE_ENV = "PICELI_AGE"
+AGE_KEYGEN_ENV = "PICELI_AGE_KEYGEN"
 #: The decrypted archive is held in memory, never on disk: a cap on it.
 MAX_ARCHIVE = 64 * 1024 * 1024
 AREAS = ("credentials", "profiles")
@@ -198,9 +209,15 @@ def _save_config(body: Mapping[str, Any]) -> None:
 
 
 def record_backup(
-    *, recipients: Sequence[str], sha256: str, names: Sequence[str], at: float
+    *,
+    recipients: Sequence[str],
+    sha256: str,
+    names: Sequence[str],
+    at: float,
+    single_recipient: bool = False,
 ) -> dict[str, Any]:
-    """Remember ``recipients`` and the marker of a backup made at ``at``."""
+    """Remember ``recipients`` and the marker of a backup made at ``at``
+    (``single_recipient``: made with ``--single-recipient``)."""
     marker = {
         "at": _iso(at),
         "timestamp": at,
@@ -208,15 +225,28 @@ def record_backup(
         "recipients": list(recipients),
         "count": len(names),
         "names": sorted(names),
+        "single_recipient": single_recipient,
     }
     _save_config({**load_config(), "recipients": list(recipients),
                   "last_backup": marker})  # fmt: skip
     return marker
 
 
+def remember_recipients(recipients: Sequence[str]) -> list[str]:
+    """Add ``recipients`` to the remembered ones (each once, in order)."""
+    config = load_config()
+    found = [str(r) for r in config.get("recipients") or ()]
+    for recipient in parse_recipients(list(recipients), None):
+        if recipient not in found:
+            found.append(recipient)
+    _save_config({**config, "recipients": found})
+    return found
+
+
 def staleness() -> dict[str, Any]:
     """The last backup's time, the newest file's modification time, whether
-    the backup is stale and which names are newer than it (or not in it).
+    the backup is stale, which names are newer than it (or not in it), and
+    whether it was made for a single recipient (``--single-recipient``).
     Reads names and times only, never a value."""
     marker = load_config().get("last_backup")
     marker = marker if isinstance(marker, dict) else {}
@@ -240,6 +270,7 @@ def staleness() -> dict[str, Any]:
         "newest_secret": _iso(newest),
         "stale": bool(newer),
         "newer": sorted(newer),
+        "single_recipient": marker.get("single_recipient") is True,
     }
 
 
@@ -299,7 +330,9 @@ def parse_recipients(values: Sequence[str], file: Path | None) -> list[str]:
     return found
 
 
-def _manifest(entries: Sequence[Entry], recipients: Sequence[str], at: float) -> bytes:
+def _manifest(
+    entries: Sequence[Entry], recipients: Sequence[str], at: float, single: bool
+) -> bytes:
     from piceli import __version__
 
     return json.dumps(
@@ -311,6 +344,7 @@ def _manifest(entries: Sequence[Entry], recipients: Sequence[str], at: float) ->
             "credentials_dir": str(credentials_dir()),
             "profiles_dir": str(_profiles_dir()),
             "recipients": list(recipients),
+            "single_recipient": single,
             "entries": [{**e.show(), "path": e.path} for e in entries],
         },
         sort_keys=True,
@@ -329,9 +363,13 @@ def backup(
     recipients: Sequence[str] = (),
     *,
     force: bool = False,
+    single_recipient: bool = False,
     now: float | None = None,
 ) -> dict[str, Any]:
-    """Write the encrypted archive to ``to``; returns names, kinds and digests."""
+    """Write the encrypted archive to ``to``; returns names, kinds and digests.
+
+    At least two recipients, unless ``single_recipient`` (recorded in the
+    manifest and the marker)."""
     age = age_binary()
     config = load_config()
     chosen = list(recipients) or list(config.get("recipients") or ())
@@ -345,6 +383,14 @@ def backup(
             "--recipients-file FILE once; they are remembered",
         )
     chosen = parse_recipients(chosen, None)
+    if len(chosen) < 2 and not single_recipient:
+        raise InfraError(
+            "secrets-backup-single-recipient",
+            "one recipient: losing that one key loses the store and its backup "
+            "together; add a second kept apart (an offline key: piceli secrets "
+            "backup-key --out PATH --add), or pass --single-recipient to accept it",
+        )
+    single = len(chosen) < 2
     target = to.expanduser().absolute()
     for root in _roots().values():
         if target.is_relative_to(root.absolute()):
@@ -379,7 +425,8 @@ def backup(
             # A stream tar written straight into age: no plaintext on disk.
             with tarfile.open(fileobj=process.stdin, mode="w|",
                               format=tarfile.PAX_FORMAT) as tar:  # fmt: skip
-                _add(tar, MANIFEST, _manifest([e for e, _ in entries], chosen, at), at)
+                _add(tar, MANIFEST,
+                     _manifest([e for e, _ in entries], chosen, at, single), at)  # fmt: skip
                 for entry, data in entries:
                     _add(tar, entry.path, data, entry.mtime)
             process.stdin.close()
@@ -403,20 +450,108 @@ def backup(
             staged.unlink()
     sha256 = "sha256:" + digest.hexdigest()
     marker = record_backup(
-        recipients=chosen, sha256=sha256, names=[_label(e) for e, _ in entries], at=at
-    )
+        recipients=chosen, sha256=sha256, names=[_label(e) for e, _ in entries],
+        at=at, single_recipient=single,
+    )  # fmt: skip
     return {
         "state": "backed-up",
         "path": str(target),
         "sha256": sha256,
         "at": marker["at"],
         "recipients": chosen,
+        "single_recipient": single,
         "count": len(entries),
         "entries": [e.show() for e, _ in entries],
         "skipped": skipped,
         "config": str(config_path()),
         "staleness": staleness(),
         "incomplete": incomplete_credentials(),
+    }
+
+
+# ------------------------------------------------------------- offline key
+
+
+def age_keygen_binary() -> str:
+    """``$PICELI_AGE_KEYGEN``, else ``age-keygen`` next to ``$PICELI_AGE``,
+    else on ``PATH`` (``secrets-age-missing``)."""
+    found = os.environ.get(AGE_KEYGEN_ENV)
+    if not found and os.environ.get(AGE_ENV):
+        sibling = Path(os.environ[AGE_ENV]).with_name("age-keygen")
+        found = str(sibling) if sibling.is_file() else None
+    found = found or shutil.which("age-keygen")
+    if not found or not Path(found).is_file():
+        raise InfraError(
+            "secrets-age-missing", f"age-keygen is not available; {_AGE_HINT}"
+        )
+    return found
+
+
+def generate_backup_key(
+    out: Path, *, force: bool = False, add: bool = False
+) -> dict[str, Any]:
+    """Create an age X25519 identity (with ``age-keygen``) and write it to
+    ``out`` (``0600``; never inside the store, never over a file without
+    ``force``). Returns its ``age1…`` recipient, never the identity; ``add``
+    appends the recipient to the remembered ones."""
+    target = out.expanduser().absolute()
+    for root in _roots().values():
+        if target.is_relative_to(root.absolute()):
+            raise InfraError(
+                "secrets-backup-key-invalid",
+                "the offline key cannot be written inside the store it protects",
+            )
+    if not target.parent.is_dir():
+        raise InfraError(
+            "secrets-backup-key-invalid", "the key file's directory does not exist"
+        )
+    if (target.exists() or target.is_symlink()) and not force:
+        raise InfraError(
+            "secrets-backup-key-exists",
+            "the key file exists (it may be the only copy of a key); choose "
+            "another path, or pass --force to replace it",
+        )
+    binary = age_keygen_binary()
+    # The identity comes back on stdout, in memory; it is written once, 0600.
+    process = subprocess.run(
+        [binary], capture_output=True, text=True, check=False, timeout=60
+    )
+    identity = next((line for line in process.stdout.splitlines()
+                     if line.startswith("AGE-SECRET-KEY-1")), None)  # fmt: skip
+    recipient = next((line.split(":", 1)[1].strip()
+                      for line in process.stdout.splitlines()
+                      if line.startswith("# public key:")), "")  # fmt: skip
+    if (
+        process.returncode != 0
+        or identity is None
+        or not _AGE_RECIPIENT.fullmatch(recipient)
+    ):
+        raise InfraError(
+            "secrets-backup-key-failed",
+            f"age-keygen did not create a key (exit {process.returncode}); "
+            "nothing was written",
+        )
+    descriptor, staged = tempfile.mkstemp(
+        dir=target.parent, prefix=f".{target.name}.partial"
+    )
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w") as handle:
+            handle.write(process.stdout)
+        os.replace(staged, target)
+    finally:
+        if os.path.exists(staged):
+            os.unlink(staged)
+    del identity, process
+    remembered = remember_recipients([recipient]) if add else None
+    return {
+        "state": "created",
+        "path": str(target),
+        "recipient": recipient,
+        "added": add,
+        "recipients": remembered
+        if remembered is not None
+        else list(load_config().get("recipients") or ()),
     }
 
 
@@ -612,6 +747,7 @@ def restore(
             sha256=sha256,
             names=[_label(_target(name, manifest)[1]) for name in files],
             at=float(timestamp) if isinstance(timestamp, int | float) else time.time(),
+            single_recipient=manifest.get("single_recipient") is True,
         )  # fmt: skip
     return {
         "state": "restored",

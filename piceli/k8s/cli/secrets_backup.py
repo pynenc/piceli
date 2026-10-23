@@ -1,8 +1,12 @@
 """``piceli secrets backup|restore``: the secret store, encrypted with age (0.25.0).
 
 - ``secrets backup --to PATH [--recipient R]... [--recipients-file F]
-  [--force]`` streams every file of the store and the profiles into ``age``;
-  the recipients are remembered for the next backup.
+  [--force] [--single-recipient]`` streams every file of the store and the
+  profiles into ``age``; the recipients are remembered for the next backup.
+  At least two recipients, unless ``--single-recipient`` (recorded).
+- ``secrets backup-key --out PATH [--add] [--force]`` creates the offline
+  age key of the recommended pair, writes it to PATH (``0600``) and prints
+  only its ``age1…`` recipient.
 - ``secrets restore PATH [--identity FILE] [--approve DIGEST]`` decrypts,
   validates and restores; a store that is not empty gets a plan first (exit
   3).
@@ -42,17 +46,32 @@ def backup_secrets(
     force: Annotated[
         bool, typer.Option("--force", help="Replace an existing backup file")
     ] = False,
+    single_recipient: Annotated[
+        bool,
+        typer.Option(
+            "--single-recipient",
+            help="Allow one recipient (losing it loses the store and the backup "
+            "together); recorded in the backup and its marker",
+        ),
+    ] = False,
     json_output: Annotated[
         bool, typer.Option("--json", help="Print one JSON object on stdout")
     ] = False,
 ) -> None:
-    """Write the whole secret store, encrypted with age, to one file (never printed)."""
+    """Write the whole secret store, encrypted with age, to one file (never printed).
+
+    It needs at least two recipients, kept apart: an age key whose identity
+    lives in your password manager, plus an offline age key (piceli secrets
+    backup-key --out PATH --add: paper or USB) or an age-plugin-yubikey
+    identity. With one, losing that key loses the store and its backup
+    together: it is refused unless --single-recipient.
+    """
     from piceli.infra.machines import secrets_backup as sb
     from piceli.k8s.cli.infra import _guard
 
     with _guard():
         chosen = sb.parse_recipients(recipient or [], recipients_file)
-        result = sb.backup(to, chosen, force=force)
+        result = sb.backup(to, chosen, force=force, single_recipient=single_recipient)
     say(
         f"backed up {result['count']} files to {result['path']} for "
         f"{len(result['recipients'])} recipient(s); {result['sha256']}; no value "
@@ -62,10 +81,58 @@ def backup_secrets(
         say(f"  skipped {item['area']}/{item['path']}: {item['why']}")
     for report in result["incomplete"]:
         say(f"  incomplete: {report['message']}")
-    if len(result["recipients"]) < 2:
+    if result["single_recipient"]:
         say(
-            "  one recipient: add a second (a hardware key) so one lost key is not fatal"
+            "  single recipient (--single-recipient, recorded): losing that key loses "
+            "the store and this backup; add an offline key with piceli secrets "
+            "backup-key --out PATH --add"
         )
+    emit_json(result)
+
+
+def backup_key(
+    out: Annotated[
+        Path,
+        typer.Option(
+            "--out",
+            help="Where to write the private key (outside the store; offline: a "
+            "USB drive, or print it and delete the file)",
+        ),
+    ],
+    add: Annotated[
+        bool,
+        typer.Option("--add", help="Add its recipient to the remembered recipients"),
+    ] = False,
+    force: Annotated[
+        bool, typer.Option("--force", help="Replace an existing file at --out")
+    ] = False,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Print one JSON object on stdout")
+    ] = False,
+) -> None:
+    """Create the offline age key for backups: prints only its age1... recipient.
+
+    The private key is written to --out (mode 0600; refused inside the store,
+    and over an existing file without --force) and never printed. It is the
+    only copy: keep it offline (paper or USB), away from this machine and the
+    password manager that holds the other recipient's identity. --add puts
+    its recipient among those the next piceli secrets backup uses.
+    """
+    from piceli.infra.machines import secrets_backup as sb
+    from piceli.k8s.cli.infra import _guard
+
+    with _guard():
+        result = sb.generate_backup_key(out, force=force, add=add)
+    say(f"wrote the private key to {result['path']} (0600); it was not printed")
+    say(
+        "  it is the only copy: keep it offline (print it, or move it to a USB "
+        "drive) and delete it from this machine"
+    )
+    say(f"recipient: {result['recipient']}")
+    if add:
+        say(f"  remembered recipients: {len(result['recipients'])}")
+    else:
+        say("  add it to backups: --recipient with it, or run again with --add")
     emit_json(result)
 
 
@@ -117,4 +184,5 @@ def restore_secrets(
 
 def register(secrets_app: typer.Typer) -> None:
     secrets_app.command("backup")(backup_secrets)
+    secrets_app.command("backup-key")(backup_key)
     secrets_app.command("restore")(restore_secrets)
