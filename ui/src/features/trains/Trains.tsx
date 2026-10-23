@@ -12,11 +12,12 @@ type Current = {
 type RunRow = {
   run: string; state: string; ok: boolean | null; started?: string | null; duration?: number | null; host?: string | null; head?: string | null;
   branches: { branch: string; verdict?: string; step?: string; reason?: string }[]; trials: number; steps: Record<string, number>;
-  tag?: string | null; promote: string; push: string; flaky: number;
+  tag?: string | null; promote: string; push: string; flaky: number; reason?: string | null; queue?: string | null;
 };
+type QueueRow = { id: string; state: string; position?: number | null; branches: string[]; promote: boolean; push: boolean; queued_at?: string | null; started_at?: string | null; run?: string | null; resumed?: number | null };
 type Trend = { step: string; samples: number; median: number; last: number; last_run: string; ratio: number | null; trend: string };
 type Flaky = { key: string; test: string; target: string; count: number; first_seen?: string | null; last_seen?: string | null; last_run?: string | null; last_branches: string[]; last_tail: string };
-export type TrainView = { train: string; state: 'running' | 'idle'; current: Current | null; runs: RunRow[]; trends: Trend[]; flaky: Flaky[] };
+export type TrainView = { train: string; state: 'running' | 'idle'; current: Current | null; queue?: QueueRow[]; runs: RunRow[]; trends: Trend[]; flaky: Flaky[] };
 export type TrainsStatus = { schema: string; trains: TrainView[] };
 type Producer = { train: string; run: string; tag?: string | null; head?: string | null; started?: string | null; joined: string[]; pushed: boolean };
 type DeployedRow = { kind: string; name: string; where?: string | null; state: string; revision: { commit?: string | null; tag?: string | null }; pinned?: string | null; train: Producer | null; matched: string | null };
@@ -45,10 +46,20 @@ function CurrentRun({ train, current }: { train: string; current: Current }) {
 function Runs({ runs }: { runs: RunRow[] }) {
   return <section className="panel control-card" aria-label="Recent runs"><div className="panelhead"><h2>Recent runs</h2></div><div className="panelbody">
     {runs.length ? <ul className="control-workloads">{runs.map(run => <li key={run.run}>
-      <strong>{run.run} <Badge value={run.state} /></strong>
+      <strong>{run.run} <Badge value={run.state} />{run.reason ? <span className="small muted"> [{run.reason}]</span> : null}</strong>
       <span>{seconds(run.duration)} · {run.trials} trial{run.trials === 1 ? '' : 's'}{run.tag ? ` · ${run.tag}` : ''}{run.push === 'pushed' ? ' · pushed' : ''} · {run.branches.map(b => `${b.branch} ${b.verdict ?? ''}${b.verdict === 'ejected' && b.step ? ` (${b.step})` : ''}`).join(', ')}</span>
       <span className="small muted">{Object.entries(run.steps).filter(([name]) => !STEP_HIDDEN.has(name)).map(([name, value]) => `${name} ${seconds(value)}`).join(' · ') || 'No step ran'} · {formatTime(run.started)}</span>
     </li>)}</ul> : <p className="small muted">No run has finished yet.</p>}
+  </div></section>;
+}
+
+function Queue({ train, queue }: { train: string; queue: QueueRow[] }) {
+  return <section className="panel control-card" aria-label={`Queue of ${train}`}><div className="panelhead"><h2>Queue</h2><span className="small muted">Served in order when the running train ends</span></div><div className="panelbody">
+    {queue.length ? <ol className="control-workloads">{queue.map(row => <li key={row.id}>
+      <strong>{row.position ? `#${row.position} ` : ''}{row.branches.join(' ')}</strong>
+      <span>{row.state !== 'waiting' ? <Badge value={row.state} /> : null} {[row.promote ? '--promote' : '', row.push ? '--push' : ''].filter(Boolean).join(' ') || 'test only'} · queued {formatTime(row.queued_at)}{row.resumed ? ` · resumed ${row.resumed}×` : ''}</span>
+      <span className="small muted">{row.id}</span>
+    </li>)}</ol> : <p className="small muted">Nothing is waiting.</p>}
   </div></section>;
 }
 
@@ -98,11 +109,12 @@ export function Trains() {
     {trains.length > 0 && <div className="statusbar" aria-label="Trains state">
       <div className="statusitem"><span className="statuslabel">Trains</span><strong>{trains.length}</strong></div>
       <div className="statusitem"><span className="statuslabel">Running</span><strong>{running}</strong></div>
-      <div className="statusitem"><span className="statuslabel">Flaky tests</span><strong>{trains.reduce((sum, train) => sum + train.flaky.length, 0)}</strong></div>
+      <div className="statusitem"><span className="statuslabel">Queued</span><strong>{trains.reduce((sum, train) => sum + (train.queue?.length ?? 0), 0)}</strong></div>
     </div>}
     {trains.map(train => <section key={train.train} aria-label={`Train ${train.train}`}>
       <h2>{train.train} <Badge value={train.state} /></h2>
       {train.current ? <CurrentRun train={train.train} current={train.current} /> : <p className="small muted">No run in progress.</p>}
+      {(train.queue?.length ?? 0) > 0 && <Queue train={train.train} queue={train.queue ?? []} />}
       <Runs runs={train.runs} />
       <Trends trends={train.trends} />
       <FlakyTests flaky={train.flaky} />

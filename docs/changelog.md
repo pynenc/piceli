@@ -72,9 +72,23 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   step and reason), the promotion, tag and push, the duration and the flaky
   tests, never step output. A failing notifier never changes the result: one
   `train-notify-failed` warning, and the run record's `notify` list.
+- **A queue per train.** `piceli train … --queue` on a busy train queues
+  the request with its flags (`--promote`, `--push`) and returns at once
+  with its id and position (`piceli.train.queued.v1`). Every `piceli
+  train` serves the queue in order when its run ends; `piceli train-queue
+  NAME` lists it, `--cancel ID` cancels a waiting request and `--drain`
+  serves it here. A request whose process died is resumed by the next
+  server; one whose branches are gone is rejected when it starts.
+  `piceli train-wait Q-ID` waits for the run that serves a request, and
+  `piceli trains` and the page show the queue.
+- **`run-failed`.** A run that raises midway (`train-git-failed`,
+  `train-run-failed`, Ctrl-C: `train-run-cancelled`) is recorded
+  `failed` with its reason and what had joined, emits `run-failed`, and
+  sends its notifications and OpenTelemetry `finished` event; `train-wait`
+  exits 1 for it.
 - **The UI's Trains view.** `piceli ui serve --trains` (with
   `--train-composition MODULE` for the deployed-by-train join) shows the
-  same document, live.
+  same document, live, with the queue.
 - **Fix:** the UI's breadcrumb named the Machines page "Page not found".
 - New error codes in the `train` area: `train-not-found`,
   `train-load-failed`, `train-invalid`, `train-repo-invalid`,

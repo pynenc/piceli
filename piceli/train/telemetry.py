@@ -130,6 +130,7 @@ class _Exporter:
         self.sent = 0
         self.dropped = 0
         self.warned = False
+        self._warn_lock = threading.Lock()
         self.thread = threading.Thread(
             target=self._work, name="piceli-train-telemetry", daemon=True
         )
@@ -162,23 +163,31 @@ class _Exporter:
                 )
             except Exception:
                 self.failures += 1
-                if not self.warned:
-                    self.warned = True
-                    self.warn(
-                        "warning: train telemetry not exported "
-                        "[train-telemetry-failed]; the run is unaffected"
-                    )
+                self._warn_once()
                 continue
             self.failures = 0
             self.sent += 1
 
+    def _warn_once(self) -> None:
+        with self._warn_lock:
+            if self.warned:
+                return
+            self.warned = True
+        self.warn(
+            "warning: train telemetry not exported "
+            "[train-telemetry-failed]; the run is unaffected"
+        )
+
     def close(self) -> None:
-        """Wait at most the timeout (plus a little) for the queue to drain."""
+        """Wait at most the timeout (plus a little) for the queue to drain;
+        what is still unsent then is given up, with the one warning."""
         try:
             self.queue.put(None, timeout=0.1)
         except queue.Full:
             pass
         self.thread.join(self.config.timeout + 0.5)
+        if self.thread.is_alive():
+            self._warn_once()
 
 
 class TrainTelemetry:
@@ -250,7 +259,7 @@ class TrainTelemetry:
                     ),
                 }
             )
-        elif kind == "run-finished":
+        elif kind in {"run-finished", "run-failed"}:
             self._finish(event, at)
 
     # ------------------------------------------------------------- output
@@ -438,6 +447,7 @@ class TrainTelemetry:
         attributes = {
             **self.root,
             "piceli.train.state": event.get("state"),
+            "piceli.train.reason": event.get("reason"),
             "piceli.train.ok": ok,
             "piceli.train.joined": list(summary.get("joined") or ()),
             "piceli.train.ejected": [

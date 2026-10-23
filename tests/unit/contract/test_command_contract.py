@@ -814,6 +814,10 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["trains", "no-such-train", "--state-dir", str(p / "state")],
         "train-unknown",
     ),
+    "train-queue": (
+        lambda p: ["train-queue", "no-such-train", "--state-dir", str(p / "state")],
+        "train-unknown",
+    ),
     "train-wait": (
         lambda p: ["train-wait", "no-such-run", "--state-dir", str(p / "state")],
         "train-run-not-found",

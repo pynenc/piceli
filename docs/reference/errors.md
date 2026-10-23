@@ -767,7 +767,12 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`train-publish-failed`](#error-train-publish-failed) | train | yes |
 | [`train-push-failed`](#error-train-push-failed) | train | yes |
 | [`train-push-needs-promote`](#error-train-push-needs-promote) | train | no |
+| [`train-queue-cancelled`](#error-train-queue-cancelled) | train | no |
+| [`train-queue-not-found`](#error-train-queue-not-found) | train | no |
+| [`train-queue-not-waiting`](#error-train-queue-not-waiting) | train | no |
 | [`train-repo-invalid`](#error-train-repo-invalid) | train | no |
+| [`train-run-cancelled`](#error-train-run-cancelled) | train | yes |
+| [`train-run-failed`](#error-train-run-failed) | train | yes |
 | [`train-run-not-found`](#error-train-run-not-found) | train | no |
 | [`train-run-unknown`](#error-train-run-unknown) | train | no |
 | [`train-spec-invalid`](#error-train-spec-invalid) | train | no |
@@ -7251,6 +7256,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Add `--promote`, or leave out `--push`.
 - **Retry-safe:** no
 
+(error-train-queue-cancelled)=
+### `train-queue-cancelled`
+
+**Queued request cancelled.** The request was cancelled with `piceli train-queue NAME --cancel ID` before it ran.
+
+- **Fix:** Queue the branches again with `piceli train APP --branches … --queue` if they should still join.
+- **Retry-safe:** no
+
+(error-train-queue-not-found)=
+### `train-queue-not-found`
+
+**No such queued request.** No train under the state root has a queued request with that id.
+
+- **Fix:** List the queue with `piceli train-queue NAME`, and pass the --state-dir the train used.
+- **Retry-safe:** no
+
+(error-train-queue-not-waiting)=
+### `train-queue-not-waiting`
+
+**Request no longer waiting.** Only a waiting request can be cancelled; this one is running or finished.
+
+- **Fix:** Wait for it with `piceli train-wait ID`; a run in progress is stopped by its own process.
+- **Retry-safe:** no
+
 (error-train-repo-invalid)=
 ### `train-repo-invalid`
 
@@ -7258,6 +7287,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Point `Train(repo=...)` at the repository (relative to the spec module) and create the base branch.
 - **Retry-safe:** no
+
+(error-train-run-cancelled)=
+### `train-run-cancelled`
+
+**Train run cancelled.** The run was interrupted (Ctrl-C) after it started. It is recorded as failed (run-failed) and its notifications were sent; no ref moved after the interruption.
+
+- **Fix:** Run the train again when you want the branches judged.
+- **Retry-safe:** yes
+
+(error-train-run-failed)=
+### `train-run-failed`
+
+**Train run failed midway.** The run raised an unexpected error after it started. It is recorded as failed (run-failed), with what had joined so far, and its notifications were sent.
+
+- **Fix:** Read the run with `piceli trains NAME` and its step logs, then run the train again; report the error if it repeats.
+- **Retry-safe:** yes
 
 (error-train-run-not-found)=
 ### `train-run-not-found`

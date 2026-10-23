@@ -85,7 +85,8 @@ stay on the command line (see {doc}`infrastructure`).
 0.26.0): the local merge trains, as `piceli trains` shows them, built by
 the same functions. The run in progress shows its branches, the steps done
 and the running step with its host, elapsed time and the tail of its log,
-refreshed every two seconds; then recent runs, step durations (median and
+refreshed every two seconds; then the queue (each waiting request's
+branches, flags and when it was queued), recent runs, step durations (median and
 last), flaky tests with their last first failure, and, with
 `--train-composition MODULE`, which run produced what each environment and
 NixHost runs (read as `piceli targets` reads them, at most once a minute).

@@ -202,6 +202,8 @@ def run_row(record: Mapping[str, Any], active: str | None) -> dict[str, Any]:
         "promote": promote.get("state", "not-requested"),
         "push": push.get("state", "not-requested"),
         "flaky": len(record.get("flaky") or ()),
+        "reason": record.get("reason"),
+        "queue": record.get("queue"),
     }
 
 
@@ -289,7 +291,9 @@ def view(
     now: float | None = None,
     lines: int = TAIL_LINES,
 ) -> dict[str, Any]:
-    """One train: ``current``, ``runs``, ``trends`` and ``flaky``."""
+    """One train: ``current``, ``queue``, ``runs``, ``trends`` and ``flaky``."""
+    from piceli.train.queue import TrainQueue
+
     live = current(state, now=now, lines=lines)
     history = state.history(limit=max(runs, trend))
     active = live["run"] if live else None
@@ -297,6 +301,7 @@ def view(
         "train": state.root.name,
         "state": "running" if live else "idle",
         "current": live,
+        "queue": TrainQueue(state).pending(),
         "runs": [run_row(record, active) for record in history[:runs]],
         "trends": trends(
             [
@@ -485,6 +490,17 @@ def table(document: Mapping[str, Any], *, logs: bool = True) -> list[str]:
                     out.append(f"      | {row}")
         else:
             out.append(f"train {train['train']}: idle")
+        if train.get("queue"):
+            out.append("  queue:")
+        for row in train.get("queue") or ():
+            flags = " ".join(
+                flag for flag in ("--promote", "--push") if row.get(flag.strip("-"))
+            )
+            where = f"#{row['position']}" if row.get("position") else row.get("state")
+            out.append(
+                f"    {where} {row['id']} {' '.join(row.get('branches') or ())}"
+                f"{' ' + flags if flags else ''} (queued {_clock(row.get('queued_at'))})"
+            )
         if train.get("runs"):
             out.append("  recent runs:")
         for run in train.get("runs") or ():
@@ -499,6 +515,8 @@ def table(document: Mapping[str, Any], *, logs: bool = True) -> list[str]:
                 if name not in {"merge", "spec"}
             )
             extra = f" {run['tag']}" if run.get("tag") else ""
+            if run.get("reason"):
+                extra += f" [{run['reason']}]"
             if run.get("push") == "pushed":
                 extra += " pushed"
             out.append(

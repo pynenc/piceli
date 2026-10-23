@@ -166,6 +166,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli targets`](#cli-targets) | Every environment and NixHost: commit or tag, pinned product commit, checks, state. | reads | no |
 | [`piceli train`](#cli-train) | Merge branches onto the base one tested merge at a time; eject failures. | none | yes |
 | [`piceli train-prune`](#cli-train-prune) | Bound what a train keeps: worktrees, cargo targets, the content store, runs. | none | no |
+| [`piceli train-queue`](#cli-train-queue) | A train's queue: waiting requests with their flags; cancel one, or serve them. | none | no |
 | [`piceli train-wait`](#cli-train-wait) | Wait until a train run ends; exit with its verdict. | none | no |
 | [`piceli trains`](#cli-trains) | The trains: the run in progress, recent runs, step trends, flaky tests, deployed by which run. | reads | no |
 | [`piceli ui backup`](#cli-ui-backup) | Back up an offline UI control store and its release journal. | none | no |
@@ -3857,6 +3858,7 @@ Merge branches onto the base one tested merge at a time; eject failures.
 | `--branches` | boolean | `False` | Starts the list of candidate branches |
 | `--promote` | boolean | `False` | Tag the joined head and move tested and the base by fast-forward only, then run the publish steps |
 | `--push` | boolean | `False` | Push the tag, tested and the base (needs --promote) |
+| `--queue` | boolean | `False` | When the train is busy, queue the request and return at once (its id and position); the running train serves it next |
 | `--json` | boolean | `False` | Print the result object on stdout |
 | `--state-dir` | path |  | Train state root (default $XDG_STATE_HOME/piceli/train, else ~/.local/state/piceli/train) |
 | `--promote-run` | text |  | Promote the head an earlier run reached (its id, or 'last'), without running it again; refused when the base moved in a way that is not a fast-forward of that head |
@@ -3870,7 +3872,7 @@ Merge branches onto the base one tested merge at a time; eject failures.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.26.0. Runs the train's steps, which run code: the explicit branch list is the approval, and --promote/--push the approval to move refs and push. Without --promote no ref changes; nothing is pushed without --push (which needs --promote). Each candidate set is merged with git merge --no-ff onto the train's head in a temporary worktree; its steps come from the merged tree's spec. A failing set is bisected. --json prints one piceli.train.v1 object. Exit 0: every branch joined (or was already in) and the promotion and push asked for succeeded; 1: a branch was ejected (train-step-failed, train-step-timeout, train-merge-conflict, train-spec-invalid), the promotion was refused (train-not-fast-forward, train-checkout-dirty), a publish step or the push failed; 2: rejected before anything ran (train-not-found, train-branch-unknown, train-busy, ...). Steps may run on the train's build hosts (Train(builds=, hosts=)) through the dev run machinery; a step with inputs that passed before is reused. --promote-run RUN promotes an earlier run's head without running it (train-run-unknown, train-not-fast-forward); no host for a step fails the run (train-host-unavailable).
+- **Notes:** 0.26.0. Runs the train's steps, which run code: the explicit branch list is the approval, and --promote/--push the approval to move refs and push. Without --promote no ref changes; nothing is pushed without --push (which needs --promote). Each candidate set is merged with git merge --no-ff onto the train's head in a temporary worktree; its steps come from the merged tree's spec. A failing set is bisected. --json prints one piceli.train.v1 object. --queue on a busy train writes a queued request (keeping its flags) and returns at once (piceli.train.queued.v1, exit 0); every run serves the train's queue when it ends. A run that raises midway is recorded failed (run-failed: train-git-failed, train-run-failed, train-run-cancelled), notified, exit 1. Exit 0: every branch joined (or was already in) and the promotion and push asked for succeeded; 1: a branch was ejected (train-step-failed, train-step-timeout, train-merge-conflict, train-spec-invalid), the promotion was refused (train-not-fast-forward, train-checkout-dirty), a publish step or the push failed; 2: rejected before anything ran (train-not-found, train-branch-unknown, train-busy, ...). Steps may run on the train's build hosts (Train(builds=, hosts=)) through the dev run machinery; a step with inputs that passed before is reused. --promote-run RUN promotes an earlier run's head without running it (train-run-unknown, train-not-fast-forward); no host for a step fails the run (train-host-unavailable).
 
 (cli-train-prune)=
 ### `piceli train-prune`
@@ -3896,6 +3898,30 @@ Bound what a train keeps: worktrees, cargo targets, the content store, runs.
 - **Output contract:** conforms
 - **Notes:** 0.26.0. Never removes what a running trial holds, the newest runs (keep_runs) or flaky.jsonl. --dry-run removes nothing. Every train run prunes the same way at its end. --json prints one piceli.train-prune.v1 object (removed: path, kind, bytes, why; sizes and limits).
 
+(cli-train-queue)=
+### `piceli train-queue`
+
+A train's queue: waiting requests with their flags; cancel one, or serve them.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--cancel` | text |  | Cancel this waiting request (its q-… id) |
+| `--drain` | boolean | `False` | Serve the queue here until it is empty (resumes a request whose process died); runs each request's steps with its flags |
+| `--state-dir` | path |  | Train state root (default $XDG_STATE_HOME/piceli/train, else ~/.local/state/piceli/train) |
+| `--json` | boolean | `False` | Print one piceli.train.queue.v1 object on stdout |
+
+**Contract**
+
+- **Reads:** $XDG_STATE_HOME/piceli/train/<name>/queue (waiting, running, done)
+- **Writes:** --cancel: moves the request to queue/done as cancelled, --drain: what piceli train writes, for each request served
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. Without options read-only; --json prints one piceli.train.queue.v1 object (a request whose process died shows stale). --cancel ID cancels a waiting request (train-queue-not-waiting, train-queue-not-found). --drain runs each queued request's steps with the flags it was queued with (the request was the approval) until the queue is empty, first putting back a request whose serving process died; a request whose branches are gone is rejected (train-branch-unknown).
+
 (cli-train-wait)=
 ### `piceli train-wait`
 
@@ -3918,7 +3944,7 @@ Wait until a train run ends; exit with its verdict.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.26.0. Read-only; safe to retry. RUN is a run id or a train's name (its running run, else its newest). --json prints the run's piceli.train.summary.v1. Exit 0: the run ended ok; 1: a branch was ejected, the promotion or push failed, the run was killed (train-interrupted) or --timeout ran out (train-wait-timeout); 2: no such run (train-run-not-found).
+- **Notes:** 0.26.0. Read-only; safe to retry. RUN is a run id, a queue id (q-…, waits for the run that serves it; train-queue-cancelled, train-queue-not-found) or a train's name (its running run, else its newest). A run that failed midway (run-failed) exits 1. --json prints the run's piceli.train.summary.v1. Exit 0: the run ended ok; 1: a branch was ejected, the promotion or push failed, the run was killed (train-interrupted) or --timeout ran out (train-wait-timeout); 2: no such run (train-run-not-found).
 
 (cli-trains)=
 ### `piceli trains`
@@ -4171,6 +4197,9 @@ Register an existing definition or inventory scope and serve the bundled UI.
 | `--docker-socket` | path | `/var/run/docker.sock` | Explicit local Docker daemon socket |
 | `--state-dir` | path |  | Private UI state directory (default: $XDG_STATE_HOME/piceli/ui) |
 | `--infra` | text |  | Also show the machines of a piceli.infra.Infrastructure MODULE:ATTR (read-only) |
+| `--trains` | boolean | `False` | Also show the local merge trains (piceli trains; read-only) |
+| `--train-state-dir` | path |  | Train state root for --trains (default $XDG_STATE_HOME/piceli/train) |
+| `--train-composition` | text |  | With --trains: also show which run produced what each environment and NixHost of this composition MODULE runs |
 
 **Contract**
 

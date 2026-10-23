@@ -14,7 +14,7 @@ Importing this module is side-effect free.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -221,6 +221,14 @@ def train(
             "--push", help="Push the tag, tested and the base (needs --promote)"
         ),
     ] = False,
+    queue: Annotated[
+        bool,
+        typer.Option(
+            "--queue",
+            help="When the train is busy, queue the request and return at once "
+            "(its id and position); the running train serves it next",
+        ),
+    ] = False,
     as_json: Annotated[
         bool, typer.Option("--json", help="Print the result object on stdout")
     ] = False,
@@ -245,6 +253,7 @@ def train(
     """Merge branches onto the base one tested merge at a time; eject failures."""
     from piceli.train.engine import TrainRun, locate
     from piceli.train.model import TrainError
+    from piceli.train.queue import TrainQueue
     from piceli.train.runner import fan_out
     from piceli.train.state import TrainState
 
@@ -264,12 +273,13 @@ def train(
         loaded, repo, spec_path = locate(app, Path.cwd())
     except TrainError as error:
         reject(error.code, str(error))
+    state = TrainState.for_train(loaded.train.name, state_dir)
     run = TrainRun(
         loaded,
         repo=repo,
         spec_path=spec_path,
         branches=branches or [],
-        state=TrainState.for_train(loaded.train.name, state_dir),
+        state=state,
         promote=promote or promote_run is not None,
         push=push,
         events=fan_out(_human),
@@ -295,17 +305,131 @@ def train(
         reject(error.code, str(error))
     if spec_path is None:
         say(f"note: {app} is outside {repo}; every commit is judged by its steps")
+    if queue:
+        entry = f"{loaded.file}:{loaded.attr}" if loaded.file is not None else app
+        _queued_run(
+            TrainQueue(state),
+            entry=entry,
+            branches=branches or [],
+            promote=promote,
+            push=push,
+            state_dir=state_dir,
+            as_json=as_json,
+        )
+        return
     try:
         result = run.run()
     except TrainError as error:
         if error.code == "train-busy":
-            reject(error.code, str(error))
+            reject(
+                error.code,
+                str(error),
+                hints=("add --queue to queue this request behind the running train",),
+            )
+        say(f"run {run.run_id} failed midway [{error.code}]")
+        serve_queue(TrainQueue(state), state_dir)  # the queue does not wait on it
         fail(error.code, str(error), run=run.run_id)
     _summary(result)
+    serve_queue(TrainQueue(state), state_dir)
     if as_json:
         emit_json(result)
     if not result["ok"]:
         raise typer.Exit(EXIT_FAILED)
+
+
+def build_request(state_dir: Path | None) -> Callable[[Mapping[str, Any]], Any]:
+    """Makes the run of a queued request, with the flags it was given."""
+    from piceli.train.engine import TrainRun, locate
+    from piceli.train.model import TrainError
+    from piceli.train.runner import fan_out
+    from piceli.train.state import TrainState
+
+    def build(request: Mapping[str, Any]) -> Any:
+        try:
+            loaded, repo, spec_path = locate(
+                str(request["entry"]), Path(request["cwd"])
+            )
+        except OSError:
+            raise TrainError(
+                "train-repo-invalid", f"{request['cwd']} is no longer a directory"
+            ) from None
+        return TrainRun(
+            loaded,
+            repo=repo,
+            spec_path=spec_path,
+            branches=list(request["branches"]),
+            state=TrainState.for_train(loaded.train.name, state_dir),
+            promote=bool(request["promote"]),
+            push=bool(request["push"]),
+            events=fan_out(_human),
+            warn=say,
+            queue=str(request["id"]),
+        )
+
+    return build
+
+
+def serve_queue(queue: Any, state_dir: Path | None) -> list[tuple[Any, Any]]:
+    """Serve the train's queue until it is empty (human lines on stderr)."""
+    from piceli.train.queue import drain
+
+    served = []
+    for done, result in drain(queue, build_request(state_dir), say=say):
+        if result is not None:
+            _summary(result)
+        served.append((done, result))
+    return served
+
+
+def queued_body(request: Mapping[str, Any], position: int | None) -> dict[str, Any]:
+    from piceli.train.queue import QUEUED_SCHEMA
+
+    return {
+        "schema": QUEUED_SCHEMA,
+        "state": "queued",
+        "train": request["train"],
+        "queue_id": request["id"],
+        "position": position,
+        "branches": request["branches"],
+        "promote": request["promote"],
+        "push": request["push"],
+        "queued_at": request["queued_at"],
+    }
+
+
+def _queued_run(
+    queue: Any,
+    *,
+    entry: str,
+    branches: list[str],
+    promote: bool,
+    push: bool,
+    state_dir: Path | None,
+    as_json: bool,
+) -> None:
+    """``--queue``: write the request; return at once when the train is
+    busy, else serve the queue (this request in its turn) here."""
+    request = queue.enqueue(
+        entry=entry, cwd=str(Path.cwd()), branches=branches, promote=promote, push=push
+    )
+    if queue.state.owner() is None:
+        for done, result in serve_queue(queue, state_dir):
+            if done["id"] != request["id"]:
+                continue
+            if result is None:
+                reject(str(done.get("reason")), str(done.get("message") or ""))
+            if as_json:
+                emit_json(result)
+            if not result["ok"]:
+                raise typer.Exit(EXIT_FAILED)
+            return
+    position = queue.position(request["id"])
+    say(
+        f"queued {request['id']} at position {position} behind the running "
+        f"train; wait with: piceli train-wait {request['id']}"
+    )
+    if as_json:
+        emit_json(queued_body(request, position))
 
 
 def register(root: typer.Typer) -> None:

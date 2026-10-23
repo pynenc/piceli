@@ -186,6 +186,7 @@ class TrainRun:
         images: Any = None,
         observe: bool = True,
         warn: Callable[[str], None] = lambda _message: None,
+        queue: str | None = None,
     ) -> None:
         if push and not promote:
             raise TrainError("train-push-needs-promote", "--push needs --promote")
@@ -236,6 +237,9 @@ class TrainRun:
         self.warn = warn
         self.observers: list[EventSink] = []
         self.notified: list[dict[str, Any]] = []
+        self.queue_id = queue
+        #: The reason code of a run that raised midway (``run-failed``).
+        self.failure: str | None = None
 
     # ----------------------------------------------------------- the run
 
@@ -285,9 +289,50 @@ class TrainRun:
                     self.observers.append(telemetry)
             try:
                 return self._run()
+            except BaseException as error:
+                self._failed(error)
+                raise
             finally:
                 if telemetry is not None:
                     telemetry.close()
+
+    def _failed(self, error: BaseException) -> None:
+        """A run that raised midway (a Git failure, a crash, Ctrl-C): record
+        it ``failed`` with the reason, emit ``run-failed`` with the summary
+        and send the notifications. Never raises."""
+        if isinstance(error, TrainError):
+            self.failure = error.code
+        elif isinstance(error, KeyboardInterrupt):
+            self.failure = "train-run-cancelled"
+        else:
+            self.failure = "train-run-failed"
+        try:
+            self.finished = time.time()
+            result = self.result()
+            self.state.write_record(self.run_id, result)
+            summary = summarize(result)
+            self.emit(
+                "run-failed",
+                state="failed",
+                ok=False,
+                reason=self.failure,
+                duration=result["duration"],
+                summary=summary,
+            )
+            self._notify(summary)
+        except BaseException:  # the original error is what the caller sees
+            pass
+
+    def _notify(self, summary: Mapping[str, Any]) -> None:
+        if not (self.observe and self.train.notify):
+            return
+        from piceli.train.notify import send_all
+
+        self.notified = send_all(self.train.notify, summary, self.warn)
+        for outcome in self.notified:
+            if outcome["state"] == "failed":
+                self.emit("notify-failed", **outcome)
+        self.state.write_record(self.run_id, self.result())
 
     def _run(self) -> dict[str, Any]:
         self.emit(
@@ -331,14 +376,8 @@ class TrainRun:
             summary=summary,
         )
         if self.observe and self.train.notify:
-            from piceli.train.notify import send_all
-
-            self.notified = send_all(self.train.notify, summary, self.warn)
-            for outcome in self.notified:
-                if outcome["state"] == "failed":
-                    self.emit("notify-failed", **outcome)
+            self._notify(summary)
             result = self.result()
-            self.state.write_record(self.run_id, result)
         return result
 
     def _finish(self) -> dict[str, Any]:
@@ -905,15 +944,20 @@ class TrainRun:
             if self.promotion and self.promotion.get("tag")
             else []
         )
-        state = (
-            "running"
-            if self.finished is None
-            else ("ejected" if self.ejected() else "joined")
-        )
+        if self.failure is not None:
+            state = "failed"
+        elif self.finished is None:
+            state = "running"
+        else:
+            state = "ejected" if self.ejected() else "joined"
         return {
             "schema": RUN_SCHEMA,
             "state": state,
-            "ok": self.ok() if self.finished is not None else None,
+            "ok": (
+                False
+                if self.failure
+                else (self.ok() if self.finished is not None else None)
+            ),
             "run": self.run_id,
             "train": self.train.name,
             "repo": str(self.repo),
@@ -935,6 +979,8 @@ class TrainRun:
             **({"promoted_from": self.promoted_from} if self.promoted_from else {}),
             **({"prune": self.pruned} if self.pruned else {}),
             **({"notify": self.notified} if self.notified else {}),
+            **({"reason": self.failure} if self.failure else {}),
+            **({"queue": self.queue_id} if self.queue_id else {}),
         }
 
     # ------------------------------------------------- promote a past run

@@ -3,8 +3,8 @@
 :func:`live_trains` writes a train's history (runs, step logs, flaky tests)
 under ``root`` and keeps one run in progress while the context is open: it
 holds the train's lock, as a real run does, and a thread appends lines to
-the running step's log and moves to the next step, so the page shows a live
-run. Everything lives under ``root`` (the showcase's temporary directory).
+the running step's log, so the page shows a live run; two requests wait in
+its queue. Everything lives under ``root`` (the showcase's temporary directory).
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from piceli.train.queue import TrainQueue
 from piceli.train.state import TrainState
 
 TRAIN = "shop"
@@ -87,6 +88,13 @@ def live_trains(root: Path) -> Iterator[Path]:
         [{"target": "-p api --test http", "test": "retries_once", "step": "cargo-test", "tail": "timed out", "branches": ["feat-6"]}],
         "run-6", _iso(now - timedelta(hours=1)),
     )  # fmt: skip
+    queue = TrainQueue(state)
+    for branches, promote in (
+        (["feat-filters", "fix-typo"], True),
+        (["feat-export"], False),
+    ):
+        queue.enqueue(entry="shop/train_spec.py:train", cwd=str(root), branches=branches,
+                      promote=promote, push=promote)  # fmt: skip
     run = f"{now.strftime('%Y%m%dT%H%M%SZ')}-0000ff"
     stop = threading.Event()
     with state.lock(run):

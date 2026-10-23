@@ -77,6 +77,8 @@ def summarize(result: Mapping[str, Any]) -> dict[str, Any]:
             if isinstance(item, Mapping)
         ],
         "record": result.get("record"),
+        **({"reason": result["reason"]} if result.get("reason") else {}),
+        **({"queue": result["queue"]} if result.get("queue") else {}),
     }
 
 
@@ -91,6 +93,8 @@ def headline(summary: Mapping[str, Any]) -> str:
         )
     for item in summary.get("ejected") or []:
         parts.append(f"{item.get('branch')} ejected ({item.get('step')})")
+    if summary.get("state") == "failed":
+        parts.insert(0, f"failed [{summary.get('reason')}]")
     if not parts:
         parts.append("nothing to join")
     tail: list[str] = []

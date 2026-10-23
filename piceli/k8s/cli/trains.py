@@ -22,6 +22,7 @@ from typing import Annotated, Any
 import typer
 
 from piceli.cli_contract import EXIT_FAILED, emit_json, fail, reject, say
+from piceli.train.queue import is_queue_id
 
 StateRootOption = Annotated[
     Path | None,
@@ -182,8 +183,9 @@ def train_wait(
     run: Annotated[
         str,
         typer.Argument(
-            help="A run id (from piceli train --json or piceli trains), or a "
-            "train's name: its running run, else its newest"
+            help="A run id (from piceli train --json or piceli trains), a queue "
+            "id (q-…: waits for the run that serves it), or a train's name: its "
+            "running run, else its newest"
         ),
     ],
     timeout: Annotated[
@@ -206,12 +208,15 @@ def train_wait(
     from piceli.train.summary import headline, summarize
 
     root = state_dir if state_dir is not None else default_root()
-    found = _locate(root, run)
+    deadline = time.monotonic() + timeout if timeout else None
+    if is_queue_id(run):
+        found = _await_request(root, run, deadline, interval)
+    else:
+        found = _locate(root, run)
     if found is None:
         reject("train-run-not-found", f"no train run {run!r} under the state root")
     train, run_id = found
     state = TrainState(root / train)
-    deadline = time.monotonic() + timeout if timeout else None
     announced = False
     while True:
         record = state.record(run_id)
@@ -245,6 +250,114 @@ def train_wait(
         raise typer.Exit(EXIT_FAILED)
 
 
+def _await_request(
+    root: Path, request_id: str, deadline: float | None, interval: float
+) -> tuple[str, str]:
+    """Wait until a queued request has a run; ``(train, run id)``."""
+    from piceli.train.queue import find_request
+
+    announced = False
+    while True:
+        found = find_request(root, request_id)
+        if found is None:
+            reject("train-queue-not-found", f"no queued request {request_id}")
+        queue, request = found
+        train = queue.state.root.name
+        if request.get("state") == "cancelled":
+            fail("train-queue-cancelled", f"request {request_id} was cancelled",
+                 train=train, queue=request_id)  # fmt: skip
+        if request.get("outcome") == "rejected":
+            fail(str(request.get("reason")), str(request.get("message") or ""),
+                 train=train, queue=request_id)  # fmt: skip
+        if request.get("run"):
+            return train, str(request["run"])
+        if request.get("state") == "running" and not _alive(request.get("pid")):
+            fail(
+                "train-interrupted",
+                f"the process serving {request_id} died; resume it with "
+                f"piceli train-queue {train} --drain",
+                train=train,
+                queue=request_id,
+            )
+        if not announced:
+            say(f"waiting for queued request {request_id} of train {train}")
+            announced = True
+        if deadline is not None and time.monotonic() >= deadline:
+            fail("train-wait-timeout", f"request {request_id} has not started",
+                 train=train, queue=request_id)  # fmt: skip
+        time.sleep(interval)
+
+
+def _alive(pid: Any) -> bool:
+    from piceli.train.queue import _alive as alive
+
+    return alive(pid)
+
+
+def train_queue(
+    name: Annotated[str, typer.Argument(help="The train's name")],
+    cancel: Annotated[
+        str | None,
+        typer.Option("--cancel", help="Cancel this waiting request (its q-… id)"),
+    ] = None,
+    drain: Annotated[
+        bool,
+        typer.Option(
+            "--drain",
+            help="Serve the queue here until it is empty (resumes a request "
+            "whose process died); runs each request's steps with its flags",
+        ),
+    ] = False,
+    state_dir: StateRootOption = None,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Print one piceli.train.queue.v1 object on stdout"),
+    ] = False,
+) -> None:
+    """A train's queue: waiting requests with their flags; cancel one, or serve them."""
+    from piceli.k8s.cli.train import serve_queue
+    from piceli.train.model import TrainError
+    from piceli.train.queue import QUEUE_SCHEMA, TrainQueue
+    from piceli.train.state import TrainState, default_root, train_names
+
+    root = state_dir if state_dir is not None else default_root()
+    if name not in train_names(root):
+        reject("train-unknown", f"no train {name!r} has run or queued here")
+    queue = TrainQueue(TrainState(root / name))
+    if cancel is not None:
+        try:
+            done = queue.cancel(cancel)
+        except TrainError as error:
+            reject(error.code, str(error))
+        say(f"cancelled {cancel}: {' '.join(done.get('branches') or ())}")
+        if as_json:
+            emit_json({"schema": QUEUE_SCHEMA, "train": name, **done})
+        return
+    served: list[dict[str, Any]] = []
+    if drain:
+        if queue.state.owner() is not None:
+            say("the train is running; it serves the queue when its run ends")
+        served = [done for done, _ in serve_queue(queue, state_dir)]
+    requests = queue.pending()
+    for row in requests:
+        flags = " ".join(f for f in ("--promote", "--push") if row.get(f.strip("-")))
+        where = f"#{row['position']}" if row.get("position") else row["state"]
+        say(f"{where} {row['id']} {' '.join(row.get('branches') or ())} {flags}".rstrip()
+            + f" (queued {row.get('queued_at')})")  # fmt: skip
+    if not requests:
+        say(f"train {name}: the queue is empty")
+    if as_json:
+        body: dict[str, Any] = {
+            "schema": QUEUE_SCHEMA,
+            "train": name,
+            "requests": requests,
+        }
+        if drain:
+            body["served"] = served
+        emit_json(body)
+
+
 def register(root: typer.Typer) -> None:
     root.command("trains")(trains)
     root.command("train-wait")(train_wait)
+    root.command("train-queue")(train_queue)

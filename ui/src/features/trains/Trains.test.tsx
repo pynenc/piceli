@@ -14,6 +14,10 @@ const status: TrainsStatus = {
       step: { trial: 1, name: 'cargo-test', kind: 'cargo-test', host: 'local', started: '2026-10-23T10:16:02Z', elapsed: 41, tail: 'test api::retries ... ok\ntest core::value ... ok' },
       done: [{ trial: 1, name: 'merge', verdict: 'passed', duration: 0.1, host: 'local' }, { trial: 1, name: 'cargo-check', verdict: 'passed', duration: 52.4, host: 'local' }],
     },
+    queue: [
+      { id: 'q-20261023T101700000000Z-ab12', state: 'waiting', position: 1, branches: ['feat-d', 'feat-e'], promote: true, push: true, queued_at: '2026-10-23T10:17:00Z', started_at: null, run: null, resumed: 0 },
+      { id: 'q-20261023T101800000000Z-cd34', state: 'waiting', position: 2, branches: ['fix-f'], promote: false, push: false, queued_at: '2026-10-23T10:18:00Z', started_at: null, run: null, resumed: 0 },
+    ],
     runs: [{
       run: '20261022T090000Z-aaaaaa', state: 'ejected', ok: false, started: '2026-10-22T09:00:00Z', duration: 412.7, host: 'local', head: 'b'.repeat(40),
       branches: [{ branch: 'feat-x', verdict: 'joined' }, { branch: 'fix-y', verdict: 'ejected', step: 'fitness', reason: 'train-step-failed' }],
@@ -49,6 +53,20 @@ it('shows the running step with its host, elapsed time and log tail', async () =
   expect(within(running).getByLabelText('Log of cargo-test').textContent).toContain('core::value ... ok');
   expect(within(running).getByText('cargo-check')).toBeTruthy();
   expect(within(running).queryByText('merge')).toBeNull();
+});
+
+it('shows the queue with the flags and queue time of each request', async () => {
+  open(status);
+  const queue = await screen.findByRole('region', { name: 'Queue of shop' });
+  expect(within(queue).getByText('#1 feat-d feat-e')).toBeTruthy();
+  expect(within(queue).getByText(/--promote --push/)).toBeTruthy();
+  expect(within(queue).getByText('#2 fix-f')).toBeTruthy();
+});
+
+it('shows why a run failed midway', async () => {
+  open({ ...status, trains: [{ ...status.trains[0], runs: [{ ...status.trains[0].runs[0], state: 'failed', reason: 'train-git-failed' }] }] });
+  const runs = await screen.findByRole('region', { name: 'Recent runs' });
+  expect(within(runs).getByText(/train-git-failed/)).toBeTruthy();
 });
 
 it('lists recent runs, trends and flaky tests', async () => {

@@ -184,6 +184,9 @@ DYNAMIC |= {
     "train-push-failed",
     # train.telemetry: the one warning line of an export that failed
     "train-telemetry-failed",
+    # train.engine: the reason of a run that raised midway (run-failed)
+    "train-run-failed",
+    "train-run-cancelled",
 }
 # Registered for the CLI contract itself (piceli/cli_contract.py users).
 CONTRACT = {"unknown-error-code"}

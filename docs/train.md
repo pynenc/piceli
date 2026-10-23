@@ -166,6 +166,7 @@ the branch names may follow `APP` directly.
 | --- | --- |
 | `--promote` | Tag the head (`tested/<date>.N`), move `tested` and the base to it by fast-forward only, then run the publish steps |
 | `--push` | Push the tag, `tested` and the base, atomically (needs `--promote`) |
+| `--queue` | When the train is busy, queue the request (with its flags) and return at once; see {ref}`train-queue` |
 | `--json` | Print the result object on stdout |
 | `--state-dir DIR` | The state root (default `$XDG_STATE_HOME/piceli/train`, else `~/.local/state/piceli/train`) |
 | `--promote-run RUN` | Promote the head an earlier run reached (its id, or `last`) without running it again; takes `--push`, no branches (see [Keep the tested head](#keep-the-tested-head)) |
@@ -546,6 +547,50 @@ It prints the sizes per kind with their limits and each path that goes
 (`--json`: one `piceli.train-prune.v1` object), and exits `0` (`2` when the
 name is neither a train name nor a spec).
 
+(train-queue)=
+## The queue
+
+A train runs one request at a time. A second `piceli train` on a busy
+train is refused with `train-busy`, unless it asks to wait its turn:
+
+```sh
+piceli train shop/train_spec.py --branches feat-d feat-e --promote --push --queue --json
+piceli train-queue shop                    # waiting requests, their flags, when queued
+piceli train-queue shop --cancel q-20261023T101700123456Z-ab12
+piceli train-wait q-20261023T101700123456Z-ab12 --json   # waits for the run that serves it
+```
+
+With `--queue` on a busy train, the request is written to the train's
+queue and the command returns at once (exit 0) with one
+`piceli.train.queued.v1` object: `queue_id`, `position`, `branches`,
+`promote`, `push` and `queued_at`. Its branches are checked first (a branch
+that does not exist is refused at once). On a free train, `--queue` runs
+the request now, after any older waiting ones, and prints its result.
+
+**Who serves the queue.** Every `piceli train` process, once its own run
+ends, takes the oldest waiting request and runs it with the flags it was
+queued with (`--promote`, `--push`), then the next, until the queue is
+empty; then it exits. `piceli train-queue NAME --drain` does the same
+without a run of its own. Each run is an ordinary run: its own record
+(with `"queue": <id>`), events, notifications and trace. A request whose
+branches no longer exist when it starts is rejected
+(`train-branch-unknown`) and the queue goes on.
+
+**If the serving process dies** (killed, machine off), its lock has no live
+owner and its request stays `running` naming a dead process: `piceli
+train-queue NAME` shows it `stale`. The next server (any `piceli train …`
+of that train, or `piceli train-queue NAME --drain`) puts it back at the
+head of the queue (`resumed` counts how often) and runs it again; the
+killed run's record shows `interrupted`. Nothing is lost: requests are
+files under `queue/waiting`, `queue/running` and `queue/done` in the
+train's state directory, moved by `rename`, so exactly one process claims
+each.
+
+`piceli train-wait Q-ID` waits until the request has a run, then for that
+run; it exits 1 with `train-queue-cancelled` for a cancelled request, the
+request's reason when it was rejected, and `train-interrupted` when its
+process died (resume it with `--drain`).
+
 ## Seeing a train
 
 ```sh
@@ -561,6 +606,9 @@ takes the lock, never loads the spec) and shows:
 - **the run in progress**: its branches and their verdicts so far, the
   trial, the steps done and the running step with its start, elapsed time,
   host and the last lines of its log (`--follow` streams the log);
+- **the queue**: requests waiting (with their position, branches, flags
+  and when they were queued), and the one being served (`stale` when its
+  process died);
 - **recent runs** (`--runs N`, default 10): state, duration, tag, push and
   each branch's verdict (with the failing step), and the seconds each step
   took, summed over the run's trials. A record still `running` while no
@@ -721,7 +769,9 @@ When a run ends, its notifiers run one after the other, each within its
 | `Notify.webhook(url=None, *, url_env=None, headers_env=None, when="always", timeout=10)` | `POST`s the summary JSON; the URL is given or read from `url_env` (a webhook URL that is a secret stays out of the spec), each header from the variable `headers_env` names; a 2xx is success |
 | `Notify.desktop(when="always", timeout=10)` | a desktop notification with the headline: `osascript` on macOS, `notify-send` elsewhere; skipped when neither exists |
 
-`when="failure"` sends only for a run that is not ok. The summary
+`when="failure"` sends only for a run that is not ok. A run that raises
+midway (a Git failure, a crash, Ctrl-C) is notified too: see
+{ref}`train-failed`. The summary
 (`piceli.train.summary.v1`) is also the `piceli.dev.train.finished`
 OpenTelemetry event and what `piceli train-wait --json` prints:
 
@@ -753,6 +803,28 @@ warning (`train-notify-failed`), appends a `notify-failed` event, and the
 run record's `notify` list says what each notifier did (`sent`,
 `skipped`, `not-wanted`, `failed`).
 
+(train-failed)=
+## A run that fails midway
+
+A run that raises after it started (a Git command that fails:
+`train-git-failed`; an unexpected error: `train-run-failed`; Ctrl-C:
+`train-run-cancelled`) does not leave a `running` record behind. It:
+
+- writes its record with `"state": "failed"`, `"ok": false`, the `reason`
+  and the verdicts reached so far (branches already joined stay `joined`;
+  without `--promote` no ref moved, and a promotion that had started is in
+  the record);
+- emits `run-failed` with the summary (`"state": "failed"`, `"reason"`,
+  `joined` so far);
+- sends the notifications and the `piceli.dev.train.finished` event with
+  that summary (the root span carries `piceli.train.reason` and status
+  `ERROR`).
+
+`piceli train` exits 1 with the reason (`{"state": "failed", "reason":
+…, "run": …}`), and `piceli train-wait` exits 1 for it. Only a run killed
+outright (`SIGKILL`, power loss) leaves `running`, shown as
+`interrupted`.
+
 ## Hooks
 
 Commands run through a runner (`piceli.train.runner.Runner`: one command
@@ -765,5 +837,6 @@ selection, flaky tests and a failing tail), `trial-finished`,
 `halves-parallel`, `trial-discarded`, `branch-joined`, `branch-ejected`,
 `branch-included`, `outputs-restored`, `promoted`, `promote-rejected`,
 `published`, `publish-failed`, `pushed`, `push-failed`, `pruned`,
-`run-finished` (with the summary), `notify-failed`). Every event is also
-appended to `events.jsonl`. A sink that raises never stops the run.
+`run-finished` (with the summary), `run-failed` (with the reason and the
+summary), `notify-failed`). Every event is also appended to
+`events.jsonl`. A sink that raises never stops the run.

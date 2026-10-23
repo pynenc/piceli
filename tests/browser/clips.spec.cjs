@@ -92,6 +92,9 @@ test('trains', async ({ page }) => {
   await pause(page, 2500);
   await expect(log).not.toHaveText(before ?? '');
   await shot(page, 'trains');
+  await page.getByRole('region', { name: 'Queue of shop' }).scrollIntoViewIfNeeded();
+  await expect(page.getByRole('region', { name: 'Queue of shop' }).getByText('#1 feat-filters fix-typo')).toBeVisible();
+  await pause(page, 1500);
   await page.getByRole('region', { name: 'Step trends' }).scrollIntoViewIfNeeded();
   await expect(page.getByRole('region', { name: 'Step trends' }).getByText('Slower')).toBeVisible();
   await pause(page, 1500);

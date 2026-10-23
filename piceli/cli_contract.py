@@ -1371,7 +1371,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "is merged with git merge --no-ff onto the train's head in a "
             "temporary worktree; its steps come from the merged tree's spec. "
             "A failing set is bisected. --json prints one piceli.train.v1 "
-            "object. Exit 0: every branch joined (or was already in) and the "
+            "object. --queue on a busy train writes a queued request (keeping "
+            "its flags) and returns at once (piceli.train.queued.v1, exit 0); "
+            "every run serves the train's queue when it ends. A run that "
+            "raises midway is recorded failed (run-failed: train-git-failed, "
+            "train-run-failed, train-run-cancelled), notified, exit 1. Exit 0: every branch joined (or was already in) and the "
             "promotion and push asked for succeeded; 1: a branch was ejected "
             "(train-step-failed, train-step-timeout, train-merge-conflict, "
             "train-spec-invalid), the promotion was refused "
@@ -1428,6 +1432,28 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "a cluster only with --composition/--infra. Exit 2: an unknown "
             "train name (train-unknown).",
         ),
+        "train-queue": _C(
+            "List a train's queue (waiting requests with their branches, flags "
+            "and when they were queued), cancel one, or serve it here.",
+            reads=(
+                "$XDG_STATE_HOME/piceli/train/<name>/queue (waiting, running, done)",
+            ),
+            writes=(
+                "--cancel: moves the request to queue/done as cancelled",
+                "--drain: what piceli train writes, for each request served",
+            ),
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.26.0. Without options read-only; --json prints one "
+            "piceli.train.queue.v1 object (a request whose process died shows "
+            "stale). --cancel ID cancels a waiting request "
+            "(train-queue-not-waiting, train-queue-not-found). --drain runs "
+            "each queued request's steps with the flags it was queued with "
+            "(the request was the approval) until the queue is empty, first "
+            "putting back a request whose serving process died; a request "
+            "whose branches are gone is rejected (train-branch-unknown).",
+        ),
         "train-wait": _C(
             "Wait until a train run ends and exit with its verdict.",
             reads=(
@@ -1437,8 +1463,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             long_running=True,
             contract="conforms",
             exit_codes=(0, 1, 2),
-            notes="0.26.0. Read-only; safe to retry. RUN is a run id or a "
-            "train's name (its running run, else its newest). --json prints "
+            notes="0.26.0. Read-only; safe to retry. RUN is a run id, a queue "
+            "id (q-…, waits for the run that serves it; train-queue-cancelled, "
+            "train-queue-not-found) or a train's name (its running run, else "
+            "its newest). A run that failed midway (run-failed) exits 1. --json prints "
             "the run's piceli.train.summary.v1. Exit 0: the run ended ok; 1: "
             "a branch was ejected, the promotion or push failed, the run was "
             "killed (train-interrupted) or --timeout ran out "

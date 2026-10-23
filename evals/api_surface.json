@@ -11669,6 +11669,7 @@
      "targets",
      "train",
      "train-prune",
+     "train-queue",
      "train-wait",
      "trains",
      "ui",
@@ -13870,6 +13871,7 @@
      "--promote",
      "--promote-run",
      "--push",
+     "--queue",
      "--state-dir"
     ],
     "subcommands": []
@@ -13881,6 +13883,18 @@
     "flags": [
      "--cache-dir",
      "--dry-run",
+     "--json",
+     "--state-dir"
+    ],
+    "subcommands": []
+   },
+   "train-queue": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--cancel",
+     "--drain",
      "--json",
      "--state-dir"
     ],
@@ -14071,6 +14085,9 @@
      "--source-file",
      "--source-root",
      "--state-dir",
+     "--train-composition",
+     "--train-state-dir",
+     "--trains",
      "--url-prefix"
     ],
     "subcommands": []
@@ -14844,7 +14861,12 @@
    "train-publish-failed",
    "train-push-failed",
    "train-push-needs-promote",
+   "train-queue-cancelled",
+   "train-queue-not-found",
+   "train-queue-not-waiting",
    "train-repo-invalid",
+   "train-run-cancelled",
+   "train-run-failed",
    "train-run-not-found",
    "train-run-unknown",
    "train-spec-invalid",
@@ -16959,6 +16981,7 @@
   "piceli.services.remote_access",
   "piceli.services.render_worker",
   "piceli.services.store",
+  "piceli.services.trains",
   "piceli.settings",
   "piceli.state",
   "piceli.state.archive",
@@ -16985,6 +17008,7 @@
   "piceli.train.model",
   "piceli.train.notify",
   "piceli.train.prune",
+  "piceli.train.queue",
   "piceli.train.reuse",
   "piceli.train.runner",
   "piceli.train.spec",
