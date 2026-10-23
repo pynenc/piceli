@@ -3856,17 +3856,18 @@ Merge branches onto the base one tested merge at a time; eject failures.
 | `--push` | boolean | `False` | Push the tag, tested and the base (needs --promote) |
 | `--json` | boolean | `False` | Print the result object on stdout |
 | `--state-dir` | path |  | Train state root (default $XDG_STATE_HOME/piceli/train, else ~/.local/state/piceli/train) |
+| `--promote-run` | text |  | Promote the head an earlier run reached (its id, or 'last'), without running it again; refused when the base moved in a way that is not a fast-forward of that head |
 
 **Contract**
 
-- **Reads:** the train spec module (MODULE[:ATTR]), then the same module in each merged tree, the Git repository (branches, base, tested), the steps' tools (cargo, scripts of the merged tree)
-- **Writes:** temporary worktrees of the repository (removed), unreferenced merge commits, $XDG_STATE_HOME/piceli/train/<name> (run records, logs, flaky.jsonl), --promote: the tag, tested and the base (fast-forward only), publish steps, --push: the remote's tag, tested and base
+- **Reads:** the train spec module (MODULE[:ATTR]), then the same module in each merged tree, the Git repository (branches, base, tested), the steps' tools (cargo, scripts of the merged tree), Train(builds=): the declared build hosts (their engines, queues, health), --promote-run: an earlier run's record
+- **Writes:** worktrees of the repository at stable paths under the train cache (removed after each trial), unreferenced merge commits; refs/piceli/train/<name>/last, $XDG_STATE_HOME/piceli/train/<name> (run records, logs, flaky.jsonl), $XDG_CACHE_HOME/piceli/train (slot locks, shared cargo targets, the content store), build hosts: dev runs of the merged tree (their queues, warm caches, health events), --promote: the tag, tested and the base (fast-forward only), publish steps, --promote with Step.images: images pushed to the cluster's registry, a prebuilt request to its controller, --push: the remote's tag, tested and base
 - **Cluster:** none
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.26.0. Runs the train's steps, which run code: the explicit branch list is the approval, and --promote/--push the approval to move refs and push. Without --promote no ref changes; nothing is pushed without --push (which needs --promote). Each candidate set is merged with git merge --no-ff onto the train's head in a temporary worktree; its steps come from the merged tree's spec. A failing set is bisected. --json prints one piceli.train.v1 object. Exit 0: every branch joined (or was already in) and the promotion and push asked for succeeded; 1: a branch was ejected (train-step-failed, train-step-timeout, train-merge-conflict, train-spec-invalid), the promotion was refused (train-not-fast-forward, train-checkout-dirty), a publish step or the push failed; 2: rejected before anything ran (train-not-found, train-branch-unknown, train-busy, ...).
+- **Notes:** 0.26.0. Runs the train's steps, which run code: the explicit branch list is the approval, and --promote/--push the approval to move refs and push. Without --promote no ref changes; nothing is pushed without --push (which needs --promote). Each candidate set is merged with git merge --no-ff onto the train's head in a temporary worktree; its steps come from the merged tree's spec. A failing set is bisected. --json prints one piceli.train.v1 object. Exit 0: every branch joined (or was already in) and the promotion and push asked for succeeded; 1: a branch was ejected (train-step-failed, train-step-timeout, train-merge-conflict, train-spec-invalid), the promotion was refused (train-not-fast-forward, train-checkout-dirty), a publish step or the push failed; 2: rejected before anything ran (train-not-found, train-branch-unknown, train-busy, ...). Steps may run on the train's build hosts (Train(builds=, hosts=)) through the dev run machinery; a step with inputs that passed before is reused. --promote-run RUN promotes an earlier run's head without running it (train-run-unknown, train-not-fast-forward); no host for a step fails the run (train-host-unavailable).
 
 (cli-ui-backup)=
 ### `piceli ui backup`

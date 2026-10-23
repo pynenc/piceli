@@ -576,6 +576,24 @@ elsewhere when the host is quarantined, and deployed through the usual
 plan, approval and checks. `controller.last_rebuild` in the status says
 what it took; a host that built nothing deployed is a rejected request.
 
+### Images a merge train built: `prebuilt` (0.26.0)
+
+A merge train that promotes a commit can build its images first
+(`Step.images`, see {doc}`train`) and offer them with a `prebuilt` request
+before the push this controller reacts to. Declare
+`Controller(on="node-a", prebuilt=True)` to take them (off by default).
+The controller keeps an offer after checking that it names a declared
+component, that its reference points into that component's repository of
+this registry and is pinned by its digest, and that the digest is in the
+registry. It uses an offer only when a step's own change key for the
+component (computed from its own clone of the commit) is the offered key,
+and the digest is still in the registry: the image is then recorded as
+its own build, with the train's provenance (`builder: "train"`, the run,
+the tag and the host), and the step deploys without asking a host or
+starting a Job. An offer under another key is never used. Current offers
+show in the status (`controller.prebuilt`). Registry delivery only: a
+controller delivering into the nodes refuses offers.
+
 ### Faulty build hosts and nodes: quarantine (0.22.0)
 
 The controller records a health event for a build host when its

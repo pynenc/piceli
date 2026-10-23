@@ -1346,12 +1346,17 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
                 "the train spec module (MODULE[:ATTR]), then the same module in each merged tree",
                 "the Git repository (branches, base, tested)",
                 "the steps' tools (cargo, scripts of the merged tree)",
+                "Train(builds=): the declared build hosts (their engines, queues, health)",
+                "--promote-run: an earlier run's record",
             ),
             writes=(
-                "temporary worktrees of the repository (removed)",
-                "unreferenced merge commits",
+                "worktrees of the repository at stable paths under the train cache (removed after each trial)",
+                "unreferenced merge commits; refs/piceli/train/<name>/last",
                 "$XDG_STATE_HOME/piceli/train/<name> (run records, logs, flaky.jsonl)",
+                "$XDG_CACHE_HOME/piceli/train (slot locks, shared cargo targets, the content store)",
+                "build hosts: dev runs of the merged tree (their queues, warm caches, health events)",
                 "--promote: the tag, tested and the base (fast-forward only), publish steps",
+                "--promote with Step.images: images pushed to the cluster's registry, a prebuilt request to its controller",
                 "--push: the remote's tag, tested and base",
             ),
             approval_required=True,
@@ -1372,7 +1377,12 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "train-spec-invalid), the promotion was refused "
             "(train-not-fast-forward, train-checkout-dirty), a publish step "
             "or the push failed; 2: rejected before anything ran "
-            "(train-not-found, train-branch-unknown, train-busy, ...).",
+            "(train-not-found, train-branch-unknown, train-busy, ...). "
+            "Steps may run on the train's build hosts (Train(builds=, hosts=)) "
+            "through the dev run machinery; a step with inputs that passed "
+            "before is reused. --promote-run RUN promotes an earlier run's head "
+            "without running it (train-run-unknown, train-not-fast-forward); "
+            "no host for a step fails the run (train-host-unavailable).",
         ),
         "host wait": _C(
             "Wait until a Nix host runs a commit or tag with its checks passed.",

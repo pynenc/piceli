@@ -45,6 +45,64 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `train-step-failed`, `train-step-timeout`, `train-spec-invalid`,
   `train-not-fast-forward`, `train-checkout-dirty`, `train-publish-failed`,
   `train-push-failed`, `train-git-failed`.
+- **Train steps on build hosts.** `Train(builds=..., hosts=[...])` names
+  where steps run: `"local"` and the `BuildHost`s of a `DevBuilds` (or
+  `MODULE:ATTR` of one, or of a `Cluster` with `dev=`); a step's own
+  `hosts=` wins. A step on a build host is a `piceli dev run` of the merged
+  checkout: the same upload, the host's own queue and slots, quarantine and
+  warm lineage (the profile's shared cargo target on that host). Only the
+  `PICELI_TRAIN_*` variables and the step's `env` travel, never the
+  caller's environment; declared outputs come back as artifacts. A host
+  that is down or unavailable at start hands the step on, and
+  `Train(fallback="local")` (the default) runs it here when every host
+  named is down (else `train-host-unavailable`). The result's `host` is
+  where each step ran.
+- **Warm local runs.** Local commands take one of `Train(local_slots=1)`
+  slots of the machine (file locks shared by every train), so the laptop
+  keeps its limit. Trials use a few stable worktree paths under
+  `$XDG_CACHE_HOME/piceli/train`, each with its own shared cargo target
+  directory (`Train(target_dir="auto")`; `CARGO_TARGET_DIR` in the
+  environment wins), and files whose content did not change since that
+  path's previous trial keep their modification time, so cargo rebuilds
+  only what changed. `sccache` is used when on `PATH`
+  (`Train(sccache="auto")`).
+- **Content-hash reuse.** A step with `inputs=` (globs) and `outputs=`
+  (paths) has a key: the Git blobs of its inputs, its definition (argv,
+  env, impact selection) and the toolchain pins. A step whose key passed
+  before is `reused`: nothing runs, its outputs are restored from a content
+  store, and the result names the run, trial and host that made them. It
+  holds across trials (bisection included), runs and trains of the
+  machine; failures are never kept. Publish steps get the outputs of the
+  tested steps restored first, so what is published is what was tested.
+- **Parallel halves.** After a failed joint run the right half is judged,
+  at the same time as the left one, on top of the left half's merge;
+  when the whole left half joins, that verdict stands, else it is
+  discarded and the right half judged again. `Train(parallel="auto")`
+  does it when two slots are free (`"on"`, `"off"`). The verdicts are the
+  sequential ones.
+- **Keep the tested head; promote a reviewed run.** Every run that joined
+  something points `refs/piceli/train/<name>/last` at its head.
+  `piceli train APP --promote-run RUN` (or `last`) promotes that head
+  without running the train again, refused when the base is no ancestor of
+  it (`train-not-fast-forward`) or the run is unknown (`train-run-unknown`).
+- **`Impact(dev_targets=True)`**: a member that reaches a changed package
+  only through a dev-dependency runs only its integration test targets
+  that name the changed library (the whole member when its unit tests or
+  shared test code name it).
+- **The train's images go to the cluster: `Step.images("infra.py")`.** On
+  promote the train computes, for each component built from the
+  repository, the change key the GitOps controller computes for that
+  commit, builds the images from the tested commit with the same
+  host-build code as `piceli builder serve`, pushes them to the cluster's
+  registry with their provenance (naming the train run and host) and
+  offers them to the controller with a new `prebuilt` request, before the
+  push the controller reacts to. A controller declared
+  `Controller(prebuilt=True)` keeps the offer and uses it only when a
+  step's own change key is the offered key, the reference names the
+  component's repository in its registry, pinned by digest, and the digest
+  is in the registry; it then deploys without waiting for a host or a
+  Job. New codes `train-images-failed`, `train-host-unavailable`,
+  `train-run-unknown`.
 
 ## Version 0.25.3
 

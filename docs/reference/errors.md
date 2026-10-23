@@ -755,6 +755,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`train-busy`](#error-train-busy) | train | yes |
 | [`train-checkout-dirty`](#error-train-checkout-dirty) | train | yes |
 | [`train-git-failed`](#error-train-git-failed) | train | yes |
+| [`train-host-unavailable`](#error-train-host-unavailable) | train | yes |
+| [`train-images-failed`](#error-train-images-failed) | train | yes |
 | [`train-invalid`](#error-train-invalid) | train | no |
 | [`train-load-failed`](#error-train-load-failed) | train | no |
 | [`train-merge-conflict`](#error-train-merge-conflict) | train | no |
@@ -764,6 +766,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`train-push-failed`](#error-train-push-failed) | train | yes |
 | [`train-push-needs-promote`](#error-train-push-needs-promote) | train | no |
 | [`train-repo-invalid`](#error-train-repo-invalid) | train | no |
+| [`train-run-unknown`](#error-train-run-unknown) | train | no |
 | [`train-spec-invalid`](#error-train-spec-invalid) | train | no |
 | [`train-step-failed`](#error-train-step-failed) | train | no |
 | [`train-step-timeout`](#error-train-step-timeout) | train | yes |
@@ -7146,6 +7149,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Run `git status` and `git worktree prune` in the repository, then run the train again.
 - **Retry-safe:** yes
 
+(error-train-host-unavailable)=
+### `train-host-unavailable`
+
+**No host could take a train step.** Every host a step may run on (its hosts, else the train's) was down, quarantined or unavailable at start, and no fallback to this machine applies (Train(fallback=None), or this machine was already tried).
+
+- **Fix:** Check `piceli dev hosts`, release a quarantined host once fixed, or allow the fallback with Train(fallback="local"); then run the train again.
+- **Retry-safe:** yes
+
+(error-train-images-failed)=
+### `train-images-failed`
+
+**Train images not built or offered.** The images step could not compute the controller's change keys, build an image, push it to the cluster's registry, or offer it to the controller. The promotion stands; the controller builds the images itself as before.
+
+- **Fix:** Read the images step's log; check the composition, the build host and the cluster's registry, then run `piceli train APP --promote-run last` again or let the controller build.
+- **Retry-safe:** yes
+
 (error-train-invalid)=
 ### `train-invalid`
 
@@ -7216,6 +7235,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Train repository invalid.** The train's `repo` is not a Git repository, or its base branch does not exist.
 
 - **Fix:** Point `Train(repo=...)` at the repository (relative to the spec module) and create the base branch.
+- **Retry-safe:** no
+
+(error-train-run-unknown)=
+### `train-run-unknown`
+
+**No such train run to promote.** `--promote-run` names a run with no record under the train's state directory, one that did not finish, or one that joined nothing.
+
+- **Fix:** Name a finished run that joined branches (its id is in the result and under runs/), or `last`.
 - **Retry-safe:** no
 
 (error-train-spec-invalid)=

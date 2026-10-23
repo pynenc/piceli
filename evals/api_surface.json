@@ -1464,40 +1464,65 @@
    },
    "attrs": [
     "args",
+    "cargo",
     "command",
     "env",
+    "hosts",
+    "images",
+    "inputs",
     "kind",
     "name",
+    "outputs",
     "phase",
     "publish",
     "select",
     "timeout",
-    "to_dict"
+    "to_dict",
+    "uses_cargo"
    ],
    "init": [
     "args",
     "env",
+    "hosts",
+    "inputs",
     "name",
+    "outputs",
     "select",
     "timeout"
    ],
    "methods": {
     "command": [
      "argv",
+     "cargo",
      "env",
+     "hosts",
+     "inputs",
      "name",
+     "outputs",
+     "timeout"
+    ],
+    "images": [
+     "components",
+     "composition",
+     "name",
+     "platforms",
      "timeout"
     ],
     "publish": [
      "argv",
+     "cargo",
      "env",
+     "hosts",
+     "inputs",
      "name",
+     "outputs",
      "timeout"
     ],
     "to_dict": []
    },
    "returns": {
     "command": "CommandStep",
+    "images": "ImagesStep",
     "publish": "PublishStep"
    }
   },
@@ -1507,21 +1532,30 @@
    },
    "attrs": [
     "args",
+    "cargo",
     "command",
     "env",
+    "hosts",
+    "images",
+    "inputs",
     "kind",
     "name",
+    "outputs",
     "phase",
     "publish",
     "retry",
     "select",
     "timeout",
-    "to_dict"
+    "to_dict",
+    "uses_cargo"
    ],
    "init": [
     "args",
     "env",
+    "hosts",
+    "inputs",
     "name",
+    "outputs",
     "retry",
     "select",
     "timeout"
@@ -1529,20 +1563,36 @@
    "methods": {
     "command": [
      "argv",
+     "cargo",
      "env",
+     "hosts",
+     "inputs",
      "name",
+     "outputs",
+     "timeout"
+    ],
+    "images": [
+     "components",
+     "composition",
+     "name",
+     "platforms",
      "timeout"
     ],
     "publish": [
      "argv",
+     "cargo",
      "env",
+     "hosts",
+     "inputs",
      "name",
+     "outputs",
      "timeout"
     ],
     "to_dict": []
    },
    "returns": {
     "command": "CommandStep",
+    "images": "ImagesStep",
     "publish": "PublishStep"
    }
   },
@@ -2001,38 +2051,65 @@
   "CommandStep": {
    "attrs": [
     "argv",
+    "cargo",
     "command",
     "env",
+    "hosts",
+    "images",
+    "inputs",
     "kind",
     "name",
+    "outputs",
     "phase",
     "publish",
+    "runs_cargo",
     "timeout",
-    "to_dict"
+    "to_dict",
+    "uses_cargo"
    ],
    "init": [
     "argv",
     "env",
+    "hosts",
+    "inputs",
     "name",
+    "outputs",
+    "runs_cargo",
     "timeout"
    ],
    "methods": {
     "command": [
      "argv",
+     "cargo",
      "env",
+     "hosts",
+     "inputs",
      "name",
+     "outputs",
+     "timeout"
+    ],
+    "images": [
+     "components",
+     "composition",
+     "name",
+     "platforms",
      "timeout"
     ],
     "publish": [
      "argv",
+     "cargo",
      "env",
+     "hosts",
+     "inputs",
      "name",
+     "outputs",
      "timeout"
     ],
     "to_dict": []
    },
    "returns": {
     "command": "CommandStep",
+    "images": "ImagesStep",
     "publish": "PublishStep"
    }
   },
@@ -2349,6 +2426,7 @@
     "image",
     "on",
     "poll",
+    "prebuilt",
     "quarantine_after",
     "quarantine_window",
     "sync",
@@ -2362,6 +2440,7 @@
     "image",
     "on",
     "poll",
+    "prebuilt",
     "quarantine_after",
     "quarantine_window",
     "sync",
@@ -5078,12 +5157,81 @@
    "methods": {},
    "pydantic": true
   },
+  "ImagesStep": {
+   "attrs": [
+    "cargo",
+    "command",
+    "components",
+    "composition",
+    "env",
+    "hosts",
+    "images",
+    "inputs",
+    "kind",
+    "name",
+    "outputs",
+    "phase",
+    "platforms",
+    "publish",
+    "timeout",
+    "to_dict",
+    "uses_cargo"
+   ],
+   "init": [
+    "components",
+    "composition",
+    "env",
+    "hosts",
+    "inputs",
+    "name",
+    "outputs",
+    "platforms",
+    "timeout"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "cargo",
+     "env",
+     "hosts",
+     "inputs",
+     "name",
+     "outputs",
+     "timeout"
+    ],
+    "images": [
+     "components",
+     "composition",
+     "name",
+     "platforms",
+     "timeout"
+    ],
+    "publish": [
+     "argv",
+     "cargo",
+     "env",
+     "hosts",
+     "inputs",
+     "name",
+     "outputs",
+     "timeout"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "command": "CommandStep",
+    "images": "ImagesStep",
+    "publish": "PublishStep"
+   }
+  },
   "Impact": {
    "attrs": [
+    "dev_targets",
     "roots",
     "to_dict"
    ],
    "init": [
+    "dev_targets",
     "roots"
    ],
    "methods": {
@@ -7995,38 +8143,65 @@
   "PublishStep": {
    "attrs": [
     "argv",
+    "cargo",
     "command",
     "env",
+    "hosts",
+    "images",
+    "inputs",
     "kind",
     "name",
+    "outputs",
     "phase",
     "publish",
+    "runs_cargo",
     "timeout",
-    "to_dict"
+    "to_dict",
+    "uses_cargo"
    ],
    "init": [
     "argv",
     "env",
+    "hosts",
+    "inputs",
     "name",
+    "outputs",
+    "runs_cargo",
     "timeout"
    ],
    "methods": {
     "command": [
      "argv",
+     "cargo",
      "env",
+     "hosts",
+     "inputs",
      "name",
+     "outputs",
+     "timeout"
+    ],
+    "images": [
+     "components",
+     "composition",
+     "name",
+     "platforms",
      "timeout"
     ],
     "publish": [
      "argv",
+     "cargo",
      "env",
+     "hosts",
+     "inputs",
      "name",
+     "outputs",
      "timeout"
     ],
     "to_dict": []
    },
    "returns": {
     "command": "CommandStep",
+    "images": "ImagesStep",
     "publish": "PublishStep"
    }
   },
@@ -10330,37 +10505,62 @@
   },
   "Step": {
    "attrs": [
+    "cargo",
     "command",
     "env",
+    "hosts",
+    "images",
+    "inputs",
     "kind",
     "name",
+    "outputs",
     "phase",
     "publish",
     "timeout",
-    "to_dict"
+    "to_dict",
+    "uses_cargo"
    ],
    "init": [
     "env",
+    "hosts",
+    "inputs",
     "name",
+    "outputs",
     "timeout"
    ],
    "methods": {
     "command": [
      "argv",
+     "cargo",
      "env",
+     "hosts",
+     "inputs",
      "name",
+     "outputs",
+     "timeout"
+    ],
+    "images": [
+     "components",
+     "composition",
+     "name",
+     "platforms",
      "timeout"
     ],
     "publish": [
      "argv",
+     "cargo",
      "env",
+     "hosts",
+     "inputs",
      "name",
+     "outputs",
      "timeout"
     ],
     "to_dict": []
    },
    "returns": {
     "command": "CommandStep",
+    "images": "ImagesStep",
     "publish": "PublishStep"
    }
   },
@@ -10726,31 +10926,49 @@
    },
    "attrs": [
     "base",
+    "builds",
+    "cache",
+    "fallback",
     "from_dict",
+    "host_names",
+    "hosts",
+    "local_slots",
     "name",
+    "parallel",
     "publish_steps",
     "remote",
     "repo",
+    "sccache",
     "steps",
     "tag",
     "tag_name",
+    "target_dir",
     "test_steps",
     "tested",
     "to_dict"
    ],
    "init": [
     "base",
+    "builds",
+    "cache",
+    "fallback",
+    "hosts",
+    "local_slots",
     "name",
+    "parallel",
     "remote",
     "repo",
+    "sccache",
     "steps",
     "tag",
+    "target_dir",
     "tested"
    ],
    "methods": {
     "from_dict": [
      "data"
     ],
+    "host_names": [],
     "tag_name": [
      "date",
      "n"
@@ -13421,6 +13639,7 @@
      "--branches",
      "--json",
      "--promote",
+     "--promote-run",
      "--push",
      "--state-dir"
     ],
@@ -14343,6 +14562,8 @@
    "train-busy",
    "train-checkout-dirty",
    "train-git-failed",
+   "train-host-unavailable",
+   "train-images-failed",
    "train-invalid",
    "train-load-failed",
    "train-merge-conflict",
@@ -14352,6 +14573,7 @@
    "train-push-failed",
    "train-push-needs-promote",
    "train-repo-invalid",
+   "train-run-unknown",
    "train-spec-invalid",
    "train-step-failed",
    "train-step-timeout",
@@ -16473,8 +16695,12 @@
   "piceli.train.cargo",
   "piceli.train.engine",
   "piceli.train.git",
+  "piceli.train.hosts",
+  "piceli.train.images",
   "piceli.train.impact",
+  "piceli.train.local",
   "piceli.train.model",
+  "piceli.train.reuse",
   "piceli.train.runner",
   "piceli.train.spec",
   "piceli.train.state",
