@@ -1706,6 +1706,25 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             notes="0.26.0. Read-only. --json prints piceli.builds.v1; --target "
             "and --state (a stage, or active) filter it.",
         ),
+        "cycle report": _C(
+            "Report how long push to running-and-checked takes per target "
+            "(environment, Nix release, Nix host, train): p50, p90, count, "
+            "slowest phase and slowest cycle.",
+            reads=(
+                "kubeconfig or --state-dir (optional)",
+                "the controller's status and history",
+                "local train run records",
+                "host switches piceli host wait kept",
+            ),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.28.0. Read-only. --json prints piceli.cycle-report.v1; "
+            "--markdown prints a Markdown table on stdout instead; --since "
+            "(24h, 7d or an ISO time) and --target filter it "
+            "(cycle-options-invalid). Without --kubeconfig/--context or "
+            "--state-dir the controller is not read.",
+        ),
         "gitops suspects": _C(
             "List the deployed images a build host (or the builder node) built, "
             "in every environment and component, from the provenance the "

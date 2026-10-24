@@ -11878,6 +11878,7 @@
      "chart",
      "cluster",
      "codegen",
+     "cycle",
      "deploy",
      "dev",
      "doctor",
@@ -12410,6 +12411,29 @@
      "--out",
      "--transport",
      "--version"
+    ],
+    "subcommands": []
+   },
+   "cycle": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "report"
+    ]
+   },
+   "cycle report": {
+    "arguments": [],
+    "flags": [
+     "--context",
+     "--json",
+     "--kubeconfig",
+     "--markdown",
+     "--namespace",
+     "--since",
+     "--state-dir",
+     "--target",
+     "--train-state-dir",
+     "--transport"
     ],
     "subcommands": []
    },
@@ -14643,6 +14667,7 @@
    "credential-helper-failed",
    "credentials-file-not-private",
    "cross-origin-location-refused",
+   "cycle-options-invalid",
    "deadline-exceeded",
    "deleted-resource-reappeared",
    "delivery-not-succeeded",
@@ -15589,6 +15614,7 @@
    "checks": {},
    "cli_contract": {},
    "codegen": {},
+   "cycle": {},
    "dev": {},
    "envs": {},
    "errors": {},
@@ -17095,6 +17121,10 @@
   "piceli.cli_contract",
   "piceli.codegen",
   "piceli.codegen.crd",
+  "piceli.cycle",
+  "piceli.cycle.local",
+  "piceli.cycle.record",
+  "piceli.cycle.report",
   "piceli.deploy_events",
   "piceli.dev",
   "piceli.dev.client",
@@ -17208,6 +17238,7 @@
   "piceli.k8s.cli.cluster_access",
   "piceli.k8s.cli.codegen",
   "piceli.k8s.cli.contract",
+  "piceli.k8s.cli.cycle",
   "piceli.k8s.cli.deploy_pipeline",
   "piceli.k8s.cli.dev",
   "piceli.k8s.cli.dev_nix",

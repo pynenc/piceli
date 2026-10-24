@@ -176,12 +176,14 @@ def event(
     outcome: Any,
     built: Iterable[str],
     builds: Mapping[str, Mapping[str, Any]] | None = None,
+    cycle: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The controller's event of one deploy step of ``record`` (its env record
     after the step). ``outcome`` is the step's
     :class:`~piceli.gitops.ports.EnvOutcome` (``None`` when the step raised).
     ``builds`` (0.16.0): each image or component the step built or mirrored,
-    with its ``started_at``, ``finished_at`` and ``state``.
+    with its ``started_at``, ``finished_at`` and ``state``. ``cycle``
+    (0.28.0): the step's cycle record (:mod:`piceli.cycle.record`, bounded).
     """
     components = _dict(record.get("components"))
     built_set = set(built)
@@ -236,6 +238,8 @@ def event(
         "failed": sorted(k for k, v in entries.items() if v["state"] == "failed"),
         "builds": _builds(builds),
     }
+    if cycle:
+        found["cycle"] = dict(cycle)
     waited = _dict(approval).get("requested_at") if approval else None
     if isinstance(waited, str) and _dict(approval).get("at"):
         # 0.16.0: from the plan waiting for approval to the owner's approval.
@@ -676,6 +680,8 @@ def _entry(
         # Added in 0.16.0: each build's times and the wait for approval.
         "builds": builds,
         "approval_wait": event_.get("approval_wait"),
+        # Added in 0.28.0: the step's cycle (piceli.cycle), when recorded.
+        **({"cycle": event_["cycle"]} if event_.get("cycle") else {}),
         "recorded_by": "controller+run"
         if event_ and run
         else "controller"

@@ -683,6 +683,10 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["gitops", "builds", "--state", "nope", "--state-dir", str(p)],
         "gitops-request-invalid",
     ),
+    "cycle report": (
+        lambda p: ["cycle", "report", "--since", "yesterday"],
+        "cycle-options-invalid",
+    ),
     "gitops suspects": (
         lambda p: ["gitops", "suspects", "--host", "mini", "--since", "yesterday"],
         "gitops-request-invalid",

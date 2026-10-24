@@ -1367,6 +1367,58 @@ the runs: `kind` (`stop`, `start`, `teardown`), `action` (the same), `state`
 `via`, `at`). A torn-down branch environment keeps its entries in the
 history (the newest 20 such environments).
 
+(gitops-cycle-report)=
+
+#### Cycle report (0.28.0)
+
+A **cycle** is one commit's way from a push to running with its checks
+passed, on one target: an environment, a Nix release, a Nix host or a
+train. Piceli records each cycle and its phases, so you do not keep the
+table by hand:
+
+- the controller adds `cycle` to each history run and to each environment
+  in its status: `queued` (first seen to its first step), `approval`,
+  `waiting-for-host`, `building` and `delivering` (a build host's build:
+  asked, claimed, built and uploaded, delivered; or the controller's own
+  builds), `applying` and `checking`. The same seconds go with the
+  `piceli.deploy.finished` OpenTelemetry event (`piceli.cycle.seconds`,
+  `piceli.cycle.phase.<name>.seconds`), through the composition's
+  existing `telemetry=`;
+- a Nix release keeps its stages (`approval`, `queue`, `fetch`, `build`,
+  `publish`), as before;
+- a train run keeps `cycle` in its `run.json` and on its root span:
+  `queued`, `merging`, `testing <step>`, `promoting`, `images`,
+  `publishing`, `pushing`;
+- `piceli host wait` keeps the host switch it saw (`polling`,
+  `downloading`, `activating`, `checking`, `boot`) in
+  `~/.local/state/piceli/cycle/hosts.json` (the newest 200).
+
+`piceli cycle report` reads them:
+
+```console
+$ piceli cycle report --since 7d --kubeconfig kc --context prod
+cycle report since 2026-10-17T09:00:00Z: 3 target(s), push to running and checked
+  environment  main                 12 cycle(s)  p50 6m 40s  p90 9m 12s  slowest phase building (4m 05s)  slowest cycle 11m 30s (3f2a91c0d4e5)
+  nix-host     web-1                4 cycle(s)  p50 8m 02s  p90 9m 40s  slowest phase building (5m 10s)  slowest cycle 9m 40s (77ab01c2d3e4)
+  train        shop                 9 cycle(s)  p50 14m 20s  p90 21m 03s  slowest phase testing unit (9m 30s)  slowest cycle 21m 03s (a1b2c3d4e5f6)
+  note: main: push time unknown for 12 of 12 cycle(s); timed from when Piceli first saw the commit (first at 2026-10-17T09:12:00Z)
+```
+
+Per target it gives the count of cycles that ended running and checked
+(and how many failed), the p50 (median) and p90 (nine in ten were as
+fast or faster) of their time, nearest-rank, the
+slowest phase (the highest p50 by phase) and the slowest single cycle.
+`--target NAME` keeps one target, `--since` takes `24h`, `7d` or an ISO
+time, `--json` prints `piceli.cycle-report.v1` and `--markdown` prints a
+table to paste into your docs, marked as generated. The controller is read
+only with `--kubeconfig` and `--context` (or `--state-dir`); without them
+the report has the local trains and hosts and says so.
+
+What it cannot know, it says: the controller learns of a push when it polls,
+so a cycle runs from when Piceli first saw the commit. A Nix host's switch
+is known only when `piceli host wait` saw it; a host cycle starts at the
+controller's release of the same commit when the report has it.
+
 #### Compatibility of the documents
 
 `piceli.gitops-status.v1` and `piceli.gitops-history.v1` change only

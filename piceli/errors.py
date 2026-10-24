@@ -6781,6 +6781,15 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         False,
         "train",
     ),
+    # --- 0.28.0 cycle metrics ---
+    _E(
+        "cycle-options-invalid",
+        "Cycle report options invalid",
+        "`piceli cycle report` got a `--since` that is neither a duration (`30m`, `24h`, `7d`, `2w`) nor an ISO time, or both `--json` and `--markdown`.",
+        "Pass `--since 24h` (or an ISO time such as 2026-10-01T00:00:00Z) and one of `--json` or `--markdown`.",
+        False,
+        "cli",
+    ),
 )
 
 

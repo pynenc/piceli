@@ -50,6 +50,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli cluster init`](#cli-cluster-init) | Set the cluster up: node labels, registry and mirrors, controller, UI (plan first; --approve HASH applies). | writes | yes |
 | [`piceli cluster status`](#cli-cluster-status) | Nodes, registry and mirrors, controller, UI and Git Secret of a declared cluster (read-only). | reads | no |
 | [`piceli codegen crd`](#cli-codegen-crd) | Generate pydantic models for one CRD version, from a file or a cluster. | reads | no |
+| [`piceli cycle report`](#cli-cycle-report) | Push to running and checked per target: p50, p90, count, slowest phase and slowest cycle, from the controller's history and local records. | reads | no |
 | [`piceli deploy`](#cli-deploy) | Deploy a pipeline: inputs → build → deliver → plan → apply → checks. | writes | yes |
 | [`piceli dev cache clear`](#cli-dev-cache-clear) | Empty free lineages' cargo targets (a corrupted cache); busy ones are skipped. | writes | no |
 | [`piceli dev cancel`](#cli-dev-cancel) | Cancel a queued or running run (its Job and pod are deleted). | writes | no |
@@ -974,6 +975,35 @@ Generate pydantic models for one CRD version, from a file or a cluster.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** A file never contacts a cluster; --from-cluster sends one GET of the CRD through an explicit --kubeconfig and --context (exec plugins only with --allow-exec). Deterministic: the same schema always generates the same module. --out replaces only a file piceli generated, unless --force.
+
+(cli-cycle-report)=
+### `piceli cycle report`
+
+Push to running and checked per target: p50, p90, count, slowest phase and slowest cycle, from the controller's history and local records.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--since` | text |  | Only cycles that ended in this window (24h, 30m, 7d) or after this ISO time; default: all that are kept |
+| `--target` | text |  | Only this target (environment, host, train) |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+| `--markdown` | boolean | `False` | Print a Markdown table on stdout (to paste into docs) |
+| `--train-state-dir` | path |  | Train state root (default $XDG_STATE_HOME/piceli/train) |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir (optional), the controller's status and history, local train run records, host switches piceli host wait kept
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.28.0. Read-only. --json prints piceli.cycle-report.v1; --markdown prints a Markdown table on stdout instead; --since (24h, 7d or an ISO time) and --target filter it (cycle-options-invalid). Without --kubeconfig/--context or --state-dir the controller is not read.
 
 (cli-deploy)=
 ### `piceli deploy`

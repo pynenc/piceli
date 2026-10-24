@@ -31,6 +31,18 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   ENV --approve DIGEST --wait` does the same for the Nix host. Exit 0: all
   good; 1: a failure; 2: timeout (`gitops-wait-timeout`). See
   {ref}`gitops-enable-wait`.
+- **Cycle report.** Piceli records how long each commit takes from a push
+  to running with its checks passed, and each phase on the way: the
+  controller per deploy (queued, waiting for a build host, building,
+  delivering, applying, checking) in its history, status and OpenTelemetry
+  event; a train run in its `run.json` and trace (queued, merging, testing
+  per step, promoting, images, pushing); `piceli host wait` per host
+  switch. `piceli cycle report [--since 24h] [--target NAME] [--json]
+  [--markdown]` gives, per environment, Nix release, Nix host and train,
+  the p50 and p90, the count, the slowest phase and the slowest cycle;
+  `--markdown` prints a table to paste into docs. A push time Piceli does
+  not know is said, with when it first saw the commit. See
+  {ref}`gitops-cycle-report`.
 - **Adopt the train in ten minutes.** `piceli train init train_spec.py
   --from scripts/merge.sh` writes a starting train spec from a shell
   script: cargo, pytest, npm, make and similar commands become steps, the

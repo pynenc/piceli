@@ -457,6 +457,7 @@ def build_request(state_dir: Path | None) -> Callable[[Mapping[str, Any]], Any]:
             queue=str(request["id"]),
             promote_run=request.get("promote_run") or None,
             retire=request.get("retire") or None,
+            queued_at=request.get("queued_at") or None,
         )
 
     return build

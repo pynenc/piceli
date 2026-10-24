@@ -846,6 +846,8 @@ class CompositionController:
         self._last_outcome: EnvOutcome | None = None
         self._step_started: str | None = None
         self._step_env: str | None = None
+        #: 0.28.0: when the step's record began waiting for a build host.
+        self._waited_since: str | None = None
         self._poll_started = 0.0
         self._history_digest: str | None = None
         self._runs: Any = None
@@ -1499,10 +1501,15 @@ class CompositionController:
         its own build would be (0.21.0)."""
         from piceli.infra import provenance, remote_builds
 
+        asked = dict(
+            (self.state.get(remote_builds.STATE_KEY) or {}).get(str(body.get("id")))
+            or {}
+        )
         images = remote_builds.delivered(self.state, body, self._in_registry)
         host = str(body.get("host"))
         receipt = body.get("receipt")
         receipt = receipt if isinstance(receipt, Mapping) else {}
+        self._host_build_times(asked, receipt, host)
         # 0.22.0: where it was built, kept with the image.
         record = provenance.from_receipt(receipt, host)
         for name, item in images.items():
@@ -1523,6 +1530,22 @@ class CompositionController:
             f"build host {body.get('host')}: delivered {', '.join(sorted(images))}"
         )
         self._wake_waiting()
+
+    def _host_build_times(
+        self, asked: Mapping[str, Any], receipt: Mapping[str, Any], host: str
+    ) -> None:
+        """0.28.0: a host build's times on the record that asked for it
+        (asked, claimed, built, delivered), for its cycle (piceli.cycle)."""
+        record = self._envs().get(str(asked.get("owner")))
+        if record is None:
+            return
+        record["host_build"] = {
+            "host": host[:64],
+            "requested_at": asked.get("requested_at"),
+            "claimed_at": (asked.get("claimed") or {}).get("at"),
+            "built_at": receipt.get("finished_at"),
+            "delivered_at": _iso(self.clock()),
+        }
 
     def _prebuilt(self, body: Mapping[str, Any]) -> None:
         """A merge train's ``prebuilt`` offer (0.26.0): checked and kept until
@@ -3279,6 +3302,9 @@ class CompositionController:
         self._built, self._last_outcome = [], None
         self._builds = {}
         self._step_started, self._step_env = started[0], str(record.get("branch"))
+        # 0.28.0: cycle metrics (piceli.cycle): the wait and the first step.
+        self._waited_since = record.get("waiting_since")
+        record.setdefault("first_step_at", started[0])
         record.pop("interrupted", None)  # a new step of it runs
         record.pop("failed_stage", None)
         # Added in 0.15.0: the step shows in the status while it runs, not
@@ -3393,18 +3419,21 @@ class CompositionController:
             )
         else:
             record.pop("pending_plan", None)
+        finished = _iso(self.clock())
+        record["cycle"] = self._cycle(record, started, finished, approval, run)
         history.remember(
             self.state,
             str(record["branch"]),
             history.event(
                 record,
                 started_at=started,
-                finished_at=_iso(self.clock()),
+                finished_at=finished,
                 trigger=trigger if isinstance(trigger, str) else None,
                 approval=approval if isinstance(approval, Mapping) else None,
                 outcome=outcome,
                 built=[item for item in self._built if item != "mirror"],
                 builds=self._builds,
+                cycle=record["cycle"],
             ),
         )
         if record.get("state") != "approval-required":
@@ -3413,6 +3442,41 @@ class CompositionController:
             record["failed_attempts"] = []  # kept by this run's history event
         if record.get("approved_hash") is None:
             record.pop("approval", None)  # used (or replaced by a new plan)
+
+    def _cycle(
+        self,
+        record: dict[str, Any],
+        started: str,
+        finished: str,
+        approval: Any,
+        run: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        """0.28.0: the deploy step's cycle (piceli.cycle.record.deploy_cycle)."""
+        from piceli.cycle.record import deploy_cycle
+
+        state = record.get("state")
+        last = record.get("cycle") or {}
+        # A later step of a commit already running and checked (a sync, a
+        # retry of its checks) is its own cycle, from that step's start.
+        again = last.get("ok") and last.get("commit") == record.get("commit")
+        first = record.get("first_step_at") or started
+        if state in {"deployed", "failed"}:  # the cycle ended
+            record.pop("first_step_at", None)
+        return deploy_cycle(
+            target=str(record["branch"]),
+            commit=record.get("commit"),
+            seen_at=started if again else record.get("pushed_at"),
+            first_step_at=started if again else first,
+            step_started_at=started,
+            finished_at=finished,
+            state=state,
+            checked=state == "deployed" and record.get("health") != "degraded",
+            approval=approval if isinstance(approval, Mapping) else None,
+            waited_since=self._waited_since,
+            host_build=record.pop("host_build", None),
+            builds=self._builds,
+            stages=(run or {}).get("stages"),
+        )
 
     # ------------------------------------------------------------ poll
     def poll_once(self) -> dict[str, Any]:

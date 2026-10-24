@@ -172,6 +172,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`credential-helper-failed`](#error-credential-helper-failed) | publish | yes |
 | [`credentials-file-not-private`](#error-credentials-file-not-private) | artifacts-input | no |
 | [`cross-origin-location-refused`](#error-cross-origin-location-refused) | artifacts-registry | no |
+| [`cycle-options-invalid`](#error-cycle-options-invalid) | cli | no |
 | [`deadline-exceeded`](#error-deadline-exceeded) | kubernetes | yes |
 | [`deleted-resource-reappeared`](#error-deleted-resource-reappeared) | execution | no |
 | [`delivery-not-succeeded`](#error-delivery-not-succeeded) | images | no |
@@ -836,6 +837,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`watch-timeout`](#error-watch-timeout) | maintenance | yes |
 
 ## Command-line contract (any command)
+
+(error-cycle-options-invalid)=
+### `cycle-options-invalid`
+
+**Cycle report options invalid.** `piceli cycle report` got a `--since` that is neither a duration (`30m`, `24h`, `7d`, `2w`) nor an ISO time, or both `--json` and `--markdown`.
+
+- **Fix:** Pass `--since 24h` (or an ISO time such as 2026-10-01T00:00:00Z) and one of `--json` or `--markdown`.
+- **Retry-safe:** no
 
 (error-deploy-flags-conflict)=
 ### `deploy-flags-conflict`
