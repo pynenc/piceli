@@ -44,6 +44,14 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   (...)`, not as "did not become ready": nothing was written and the live
   release keeps running.
 
+**Upgrade notes**
+
+- **A changed value under an existing Secret name now stops the plan**
+  (`retained-content-differs`) instead of failing every apply. Piceli never
+  rewrites a retained Secret: give the new value a new Secret name.
+- **Use the 0.26.3 builder image** for the in-cluster build Job fix; the
+  fix runs inside the Job.
+
 ## Version 0.26.2
 
 **Upgrade notes**

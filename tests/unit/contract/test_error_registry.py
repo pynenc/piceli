@@ -21,6 +21,7 @@ FIRST_ARGUMENT = {
     "BuildContextError",
     "ExecAuthError",
     "ProviderError",
+    "_PreconditionFailed",
     "_Diagnosed",
     "RegistryError",
     "GitOpsError",
