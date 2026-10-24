@@ -10,6 +10,7 @@ from piceli.k8s.cli.chart import app as chart_app
 from piceli.k8s.cli.cluster import register as register_cluster_commands
 from piceli.k8s.cli.codegen import app as codegen_app
 from piceli.k8s.cli.contract import register as register_contract_commands
+from piceli.k8s.cli.cycle import register as register_cycle_commands
 from piceli.k8s.cli.deploy_pipeline import deploy
 from piceli.k8s.cli.dev import register as register_dev_commands
 from piceli.k8s.cli.env import register as register_env_commands
@@ -68,6 +69,7 @@ register_host_commands(app)
 register_targets_command(app)
 register_train_command(app)
 register_trains_commands(app)
+register_cycle_commands(app)
 
 
 def _version(value: bool) -> None:

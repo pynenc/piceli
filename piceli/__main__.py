@@ -23,8 +23,9 @@ def main() -> None:
         sys.argv[1:2] = ["help-json"]
     from piceli.k8s.cli import app as k8s_app
     from piceli.k8s.cli.profiles import main_argv
+    from piceli.k8s.cli.train import subcommand_argv
 
-    k8s_app(args=main_argv())
+    k8s_app(args=subcommand_argv(main_argv()))
 
 
 if __name__ == "__main__":

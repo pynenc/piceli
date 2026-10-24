@@ -583,6 +583,23 @@ def _ref_name(ref: Any) -> tuple[str | None, str | None]:
     return ref, None
 
 
+def _cycle_attributes(
+    run: Mapping[str, Any], record: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """0.28.0: the step's cycle (piceli.cycle) as event attributes: its
+    seconds, where it is timed from and each phase's seconds."""
+    cycle = _dict((record or {}).get("cycle"))
+    if not cycle or cycle.get("commit") != run.get("commit"):
+        return {}
+    found: dict[str, Any] = {
+        "piceli.cycle.seconds": cycle.get("seconds"),
+        "piceli.cycle.from": cycle.get("from"),
+    }
+    for name, seconds in sorted(_dict(cycle.get("phases")).items()):
+        found[f"piceli.cycle.phase.{name}.seconds"] = seconds
+    return found
+
+
 def _dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
@@ -1762,6 +1779,7 @@ class ControllerTelemetry:
                     "piceli.deploy.result": result,
                     "piceli.run.attempt": run.get("attempt"),
                     "error.type": reason if result != "success" else None,
+                    **_cycle_attributes(run, record),
                 },
                 error=result != "success",
             )

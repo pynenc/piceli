@@ -6702,6 +6702,30 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "train",
     ),
     _E(
+        "train-init-exists",
+        "Train spec file already exists",
+        "`piceli train-init` would overwrite a file that is already there.",
+        "Pick another path, or add --force to overwrite it.",
+        False,
+        "train",
+    ),
+    _E(
+        "train-init-invalid",
+        "Train init input not usable",
+        "The script given to --from cannot be read, or an option is not valid: --images is not a composition module path (infra.py[:ATTR]), --repository was given without --images, --host is not a build host name, --builds is not MODULE:ATTR with --host, or --name is not a DNS label.",
+        "Fix the option named in the message and run `piceli train-init` again.",
+        False,
+        "train",
+    ),
+    _E(
+        "train-compare-invalid",
+        "Train compare request not valid",
+        "--compare runs the old command and the train side by side and never moves or pushes anything, so it refuses --promote, --push, --queue, --retire and --promote-run; it also needs a non-empty command, a valid --compare-phase expression and a scratch clone of the repository.",
+        "Drop the flags the message names, or run the train without --compare.",
+        False,
+        "train",
+    ),
+    _E(
         "train-wait-timeout",
         "Train run still running",
         "The run had not ended when the --timeout of `piceli train-wait` ran out.",
@@ -6780,6 +6804,15 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "Install the extra (`pip install 'piceli[telemetry]'`, or `uv tool install 'piceli[telemetry]'`), or remove `telemetry=` from the spec.",
         False,
         "train",
+    ),
+    # --- 0.28.0 cycle metrics ---
+    _E(
+        "cycle-options-invalid",
+        "Cycle report options invalid",
+        "`piceli cycle report` got a `--since` that is neither a duration (`30m`, `24h`, `7d`, `2w`) nor an ISO time, or both `--json` and `--markdown`.",
+        "Pass `--since 24h` (or an ISO time such as 2026-10-01T00:00:00Z) and one of `--json` or `--markdown`.",
+        False,
+        "cli",
     ),
 )
 

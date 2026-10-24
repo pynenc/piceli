@@ -66,6 +66,30 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   last build and quarantine, and the declared hosts never seen (claims
   and progress reports now carry the host's version;
   `controller.build_hosts` in the status). See {ref}`builder-service`.
+- **Cycle report.** Piceli records how long each commit takes from a push
+  to running with its checks passed, and each phase on the way: the
+  controller per deploy (queued, waiting for a build host, building,
+  delivering, applying, checking) in its history, status and OpenTelemetry
+  event; a train run in its `run.json` and trace (queued, merging, testing
+  per step, promoting, images, pushing); `piceli host wait` per host
+  switch. `piceli cycle report [--since 24h] [--target NAME] [--json]
+  [--markdown]` gives, per environment, Nix release, Nix host and train,
+  the p50 and p90, the count, the slowest phase and the slowest cycle;
+  `--markdown` prints a table to paste into docs. A push time Piceli does
+  not know is said, with when it first saw the commit. See
+  {ref}`gitops-cycle-report`.
+- **Adopt the train in ten minutes.** `piceli train init train_spec.py
+  --from scripts/merge.sh` writes a starting train spec from a shell
+  script: cargo, pytest, npm, make and similar commands become steps, the
+  base branch is read, and every line it cannot translate stays as a TODO
+  comment (also printed). Without `--from` it writes a commented template.
+  `--images infra.py` adds `Step.images` for a `Controller(prebuilt=True)`,
+  `--host NAME` runs the cargo steps on a build host; an existing file is
+  kept unless `--force`. `piceli train SPEC --branches ... --compare
+  "COMMAND"` runs the old command in a scratch clone, then the train on the
+  same branches without promoting, and prints a side-by-side table (wall
+  time, time per phase, tests, failures, retries, and whether both agree).
+  See {ref}`train-adopt`.
 
 ## Version 0.27.1
 

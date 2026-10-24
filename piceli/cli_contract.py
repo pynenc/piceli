@@ -1358,6 +1358,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
                 "--promote: the tag, tested and the base (fast-forward only), publish steps",
                 "--promote with Step.images: images pushed to the cluster's registry, a prebuilt request to its controller",
                 "--push: the remote's tag, tested and base",
+                "--compare: a scratch clone (removed), the old command's output in the run's directory",
             ),
             approval_required=True,
             safe_to_retry=True,
@@ -1388,7 +1389,40 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "through the dev run machinery; a step with inputs that passed "
             "before is reused. --promote-run RUN promotes an earlier run's head "
             "without running it (train-run-unknown, train-not-fast-forward); "
-            "no host for a step fails the run (train-host-unavailable).",
+            "no host for a step fails the run (train-host-unavailable). "
+            "--compare COMMAND (0.28.0) runs the old command in a scratch clone "
+            "first, then the train on the same branches without promoting, and "
+            "prints both side by side (piceli.train-compare.v1 under --json); "
+            "exit 0 when both agree on pass or fail, 1 when they disagree; "
+            "refuses --promote, --push, --queue, --retire, --promote-run "
+            "(train-compare-invalid).",
+        ),
+        "train-init": _C(
+            "Write a starting train spec: from a shell script (its test "
+            "commands become steps) or as a commented template.",
+            reads=(
+                "--from: the shell script",
+                "the directory's project files (Cargo.toml, pyproject.toml, package.json)",
+                "the written spec, loaded once with the train's loader",
+            ),
+            writes=(
+                "the spec file (only a new file, or an existing one with --force)",
+            ),
+            approval_required=False,
+            safe_to_retry=False,
+            long_running=False,
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.28.0. Also spelled piceli train init. Never runs the script. "
+            "cargo, pytest (and uv/poetry run, python -m), tox, nox, npm, pnpm, "
+            "yarn, make, just and go commands become steps; git commands are what "
+            "the train does; shell glue is skipped; every other command line "
+            "stays in the spec as a TODO comment with a hint. --images "
+            "COMPOSITION[:ATTR] [--repository URL --branch B] adds Step.images; "
+            "--host NAME [--builds MODULE:ATTR] runs the cargo steps on a build "
+            "host. --json prints one piceli.train-init.v1 object. Exit 0: written "
+            "and it loads; 1: written but it does not load (load_error); 2: "
+            "nothing written (train-init-exists, train-init-invalid).",
         ),
         "train-prune": _C(
             "Bound what a train keeps on this machine: trial worktrees, cargo "
@@ -1678,6 +1712,25 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             exit_codes=(0, 2),
             notes="0.26.0. Read-only. --json prints piceli.builds.v1; --target "
             "and --state (a stage, or active) filter it.",
+        ),
+        "cycle report": _C(
+            "Report how long push to running-and-checked takes per target "
+            "(environment, Nix release, Nix host, train): p50, p90, count, "
+            "slowest phase and slowest cycle.",
+            reads=(
+                "kubeconfig or --state-dir (optional)",
+                "the controller's status and history",
+                "local train run records",
+                "host switches piceli host wait kept",
+            ),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.28.0. Read-only. --json prints piceli.cycle-report.v1; "
+            "--markdown prints a Markdown table on stdout instead; --since "
+            "(24h, 7d or an ISO time) and --target filter it "
+            "(cycle-options-invalid). Without --kubeconfig/--context or "
+            "--state-dir the controller is not read.",
         ),
         "gitops suspects": _C(
             "List the deployed images a build host (or the builder node) built, "

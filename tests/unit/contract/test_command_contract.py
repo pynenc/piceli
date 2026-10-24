@@ -702,6 +702,10 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["gitops", "builds", "--state", "nope", "--state-dir", str(p)],
         "gitops-request-invalid",
     ),
+    "cycle report": (
+        lambda p: ["cycle", "report", "--since", "yesterday"],
+        "cycle-options-invalid",
+    ),
     "gitops suspects": (
         lambda p: ["gitops", "suspects", "--host", "mini", "--since", "yesterday"],
         "gitops-request-invalid",
@@ -879,6 +883,10 @@ CASES: dict[str, tuple[Argv, str]] = {
         "train-not-found",
     ),
     "train-prune": (lambda p: ["train-prune", "Not A Name"], "train-not-found"),
+    "train-init": (
+        lambda p: ["train-init", str(p / "spec.py"), "--images", "/abs/infra.py"],
+        "train-init-invalid",
+    ),
     "host wait": (
         lambda p: ["host", "wait", "no_such_module:web", "v1.0.0"],
         "host-not-found",

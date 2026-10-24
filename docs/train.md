@@ -25,6 +25,97 @@ change before 1.0.
 - **Verdict**: `joined`, `ejected`, or `included` (the branch was already in
   the base).
 
+(train-adopt)=
+## Adopt the train in ten minutes
+
+Most projects already have a script that merges branches, runs the tests
+and pushes. Three steps replace it, without risk.
+
+**1. Write the spec from the script.** `piceli train init` reads the script
+and writes a starting spec. It never runs the script.
+
+```sh
+piceli train init train_spec.py --from scripts/merge.sh
+```
+
+Test commands become steps: `cargo check` and `cargo test` become
+`CargoCheck` and `CargoTests` (with `Impact()`: only the packages a change
+can affect), and `pytest` (also through `uv run`, `poetry run` or
+`python -m`), `tox`, `nox`, `npm`, `pnpm`, `yarn`, `make`, `just` and `go`
+commands become `Step.command(...)`. The base branch comes from a
+`BASE=` variable or a `git` command. `git` lines (merge, rebase, tag, push)
+are what the train itself does. Every other command line stays in the spec
+as a `# TODO line N:` comment with a hint, and the command prints the same
+list. A command repeated (a home-made retry) becomes one step: `CargoTests`
+retries failed tests itself. Without `--from` it writes a commented
+template whose step follows the project's files (`Cargo.toml`,
+`pyproject.toml`, `package.json`, else `make test`).
+
+| Option | Effect |
+| --- | --- |
+| `--from SCRIPT` | Read this shell script |
+| `--name NAME` | The train's name (default: the repository's) |
+| `--base BRANCH` | The base branch (default: the script's, else `main`) |
+| `--images infra.py[:ATTR]` | Add `Step.images(...)`: on `--promote`, the images the GitOps controller wants are built from the tested commit and offered to it (its `Controller` must say `prebuilt=True`; see [Images for the cluster](#images-for-the-cluster)). `docker build`/`push` lines are then covered |
+| `--repository URL --branch B` | With `--images`: the composition's own repository and the branch its controller follows |
+| `--host NAME` | Run the cargo steps on this build host (see [Where steps run](#where-steps-run)) |
+| `--builds MODULE:ATTR` | With `--host`: the `DevBuilds` (or `Cluster` with `dev=`) declaring it |
+| `--force` | Overwrite an existing file (never overwritten without it) |
+| `--json` | Print a `piceli.train-init.v1` object |
+
+The written spec is loaded with the train's own loader before the command
+ends (exit `1` if it does not load). Fix the TODO lines, then commit it.
+
+**2. Run both side by side.** `--compare` runs the old command, then the
+train, on the same branches, and prints both:
+
+```sh
+piceli train train_spec.py --branches feat-a feat-b \
+  --compare "bash scripts/merge.sh {branches}"
+```
+
+For example (a Rust project whose script tests every package):
+
+```text
+                old command  train
+wall time       312.4 s      61.0 s
+time per phase
+setup           4.1 s
+cargo-test      280.2 s      48.3 s
+merge                        0.4 s
+spec                         0.6 s
+other                        11.7 s
+tests run       412          398
+tests failed    0            0
+failures found  none         none
+retries         1            0
+verdict         pass         pass
+agree                        yes
+```
+
+The old command runs first, in a scratch clone of the repository with the
+same branch tips and no remote, removed afterwards: whatever it merges,
+tags or pushes stays there. `{branches}` becomes the branch names and
+`{repo}` the clone (also `$PICELI_COMPARE_BRANCHES` and
+`$PICELI_COMPARE_CHECKOUT`); it runs in the clone with `bash -c`. The train
+then runs without `--promote`: nothing is tagged, moved or pushed, and no
+notification is sent. `--compare` refuses `--promote`, `--push`, `--queue`,
+`--retire` and `--promote-run` (`train-compare-invalid`).
+
+Both sides are counted the same way: tests run and failed come from the
+cargo, pytest and jest summary lines (the old command's output, the
+train's step logs). The old command's phases start at lines that look
+like markers: `==> NAME`, `::phase NAME`, or a `bash -x` trace of a test
+or build tool (`+ cargo test`); `--compare-phase REGEX` sets your own (its
+first group names the phase). Run the script with `bash -x` to see where
+its time goes. Its retries are the lines that say retry. Its output is
+kept as `compare-old.log` in the train run's directory. `--json` prints a
+`piceli.train-compare.v1` object (`old`, `train`, `agree`, `speedup`).
+Exit `0` when both agree on pass or fail, `1` when they disagree.
+
+**3. Switch.** When the two agree on a few runs, call the train where the
+script was called (`--promote`, then `--push`), and delete the script.
+
 ## The spec
 
 A train is declared in Python, in a module of the repository it tests (the
@@ -198,6 +289,7 @@ the branch names may follow `APP` directly.
 | `--json` | Print the result object on stdout |
 | `--state-dir DIR` | The state root (default `$XDG_STATE_HOME/piceli/train`, else `~/.local/state/piceli/train`) |
 | `--promote-run RUN` | Promote the head an earlier run reached (its id, or `last`) without running it again; takes `--push`, no branches (see [Keep the tested head](#keep-the-tested-head)) |
+| `--compare COMMAND` | Run the old command in a scratch clone, then the train on the same branches without promoting, and compare them (see {ref}`train-adopt`) |
 
 Without `--promote` no ref moves: the result names the head the train
 reached. Nothing is pushed without `--push`.
