@@ -436,6 +436,21 @@ dev=DevBuilds(
 - `builds=("hosts", "cluster")`: the same, and after `host_wait` without a
   host claiming it, the in-cluster Job builds it.
 
+The waiting environment says what it waits for (`waiting_for` in its status,
+and on its line in `piceli gitops status`), for example:
+
+```text
+main: retrying 1a2b3c4d5e6f (build-waiting); waiting for a build host (docker)
+  to build web: offered to builder-1; not claimed; in-cluster fallback at
+  2026-01-01T10:00:20Z
+```
+
+When there is no fallback it says why: `claimed by <host> since <time>`,
+the builder node is quarantined, `no in-cluster builder image`, or
+`builds=("hosts",)`. A claim lives while its host reports (0.27.1): a host
+that sent no claim or progress report for 10 minutes is taken for dead, so
+the fallback may take the build and another host may claim it.
+
 On a build host, with the cluster's credential profile:
 
 ```sh
@@ -444,7 +459,7 @@ piceli builder serve --cluster infra.py:my_cluster --once     # one build
 ```
 
 It takes the oldest wanted build nobody holds (request `build-claim`; a
-claim not answered in 4 hours lapses), fetches each source at its commit
+claim with no report from its host for 10 minutes lapses), fetches each source at its commit
 with **this machine's own Git access** (mirrors in
 `~/.cache/piceli/builder/git`, fetched incrementally), checks each one out
 with its `.git` (`~/.cache/piceli/builder/checkouts`, kept between builds),
