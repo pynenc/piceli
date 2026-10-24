@@ -449,6 +449,10 @@ def test_a_down_build_host_falls_back_to_the_laptop(toy: Toy, tmp_path: Path) ->
 # --------------------------------------------------------- parallel halves
 
 
+# Two whole trains of six branches (25 trials, each starting Python steps):
+# about 15 s alone, 90 s beside two suites, past the suite's 120 s hang
+# guard on a machine three times as busy. The guard stays, sized to the work.
+@pytest.mark.timeout(480)
 def test_parallel_halves_reach_the_sequential_verdicts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
