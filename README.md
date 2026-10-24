@@ -73,7 +73,7 @@ objects).
   new Secret, the workloads that use it roll in the same apply, and old
   versions are deleted once nothing mounts them. Use it for config files
   that hold a secret; see the
-  [guide](https://docs.pynenc.org/projects/piceli/en/latest/secrets.html).
+  [guide](https://docs.pynenc.org/projects/piceli/en/stable/secrets.html).
 
 ## Web UI
 
