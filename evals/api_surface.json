@@ -14982,6 +14982,7 @@
    "train-invalid",
    "train-load-failed",
    "train-merge-conflict",
+   "train-merge-failed",
    "train-not-fast-forward",
    "train-not-found",
    "train-notify-failed",

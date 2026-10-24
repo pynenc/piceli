@@ -765,6 +765,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`train-invalid`](#error-train-invalid) | train | no |
 | [`train-load-failed`](#error-train-load-failed) | train | no |
 | [`train-merge-conflict`](#error-train-merge-conflict) | train | no |
+| [`train-merge-failed`](#error-train-merge-failed) | train | no |
 | [`train-not-fast-forward`](#error-train-not-fast-forward) | train | no |
 | [`train-not-found`](#error-train-not-found) | train | no |
 | [`train-notify-failed`](#error-train-notify-failed) | train | yes |
@@ -7244,6 +7245,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Branch conflicts with the train.** Merging the branch onto the train's head (the base plus the branches already joined) conflicts. The train never resolves a conflict.
 
 - **Fix:** Merge or rebase the branch on the base, resolve the conflict, then queue it again.
+- **Retry-safe:** no
+
+(error-train-merge-failed)=
+### `train-merge-failed`
+
+**Merging the branch failed.** Git could not make the merge commit for a reason other than a conflict (a damaged object, a full disk, a refused ref). The result gives Git's message. A missing Git identity is not one: the train then commits as Piceli train <train@piceli.invalid>.
+
+- **Fix:** Read Git's message in the result, fix the repository or the machine, then queue the branch again.
 - **Retry-safe:** no
 
 (error-train-not-fast-forward)=

@@ -11,6 +11,7 @@ Importing this module is side-effect free.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import threading
@@ -39,14 +40,22 @@ _QUIET = (
 )
 
 
+#: The identity of the train's own merge commits and tags where Git has none
+#: (a CI runner or a build host without ``user.name``/``user.email``).
+FALLBACK_NAME = "Piceli train"
+FALLBACK_EMAIL = "train@piceli.invalid"
+
+
 @dataclass(frozen=True)
 class Merged:
     """The outcome of merging candidates onto a head: the new commit, or the
-    branch that conflicted and its conflicting files."""
+    branch that failed with its conflicting files (none when Git failed for
+    another reason, given in ``error``)."""
 
     head: str | None
     conflict: str | None = None
     files: tuple[str, ...] = ()
+    error: str | None = None
 
 
 class Git:
@@ -56,6 +65,28 @@ class Git:
         self.repo = repo
         # Worktrees are added and removed one at a time (parallel trials).
         self._worktrees = threading.Lock()
+        self._env: dict[str, str] | None = None
+
+    def _environment(self) -> dict[str, str]:
+        """The environment of Git commands: an identity for the train's own
+        commits when Git has none, so a merge never fails for want of one."""
+        if self._env is None:
+            env = dict(os.environ)
+            known = subprocess.run(
+                ["git", "var", "GIT_COMMITTER_IDENT"],
+                cwd=self.repo,
+                capture_output=True,
+                text=True,
+                timeout=GIT_TIMEOUT,
+                stdin=subprocess.DEVNULL,
+                env=env,
+            )
+            if known.returncode != 0:
+                for who in ("AUTHOR", "COMMITTER"):
+                    env.setdefault(f"GIT_{who}_NAME", FALLBACK_NAME)
+                    env.setdefault(f"GIT_{who}_EMAIL", FALLBACK_EMAIL)
+            self._env = env
+        return self._env
 
     def run(
         self, *args: str, cwd: Path | None = None, check: bool = True
@@ -68,6 +99,7 @@ class Git:
                 text=True,
                 timeout=GIT_TIMEOUT,
                 stdin=subprocess.DEVNULL,
+                env=self._environment(),
             )
         except subprocess.TimeoutExpired:
             raise TrainError("train-git-failed", f"git {args[0]} timed out") from None
@@ -181,7 +213,8 @@ class Git:
                     "diff", "--name-only", "--diff-filter=U", cwd=checkout
                 ).splitlines()
                 self.run("merge", "--abort", cwd=checkout, check=False)
-                return Merged(None, branch, tuple(files))
+                error = None if files else (done.stderr or done.stdout).strip()[-500:]
+                return Merged(None, branch, tuple(files), error or None)
         return Merged(self.out("rev-parse", "HEAD", cwd=checkout))
 
     def changed(self, base: str, head: str) -> list[str]:

@@ -180,6 +180,7 @@ DYNAMIC |= {
     # train.engine: a trial's or branch's reason, and promote/push outcomes
     # recorded in the result (piceli.train.v1)
     "train-merge-conflict",
+    "train-merge-failed",
     "train-step-failed",
     "train-step-timeout",
     "train-publish-failed",

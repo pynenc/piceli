@@ -588,7 +588,7 @@ class TrainRun:
             if merged.head is None:
                 trial.verdict, trial.reason, trial.failed_step = (
                     "failed",
-                    "train-merge-conflict",
+                    "train-merge-failed" if merged.error else "train-merge-conflict",
                     "merge",
                 )
                 trial.conflict, trial.files = merged.conflict, merged.files
@@ -596,9 +596,13 @@ class TrainRun:
                     "conflict": merged.conflict,
                     "files": list(merged.files),
                 }
-                merge.tail = f"{merged.conflict} conflicts in: " + ", ".join(
-                    merged.files
-                )
+                if merged.error:
+                    merge.detail["error"] = merged.error
+                    merge.tail = f"merging {merged.conflict} failed: {merged.error}"
+                else:
+                    merge.tail = f"{merged.conflict} conflicts in: " + ", ".join(
+                        merged.files
+                    )
             else:
                 trial.head = merged.head
                 if premerged is None:

@@ -289,3 +289,52 @@ def test_branches_can_follow_the_app_without_the_flag(toy: Toy) -> None:
     good(toy, "feat-a")
     status, body, _ = train(toy, "feat-a")
     assert status == 0 and verdicts(body) == {"feat-a": "joined"}
+
+
+def test_a_repository_without_a_git_identity_still_merges(
+    toy: Toy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A CI runner or a build host often has no user.name/user.email: the train
+    # commits its merges as itself instead of ejecting every branch.
+    good(toy, "feat-a")
+    toy.git("config", "--unset", "user.name")
+    toy.git("config", "--unset", "user.email")
+    toy.git("config", "user.useConfigOnly", "true")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(toy.root / "no-global-config"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    for name in ("NAME", "EMAIL"):
+        for who in ("AUTHOR", "COMMITTER"):
+            monkeypatch.delenv(f"GIT_{who}_{name}", raising=False)
+    status, body, _ = train(toy, "--branches", "feat-a")
+    assert status == 0, body
+    assert verdicts(body) == {"feat-a": "joined"}
+    author = toy.git("log", "-1", "--format=%an <%ae>", body["head"])
+    assert author == "Piceli train <train@piceli.invalid>"
+
+
+def test_a_merge_that_fails_without_a_conflict_says_why(
+    toy: Toy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.train import git as train_git
+
+    good(toy, "feat-a")
+    real = train_git.Git.run
+
+    def failing(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if args and args[0] == "merge" and "--no-ff" in args:
+            done = real(
+                self,
+                "--version",
+                **{k: v for k, v in kwargs.items() if k != "check"},
+                check=False,
+            )
+            done.returncode, done.stderr = 128, "fatal: unable to write new index file"
+            return done
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(train_git.Git, "run", failing)
+    status, body, _ = train(toy, "--branches", "feat-a")
+    assert status == 1
+    branch = body["branches"][0]
+    assert branch["verdict"] == "ejected" and branch["reason"] == "train-merge-failed"
+    assert "unable to write new index file" in branch["tail"]

@@ -1379,7 +1379,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(run-failed: train-git-failed, train-host-unavailable, "
             "train-run-failed, train-run-cancelled), notified, exit 1. Exit 0: every branch joined (or was already in) and the "
             "promotion and push asked for succeeded; 1: a branch was ejected "
-            "(train-step-failed, train-step-timeout, train-merge-conflict, "
+            "(train-step-failed, train-step-timeout, train-merge-conflict, train-merge-failed, "
             "train-spec-invalid), the promotion was refused "
             "(train-not-fast-forward, train-checkout-dirty), a publish step "
             "or the push failed; 2: rejected before anything ran "

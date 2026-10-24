@@ -6526,6 +6526,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "train",
     ),
     _E(
+        "train-merge-failed",
+        "Merging the branch failed",
+        "Git could not make the merge commit for a reason other than a conflict (a damaged object, a full disk, a refused ref). The result gives Git's message. A missing Git identity is not one: the train then commits as Piceli train <train@piceli.invalid>.",
+        "Read Git's message in the result, fix the repository or the machine, then queue the branch again.",
+        False,
+        "train",
+    ),
+    _E(
         "train-step-failed",
         "A train step failed",
         "A step of the merged tree's spec exited non-zero (a failed build, a test that failed again on its retry, a check). The result names the step, its log and an output tail.",

@@ -327,6 +327,12 @@ and `cancel` start and stop one, and the UI's Builds page shows them all.
   `gitops-build-ref-unknown`, `gitops-build-not-running` and
   `gitops-build-cancelled`; in `infra`: `infra-nix-input-unreachable`.
 
+- **A train merges where Git has no identity.** On a CI runner or a build
+  host without `user.name`/`user.email`, every merge used to fail and was
+  reported as a conflict. The train now commits its own merges and tags as
+  `Piceli train <train@piceli.invalid>` there, and a merge that fails for any
+  other reason is `train-merge-failed` with Git's message, never a conflict.
+
 **Upgrade notes**
 
 - **Train impact: `Cargo.lock` and files outside every package.** Since
