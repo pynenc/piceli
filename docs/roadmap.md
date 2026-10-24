@@ -69,9 +69,9 @@ went wrong and how to fix it.
 - **One maintainer.** Reviews, releases, security fixes and support all
   depend on one person, and the release pace (often several a week) makes
   "preview" mean "may change next week".
-- **Slow tests.** About 2,700 tests run in parallel in a few minutes, but
-  some are slow on their own (one OpenTofu test takes about 50 seconds), and
-  the cluster tests run one at a time.
+- **Slow tests.** About 5,200 tests run in parallel in about four minutes,
+  but some are slow on their own (one OpenTofu test takes about 50
+  seconds), and the cluster tests run one at a time.
 - **One production user.** Build hosts, the merge train, NixOS hosts,
   several clusters, client bundles and OpenTofu machines have each been used
   in production by one team only. Their defaults fit that team; a second one
