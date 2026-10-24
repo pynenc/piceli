@@ -363,7 +363,7 @@ incremental state), runs the command once more, and reports it:
 
 ```json
 "cache": {"lineage": "shop-rust-1a2b3c4d5e/0", "warm": true,
-          "repaired": {"kind": "link", "crates": ["canvas"], "entries": 3,
+          "repaired": {"kind": "link", "crates": ["geometry"], "entries": 3,
                        "first_error": ["error: linking with `cc` failed: exit status: 1", "…"]}}
 ```
 
@@ -374,7 +374,7 @@ To clear by hand:
 ```sh
 piceli dev cache clear --cluster infra.py:lab                      # every free lineage
 piceli dev cache clear --cluster infra.py:lab --lineage shop       # every lineage of a root source
-piceli dev cache clear --cluster infra.py:lab --lineage shop-rust-1a2b3c4d5e/0 --crate canvas
+piceli dev cache clear --cluster infra.py:lab --lineage shop-rust-1a2b3c4d5e/0 --crate geometry
 ```
 
 It runs a short Job on the builder (same user and claim as a run, no

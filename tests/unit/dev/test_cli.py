@@ -229,7 +229,7 @@ def test_cache_clear_empties_the_lineages_a_run_left(stand_in: dict[str, Any]) -
     assert lineages
     target = lineages[0] / "0" / "target" / "debug" / "deps"
     target.mkdir(parents=True, exist_ok=True)
-    (target / "libcanvas-1.rlib").write_text("x")
+    (target / "libgeometry-1.rlib").write_text("x")
     (target / "libapp-1.rlib").write_text("x")
     clear = CliRunner().invoke(
         cli,
@@ -240,7 +240,7 @@ def test_cache_clear_empties_the_lineages_a_run_left(stand_in: dict[str, Any]) -
             "--cluster",
             "infra.py:c",
             "--crate",
-            "canvas",
+            "geometry",
             "--json",
         ],
     )
@@ -248,7 +248,7 @@ def test_cache_clear_empties_the_lineages_a_run_left(stand_in: dict[str, Any]) -
     body = json.loads(clear.stdout)
     assert body["cleared"] == [{"lineage": f"{lineages[0].name}/0", "entries": 1}]
     assert (target / "libapp-1.rlib").exists() and not (
-        target / "libcanvas-1.rlib"
+        target / "libgeometry-1.rlib"
     ).exists()
     job = stand_in["ports"][-1].cleared_jobs[-1]
     pod = job["spec"]["template"]["spec"]
