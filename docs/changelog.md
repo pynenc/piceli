@@ -41,6 +41,33 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   Job and its ConfigMap are removed when the command ends. See
   {ref}`gitops-enable-canary`.
 
+## Version 0.27.1
+
+**Fixes**
+
+- **A restarted controller deploys again when the composition's head
+  failed to import.** When an older controller could not import the
+  composition's newest commit (for example, it used a newer Piceli API), it
+  recorded the commit as failed. After an upgrade or a restart, the new
+  controller never tried that commit again and had no composition loaded,
+  so it read no requests and ran no steps: builds waited forever, no build
+  host could claim them and the in-cluster fallback never started. Now a
+  controller of another version tries the failed commit once more, and when
+  the head still fails it deploys the last good commit again. `piceli gitops
+  status` shows `composition at <commit> failed to import (<type>:
+  <message>)`, and the health is `degraded`. The error keeps the exception's
+  message, not only its type.
+- **A dead build host no longer blocks a build.** A claim lives while its
+  host reports; after 10 minutes without a report the in-cluster fallback
+  may take the build and another host may claim it (before: 4 hours, and
+  the fallback waited forever).
+- **A waiting build says what it waits for**: the hosts it is offered to,
+  who claimed it, and when the in-cluster fallback starts or why it never
+  does. `piceli builder serve` says once why it skips a build (claimed by
+  another host, failed until `piceli gitops sync`, claim refused and why).
+  A controller without a builder image no longer takes the fallback and
+  fails; the build keeps waiting for a host and says so.
+
 ## Version 0.27.0
 
 **Features**

@@ -22,6 +22,14 @@ delivered within ``host_wait`` seconds, unless the builder node is
 quarantined (0.22.0, :mod:`piceli.dev.health`): then the build keeps
 waiting for a host. A quarantined host's ``build-claim`` is refused.
 
+A claim lives while its host reports (0.27.1): a host that claimed an image
+build and sent no claim or ``build-progress`` for :data:`CLAIM_STALE_SECONDS`
+(builders report at each stage and every few seconds while the build logs)
+is taken for dead: the fallback may take the build and another host may
+claim it. Before, a dead host's claim blocked both for hours. The waiting
+step says what it waits for (:meth:`HostBuilds.waiting`): the hosts it is
+offered to, who holds it, and when the fallback starts or why it never does.
+
 Delivery into the nodes (0.22.0, ``Controller(delivery="nodes")``): the
 wanted build also names every declared node and its platform
 (``deliver.nodes``). The host imports each image into each node's
@@ -81,6 +89,10 @@ OFFERS_PER_COMPONENT = 20
 _KEY = re.compile(r"[A-Za-z0-9:._-]{1,100}")
 #: A claim with no answer for this long may be claimed again.
 CLAIM_SECONDS = 4 * 3600
+#: 0.27.1: an image build's claim with no report (the claim itself or a
+#: ``build-progress``) for this long is dead: the in-cluster fallback may
+#: take the build and another host may claim it.
+CLAIM_STALE_SECONDS = 600.0
 WAITING = "build-waiting"
 #: The registry domain of images imported into the nodes: ``.invalid``
 #: never resolves, so a node without the image never pulls one from elsewhere.
@@ -121,6 +133,23 @@ def node_reference(repository: str, configs: Mapping[str, str]) -> str:
     return f"{NODE_DOMAIN}/{repository}:{content_tag(node_identity(configs), 64)}"
 
 
+def live_claim(entry: Mapping[str, Any], now: float) -> dict[str, Any] | None:
+    """The claim on ``entry`` while its host is alive, else ``None``.
+
+    0.27.1: an image build's claim lives :data:`CLAIM_STALE_SECONDS` after
+    the host's last report (its claim, or its last ``build-progress``); a
+    NixRelease publish's claim keeps the longer :data:`CLAIM_SECONDS`."""
+    claimed = entry.get("claimed") or {}
+    if not claimed:
+        return None
+    last = max(
+        float(claimed.get("epoch") or 0),
+        float((entry.get("progress") or {}).get("epoch") or 0),
+    )
+    limit = CLAIM_SECONDS if entry.get("kind") == "nix-publish" else CLAIM_STALE_SECONDS
+    return dict(claimed) if now - last < limit else None
+
+
 def build_id(kind: str, body: Mapping[str, Any]) -> str:
     return hashlib.sha256(
         json.dumps({"kind": kind, **body}, sort_keys=True, default=str).encode()
@@ -150,7 +179,11 @@ class HostBuilds:
         nodes: Mapping[str, str] | None = None,
         cluster_blocked: Callable[[], str | None] = lambda: None,
         owner: Callable[[], str | None] = lambda: None,
+        hosts: Sequence[str] = (),
     ) -> None:
+        #: 0.27.1: the declared build hosts that build images (shown in the
+        #: waiting step's status: who it is offered to).
+        self.hosts = tuple(hosts)
         #: 0.22.0: the environment whose step asks (its key), so a newer
         #: build it asks for replaces the older one.
         self.owner = owner
@@ -250,26 +283,65 @@ class HostBuilds:
             raise _failure_error(failure)
         return entry
 
+    def _no_fallback(self, entry: Mapping[str, Any], method: str) -> str | None:
+        """Why the in-cluster fallback may not take ``entry`` now, or ``None``."""
+        if "cluster" not in self.order:
+            return 'builds=("hosts",): no in-cluster fallback'
+        if not callable(getattr(self.inner, method, None)) or not getattr(
+            self.inner, "builds_images", True
+        ):
+            return "no in-cluster builder image (piceli gitops enable --builder-image)"
+        blocked = self.cluster_blocked()
+        if blocked is not None:
+            return blocked
+        claimed = live_claim(entry, self.clock())
+        if claimed is not None:
+            return f"claimed by {claimed.get('host')} since {claimed.get('at')}"
+        return None
+
     def _fallback_at(self, entry: Mapping[str, Any], method: str) -> float | None:
         """When the in-cluster fallback may take ``entry`` (``None``: never,
-        or not while a host holds it)."""
-        if (
-            "cluster" not in self.order
-            or not callable(getattr(self.inner, method, None))
-            or entry.get("claimed")
-            or self.cluster_blocked() is not None
-        ):
+        or not while a live host holds it)."""
+        if self._no_fallback(entry, method) is not None:
             return None
         return float(entry.get("requested_epoch") or 0) + self.host_wait
 
     def _fallback_due(self, entry: Mapping[str, Any], method: str) -> bool:
         return (
-            "cluster" in self.order
-            and callable(getattr(self.inner, method, None))
+            self._no_fallback(entry, method) is None
             and self.clock() - float(entry.get("requested_epoch") or 0) > self.host_wait
-            and not entry.get("claimed")
-            and self.cluster_blocked() is None
         )
+
+    def waiting(
+        self, entry: Mapping[str, Any], method: str, names: Sequence[str]
+    ) -> str:
+        """What the step waits for (0.27.1), for example ``waiting for a build
+        host (docker) to build web: offered to builder-1; not claimed;
+        in-cluster fallback at 2026-01-01T00:00:20Z``."""
+        now = self.clock()
+        text = f"waiting for a build host (docker) to build {', '.join(names)}"
+        text += ": offered to " + (", ".join(self.hosts) or "any build host")
+        claimed = live_claim(entry, now)
+        if claimed is not None:
+            text += f"; claimed by {claimed.get('host')} at {claimed.get('at')}"
+            stage = (entry.get("progress") or {}).get("stage")
+            if stage:
+                text += f" ({stage})"
+        elif entry.get("claimed"):
+            held = entry["claimed"]
+            text += (
+                f"; the claim of {held.get('host')} at {held.get('at')} expired "
+                f"(no report for {int(CLAIM_STALE_SECONDS // 60)} min)"
+            )
+        else:
+            text += "; not claimed"
+        why = self._no_fallback(entry, method)
+        if why is None:
+            at = float(entry.get("requested_epoch") or 0) + self.host_wait
+            text += f"; in-cluster fallback at {_iso(at)}"
+        elif claimed is None or not why.startswith("claimed by"):
+            text += f"; no in-cluster fallback: {why}"
+        return text
 
     def build_spec(self, request: Any, checkout: Any) -> dict[str, Any]:
         body = {
@@ -285,7 +357,7 @@ class HostBuilds:
             del self._wanted()[entry["id"]]
             return self.inner.build_spec(request, checkout)
         raise BuildPending(
-            f"waiting for a build host to build {', '.join(sorted(request.images))}",
+            self.waiting(entry, "build_spec", sorted(request.images)),
             retry_at=self._fallback_at(entry, "build_spec"),
         )
 
@@ -308,8 +380,7 @@ class HostBuilds:
             del self._wanted()[entry["id"]]
             return dict(self.inner.build(items, checkout))
         raise BuildPending(
-            "waiting for a build host to build "
-            + ", ".join(sorted(item.component for item in items)),
+            self.waiting(entry, "build", sorted(item.component for item in items)),
             retry_at=self._fallback_at(entry, "build"),
         )
 
@@ -364,14 +435,21 @@ def public(state: Mapping[str, Any], now: float) -> list[dict[str, Any]]:
         (state.get(STATE_KEY) or {}).values(),
         key=lambda item: float(item.get("requested_epoch") or 0),
     ):
-        claimed = entry.get("claimed") or {}
-        if claimed and now - float(claimed.get("epoch") or 0) > CLAIM_SECONDS:
-            claimed = {}
+        claimed = live_claim(entry, now) or {}
         item = {
             key: value
             for key, value in entry.items()
             if key not in {"requested_epoch", "asked_epoch", "failed"}
         } | {"claimed": {k: v for k, v in claimed.items() if k != "epoch"} or None}
+        if entry.get("claimed") and not claimed:
+            # 0.27.1: a dead host's claim, shown (any host may claim it).
+            item["claim_expired"] = {
+                k: v for k, v in entry["claimed"].items() if k != "epoch"
+            }
+        if isinstance(item.get("progress"), Mapping):
+            item["progress"] = {
+                k: v for k, v in item["progress"].items() if k != "epoch"
+            }
         failure = entry.get("failed")
         if failure:
             # 0.22.0: shown, so hosts never offer it again and people see why.
@@ -393,17 +471,18 @@ def claim(state: dict[str, Any], body: Mapping[str, Any], now: float) -> None:
     entry = (state.get(STATE_KEY) or {}).get(str(body.get("id")))
     if entry is None:
         raise GitOpsError("gitops-request-invalid", "no such wanted build")
-    held = entry.get("claimed") or {}
+    held = live_claim(entry, now) or {}
     host = str(body.get("host") or "")
-    if (
-        held
-        and held.get("host") != host
-        and now - float(held.get("epoch") or 0) < CLAIM_SECONDS
-    ):
+    if held and held.get("host") != host:
         raise GitOpsError(
-            "gitops-request-invalid", f"build host {held.get('host')} already builds it"
+            "gitops-request-invalid",
+            f"build host {held.get('host')} already builds it (claimed at "
+            f"{held.get('at')})",
         )
-    entry["claimed"] = {"host": host, "at": _iso(now), "epoch": now}
+    if held.get("host") != host:
+        entry.pop("progress", None)  # an earlier holder's
+    at = held.get("at") if held.get("host") == host else None
+    entry["claimed"] = {"host": host, "at": at or _iso(now), "epoch": now}
 
 
 def failed(state: dict[str, Any], body: Mapping[str, Any]) -> None:
@@ -418,7 +497,9 @@ def failed(state: dict[str, Any], body: Mapping[str, Any]) -> None:
     }
 
 
-def progress(state: dict[str, Any], body: Mapping[str, Any]) -> None:
+def progress(
+    state: dict[str, Any], body: Mapping[str, Any], now: float | None = None
+) -> None:
     """A build host's stage and log tail (0.26.0, ``build-progress``): kept
     on the wanted build it holds (``progress`` in ``builds_wanted``); one of
     a build no longer wanted (cancelled, answered) is dropped quietly."""
@@ -429,6 +510,8 @@ def progress(state: dict[str, Any], body: Mapping[str, Any]) -> None:
         "stage": str(body.get("stage") or "")[:16],
         "at": str(body.get("at") or "")[:40],
         "log_tail": str(body.get("log_tail") or "")[-4000:],
+        # 0.27.1: when the controller heard it (keeps the claim alive).
+        **({"epoch": now} if now is not None else {}),
     }
 
 

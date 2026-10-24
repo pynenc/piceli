@@ -1666,7 +1666,7 @@ class CompositionController:
                 elif kind == "build-progress":
                     from piceli.infra import remote_builds
 
-                    remote_builds.progress(self.state, body)
+                    remote_builds.progress(self.state, body, self.clock())
                 else:
                     raise GitOpsError("gitops-request-invalid", "unknown request kind")
             except GitOpsError as error:
@@ -1949,6 +1949,13 @@ class CompositionController:
             else None,
             cluster_blocked=self._cluster_quarantine,
             owner=lambda: self._step_env,
+            # 0.27.1: who the build is offered to (the waiting status says).
+            hosts=[
+                host.name
+                for host in getattr(getattr(cluster, "dev", None), "hosts", ()) or ()
+                if getattr(host, "kind", None) == "docker"
+                and getattr(host, "runs", True)
+            ],
         )
 
     # ------------------------------------------------------------ build health
@@ -3312,9 +3319,12 @@ class CompositionController:
                     ]
                 ),
             )
+            # 0.27.1: what it waits for (hosts, claim, fallback), kept fresh.
+            if record.get("waiting_for") != str(waiting):
+                self.log(f"{record['branch']}: {waiting}")
+            record["waiting_for"] = str(waiting)
             if record.get("waiting_since") is None:
                 record["waiting_since"] = _iso(self.clock())
-                self.log(f"{record['branch']}: {waiting}")
         except Exception as error:  # one bad environment never stops the loop
             if isinstance(error, PipelineError | GitOpsError):
                 self.log(f"{record['branch']}: {error}")  # registered, no secret
@@ -3333,6 +3343,7 @@ class CompositionController:
             record.pop("in_progress", None)
             if not pending:
                 record.pop("waiting_since", None)
+                record.pop("waiting_for", None)
                 # 0.22.0: a step that ended without waiting wants no build.
                 from piceli.infra import remote_builds
 
@@ -3764,8 +3775,12 @@ class CompositionController:
         """Import the composition at its branch's head when it moved; new sources' refs.
 
         A module that fails to import (or is invalid) is recorded with its
-        code and not retried until the branch moves again; the previous
-        composition keeps deploying.
+        code and not retried until the branch moves again or the controller
+        runs another version (0.27.1: a newer version may import what an
+        older one could not); the previous composition keeps deploying,
+        also after a restart (0.27.1: the last good commit is imported
+        again; before, a restarted controller deployed nothing and read no
+        requests).
         """
         assert self.repo is not None
         settings = self.repo.settings
@@ -3778,43 +3793,92 @@ class CompositionController:
         if commit is None:
             entry["error"] = "composition-ref-unresolved"
             return []
-        if commit == self.repo.commit or entry.get("failed") == commit:
+        if commit == self.repo.commit:
             return []
+        if entry.get("failed") == commit and entry.get("failed_version") == _version():
+            return self._load_last_good(now)
         try:
-            composition = self.repo.load(commit)
-            clash = [
-                s.key
-                for s in composition.sources
-                if s.key == settings.name and s.url != settings.url
-            ]
-            if clash:
-                raise CompositionError(
-                    "composition-invalid",
-                    f"a source is named {settings.name!r} like the composition's "
-                    "repository but has another URL",
-                )
+            composition = self._import_composition(commit)
         except (CompositionError, GitOpsError) as error:
             entry.update(error=error.code, error_detail=str(error))
             if isinstance(error, CompositionError):
-                entry["failed"] = commit
+                entry.update(failed=commit, failed_version=_version())
             self.log(f"composition at {commit[:12]}: {error} ({error.code})")
-            return []
+            return self._load_last_good(now)
         if self._composition is not None:
             self.log(f"composition {settings.name}@{commit[:12]}: re-rendering")
-        self._composition = composition
         entry.update(
             commit=commit,
             failed=None,
+            failed_version=None,
             error=None,
             error_detail=None,
             loaded_at=_iso(now),
         )
+        return self._adopt(composition, now)
+
+    def _import_composition(self, commit: str) -> Composition:
+        assert self.repo is not None
+        settings = self.repo.settings
+        composition = self.repo.load(commit)
+        clash = [
+            s.key
+            for s in composition.sources
+            if s.key == settings.name and s.url != settings.url
+        ]
+        if clash:
+            raise CompositionError(
+                "composition-invalid",
+                f"a source is named {settings.name!r} like the composition's "
+                "repository but has another URL",
+            )
+        return composition
+
+    def _load_last_good(self, now: float) -> list[str]:
+        """The head failed to import: with nothing loaded (a restart), import
+        the last good commit again so it keeps deploying (0.27.1)."""
+        assert self.repo is not None
+        good = self.state["composition"].get("commit")
+        if self._composition is not None or not good:
+            return []
+        try:
+            composition = self._import_composition(str(good))
+        except (CompositionError, GitOpsError) as error:
+            self.log(f"composition at {str(good)[:12]} (last good): {error}")
+            return []
+        self.log(f"composition: deploying the last good commit {str(good)[:12]}")
+        return self._adopt(composition, now)
+
+    def _adopt(self, composition: Composition, now: float) -> list[str]:
+        """Deploy ``composition`` from now on; new sources' refs."""
+        self._composition = composition
         failed: list[str] = []
         for source in composition.sources:
             if source.key not in self.sources.remotes:
                 self.sources.add(source)
                 failed += self._poll_source(source.key, now)
         return failed
+
+    def _composition_problem(self) -> str | None:
+        """Why the composition's head is not what deploys (0.27.1), or ``None``."""
+        if self.repo is None:
+            return None
+        entry = self.state.get("composition") or {}
+        failed = entry.get("failed")
+        if not failed and self._composition is not None:
+            return None
+        if not failed:
+            if not entry.get("error"):
+                return None
+            return (
+                f"the composition is not loaded ({entry.get('error')}: "
+                f"{entry.get('error_detail') or 'no detail'}); nothing deploys"
+            )
+        why = entry.get("error_detail") or entry.get("error") or "no detail"
+        text = f"composition at {str(failed)[:12]} failed to import ({why})"
+        if self._composition is not None and self.repo.commit:
+            return text + f"; deploying the last good commit {self.repo.commit[:12]}"
+        return text + "; nothing deploys"
 
     def _followed_refs(self, key: str, refs: RemoteRefs) -> set[str]:
         wanted: set[str] = set()
@@ -3861,6 +3925,12 @@ class CompositionController:
                 key: {k: v for k, v in entry.items() if k != "deployed_image"}
                 for key, entry in (record.get("components") or {}).items()
             }
+        problem = self._composition_problem()
+        if problem is not None and self._composition is None:
+            # 0.27.1: nothing steps while no composition is loaded; each
+            # environment says so instead of its last (stale) state alone.
+            for record in envs.values():
+                record["blocked"] = problem
         envs = self._grouped(envs)
         clusters = self._clusters_status()
         loaded = self._composition
@@ -3872,7 +3942,12 @@ class CompositionController:
         return {
             "schema": STATUS_SCHEMA,
             "controller": {
-                "state": "degraded" if self.state.get("last_error") else "running",
+                "state": "degraded"
+                if self.state.get("last_error") or problem is not None
+                else "running",
+                # Added in 0.27.1: the composition's head failed to import
+                # (what deploys instead, or that nothing does).
+                **({"composition_problem": problem} if problem else {}),
                 "version": _version(),
                 "repo": None,
                 "branches": [],

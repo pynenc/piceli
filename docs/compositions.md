@@ -156,8 +156,14 @@ commit from its own checkout (the helper modules next to it too). Every
 environment's revision includes that commit, so **a change in the
 composition repository re-renders every environment**; images whose key did
 not change are not rebuilt. A module that fails to import is recorded
-(`controller.composition_repo.error`, `composition-invalid`) and the last
-good one keeps deploying until the branch moves again.
+(`controller.composition_repo.error`, `composition-invalid`, with the
+exception's type and message) and the last good one keeps deploying until
+the branch moves again, also after a restart (0.27.1). A controller of
+another version tries the failed commit once more: a newer Piceli may import
+what an older one could not. While the head fails, `piceli gitops status`
+says so (`composition at <commit> failed to import (...); deploying the last
+good commit <commit>`, or `nothing deploys` when there is none) and the
+controller's health is `degraded`.
 
 ### Status
 
