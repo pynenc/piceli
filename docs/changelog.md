@@ -6,79 +6,52 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.26.2
 
-- **GC roots on docker build hosts.** `BuildHost.docker(roots_dir=...)`: a
-  directory of the host (writable by uid 65532) its Nix steps bind-mount at
-  the same path, read-write, so the roots they make there are ones the
-  host's daemon honours. A fetched private input is rooted from the fetch
-  until the build ended (a step removes the build's directory then, on
-  failure too), and an `--image` build keeps `ROOTS_DIR/images/NAME` until
-  the next build of that name, for `infra apply`'s upload. Without it, a
-  docker host keeps no root, as before.
-- **`dev nix build` fetches the private inputs the release path fetches.**
-  A build without `--input` or `--publish` (an `--image` of the same
-  flake) fetched none, so its run's Nix tried the private repository
-  itself and failed; now the `--dev` module (as `--composition` or the
-  `--publish` module) gives the inputs of its NixReleases: their gates,
-  their `inputs=` and their Sources. Every path fetches a `git` input from
-  one function of the locked node, with its whole history (`shallow =
-  false`, so `revCount` is checked too); a shallow fetch of the same rev
-  gives the same `narHash` on Nix 2.18 to 2.35.
+**Upgrade notes**
 
-- **`infra apply` reads the state once.** After an apply (and a destroy)
-  the S3 key pairs, the inventory and the images still in use come from
-  one `tofu show -json` instead of three (two with no image to retire):
-  the pairs are read from it in memory, never logged, and the rest from it
-  redacted as before. The images an apply uploads come from the plan
-  already shown, not from a second `show` of the plan file. Each read
-  derives the state key (about 1 s of CPU); the S3 keys test runs 43
-  OpenTofu commands instead of 47.
-- **The forward and access tests no longer race for ports under load.**
-  They take their loopback ports from a slice of their own per pytest-xdist
-  worker, below the ephemeral range, instead of a free port another process
-  binds later; and the fake `kubectl` of tests that expect a live forward
-  keeps its connections open, so the supervisor no longer restarts it. The
-  busy-forward test restarts only after two failed probes in a row (one idle
-  probe that timed out under load cut its download), and the forward health
-  tests wait up to 30 s for a state instead of 10.
-- **A server whose image changes can be replaced instead of rebuilt.**
-  `Server(on_image_change="replace")` makes a new image (a new `Image`
-  checksum) replace the server (`tofu plan -replace`): destroyed first,
-  then created on the same persistent port (same IPv4 and IPv6) with the
-  current `UserData`, which the plan needs (`infra-user-data-missing`). The
-  default, `"rebuild"`, keeps the behaviour so far: the OpenStack provider
-  rebuilds the server in place with Nova, with its original user data. For a
-  server with user data such a plan now warns (stderr and JSON `warnings`;
-  it does not block): the rebuilt host would boot with a spent single-use
-  key. `piceli infra replace REF SERVER [--approve HASH]` replaces one
-  server on request through the same plan, approval and hash; the plan's
-  `replaced` lists the replaced servers and why.
-- **A Nix host moves its boot default only after its checks pass.** The
-  agent activated a new system with `nix-env --set` and
-  `switch-to-configuration switch`, which made it the boot default before
-  any check ran, and a run that died after the switch (its own switch
-  stopped it, a check hung it) left the new system active with nothing
-  recorded. It now writes a pending attempt, activates with
-  `switch-to-configuration test`, runs the checks, and only then sets the
-  profile and the boot default (`nix-env --set`, `switch-to-configuration
-  boot`). A failure activates the previous system again with `test`. The
-  next start of an agent that died with an attempt pending rolls it back
-  before anything else (`host-deploy-interrupted`, the build marked bad),
-  and a reboot comes up on the previous system. A unit check never gets a
-  zero timeout at its deadline. Stages are now `activate`, `checks` and
-  `boot` (were `switch` and `checks`). Render the module again and switch
-  once to get the new agent.
-- **`piceli host status` and `wait` never hang on SSH.** A status read
-  connects within 10 s, closes a silent session after 10 s and gives up
-  after 30 s. A session that broke after login (closed with no exit status,
-  or hung) is the new `host-ssh-failed`; `host-unreachable` stays for no
-  session at all. Both carry SSH's message and, when the host declares a
-  `HostReport`, its endpoint, where the agent's own reports are. `wait`
-  says each new failure once and keeps waiting until `--timeout`.
-- **`secrets status`: an owner-made S3 pair that is absent is `missing`.**
-  `NixCache(write_credentials=, read_credentials=)` pairs the owner makes by
-  hand were `pending`, so status passed; they are now `missing` and status
-  exits 1 until they are stored. Pairs the next `infra apply` creates stay
+- **Nix hosts: render the host module again and switch once.** The host
+  agent now activates a new system in a new order (below). A host keeps the
+  old agent until its module is rendered again and switched to one time.
+  Deploy stages are now `activate`, `checks` and `boot` (were `switch` and
+  `checks`).
+- **`secrets status` exits 1 for S3 key pairs the owner has not stored.**
+  An S3 (object storage) key pair the owner makes by hand
+  (`NixCache(write_credentials=, read_credentials=)`) was `pending`; it is
+  now `missing` until stored. Pairs the next `infra apply` creates stay
   `pending`.
+
+**Changes**
+
+- **A Nix host makes a new system the boot default only after its checks
+  pass.** The agent records a pending attempt, activates the new system
+  for this boot only (`switch-to-configuration test`), runs the checks, and
+  then sets the profile and the boot default. A failed check activates the
+  previous system again. An agent that died mid-attempt rolls it back on
+  its next start (`host-deploy-interrupted`), and a reboot comes up on the
+  previous system.
+- **`piceli host status` and `wait` never hang on SSH (Secure Shell).** A
+  status read connects within 10 s and gives up after 30 s. A session that
+  breaks after login is the new `host-ssh-failed`; `host-unreachable` stays
+  for no session at all. `wait` keeps waiting until `--timeout`.
+- **Replace a server instead of rebuilding it.**
+  `Server(on_image_change="replace")` recreates a server whose image
+  changed, on the same IP addresses and with its current user data (the
+  first-boot secret). The default, `"rebuild"`, rebuilds it in place as
+  before, and now warns when the server has user data, which a rebuild
+  reuses although it was single-use. `piceli infra replace REF SERVER`
+  replaces one server on request, through the usual plan and approval.
+- **`infra apply` reads the OpenTofu state once** instead of three times
+  (each read costs about 1 s of CPU).
+- **Garbage-collection roots on docker build hosts.**
+  `BuildHost.docker(roots_dir=...)` keeps what a build fetched or made safe
+  from Nix's garbage collector while it is needed: a fetched private input
+  until the build ends, an `--image` build until the next build of that
+  name.
+- **`dev nix build` fetches the private inputs the release path fetches**,
+  so a plain `--image` build of a flake with private inputs no longer fails.
+- **Tests:** the forward, telemetry and parallel-train tests no longer fail
+  on a busy machine.
+- **Docs:** a shorter roadmap, one object-model page instead of three, and
+  unused images removed.
 
 ## Version 0.26.1
 
