@@ -472,17 +472,18 @@ def build(
     import contextlib
 
     held = contextlib.ExitStack()  # 0.26.0: the inputs' GC roots, until built
+    reference: str | None = None  # 0.26.3: the fetched trees, pinned
     if private:
         fetcher = _fetcher(chosen, chosen_profile)
         roots = held.enter_context(fetcher.roots())  # 0.26.2: docker roots_dir
         try:
-            _fetch_private(private, fetcher, root_dir, rev, roots)
+            reference = _fetch_private(private, fetcher, root_dir, rev, roots)
         except BaseException:  # a refusal exits: the roots still go
             held.close()
             raise
     request = RunRequest(
         root=SourceRequest(repository_name(root_dir), root_dir, rev),
-        command=build_argv(target),
+        command=build_argv(target, reference),
         cwd=".",
         profile=chosen_profile.name,
         requester=requester_label(None),
@@ -688,17 +689,23 @@ def _fetch_private(
     root: Path,
     rev: str | None,
     roots: Any = None,
-) -> None:
+) -> str | None:
     """Fetch the private inputs on the build host with this machine's
-    credentials, before the build (else ``infra-nix-input-unreachable``)."""
+    credentials, before the build (else ``infra-nix-input-unreachable``);
+    the reference lock pinning their trees (0.26.3), for the build."""
     from piceli.dev.model import DevError
-    from piceli.dev.nix_inputs import resolve
+    from piceli.dev.nix_inputs import reference_lock_of, resolve
 
     try:
-        pairs = resolve(private, _lock_of(root, rev))
-        fetcher(pairs, say, roots=roots)
+        lock = _lock_of(root, rev)
+        pairs = resolve(private, lock)
+        outcome = fetcher(pairs, say, roots=roots, lock=lock)
     except DevError as error:
         reject(error.code, str(error))
+    reference = reference_lock_of(outcome)
+    if reference is not None:
+        say(f"  the build reads the fetched inputs from {reference}")
+    return reference
 
 
 def _fetcher(host: Any, profile: Any) -> Any:

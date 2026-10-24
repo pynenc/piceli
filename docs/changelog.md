@@ -4,6 +4,25 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.26.3
+
+**Fixes**
+
+- **A Nix build with a private flake input uses the exact tree the fetch
+  step fetched.** Before the build, the build host fetches each private
+  input with exactly the attributes `flake.lock` pins (`shallow` included;
+  0.26.2 forced `shallow = false`) and recomputes the tree's `narHash`. A
+  different tree stops the release with `infra-nix-input-unreachable`,
+  naming the expected and the actual hash. The step then stores a copy of
+  `flake.lock` in which each fetched input points at its tree in the Nix
+  store, and the build reads it with `nix build --reference-lock-file`.
+  The build no longer resolves a private input itself, so it needs no Git
+  credential and cannot get another tree. The checkout's `flake.lock` and
+  every other pin stay as they are, so the built store path is the same.
+  This applies to `builder serve --publish` and `dev nix build`. The copy
+  is held by a GC (garbage collection) root until the build ends, like the
+  trees.
+
 ## Version 0.26.2
 
 **Upgrade notes**

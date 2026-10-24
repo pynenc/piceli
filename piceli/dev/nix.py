@@ -452,11 +452,18 @@ def check_name(name: str) -> str:
     return name
 
 
-def build_argv(target: str) -> list[str]:
-    """The run's command: build ``target``, link it, print its store path."""
+def build_argv(target: str, lock: str | None = None) -> list[str]:
+    """The run's command: build ``target``, link it, print its store path.
+
+    ``lock`` (0.26.3): the reference lock the input fetch stored
+    (:func:`piceli.dev.nix_inputs.reference_lock_of`), read instead of the
+    checkout's ``flake.lock`` (left as it is): the fetched private inputs
+    are ``path`` inputs of their trees there, so the build never resolves
+    them itself."""
+    pinned = ["--reference-lock-file", lock, "--no-write-lock-file"] if lock else []
     return [
         "nix", *FEATURES, "build", "--print-build-logs",
-        "--out-link", OUT_LINK, "--print-out-paths", target,
+        "--out-link", OUT_LINK, "--print-out-paths", *pinned, target,
     ]  # fmt: skip
 
 

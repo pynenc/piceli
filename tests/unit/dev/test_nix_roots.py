@@ -196,10 +196,13 @@ def test_the_fetcher_makes_the_roots_directory(tmp_path: Path) -> None:
         if "--out-link" in argv:
             assert roots.is_dir()
             return subprocess.CompletedProcess(argv, 0, b"", b"")
+        if "hash" in argv:
+            return subprocess.CompletedProcess(argv, 0, b"sha256-AAAA\n", b"")
         return subprocess.CompletedProcess(argv, 0, STORE.encode(), b"")
 
     request = {"inputs": [{"name": "app", "mode": "none",
-                           "locked": {"type": "git", "url": "https://x/app"}}],
+                           "locked": {"type": "git", "url": "https://x/app",
+                                      "narHash": "sha256-AAAA"}}],
                "roots": str(roots)}  # fmt: skip
     outcome = nix_fetch.fetch(request, runner=runner, environ=_nix(tmp_path))
     assert outcome["inputs"][0]["rooted"] is True
