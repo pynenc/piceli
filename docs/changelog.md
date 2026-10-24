@@ -31,6 +31,15 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   ENV --approve DIGEST --wait` does the same for the Nix host. Exit 0: all
   good; 1: a failure; 2: timeout (`gitops-wait-timeout`). See
   {ref}`gitops-enable-wait`.
+- **Test an upgrade before it replaces the controller.** `piceli gitops
+  enable infra.py --approve HASH --canary` first runs the new controller
+  image once, as a Job that imports the composition, resolves each
+  environment, loads its builds and plans it without applying anything
+  (`main: imports, plans 3 changes, builds 2 components: ok`). A failure
+  refuses the upgrade (`gitops-canary-failed`, naming the first failure)
+  and the live controller keeps running; `--force` replaces it anyway. The
+  Job and its ConfigMap are removed when the command ends. See
+  {ref}`gitops-enable-canary`.
 
 ## Version 0.27.0
 

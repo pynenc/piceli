@@ -201,10 +201,14 @@ def _run_plan(
     command: str,
     extra: dict[str, Any],
     wait: dict[str, Any] | None = None,
+    canary: Callable[[Any], dict[str, Any]] | None = None,
+    force: bool = False,
 ) -> None:
     """Show the plan; execute it when approved. ``wait`` (0.28.0, ``enable
     --wait``): ``{"namespace", "timeout", "interval"}``, then wait until
-    every environment runs its revision (exit 1: a failure, 2: timeout)."""
+    every environment runs its revision (exit 1: a failure, 2: timeout).
+    ``canary`` (0.28.0, ``enable --canary``): run before the approved plan
+    replaces the controller; a failed canary refuses it unless ``force``."""
     from piceli.gitops.install import execute
 
     _describe(plan)
@@ -214,6 +218,8 @@ def _run_plan(
         _finish_enable(api, {**body, "state": "unchanged"}, wait, None)
         return
     if approve is None:
+        if canary is not None:
+            say("note: --canary runs with --approve, before the controller is replaced")
         say("approve with:")
         say(f"  {command} --approve {plan.plan_hash}")
         emit_json(
@@ -230,6 +236,8 @@ def _run_plan(
             "the plan changed since it was approved (or the hash is wrong); "
             "review the new plan above",
         )
+    if canary is not None:
+        body["canary"] = _run_canary(api, canary, force)
     before = _last_poll(api, wait)
     with _guard():
         done = execute(api, plan, say)
@@ -243,6 +251,31 @@ def _run_plan(
         wait,
         before,
     )
+
+
+def _run_canary(
+    api: Any, canary: Callable[[Any], dict[str, Any]], force: bool
+) -> dict[str, Any]:
+    """Run the canary; refuse a failed one (``gitops-canary-failed``) unless forced."""
+    from piceli.gitops.canary import failure_text, summary_lines
+
+    result = canary(api)
+    if result.get("state") == "skipped":
+        return result
+    for line in summary_lines(result):
+        say(line)
+    if result.get("state") != "ok":
+        first = failure_text(result.get("failure"))
+        if not force:
+            reject(
+                "gitops-canary-failed",
+                f"the new controller's canary failed: {first}; the live "
+                "controller was not replaced",
+                hints=("fix the cause, or replace it anyway with --force",),
+                canary=result,
+            )
+        say(f"canary failed ({first}); --force: replacing the controller anyway")
+    return result
 
 
 def _last_poll(api: Any, wait: dict[str, Any] | None) -> str | None:
@@ -449,12 +482,34 @@ def enable(
         ),
     ] = False,
     timeout: Annotated[
-        str, typer.Option("--timeout", help="With --wait: give up after (15m, 1h)")
+        str,
+        typer.Option(
+            "--timeout", help="With --wait or --canary: give up after (15m, 1h)"
+        ),
     ] = "15m",
     interval: Annotated[
         float,
-        typer.Option("--interval", help="With --wait: seconds between reads", min=1),
+        typer.Option(
+            "--interval", help="With --wait or --canary: seconds between reads", min=1
+        ),
     ] = 10.0,
+    canary: Annotated[
+        bool,
+        typer.Option(
+            "--canary",
+            help="With --approve, for a composition: before replacing the live "
+            "controller, run the new image once as a Job that imports the "
+            "composition and plans every environment without applying anything; "
+            "a failure refuses the replacement (gitops-canary-failed)",
+        ),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="With --canary: replace the controller even if its canary failed",
+        ),
+    ] = False,
 ) -> None:
     """Install the GitOps controller (plan first; --approve HASH installs).
 
@@ -474,17 +529,22 @@ def enable(
         parse_selector,
     )
     from piceli.gitops.install import InstallSettings, plan_objects, render_controller
+    from piceli.k8s.cli.gitops_watch import parse_timeout
 
     waiting: dict[str, Any] | None = None
     if wait:
-        from piceli.k8s.cli.gitops_watch import parse_timeout
-
         waiting = {
             "namespace": namespace,
             "timeout": parse_timeout(timeout),
             "interval": interval,
         }
-    if ":" not in pipeline and pipeline.endswith(".py"):
+    composition_entry = ":" not in pipeline and pipeline.endswith(".py")
+    if canary and not composition_entry:
+        reject(
+            "gitops-config-invalid",
+            "--canary tests a composition controller (gitops enable infra.py)",
+        )
+    if composition_entry:
         _enable_composition(
             pipeline, root=root, image=image, kubeconfig=kubeconfig, context=context,
             poll=poll, credentials_secret=credentials_secret, namespace=namespace,
@@ -494,6 +554,9 @@ def enable(
             build_storage=build_storage, approve=approve, allow_exec=allow_exec,
             exec_sha256=exec_sha256, transport=transport, repo=repo,
             main_branch=main_branch, wait=waiting,
+            canary={"timeout": parse_timeout(timeout), "interval": interval}
+            if canary else None,
+            force=force,
         )  # fmt: skip
         return
     if repo is None:
@@ -595,6 +658,8 @@ def _enable_composition(
     repo: str | None = None,
     main_branch: str = "main",
     wait: dict[str, Any] | None = None,
+    canary: dict[str, Any] | None = None,
+    force: bool = False,
 ) -> None:
     """``gitops enable infra.py``: the controller of a composition."""
     from piceli.gitops.config import parse_duration, parse_selector
@@ -728,7 +793,25 @@ def _enable_composition(
             command,
             {"controller": config.to_dict(), "ui": ui},
             wait,
+            canary=None
+            if canary is None
+            else _canary_runner(objects, namespace, canary),
+            force=force,
         )
+
+
+def _canary_runner(
+    objects: list[dict[str, Any]], namespace: str, options: dict[str, Any]
+) -> Callable[[Any], dict[str, Any]]:
+    from piceli.gitops.canary import run_canary
+
+    def run(api: Any) -> dict[str, Any]:
+        return run_canary(
+            api, objects, namespace, timeout=options["timeout"],
+            interval=options["interval"], say=say,
+        )  # fmt: skip
+
+    return run
 
 
 def _object_key(item: Mapping[str, Any]) -> tuple[str, str | None, str]:
@@ -1980,6 +2063,103 @@ def run(
                 _forever(controller, refresh)
             finally:
                 closer()
+
+
+@app.command("canary", hidden=True)
+def canary(
+    config_file: Annotated[
+        Path, typer.Option("--config", help="The new controller config (config.json)")
+    ],
+    state_dir: Annotated[
+        Path,
+        typer.Option(
+            "--state-dir", help="A scratch state directory (never the live one)"
+        ),
+    ],
+    service_account: Annotated[
+        bool,
+        typer.Option(
+            "--service-account",
+            help="Inside the canary's pod: reach the API with the pod's service account",
+        ),
+    ] = False,
+    kubeconfig: KubeconfigOption = None,
+    context: ContextOption = None,
+    namespace: Annotated[
+        str | None,
+        typer.Option(
+            "--namespace",
+            help="The live controller's namespace: its status is read for the "
+            "images it already built",
+        ),
+    ] = None,
+    credentials_dir: Annotated[
+        Path | None,
+        typer.Option("--credentials-dir", help="The mounted Git credentials Secret"),
+    ] = None,
+    transport: TransportOption = "https",
+) -> None:
+    """Test this version on a composition controller's config; apply nothing.
+
+    ``gitops enable infra.py --approve HASH --canary`` runs it in a Job with
+    the new image. It imports the composition at its branch head, resolves
+    every environment's revision, loads its build specs and components and
+    plans it, then prints one ``piceli.gitops-canary.v1`` JSON object.
+    """
+    import json
+
+    from piceli.gitops.canary import DryPorts, dry_run, known_images
+    from piceli.gitops.state import DirectoryChannel
+    from piceli.infra.controller import (
+        CompositionController,
+        is_composition_config,
+        load_config,
+    )
+    from piceli.infra.sources import SourceSet
+
+    if service_account and kubeconfig is not None:
+        reject(
+            "gitops-target-required",
+            "--service-account and --kubeconfig exclude each other",
+        )
+    try:
+        document = json.loads(config_file.read_text())
+    except (OSError, ValueError):
+        document = None
+    if not is_composition_config(document):
+        reject("gitops-config-invalid", "the canary tests a composition controller")
+    with _guard():
+        config = load_config(config_file)
+    with tempfile.TemporaryDirectory(prefix="piceli-canary-") as private, _guard():
+        target = _run_target(service_account, kubeconfig, context, Path(private))
+        if target is None:
+            reject(
+                "gitops-target-required",
+                "the canary plans against a cluster: pass --service-account (in its "
+                "pod) or --kubeconfig FILE --context NAME",
+            )
+        known: dict[tuple[str, str], tuple[str, str]] = {}
+        if namespace is not None:
+            live, closer = _run_channel(target, namespace, state_dir, transport)
+            try:
+                known = known_images(live.read_status())
+            finally:
+                closer()
+        inner = _composition_ports(
+            target, state_dir, config, transport, local_build=False,
+            private=Path(private),
+        )  # fmt: skip
+        controller = CompositionController(
+            config,
+            state_dir=state_dir,
+            sources=SourceSet(
+                config.sources, state_dir / "sources", credentials_dir=credentials_dir
+            ),
+            ports=inner,
+            channel=DirectoryChannel(state_dir / "status"),
+            log=say,
+        )
+        emit_json(dry_run(controller, DryPorts(inner, known=known)))
 
 
 def _run_composition(

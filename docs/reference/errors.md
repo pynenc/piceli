@@ -302,6 +302,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`gitops-build-cancelled`](#error-gitops-build-cancelled) | gitops | yes |
 | [`gitops-build-not-running`](#error-gitops-build-not-running) | gitops | yes |
 | [`gitops-build-ref-unknown`](#error-gitops-build-ref-unknown) | gitops | yes |
+| [`gitops-canary-failed`](#error-gitops-canary-failed) | gitops | no |
 | [`gitops-cluster-failed`](#error-gitops-cluster-failed) | gitops | yes |
 | [`gitops-config-invalid`](#error-gitops-config-invalid) | gitops | no |
 | [`gitops-controller-locked`](#error-gitops-controller-locked) | gitops | yes |
@@ -4398,6 +4399,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Run `piceli gitops status` for the tags and heads the controller sees, push the tag first, or promote another commit to the environment with `piceli promote`.
 - **Retry-safe:** yes
+
+(error-gitops-canary-failed)=
+### `gitops-canary-failed`
+
+**The new controller failed its canary.** `piceli gitops enable infra.py --approve HASH --canary` ran the new controller image once, as a Job that imports the composition and plans every environment without applying anything, and it failed: the composition does not import on the new version, an environment does not resolve, load its build specs or plan (a refusal such as `retained-content-differs`), or the Job could not run (the image cannot be pulled, an image older than 0.28.0 has no `gitops canary`, or it timed out). The live controller was not replaced.
+
+- **Fix:** Read the first failure in the message and the `canary` object of the JSON; fix the composition or pick another image, then run the command again. `--force` replaces the controller anyway.
+- **Retry-safe:** no
 
 (error-gitops-cluster-failed)=
 ### `gitops-cluster-failed`

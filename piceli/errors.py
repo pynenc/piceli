@@ -4651,6 +4651,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "gitops",
     ),
     _E(
+        "gitops-canary-failed",
+        "The new controller failed its canary",
+        "`piceli gitops enable infra.py --approve HASH --canary` ran the new controller image once, as a Job that imports the composition and plans every environment without applying anything, and it failed: the composition does not import on the new version, an environment does not resolve, load its build specs or plan (a refusal such as `retained-content-differs`), or the Job could not run (the image cannot be pulled, an image older than 0.28.0 has no `gitops canary`, or it timed out). The live controller was not replaced.",
+        "Read the first failure in the message and the `canary` object of the JSON; fix the composition or pick another image, then run the command again. `--force` replaces the controller anyway.",
+        False,
+        "gitops",
+    ),
+    _E(
         "gitops-nix-release-failed",
         "NixRelease publish failed",
         "The build host that claimed a NixRelease's publish answered `build-failed`: the source could not be fetched at the commit, the tag points at another commit, the Nix build failed, or signing, pushing or uploading the manifest failed. The release stays `failed` with the host's reason and output tail in `piceli gitops status`.",

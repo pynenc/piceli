@@ -1591,7 +1591,14 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(environment, stage, reason code, log tail; a composition that does "
             "not import; exit 1) or the timeout (gitops-wait-timeout, exit 2); "
             "progress lines on stderr, the result under wait in the JSON. "
-            + _EXPLICIT_CONTEXT,
+            "0.28.0, --canary (with --approve, a composition): before the plan "
+            "replaces a running controller, runs the new image once as a Job "
+            "(gitops canary: scratch state, its own ConfigMap, plan only) that "
+            "imports the composition, resolves every environment, loads its "
+            "builds and plans it; a failure refuses the replacement "
+            "(gitops-canary-failed, exit 2) unless --force; the Job and its "
+            "ConfigMap are removed when it ends; the result under canary in "
+            "the JSON. " + _EXPLICIT_CONTEXT,
         ),
         "gitops cache clear": _C(
             "Ask the GitOps controller to empty its cluster build cache (the "

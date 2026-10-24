@@ -153,6 +153,70 @@ Exit codes, for scripts:
 `piceli promote HOST --from ENV --approve sha256:… --wait` does the same
 for a Nix host ({ref}`promote-wait`).
 
+(gitops-enable-canary)=
+### Test an upgrade before it replaces the controller: `--canary` (0.28.0)
+
+A new controller version can fail on a composition the old one deployed
+(a keyword the new API renamed, a stricter check). Without a test, you
+find out only after the live controller was replaced, and nothing deploys
+until you fix it. `--canary` runs the new version first:
+
+```bash
+piceli gitops enable infra.py --image ghcr.io/example/piceli@sha256:… \
+  --approve sha256:… --canary --wait
+```
+
+Before the approved plan replaces the controller, Piceli runs the new
+image once, as a Kubernetes Job in the controller's namespace. The Job
+runs the new version's own code (`piceli gitops canary`) and, applying
+nothing:
+
+- imports the composition at the followed branch's head;
+- resolves the revision each environment would deploy;
+- loads each build spec and resolves each component, without building
+  (an image the live controller already built for the same sources is
+  reused; any other counts as a build);
+- plans each environment (a dry run: what would change), so refusals such
+  as `retained-content-differs` or `versioned-secret-generated` show up.
+
+```text
+canary: running ghcr.io/example/piceli@sha256:… on the composition (nothing is applied)
+composition: imports at 3f2a91c07d4e
+main: imports, plans 3 changes, builds 2 components: ok
+rc: not checked (waiting for a ref of shop)
+canary: ok
+```
+
+A failure refuses the upgrade with `gitops-canary-failed` (exit 2),
+naming the first failure; the live controller keeps running:
+
+```text
+composition: does not import at 8c1d2e3f4a5b (composition-invalid): importing infra.py failed: TypeError: ...
+canary: failed
+rejected: the new controller's canary failed: the composition: import failed (composition-invalid): ...; the live controller was not replaced [gitops-canary-failed]
+```
+
+`--force` replaces the controller anyway. A passing canary goes on to the
+normal install, and `--wait` after it. Under `--json` the result is the
+`canary` object of the output. `--timeout` (default `15m`) bounds the Job.
+
+Why a Job with the new image: only it runs the new version's code, with
+the controller's own Git credentials and access, inside the cluster. The
+Job's pod is the new controller's pod with three changes: it runs `gitops
+canary` instead of `gitops run`, its state directory is an empty scratch
+volume (never the live state claim), and its config is a copy in its own
+ConfigMap. It plans with "plan only" and has no way to build, copy images,
+create namespaces or apply. The Job, its pod and its ConfigMap are removed
+when the command ends: pass, fail or crash (the Job also removes itself ten
+minutes after it ends).
+
+What it does not check: builds themselves (only that they can start),
+checks after a deploy, and environments waiting for a ref that does not
+exist yet. The image must be 0.28.0 or newer (an older one has no `gitops
+canary`, and the canary fails saying so). With no controller installed
+yet there is nothing to replace, and the canary is skipped. It runs only
+with `--approve`, for a composition (`gitops enable infra.py`).
+
 Each deploy records the digest of the check set it verified (its
 `checks_hash`), so unchanged checks never run again on the next sync of an
 unchanged release, and a changed check set always does. On start, the

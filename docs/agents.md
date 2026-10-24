@@ -166,6 +166,11 @@ noted.
   host) runs the expected revision with its checks passed. Exit 0: done;
   1: the first failure (JSON `wait.failure`: `env`, `reason`, `stage`,
   `detail`, `log_tail`); 2: timeout (`gitops-wait-timeout`).
+- `piceli gitops enable infra.py --approve HASH --canary` (0.28.0): before
+  replacing a running controller, runs the new image once as a Job that
+  imports the composition and plans every environment without applying.
+  A failure exits 2 with `gitops-canary-failed` (JSON `canary.failure`:
+  `env`, `stage`, `reason`, `detail`); ask the owner before `--force`.
 - `piceli gitops alarms [--follow] [--json]` (0.28.0): the controller's
   alarms (failed or waiting environments and NixReleases, a composition
   that does not import, a new version) and its failed sends. Read-only.
