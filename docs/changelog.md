@@ -4,6 +4,22 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.27.0
+
+**Features**
+
+- **Versioned Secrets.** `app.secret("turn", {...}, versioned=True)` names
+  the Secret `turn-<hash>`, where the hash is a short keyed digest of its
+  values (never the values). A changed value is a new, immutable Secret;
+  every workload that reads `turn` is pointed at the new name in the same
+  apply, so it rolls. Piceli still never rewrites a Secret. The plan prints
+  `secret turn → turn-a1b2c3d4e5 (new value)` and, once nothing mounts an
+  old version, `delete turn-0f9e8d7c6b (no longer mounted)`. The current
+  version and the one the running release uses (the rollback target) are
+  kept. Binding a `random`, `tls-self-signed` or `tls-ca` value directly
+  into a versioned Secret is refused (`versioned-secret-generated`). See
+  {ref}`versioned-secrets`.
+
 ## Version 0.26.3
 
 **Fixes**

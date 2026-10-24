@@ -64,6 +64,7 @@ from piceli.k8s.ops.plan import (
     removal_patch,
     replace_propagation,
     replace_refusal,
+    versioned_secret_deletable,
     without_metadata_maps,
 )
 from piceli.k8s.ops.replace_backup import write_backup
@@ -585,7 +586,12 @@ class PlanExecutor:
                 ):
                     raise ValueError("unsafe retained descendants")
             if action.operation is PlanOperation.DELETE:
-                if current is None or current.retained or ref.kind in RETAINED_KINDS:
+                if current is None or (
+                    (current.retained or ref.kind in RETAINED_KINDS)
+                    and not versioned_secret_deletable(
+                        current.intent.manifest, current.ownership
+                    )
+                ):
                     raise ValueError("retained resource cannot be deleted")
                 if any(
                     current.precondition.uid in child.owner_uids
@@ -791,6 +797,10 @@ class PlanExecutor:
         if (
             action.operation in {PlanOperation.DELETE, PlanOperation.REPLACE}
             and current.retained
+            and not (
+                action.operation is PlanOperation.DELETE
+                and versioned_secret_deletable(current.manifest, current.ownership)
+            )
         ):
             raise ProviderError("retained-resource")
         if action.operation is PlanOperation.REPLACE and (
@@ -819,7 +829,13 @@ class PlanExecutor:
         action: PlanAction,
     ) -> bool:
         """Retained resources may be observed, never rewritten under a new op id."""
-        if current is None or not current.retained:
+        if (
+            current is None
+            or not current.retained
+            # The delete of an old versioned Secret (see
+            # ``versioned_secret_deletable``) is a delete, not a write.
+            or action.operation is PlanOperation.DELETE
+        ):
             return False
         metadata = current.manifest["metadata"]
         if metadata.get("annotations", {}).get(OWNER_ANNOTATION) not in self._owners:
@@ -1765,6 +1781,16 @@ class PlanExecutor:
                                         deadline=deadline,
                                         propagation=prune_propagation(
                                             action.resource.ref.kind
+                                        ),
+                                        # An old version of a versioned
+                                        # Secret (checked against the live
+                                        # object in ``_check_current``).
+                                        **(
+                                            {"allow_retained": True}
+                                            if versioned_secret_deletable(
+                                                current.manifest, current.ownership
+                                            )
+                                            else {}
                                         ),
                                     )
                                     result = None

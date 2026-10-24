@@ -547,7 +547,8 @@
      "component",
      "data",
      "name",
-     "type"
+     "type",
+     "versioned"
     ],
     "service": [
      "access",
@@ -9942,13 +9943,15 @@
     "data",
     "key",
     "name",
-    "type"
+    "type",
+    "versioned"
    ],
    "init": [
     "component",
     "data",
     "name",
-    "type"
+    "type",
+    "versioned"
    ],
    "methods": {
     "key": [
@@ -15080,6 +15083,7 @@
    "unknown-source",
    "upload-rejected",
    "verification-failed",
+   "versioned-secret-generated",
    "watch-no-run",
    "watch-timeout"
   ]
@@ -17042,6 +17046,7 @@
   "piceli.k8s.ops.provider_factory",
   "piceli.k8s.ops.replace_backup",
   "piceli.k8s.ops.revision",
+  "piceli.k8s.ops.secret_names",
   "piceli.k8s.ops.secret_versions",
   "piceli.k8s.ops.session",
   "piceli.k8s.orphans",

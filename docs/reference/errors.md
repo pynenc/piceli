@@ -826,6 +826,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`unknown-source`](#error-unknown-source) | inputs | no |
 | [`upload-rejected`](#error-upload-rejected) | artifacts-registry | yes |
 | [`verification-failed`](#error-verification-failed) | artifacts-delivery | yes |
+| [`versioned-secret-generated`](#error-versioned-secret-generated) | release | no |
 | [`watch-no-run`](#error-watch-no-run) | maintenance | yes |
 | [`watch-timeout`](#error-watch-timeout) | maintenance | yes |
 
@@ -2934,6 +2935,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Unknown secret to rotate.** `--rotate` names a secret generator that `[secrets]` does not declare.
 
 - **Fix:** Use a name declared under `[secrets]`.
+- **Retry-safe:** no
+
+(error-versioned-secret-generated)=
+### `versioned-secret-generated`
+
+**A versioned Secret holds a generated value.** A Secret declared with `versioned=True` binds the output of a `random`, `tls-self-signed` or `tls-ca` generator directly. Those values must stay the same: when the state starts empty they are adopted back from the live Secret by its declared name, which a versioned Secret does not have, so a new value (and a new Secret) would be made silently. The plan refuses before anything is generated or written.
+
+- **Fix:** Keep generated passwords, keys and certificates in a plain `app.secret(...)` (rotate them with `--rotate` into a Secret with a new name). Use `versioned=True` for config files that carry a secret: a `template`, `import`, `static` or external source.
 - **Retry-safe:** no
 
 
