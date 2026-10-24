@@ -1070,7 +1070,9 @@ def _health(status: dict[str, Any] | None, ready: bool | None, now: float) -> st
     quiet = silence(controller, now)
     if quiet["age"] is not None and quiet["age"] > quiet["limit"]:
         return "stale"
-    return "degraded" if controller.get("last_error") else "healthy"
+    # 0.27.1: a composition head that failed to import is not healthy.
+    problem = controller.get("last_error") or controller.get("composition_problem")
+    return "degraded" if problem else "healthy"
 
 
 def status_body(channel: Any, namespace: str) -> dict[str, Any]:
@@ -1149,6 +1151,8 @@ def status(
                 f"  last error: {controller['last_error']}"
                 + (f": {detail}" if detail else "")
             )
+        if controller.get("composition_problem"):  # 0.27.1
+            say(f"  {controller['composition_problem']}")
     for key, source in (body.get("sources") or {}).items():
         if source.get("error"):
             # 0.19: Git's masked message (an expired token, a wrong URL).
@@ -1161,6 +1165,10 @@ def status(
             line += f"; approve: piceli gitops approve {branch} {env.get('plan_hash')}"
         elif env.get("reason"):
             line += f" ({env['reason']})"
+        if env.get("waiting_for"):  # 0.27.1: what a waiting build waits for
+            line += f"; {env['waiting_for']}"
+        if env.get("blocked"):  # 0.27.1: nothing steps (no composition)
+            line += f"; not stepped: {env['blocked']}"
         verification = env.get("verification") or {}
         if env.get("health") == "degraded":
             failing = [
@@ -2136,6 +2144,10 @@ def _controller_telemetry(
 
 class _NoBuilder:
     """A composition controller without --builder-image: mirrors, never builds."""
+
+    #: 0.27.1: never the in-cluster fallback of the build hosts (the step
+    #: keeps waiting for a host and says why).
+    builds_images = False
 
     def __init__(self, mirror: Any) -> None:
         self._mirror = mirror

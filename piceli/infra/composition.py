@@ -702,10 +702,20 @@ def _import(path: Path) -> Any:
             raise _invalid(str(error)) from None
         if isinstance(error, Exception):
             raise _invalid(
-                f"importing the composition failed: {type(error).__name__}"
+                f"importing the composition failed: {_import_error(error)}"
             ) from None
         raise
     return module
+
+
+def _import_error(error: Exception) -> str:
+    """``Type: message`` of an import failure (0.27.1: the type alone said
+    too little), the message's first line scrubbed of secrets and cut short."""
+    from piceli.pipeline.prerollout import scrub
+
+    lines = str(error).strip().splitlines()
+    message = scrub(lines[0])[:300] if lines else ""
+    return type(error).__name__ + (f": {message}" if message else "")
 
 
 def _installed() -> list[Path]:
