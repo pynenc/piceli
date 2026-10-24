@@ -1149,28 +1149,16 @@ def publisher_source() -> str:
     return Path(nix_publish.__file__).read_text()
 
 
-def publisher_argv(host: Any, image: str) -> list[str]:
+def publisher_argv(host: Any, image: str | None) -> list[str]:
     """How the publisher runs on ``host``, after the build: a native host's
     Python, or a short container of the run image on a docker host with the
-    host's Nix mounted as for the run (never on a cluster node)."""
-    import sys
+    host's Nix mounted as for the run, as the run's user
+    (:mod:`piceli.dev.nix_step`; never on a cluster node).
 
-    source = publisher_source()
-    if host.kind == "native":
-        return [sys.executable, "-I", "-c", source]
-    if host.kind == "docker":
-        from piceli.dev.hosts import NIX_MOUNT, ContainerCli
+    :raises DevError: ``dev-nix-invalid``, a docker host without an image."""
+    from piceli.dev.nix_step import step_argv
 
-        return ContainerCli(host).argv(
-            "run", "--rm", "-i", "--user", "65532:65532", "--cap-drop", "ALL",
-            "--security-opt", "no-new-privileges", *NIX_MOUNT, "-e", "HOME=/tmp",
-            "--entrypoint", "python3", host.image or image, "-I", "-c", source,
-        )  # fmt: skip
-    raise DevError(
-        "dev-nix-host-unsupported",
-        f"build host {host.name} is a cluster node; Nix builds run on docker "
-        "or native hosts",
-    )
+    return step_argv(host, image, publisher_source())
 
 
 def run_publisher(
@@ -1215,9 +1203,17 @@ def run_publisher(
             except ValueError:
                 outcome = {}
     if outcome.get("state") != "published":
+        from piceli.dev.nix_step import failure_tail
+
+        # 0.26.1: what docker or Nix said, also when it never reported.
+        tail = failure_tail(done.stderr, secrets)
+        reason = str(outcome.get("reason") or "")
+        if not outcome:
+            why = f" (exit {done.returncode}: {tail or 'it printed nothing'})"
+        else:
+            why = f" ({': '.join(part for part in (reason, tail) if part)})"
+            why = "" if why == " ()" else why
         raise DevError(
-            "dev-nix-publish-failed",
-            "signing or pushing the closure failed"
-            + (f" ({outcome['reason']})" if outcome.get("reason") else ""),
+            "dev-nix-publish-failed", "signing or pushing the closure failed" + why
         )
     return outcome

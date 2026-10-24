@@ -5230,9 +5230,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-dev-nix-invalid)=
 ### `dev-nix-invalid`
 
-**Nix build request refused.** `piceli dev nix build` got an output that is not a flake attribute of the source (`.#ATTR`), a bad `--name`, `--publish` without `--ref` or `--name`, `--approve` without `--publish`, or a profile without `nix=True`.
+**Nix build request refused.** `piceli dev nix build` got an output that is not a flake attribute of the source (`.#ATTR`), a bad `--name`, `--publish` without `--ref` or `--name`, `--approve` without `--publish`, a profile without `nix=True`, or a docker build host with no image for the Nix steps (the input fetch, the publisher).
 
-- **Fix:** Give `ATTR` or `.#ATTR`, a DNS-label `--name`, a commit with `--ref` when publishing, and declare `DevProfile.for_nix()`.
+- **Fix:** Give `ATTR` or `.#ATTR`, a DNS-label `--name`, a commit with `--ref` when publishing, and declare `DevProfile.for_nix()`; give the docker host, the profile or `DevBuilds` an `image`.
 - **Retry-safe:** no
 
 (error-dev-nix-key-invalid)=

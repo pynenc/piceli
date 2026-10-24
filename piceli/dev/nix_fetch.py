@@ -185,11 +185,17 @@ def input_env(
 
 
 def reason(lines: Sequence[str]) -> str:
-    """The line that says why: Git's ``fatal:``, else Nix's last ``error:``."""
-    stripped = [line.strip() for line in lines]
+    """The line that says why: Git's ``fatal:``, else Nix's last ``error:``
+    (also inside an abort's ``what():``), else docker's, else the last."""
+    stripped = [line.strip() for line in lines if line.strip()]
     fatal = [line for line in stripped if line.startswith("fatal:")]
-    errors = [line for line in stripped if line.startswith("error:") and line[6:]]
-    found = (fatal or errors or stripped or ["nix printed nothing"])[-1]
+    errors = [
+        line[line.index("error:") :]
+        for line in stripped
+        if "error:" in line and line[line.index("error:") + 6 :].strip()
+    ]
+    docker = [line for line in stripped if line.startswith("docker:")]
+    found = (fatal or errors or docker or stripped or ["nix printed nothing"])[-1]
     return found[:300]
 
 

@@ -16840,6 +16840,7 @@
   "piceli.dev.nix_fetch",
   "piceli.dev.nix_inputs",
   "piceli.dev.nix_publish",
+  "piceli.dev.nix_step",
   "piceli.dev.nix_verify",
   "piceli.dev.pack",
   "piceli.dev.pod",

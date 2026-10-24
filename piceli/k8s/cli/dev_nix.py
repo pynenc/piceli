@@ -668,10 +668,11 @@ def _fetch_private(
     credentials, before the build (else ``infra-nix-input-unreachable``)."""
     from piceli.dev.model import DevError
     from piceli.dev.nix_inputs import fetch_inputs, resolve
+    from piceli.dev.nix_step import step_image
 
     try:
         pairs = resolve(private, _lock_of(root, rev))
-        fetch_inputs(host, str(profile.image))(pairs, say, roots=roots)
+        fetch_inputs(host, step_image(host, profile))(pairs, say, roots=roots)
     except DevError as error:
         reject(error.code, str(error))
 
@@ -827,10 +828,13 @@ def _publish(
     """Sign and push on the host, then sign and upload the manifest here."""
     from piceli.dev import nix
     from piceli.dev.model import DevError
+    from piceli.dev.nix_step import step_image
 
     def push(request: Any, say_line: Any) -> Any:
         return nix.run_publisher(
-            nix.publisher_argv(chosen, str(profile.image)), request, say=say_line
+            nix.publisher_argv(chosen, step_image(chosen, profile)),
+            request,
+            say=say_line,
         )
 
     try:
