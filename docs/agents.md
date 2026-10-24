@@ -160,6 +160,20 @@ noted.
   (exit 1), or `approval-required` with `plan_hash` (exit 3: ask the owner).
   Controller retries are waited through. Read-only; end an integration
   round with it instead of polling `gitops status` yourself.
+- `piceli gitops enable infra.py --approve HASH --wait [--timeout 15m]`
+  and `piceli promote HOST --from ENV --approve DIGEST --wait` (0.28.0):
+  after the install or the push, wait until every environment (or the
+  host) runs the expected revision with its checks passed. Exit 0: done;
+  1: the first failure (JSON `wait.failure`: `env`, `reason`, `stage`,
+  `detail`, `log_tail`); 2: timeout (`gitops-wait-timeout`).
+- `piceli gitops enable infra.py --approve HASH --canary` (0.28.0): before
+  replacing a running controller, runs the new image once as a Job that
+  imports the composition and plans every environment without applying.
+  A failure exits 2 with `gitops-canary-failed` (JSON `canary.failure`:
+  `env`, `stage`, `reason`, `detail`); ask the owner before `--force`.
+- `piceli gitops alarms [--follow] [--json]` (0.28.0): the controller's
+  alarms (failed or waiting environments and NixReleases, a composition
+  that does not import, a new version) and its failed sends. Read-only.
 - `piceli gitops suspects --host NAME [--since ISO] [--json]` and `piceli
   gitops hosts [--json]` (0.22.0): the deployed images a build host (or the
   builder node) built, from the provenance the controller recorded, and the
@@ -386,6 +400,7 @@ Exporting deploy events (`--otlp-endpoint`, or `OTEL_EXPORTER_OTLP_*` in the env
 | `piceli dev schedule` (0.18.0) | Runs the development-run queue in your process: starts queued runs, records finished ones, deletes their Jobs | Only when the owner asked (a cluster without the GitOps controller, which runs the queue itself) |
 | `piceli gitops run` | The controller loop itself (normally only inside its Deployment); deploys and tears down branch environments | Never run it yourself unless the owner asked for a local `--once` poll |
 | `piceli train-prune` (0.26.0) | Removes a train's leftover worktrees, cargo target directories unused for `target_days` or beyond `targets_size`, content-store records unused for `store_days` or beyond `store_size` and their bytes, and runs older than `log_days` beyond the newest `keep_runs`; never what a running trial holds. `--dry-run` removes nothing | Safe to run, with `--dry-run` first when unsure; the next train run rebuilds what went |
+| `piceli train-init` (0.28.0) | Writes one new spec file (an existing one only with `--force`); reads the `--from` script, never runs it | Safe; review the TODO comments before committing the spec |
 | `piceli train` (0.26.0) | Runs the train's steps, the code of the merged branches, in worktrees under the train's cache (removed after each trial; merge commits stay unreferenced; `refs/piceli/train/<name>/last` points at the head reached; logs and records go to the train's state directory), here and on the build hosts `Train(builds=, hosts=)` names (as `piceli dev run` runs). A step with inputs that passed before is reused from the content store. With `--promote`: tags the head and moves `tested` and the base by fast-forward only, then runs the publish steps (a `Step.images` step builds the controller's images, pushes them to the cluster's registry and offers them to its controller). `--promote-run RUN` does the same for an earlier run's head without running it. With `--push` (needs a promotion): pushes the tag, `tested` and the base. With `--retire`: renames each joined branch `to_delete_<date>_<branch>` once promoted (never deletes; a branch checked out with changes or that moved after it joined is left alone); `--retire-remote` (needs `--push`) also deletes it on the remote while it is at the joined commit | The owner names the branches; add `--promote`, `--promote-run`, `--push`, `--retire` and `--retire-remote` only when the owner asked for them. An ejected branch goes back to its author with the step and log the result names: never fix or merge it by hand. `train-host-unavailable`: check `piceli dev hosts`, do not edit the train's hosts on your own. On `train-busy`, add `--queue` (same flags, `--promote-run` too) rather than retrying in a loop; it returns a queue id for `piceli train-wait`. `piceli train-queue NAME --cancel ID` only for a request you queued; `--drain` (runs queued requests) only when the owner asks |
 | `piceli deploy` | Builds images, pushes them to a registry or node, applies a release | `--approve <combined hash>` from `piceli deploy MODULE:ATTR --plan`, after the owner reviewed that plan (or `--apply <plan file> --approve <its hash>` on another runner); `--resume` continues an approved run; `--approve-if-policy` only when the owner declared an `auto_approve` policy (see below) |
 | `piceli restore` | Replaces every file of the restore point's claims (stops their writers, then starts them again) | `--approve <restore_hash>` printed by `piceli restore MODULE:ATTR --point ID` without `--approve`, after the owner chose that restore point and agreed to lose what the claims hold now |

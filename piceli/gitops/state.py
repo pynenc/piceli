@@ -64,6 +64,8 @@ REQUEST_KINDS = (
     "prebuilt",
     # 0.26.0: start a build by hand, cancel one, a build host's progress
     "build", "build-cancel", "build-progress",
+    # 0.28.0: piceli env up|down BRANCH (a preview, now)
+    "preview",
 )  # fmt: skip
 #: Env states a status may carry.
 ENV_STATES = (
@@ -321,14 +323,24 @@ def build_claim_request(
     ``proof`` (0.25.0, a ``nix-publish``): the cache key's signature over
     the claim (:func:`piceli.infra.nix_releases.claim_message`), never a key.
     ``recipient`` (0.26.0): the one-claim public key the controller seals
-    its Git credential to, for a ``credentials="controller"`` release."""
+    its Git credential to, for a ``credentials="controller"`` release.
+    0.28.0: ``version``, the host's Piceli version (``piceli builder status``)."""
     if proof is None:
-        return request("build-claim", id=_build_id(build), host=str(host)[:64])
+        return request(
+            "build-claim", id=_build_id(build), host=str(host)[:64],
+            version=_piceli_version(),
+        )  # fmt: skip
     extra = {"recipient": str(recipient)[:64]} if recipient else {}
     return request(
         "build-claim", id=_build_id(build), host=str(host)[:64],
-        proof=str(proof)[:200], **extra,
+        proof=str(proof)[:200], version=_piceli_version(), **extra,
     )  # fmt: skip
+
+
+def _piceli_version() -> str:
+    from piceli import __version__
+
+    return str(__version__)[:40]
 
 
 def nix_published_request(
@@ -497,7 +509,8 @@ def build_cancel_request(
 def build_progress_request(
     build: str, host: str, stage: str, log_tail: str, at: str
 ) -> tuple[str, dict[str, Any]]:
-    """A build host's stage and log tail while it builds (0.26.0)."""
+    """A build host's stage and log tail while it builds (0.26.0), and
+    (0.28.0) its Piceli version."""
     import re
 
     if not re.fullmatch(r"[a-z]{1,16}", stage):
@@ -509,6 +522,7 @@ def build_progress_request(
         stage=stage,
         log_tail=str(log_tail)[-4000:],
         at=str(at)[:40],
+        version=_piceli_version(),
     )
 
 
@@ -546,6 +560,28 @@ def stop_request(
 
         at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     return request("start" if start else "stop", env=env, via=via, at=at)
+
+
+def preview_request(
+    branch: str, *, action: str = "up", at: str | None = None
+) -> tuple[str, dict[str, Any]]:
+    """Deploy (``up``) or tear down (``down``) the preview of ``branch`` now
+    (``piceli env up|down BRANCH``, 0.28.0).
+
+    ``at`` (now by default, with microseconds) makes each request its own
+    key: ``env up --wait`` follows that key in the controller's status.
+    """
+    from piceli.infra.previews import check_branch
+
+    check_branch(branch)
+    if action not in ("up", "down"):
+        raise GitOpsError("gitops-request-invalid", "a preview is up or down")
+    if at is None:
+        from datetime import UTC, datetime
+
+        at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    nonce = os.urandom(4).hex()  # two requests in one microsecond stay two
+    return request("preview", branch=branch, action=action, at=at, nonce=nonce)
 
 
 class Channel(Protocol):

@@ -123,6 +123,11 @@ def check_controller(controller: Controller) -> None:
             "the controller runs in the cluster: Otlp(ca_file=) is a file on this "
             "machine; give the CA as a Secret with Otlp(ca_secret=)"
         )
+    if controller.alarms is not None:
+        from piceli.gitops.alarms import Alarms
+
+        if not isinstance(controller.alarms, Alarms):
+            raise _invalid("Controller(alarms=) must be Alarms(...)")
     builds = tuple(controller.builds) if not isinstance(controller.builds, str) else ()
     if (
         not builds

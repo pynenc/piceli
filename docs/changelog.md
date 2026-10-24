@@ -4,6 +4,93 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.28.0
+
+**Features**
+
+- **Alarms.** `Controller(alarms=Alarms(targets=[Notify.ntfy(url),
+  Notify.webhook(url_env=...), Notify.desktop()], secret="piceli-alarms",
+  waiting_after="10m"))` makes the GitOps controller send a short message
+  when an environment fails or waits too long for a build host or an
+  approval, a `NixRelease` fails or waits, the composition does not
+  import, or the controller restarts on a new version. Each alarm is sent
+  once (also across restarts), with one "recovered" message when it ends;
+  each names the environment or host, the reason code and the next command.
+  Secret URLs and tokens come from a Kubernetes Secret, never the config,
+  logs or status. A failed send is listed in the status
+  (`gitops-alarm-failed`) and never stops the controller. `piceli gitops
+  alarms --follow` raises the same alarms as desktop notifications on your
+  machine. The train's notifiers gain `Notify.ntfy`. See
+  {ref}`gitops-alarms`.
+- **`--wait` after an install or a promotion.** `piceli gitops enable
+  infra.py --approve HASH --wait [--timeout 15m]` waits until every
+  environment runs its revision with its checks passed, printing progress
+  lines (`staging: building (waiting for a build host) 3m`), or reports the
+  first failure with its environment, stage, reason code and log tail (a
+  composition that does not import included). `piceli promote HOST --from
+  ENV --approve DIGEST --wait` does the same for the Nix host. Exit 0: all
+  good; 1: a failure; 2: timeout (`gitops-wait-timeout`). See
+  {ref}`gitops-enable-wait`.
+- **Test an upgrade before it replaces the controller.** `piceli gitops
+  enable infra.py --approve HASH --canary` first runs the new controller
+  image once, as a Job that imports the composition, resolves each
+  environment, loads its builds and plans it without applying anything
+  (`main: imports, plans 3 changes, builds 2 components: ok`). A failure
+  refuses the upgrade (`gitops-canary-failed`, naming the first failure)
+  and the live controller keeps running; `--force` replaces it anyway. The
+  Job and its ConfigMap are removed when the command ends. See
+  {ref}`gitops-enable-canary`.
+- **Previews in minutes.** `piceli env up BRANCH --cluster infra.py:CLUSTER
+  --wait` asks the GitOps controller to deploy the branch's preview now: the
+  controller wakes for the request within 2 seconds instead of waiting for
+  its next poll, takes the images a merge train offered for the branch's
+  head (no build), and the command prints the preview's URL once it runs
+  with its checks passed (`Environment.per_branch(url=
+  "https://{branch}.preview.example.org")`). A branch outside the rule's
+  patterns gets a preview on request. `piceli env down BRANCH --cluster ...`
+  tears it down until the branch's next push, and
+  `Environment.per_branch(down_when_merged=True)` also tears down a branch
+  once it is merged into `main` (deleting the branch always did). Exit codes
+  as `gitops enable --wait`. Every request people make (`env up`, `gitops
+  sync`, `gitops approve`, `promote`, ...) now wakes the controller at once.
+  See {ref}`previews-in-minutes`.
+- **Build hosts as services.** `piceli builder install --cluster
+  infra.py:my_cluster --host builder-1` (run on the build host) writes and
+  starts a systemd unit (Linux) or launchd property list (macOS) that runs
+  `builder serve` with the same arguments and Piceli program, restarts it
+  on failure and stops it with SIGINT. It runs the `builder serve --check`
+  checks first and refuses on a missing credential or a missing docker,
+  git or kubectl; `--print` only shows the unit; `piceli builder
+  uninstall --host builder-1` removes it. `piceli builder status` lists
+  each build host's Piceli version, last sighting, live or expired claim,
+  last build and quarantine, and the declared hosts never seen (claims
+  and progress reports now carry the host's version;
+  `controller.build_hosts` in the status). See {ref}`builder-service`.
+- **Cycle report.** Piceli records how long each commit takes from a push
+  to running with its checks passed, and each phase on the way: the
+  controller per deploy (queued, waiting for a build host, building,
+  delivering, applying, checking) in its history, status and OpenTelemetry
+  event; a train run in its `run.json` and trace (queued, merging, testing
+  per step, promoting, images, pushing); `piceli host wait` per host
+  switch. `piceli cycle report [--since 24h] [--target NAME] [--json]
+  [--markdown]` gives, per environment, Nix release, Nix host and train,
+  the p50 and p90, the count, the slowest phase and the slowest cycle;
+  `--markdown` prints a table to paste into docs. A push time Piceli does
+  not know is said, with when it first saw the commit. See
+  {ref}`gitops-cycle-report`.
+- **Adopt the train in ten minutes.** `piceli train init train_spec.py
+  --from scripts/merge.sh` writes a starting train spec from a shell
+  script: cargo, pytest, npm, make and similar commands become steps, the
+  base branch is read, and every line it cannot translate stays as a TODO
+  comment (also printed). Without `--from` it writes a commented template.
+  `--images infra.py` adds `Step.images` for a `Controller(prebuilt=True)`,
+  `--host NAME` runs the cargo steps on a build host; an existing file is
+  kept unless `--force`. `piceli train SPEC --branches ... --compare
+  "COMMAND"` runs the old command in a scratch clone, then the train on the
+  same branches without promoting, and prints a side-by-side table (wall
+  time, time per phase, tests, failures, retries, and whether both agree).
+  See {ref}`train-adopt`.
+
 ## Version 0.27.1
 
 **Fixes**

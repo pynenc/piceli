@@ -117,9 +117,12 @@ def promote_host(
     state_dir: Path | None,
     namespace: str,
     as_json: bool,
+    wait: dict[str, Any] | None = None,
 ) -> None:
     """Pin the newest commit an environment verified in flake.lock, commit,
-    tag and push (plan, then --approve DIGEST)."""
+    tag and push (plan, then --approve DIGEST). ``wait`` (0.28.0, ``--wait``):
+    ``{"timeout", "interval"}``, then wait until the host runs the tag with
+    its checks passed (exit 1: a failure, 2: timeout)."""
     from piceli.infra import promote as promotion_plan
     from piceli.infra.promotion import PromotionError
 
@@ -159,7 +162,14 @@ def promote_host(
     if body is None:  # current, already tagged
         say(f"{host}: {gate.input} already pins {found['pinned']['commit'][:12]}; "
             f"tag {found['tag']} points at it")  # fmt: skip
-        emit_json(document)
+        if wait is None:
+            emit_json(document)
+            return
+        _wait_and_emit(
+            document, host, str(found["tag"]), composition, found_composition,
+            wait, kubeconfig=kubeconfig, context=context, state_dir=state_dir,
+            namespace=namespace,
+        )  # fmt: skip
         return
     digest = found["digest"]
     document["approve_command"] = f"{command} --approve {digest}"
@@ -198,5 +208,216 @@ def promote_host(
     document.update(state="promoted", **result)
     document.pop("approve_command", None)
     say(f"{host}: promoted {document['tag']} at {document['commit'][:12]}")
-    if as_json:
-        emit_json(document)
+    if wait is None:
+        if as_json:
+            emit_json(document)
+        return
+    _wait_and_emit(
+        document, host, str(document["tag"]), composition, found_composition,
+        wait, kubeconfig=kubeconfig, context=context, state_dir=state_dir,
+        namespace=namespace,
+    )  # fmt: skip
+
+
+def _wait_and_emit(
+    document: dict[str, Any],
+    host: str,
+    tag: str,
+    composition: Path,
+    found_composition: Any,
+    wait: dict[str, Any],
+    *,
+    kubeconfig: Path | None,
+    context: str | None,
+    state_dir: Path | None,
+    namespace: str,
+) -> None:
+    code, result = wait_host_release(
+        host,
+        tag,
+        composition=composition,
+        controller=lambda: _release_record(
+            found_composition,
+            host,
+            kubeconfig=kubeconfig,
+            context=context,
+            state_dir=state_dir,
+            namespace=namespace,
+        ),
+        timeout=wait["timeout"],
+        interval=wait["interval"],
+    )
+    emit_json({**document, "wait": result})
+    if code:
+        raise typer.Exit(code)
+
+
+def _release_record(
+    composition: Any,
+    host: str,
+    *,
+    kubeconfig: Path | None,
+    context: str | None,
+    state_dir: Path | None,
+    namespace: str,
+) -> dict[str, Any] | None:
+    """The controller's ``nix_releases.<host>`` (``None``: unreadable; the
+    host's own status still decides the wait)."""
+    from piceli.gitops.state import ConfigMapChannel, DirectoryChannel
+
+    try:
+        if state_dir is not None:
+            document = DirectoryChannel(state_dir).read_status()
+        else:
+            if kubeconfig is None:
+                from piceli.profiles import resolve
+
+                found = resolve(composition.cluster.credentials)
+                kubeconfig, context = found.kubeconfig, found.context
+            from piceli.gitops.install import connect
+
+            assert kubeconfig is not None and context is not None
+            with connect(kubeconfig, context) as api:
+                document = ConfigMapChannel(api.client, namespace).read_status()
+    except Exception:  # unreadable: the host decides
+        return None
+    record = ((document or {}).get("nix_releases") or {}).get(host)
+    return dict(record) if isinstance(record, dict) else None
+
+
+def release_failure(record: dict[str, Any] | None, tag: str) -> dict[str, Any] | None:
+    """The failure of the controller's publish of ``tag``, if it failed."""
+    if not record or record.get("tag") != tag:
+        return None
+    if record.get("state") not in ("failed", "rejected", "cancelled"):
+        return None
+    failure = record.get("failure") or {}
+    refusal = record.get("refusal") or {}
+    host = failure.get("host")
+    detail = "; ".join(
+        str(item)
+        for item in (
+            f"build host {host}" if host else None,
+            failure.get("reason"),
+            refusal.get("message"),
+        )
+        if item
+    )
+    tail = str(failure.get("log_tail") or "").rstrip("\n").splitlines()[-20:]
+    return {
+        "env": record.get("name") or None,
+        "reason": record.get("reason") or "gitops-nix-release-failed",
+        "stage": "publish",
+        "commit": record.get("commit"),
+        "detail": detail or None,
+        "log_tail": "\n".join(tail) or None,
+    }
+
+
+def _release_text(record: dict[str, Any] | None, tag: str) -> str | None:
+    if not record or record.get("tag") != tag:
+        return None
+    state = record.get("state")
+    claimed = (record.get("claimed") or {}).get("host")
+    return {
+        "approval-required": "the publish waits for approval: "
+        + str(record.get("approve_command") or "piceli gitops approve"),
+        "waiting-build": "publishing (waiting for a build host)",
+        "publishing": f"publishing (build host {claimed})" if claimed else "publishing",
+        "published": "published; the host has not run it yet",
+    }.get(str(state), str(state))
+
+
+def _host_failure(current: dict[str, Any], reason: str) -> dict[str, Any]:
+    attempt = current.get("last_attempt") or {}
+    stages = [s for s in attempt.get("stages") or () if s.get("state") == "failed"]
+    checks = [
+        str(c.get("name"))
+        for c in attempt.get("checks") or ()
+        if c.get("state") != "passed"
+    ]
+    tail = attempt.get("log_tail") or attempt.get("tail")
+    return {
+        "env": current.get("host"),
+        "reason": reason,
+        "stage": stages[0].get("name") if stages else None,
+        "commit": attempt.get("commit"),
+        "detail": ("failing checks: " + ", ".join(checks)) if checks else None,
+        "log_tail": "\n".join(str(tail).splitlines()[-20:]) if tail else None,
+    }
+
+
+def wait_host_release(
+    host: str,
+    tag: str,
+    *,
+    composition: Path,
+    controller: Any,
+    timeout: int,
+    interval: float,
+    sleep: Any = None,
+) -> tuple[int, dict[str, Any]]:
+    """Wait until ``host`` runs ``tag`` with its checks passed: ``(exit
+    code, body)``. Reads the controller's publish of the tag (a failed
+    publish is the first failure) and the host's status over SSH (as
+    ``piceli host wait``)."""
+    import time
+
+    from piceli.hosts.model import HostError
+    from piceli.hosts.remote import outcome, read_status
+    from piceli.k8s.cli.gitops_watch import (
+        EXIT_FAILED,
+        EXIT_OK,
+        EXIT_TIMEOUT,
+        say_failure,
+    )
+    from piceli.k8s.cli.host import _target
+
+    sleep = sleep or time.sleep
+    _found, ssh, known = _target(host, str(composition))
+    started = time.monotonic()
+    body: dict[str, Any] = {"schema": "piceli.promote-wait.v1", "host": host,
+                            "tag": tag, "target": ssh.address}  # fmt: skip
+    last: tuple[str, float] | None = None
+    unread: str | None = None
+    while True:
+        waited = time.monotonic() - started
+        record = controller()
+        failure = release_failure(record, tag)
+        text = _release_text(record, tag)
+        if failure is None:
+            try:
+                current = read_status(ssh, known_hosts=known)
+                unread = None
+            except HostError as error:
+                if error.code != unread:
+                    say(
+                        f"  cannot read {ssh.address}'s status ({error.code}); retrying"
+                    )
+                current, unread = {}, error.code
+            state, reason = outcome(current, tag) if current else ("waiting", None)
+            if state == "deployed":
+                say(f"{host}: running {tag}, checks passed")
+                return EXIT_OK, {**body, "state": "deployed",
+                                 "waited_seconds": round(waited, 1)}  # fmt: skip
+            if state == "failed":
+                failure = _host_failure(current, str(reason))
+                failure["env"] = host
+            elif current.get("in_progress"):
+                text = f"deploying {tag}"
+        if failure is not None:
+            say_failure(failure)
+            return EXIT_FAILED, {**body, "state": "failed", "failure": failure,
+                                 "waited_seconds": round(waited, 1)}  # fmt: skip
+        line = text or "waiting for the publish"
+        if last is None or last[0] != line or waited - last[1] >= 60:
+            from piceli.gitops.wait import duration
+
+            say(f"{host}: {line} {duration(waited)}".rstrip())
+            last = (line, waited)
+        if waited >= timeout:
+            say(f"timed out after {timeout}s [gitops-wait-timeout]")
+            return EXIT_TIMEOUT, {**body, "state": "timed-out",
+                                  "reason": "gitops-wait-timeout",
+                                  "waited_seconds": round(waited, 1)}  # fmt: skip
+        sleep(min(interval, max(0.0, timeout - waited)))

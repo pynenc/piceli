@@ -591,6 +591,25 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["builder", "serve", "--cluster", "no_such_module:c"],
         "cluster-not-found",
     ),
+    "builder install": (
+        lambda p: [
+            "builder",
+            "install",
+            "--cluster",
+            "no_such_module:c",
+            "--host",
+            "b-1",
+        ],
+        "cluster-not-found",
+    ),
+    "builder uninstall": (
+        lambda p: ["builder", "uninstall", "--host", "Not_A_Name"],
+        "builder-service-invalid",
+    ),
+    "builder status": (
+        lambda p: ["builder", "status", "--cluster", "no_such_module:c"],
+        "cluster-not-found",
+    ),
     "dev hosts": (
         lambda p: ["dev", "hosts", "--cluster", "no_such_module:c"],
         "cluster-not-found",
@@ -683,6 +702,10 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["gitops", "builds", "--state", "nope", "--state-dir", str(p)],
         "gitops-request-invalid",
     ),
+    "cycle report": (
+        lambda p: ["cycle", "report", "--since", "yesterday"],
+        "cycle-options-invalid",
+    ),
     "gitops suspects": (
         lambda p: ["gitops", "suspects", "--host", "mini", "--since", "yesterday"],
         "gitops-request-invalid",
@@ -692,6 +715,7 @@ CASES: dict[str, tuple[Argv, str]] = {
         "gitops-request-invalid",
     ),
     "gitops hosts": (lambda p: ["gitops", "hosts"], "gitops-target-required"),
+    "gitops alarms": (lambda p: ["gitops", "alarms"], "gitops-target-required"),
     "gitops release-host": (
         lambda p: ["gitops", "release-host", "Not_A_Host", "--state-dir", str(p)],
         "gitops-request-invalid",
@@ -859,6 +883,10 @@ CASES: dict[str, tuple[Argv, str]] = {
         "train-not-found",
     ),
     "train-prune": (lambda p: ["train-prune", "Not A Name"], "train-not-found"),
+    "train-init": (
+        lambda p: ["train-init", str(p / "spec.py"), "--images", "/abs/infra.py"],
+        "train-init-invalid",
+    ),
     "host wait": (
         lambda p: ["host", "wait", "no_such_module:web", "v1.0.0"],
         "host-not-found",

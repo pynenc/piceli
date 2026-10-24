@@ -85,6 +85,7 @@ from piceli.envs.model import (
     Tag,
 )
 from piceli.gitops import GitOpsError
+from piceli.gitops.alarms import status_view
 from piceli.gitops.config import (
     DEFAULT_NAMESPACE,
     MAX_POLL_SECONDS,
@@ -188,6 +189,9 @@ class CompositionConfig:
     :param telemetry: ``Otlp(...).to_dict()`` of ``Controller(telemetry=)``
         (0.16): where the controller sends OpenTelemetry
         (:mod:`piceli.gitops.otel`).
+    :param alarms: ``Alarms(...).to_dict()`` of ``Controller(alarms=)``
+        (0.28.0): where the controller sends its alarms
+        (:mod:`piceli.gitops.alarms`).
     """
 
     composition: Mapping[str, Any]
@@ -202,8 +206,16 @@ class CompositionConfig:
     build_storage: str = "20Gi"
     repo: Mapping[str, Any] | None = None
     telemetry: Mapping[str, Any] | None = None
+    alarms: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
+        if self.alarms is not None:
+            from piceli.gitops.alarms import Alarms
+
+            try:
+                Alarms.from_dict(self.alarms)
+            except ValueError as error:
+                raise GitOpsError("gitops-config-invalid", str(error)) from None
         if self.telemetry is not None:
             from piceli.infra import Otlp
 
@@ -309,6 +321,8 @@ class CompositionConfig:
                 if self.telemetry is not None
                 else {}
             ),
+            # 0.28.0, only when set: other configs and their hashes are unchanged.
+            **({"alarms": dict(self.alarms)} if self.alarms is not None else {}),
         }
 
     @classmethod
@@ -332,6 +346,7 @@ class CompositionConfig:
                 build_storage=build.get("storage") or "20Gi",
                 repo=value.get("repo"),
                 telemetry=value.get("telemetry"),
+                alarms=value.get("alarms"),
             )
         except (KeyError, TypeError, ValueError) as error:
             if isinstance(error, GitOpsError):
@@ -754,6 +769,18 @@ def _offers(state: Mapping[str, Any]) -> list[dict[str, Any]]:
     return public_offers(state)
 
 
+def _previews_status(state: Mapping[str, Any]) -> dict[str, Any] | None:
+    from piceli.infra.previews import public
+
+    return public(state)
+
+
+def _build_hosts(state: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    from piceli.infra.remote_builds import public_hosts
+
+    return public_hosts(state)
+
+
 def _failing(record: Mapping[str, Any], reason: str) -> str:
     """``; failing: name: detail, ...`` of a check failure's checks (0.19)."""
     checks = record.get("checks") or {}
@@ -831,6 +858,8 @@ class CompositionController:
         self._last_outcome: EnvOutcome | None = None
         self._step_started: str | None = None
         self._step_env: str | None = None
+        #: 0.28.0: when the step's record began waiting for a build host.
+        self._waited_since: str | None = None
         self._poll_started = 0.0
         self._history_digest: str | None = None
         self._runs: Any = None
@@ -842,6 +871,8 @@ class CompositionController:
         self.publish_lock = threading.RLock()
         self.heartbeat_at: str | None = None
         self._builds: dict[str, dict[str, Any]] = {}
+        #: 0.28.0: preview requests served this poll ({branch: request key}).
+        self._preview_marks: dict[str, str] = {}
         self.recovered = False  # interrupted steps and runs marked once, at start
         # 0.16: OpenTelemetry (piceli.gitops.otel); a no-op unless configured.
         from piceli.gitops.otel import ControllerTelemetry
@@ -852,6 +883,14 @@ class CompositionController:
 
         self.token_expiry: Callable[[Path | None], datetime | None] = (
             github_token_expiry
+        )
+        # 0.28.0: Controller(alarms=Alarms(...)), sent after each poll.
+        from piceli.gitops.alarms import Alarms, AlarmSender
+
+        self.alarm_sender: AlarmSender | None = (
+            None
+            if config.alarms is None
+            else AlarmSender(Alarms.from_dict(config.alarms), log=log)
         )
         self.telemetry.attach(self)  # closes runs a crash interrupted
         # 0.25.0: the Nix host releases it publishes (piceli.infra.nix_releases).
@@ -1186,19 +1225,31 @@ class CompositionController:
         """The instances of environment (or branch) ``name``: itself or its clusters."""
         return [item for item in self._instances() if item.group == name]
 
-    def _rule_branches(self, rule: BranchEnvironments) -> list[str]:
-        names: set[str] = set()
+    def _branch_heads(self, rule: BranchEnvironments) -> dict[str, str]:
+        """Each branch's head in the sources that follow ``"{branch}"`` (the
+        first source that has it)."""
+        heads: dict[str, str] = {}
         for source, items in rule.sources:
-            if BRANCH not in items:
-                continue
             refs = self.refs.get(source.key)
-            if refs is None:
+            if BRANCH not in items or refs is None:
                 continue
-            names |= {
-                branch
-                for branch in refs.branches
-                if rule.branches.matches(branch) and branch != rule.branches.fallback
-            }
+            for branch, sha in refs.branches.items():
+                heads.setdefault(branch, sha)
+        return heads
+
+    def _rule_branches(self, rule: BranchEnvironments) -> list[str]:
+        from piceli.infra import previews
+
+        asked = previews.on_request(self.state)
+        heads = self._branch_heads(rule)
+        names = {
+            branch
+            for branch in heads
+            if (rule.branches.matches(branch) or branch in asked)
+            and branch != rule.branches.fallback
+            # 0.28.0: `env down`, or merged: down until its next push.
+            and not previews.held_down(self.state, branch, heads[branch])
+        }
         fixed = {
             item.name
             for item in self.composition.environments
@@ -1393,7 +1444,13 @@ class CompositionController:
             self._set(
                 record, state="deleting", attempts=0, next_attempt_at=None, reason=None
             )
-            self.log(f"{name}: branch gone; tearing its environment down")
+            from piceli.infra import previews
+
+            why = {
+                "requested": "env down requested",
+                "merged": f"merged into {rule.branches.fallback}",
+            }.get(str(previews.down_reason(self.state, name)), "branch gone")
+            self.log(f"{name}: {why}; tearing its environment down")
 
     def _tag(self, instance: _Instance) -> None:
         """A cluster's record names its cluster and environment (0.15)."""
@@ -1476,10 +1533,15 @@ class CompositionController:
         its own build would be (0.21.0)."""
         from piceli.infra import provenance, remote_builds
 
+        asked = dict(
+            (self.state.get(remote_builds.STATE_KEY) or {}).get(str(body.get("id")))
+            or {}
+        )
         images = remote_builds.delivered(self.state, body, self._in_registry)
         host = str(body.get("host"))
         receipt = body.get("receipt")
         receipt = receipt if isinstance(receipt, Mapping) else {}
+        self._host_build_times(asked, receipt, host)
         # 0.22.0: where it was built, kept with the image.
         record = provenance.from_receipt(receipt, host)
         for name, item in images.items():
@@ -1500,6 +1562,22 @@ class CompositionController:
             f"build host {body.get('host')}: delivered {', '.join(sorted(images))}"
         )
         self._wake_waiting()
+
+    def _host_build_times(
+        self, asked: Mapping[str, Any], receipt: Mapping[str, Any], host: str
+    ) -> None:
+        """0.28.0: a host build's times on the record that asked for it
+        (asked, claimed, built, delivered), for its cycle (piceli.cycle)."""
+        record = self._envs().get(str(asked.get("owner")))
+        if record is None:
+            return
+        record["host_build"] = {
+            "host": host[:64],
+            "requested_at": asked.get("requested_at"),
+            "claimed_at": (asked.get("claimed") or {}).get("at"),
+            "built_at": receipt.get("finished_at"),
+            "delivered_at": _iso(self.clock()),
+        }
 
     def _prebuilt(self, body: Mapping[str, Any]) -> None:
         """A merge train's ``prebuilt`` offer (0.26.0): checked and kept until
@@ -1644,9 +1722,13 @@ class CompositionController:
                     from piceli.infra import remote_builds
 
                     remote_builds.progress(self.state, body, self.clock())
+                elif kind == "preview":  # 0.28.0: piceli env up|down BRANCH
+                    self._preview(key, body)
                 else:
                     raise GitOpsError("gitops-request-invalid", "unknown request kind")
+                self._host_seen(str(kind), body, ok=True)
             except GitOpsError as error:
+                self._host_seen(str(kind), body, ok=False)
                 remember_rejected(
                     self.state,
                     {
@@ -1663,6 +1745,170 @@ class CompositionController:
                 self.channel.remove_requests(handled)
             except GitOpsError as error:
                 self.state["last_error"] = error.code
+
+    def _preview(self, key: str, body: Mapping[str, Any]) -> None:
+        """``piceli env up|down BRANCH`` (0.28.0): deploy the branch's head
+        now (its offered images taken, see :mod:`piceli.infra.previews`), or
+        tear its environment down until its next push."""
+        from piceli.infra import previews
+
+        rule = self.composition.branch_rule
+        if rule is None:
+            raise GitOpsError(
+                "gitops-request-invalid",
+                "the composition declares no Environment.per_branch(...) rule",
+            )
+        branch = previews.check_branch(body.get("branch"))
+        fixed = {
+            item.name
+            for item in self.composition.environments
+            if isinstance(item, Environment)
+        }
+        if branch == rule.branches.fallback or branch in fixed:
+            raise GitOpsError(
+                "gitops-request-invalid",
+                f"{branch} deploys a named environment, not a preview",
+            )
+        heads = self._branch_heads(rule)
+        at = _iso(self.clock())
+        if body.get("action") == "down":
+            if branch not in self._envs() and branch not in previews.on_request(
+                self.state
+            ):
+                raise GitOpsError(
+                    "gitops-request-invalid", f"branch {branch} has no preview"
+                )
+            previews.down(
+                self.state, branch, heads.get(branch), reason="requested", at=at
+            )
+            previews.serve(self.state, key)
+            self.log(f"{branch}: preview down requested")
+            return
+        if branch not in heads:
+            raise GitOpsError(
+                "gitops-request-invalid",
+                f"no branch {branch} in the sources the branch environments follow",
+            )
+        try:
+            rule.env_config().namespace_for(branch)
+        except Exception as error:
+            raise GitOpsError(
+                "gitops-request-invalid", f"branch {branch} gives no namespace"
+            ) from error
+        previews.up(self.state, branch, listed=rule.branches.matches(branch), at=at)
+        self.state["forced"][branch] = {"trigger": "preview"}
+        self._preview_marks[branch] = key
+        previews.serve(self.state, key)
+        self.log(f"{branch}: preview requested")
+
+    def _preview_poll(self) -> None:
+        """Before the requests: forget held branches that moved or went, and
+        hold down the branches merged into the fallback branch
+        (``down_when_merged=True``). Only on a complete view of the sources."""
+        from piceli.infra import previews
+
+        rule = self.composition.branch_rule
+        if rule is None:
+            return
+        keys = [source.key for source, items in rule.sources if BRANCH in items]
+        if not keys or not set(keys) <= set(self.refs):
+            return
+        heads = self._branch_heads(rule)
+        previews.forget(self.state, heads)
+        if not rule.down_when_merged:
+            return
+        fallback = rule.branches.fallback
+        live = [
+            name
+            for name in self._rule_branches(rule)
+            if (self._envs().get(name) or {}).get("state") != "deleting"
+        ]
+        for key in keys:
+            refs = self.refs[key]
+            main = refs.branches.get(fallback)
+            mine = [
+                b
+                for b in live
+                if b in refs.branches and heads.get(b) == refs.branches[b]
+            ]
+            if main is None or not mine:
+                continue
+
+            def contained(commit: str, target: str, key: str = key) -> bool:
+                self.sources.fetch(key)
+                return self.sources.contains(key, target, commit)
+
+            for branch in previews.merged(self.state, mine, heads, main, contained):
+                previews.down(
+                    self.state,
+                    branch,
+                    heads[branch],
+                    reason="merged",
+                    at=_iso(self.clock()),
+                )
+                self.log(f"{branch}: merged into {fallback}")
+
+    def _mark_previews(self) -> None:
+        """The served ``env up`` requests, on their records (after
+        :meth:`_desired`, so the record's revision is the branch's head)."""
+        for branch, key in self._preview_marks.items():
+            record = self._envs().get(branch)
+            if record is not None:
+                record["preview_request"] = key
+        self._preview_marks = {}
+
+    def _preview_view(
+        self, name: str, record: Mapping[str, Any]
+    ) -> dict[str, Any] | None:
+        """A branch record's ``preview`` in the status: its URL and the last
+        ``env up`` request served for it."""
+        from piceli.infra import previews
+
+        rule = self._composition.branch_rule if self._composition else None
+        if rule is None or record.get("kind") == "environment":
+            return None
+        if name in {
+            item.name
+            for item in self.composition.environments
+            if isinstance(item, Environment)
+        }:
+            return None
+        branch = str(record.get("branch") or name).split("@", 1)[0]
+        try:
+            namespace = rule.env_config().namespace_for(branch)
+        except Exception:
+            return None
+        found = previews.url(rule.url, namespace[len(rule.prefix) :], namespace)
+        view = {
+            **(
+                {"request": record["preview_request"]}
+                if record.get("preview_request")
+                else {}
+            ),
+            **({"url": found} if found else {}),
+        }
+        return view or None
+
+    def wake_requested(self) -> bool:
+        """Whether a request people make waits (0.28.0): the run loop polls
+        at once instead of at the next ``poll_seconds``."""
+        from piceli.infra.previews import WAKE_KINDS
+
+        try:
+            with self.publish_lock:
+                pending = self.channel.requests()
+        except Exception:  # never fail the loop on it
+            return False
+        return any(
+            isinstance(body, Mapping) and body.get("kind") in WAKE_KINDS
+            for body in pending.values()
+        )
+
+    def _host_seen(self, kind: str, body: Mapping[str, Any], *, ok: bool) -> None:
+        """0.28.0: a build host's request is a sighting (``build_hosts``)."""
+        from piceli.infra import remote_builds
+
+        remote_builds.seen(self.state, kind, body, self.clock(), ok)
 
     def _approve(self, body: Mapping[str, Any]) -> None:
         name = str(body.get("env"))
@@ -3256,6 +3502,9 @@ class CompositionController:
         self._built, self._last_outcome = [], None
         self._builds = {}
         self._step_started, self._step_env = started[0], str(record.get("branch"))
+        # 0.28.0: cycle metrics (piceli.cycle): the wait and the first step.
+        self._waited_since = record.get("waiting_since")
+        record.setdefault("first_step_at", started[0])
         record.pop("interrupted", None)  # a new step of it runs
         record.pop("failed_stage", None)
         # Added in 0.15.0: the step shows in the status while it runs, not
@@ -3370,18 +3619,21 @@ class CompositionController:
             )
         else:
             record.pop("pending_plan", None)
+        finished = _iso(self.clock())
+        record["cycle"] = self._cycle(record, started, finished, approval, run)
         history.remember(
             self.state,
             str(record["branch"]),
             history.event(
                 record,
                 started_at=started,
-                finished_at=_iso(self.clock()),
+                finished_at=finished,
                 trigger=trigger if isinstance(trigger, str) else None,
                 approval=approval if isinstance(approval, Mapping) else None,
                 outcome=outcome,
                 built=[item for item in self._built if item != "mirror"],
                 builds=self._builds,
+                cycle=record["cycle"],
             ),
         )
         if record.get("state") != "approval-required":
@@ -3390,6 +3642,41 @@ class CompositionController:
             record["failed_attempts"] = []  # kept by this run's history event
         if record.get("approved_hash") is None:
             record.pop("approval", None)  # used (or replaced by a new plan)
+
+    def _cycle(
+        self,
+        record: dict[str, Any],
+        started: str,
+        finished: str,
+        approval: Any,
+        run: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        """0.28.0: the deploy step's cycle (piceli.cycle.record.deploy_cycle)."""
+        from piceli.cycle.record import deploy_cycle
+
+        state = record.get("state")
+        last = record.get("cycle") or {}
+        # A later step of a commit already running and checked (a sync, a
+        # retry of its checks) is its own cycle, from that step's start.
+        again = last.get("ok") and last.get("commit") == record.get("commit")
+        first = record.get("first_step_at") or started
+        if state in {"deployed", "failed"}:  # the cycle ended
+            record.pop("first_step_at", None)
+        return deploy_cycle(
+            target=str(record["branch"]),
+            commit=record.get("commit"),
+            seen_at=started if again else record.get("pushed_at"),
+            first_step_at=started if again else first,
+            step_started_at=started,
+            finished_at=finished,
+            state=state,
+            checked=state == "deployed" and record.get("health") != "degraded",
+            approval=approval if isinstance(approval, Mapping) else None,
+            waited_since=self._waited_since,
+            host_build=record.pop("host_build", None),
+            builds=self._builds,
+            stages=(run or {}).get("stages"),
+        )
 
     # ------------------------------------------------------------ poll
     def poll_once(self) -> dict[str, Any]:
@@ -3421,9 +3708,12 @@ class CompositionController:
             self.state["last_error_detail"] = None
             self.state["poll_failures"] = 0
         if self._composition is None:  # nothing to deploy before the first import
+            self._alarms()
             return self._publish()
+        self._preview_poll()
         self._requests()
         self._desired()
+        self._mark_previews()
         self.nix.poll(
             self.composition.nix_releases,
             self.refs,
@@ -3464,7 +3754,20 @@ class CompositionController:
         )
         if dropped:
             self.log(f"builds no longer wanted: {', '.join(sorted(dropped))}")
+        self._alarms()
         return self._publish()
+
+    def _alarms(self) -> None:
+        """Send this poll's alarms (0.28.0); never fails a poll."""
+        if self.alarm_sender is None:
+            return
+        memory = self.state.setdefault("alarms", {})
+        try:
+            self.alarm_sender.run(
+                memory, self.status(), self.clock(), _iso(self.clock())
+            )
+        except Exception as error:  # never fail a poll on it
+            self.log(f"alarms not evaluated ({type(error).__name__})")
 
     # ------------------------------------------------------------ reach, rollout
     def _contact(self, cluster: str, *, fresh: bool = False) -> dict[str, Any]:
@@ -3883,11 +4186,16 @@ class CompositionController:
             }
             for name, record in sorted(self._envs().items())
         }
-        for record in envs.values():
+        for name, record in envs.items():
             record["components"] = {
                 key: {k: v for k, v in entry.items() if k != "deployed_image"}
                 for key, entry in (record.get("components") or {}).items()
             }
+            record.pop("preview_request", None)
+            # Added in 0.28.0: the preview's URL and last env up request.
+            preview = self._preview_view(name, self._envs()[name])
+            if preview:
+                record["preview"] = preview
         problem = self._composition_problem()
         if problem is not None and self._composition is None:
             # 0.27.1: nothing steps while no composition is loaded; each
@@ -3932,8 +4240,21 @@ class CompositionController:
                 # Added in 0.21.0: what this controller waits for build hosts
                 # to build (piceli builder serve reads it).
                 "builds_wanted": _wanted_builds(self.state, self.clock()),
+                # Added in 0.28.0: previews on request, held down, served.
+                **(
+                    {"previews": found}
+                    if (found := _previews_status(self.state))
+                    else {}
+                ),
                 # Added in 0.26.0: images a merge train offered (only when any).
                 **({"prebuilt": offers} if (offers := _offers(self.state)) else {}),
+                # Added in 0.28.0: each build host's last sighting (its Piceli
+                # version, when, its last build), once any showed up.
+                **(
+                    {"build_hosts": seen_hosts}
+                    if (seen_hosts := _build_hosts(self.state))
+                    else {}
+                ),
                 # Added in 0.22.0: health events and quarantine of its build
                 # hosts and builder node, and the last rebuild request.
                 **(
@@ -3944,6 +4265,17 @@ class CompositionController:
                 **(
                     {"last_rebuild": self.state["last_rebuild"]}
                     if self.state.get("last_rebuild")
+                    else {}
+                ),
+                # Added in 0.28.0, only with Controller(alarms=): the open
+                # alarms, how many were sent and the failed sends.
+                **(
+                    {
+                        "alarms": status_view(
+                            self.alarm_sender.alarms, self.state.get("alarms") or {}
+                        )
+                    }
+                    if self.alarm_sender is not None
                     else {}
                 ),
                 "poll_failures": int(self.state.get("poll_failures") or 0),

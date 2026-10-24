@@ -190,6 +190,31 @@
     "zfill": null
    }
   },
+  "Alarms": {
+   "attrs": [
+    "from_dict",
+    "secret",
+    "targets",
+    "to_dict",
+    "variables",
+    "waiting_after",
+    "waiting_seconds"
+   ],
+   "init": [
+    "secret",
+    "targets",
+    "waiting_after"
+   ],
+   "methods": {
+    "from_dict": [
+     "value"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "from_dict": "Alarms"
+   }
+  },
   "ApiDefaultedField": {
    "attr_types": {
     "resource": "ResourceIdentity"
@@ -987,6 +1012,7 @@
     "cluster",
     "clusters",
     "describe",
+    "down_when_merged",
     "env_config",
     "follow",
     "idle_stop",
@@ -1003,7 +1029,8 @@
     "secrets",
     "settings",
     "sources",
-    "stack"
+    "stack",
+    "url"
    ],
    "init": [
     "access",
@@ -1014,6 +1041,7 @@
     "claim_sizes",
     "cluster",
     "clusters",
+    "down_when_merged",
     "follow",
     "idle_stop",
     "limit",
@@ -1027,7 +1055,8 @@
     "rollout",
     "secrets",
     "settings",
-    "stack"
+    "stack",
+    "url"
    ],
    "methods": {
     "describe": [],
@@ -2066,9 +2095,12 @@
     "desktop",
     "kind",
     "label",
+    "ntfy",
     "send",
+    "send_message",
     "timeout",
     "to_dict",
+    "variables",
     "wanted",
     "webhook",
     "when"
@@ -2089,10 +2121,23 @@
      "when"
     ],
     "label": [],
+    "ntfy": [
+     "timeout",
+     "token_env",
+     "url",
+     "url_env",
+     "when"
+    ],
     "send": [
      "summary"
     ],
+    "send_message": [
+     "payload",
+     "text",
+     "title"
+    ],
     "to_dict": [],
+    "variables": [],
     "wanted": [
      "summary"
     ],
@@ -2107,6 +2152,7 @@
    "returns": {
     "command": "CommandNotify",
     "desktop": "DesktopNotify",
+    "ntfy": "NtfyNotify",
     "webhook": "WebhookNotify"
    }
   },
@@ -2480,9 +2526,11 @@
   },
   "Controller": {
    "attr_types": {
+    "alarms": "Alarms",
     "telemetry": "Otlp"
    },
    "attrs": [
+    "alarms",
     "builds",
     "delete_volumes",
     "delivery",
@@ -2497,6 +2545,7 @@
     "telemetry"
    ],
    "init": [
+    "alarms",
     "builds",
     "delete_volumes",
     "delivery",
@@ -3094,9 +3143,12 @@
     "desktop",
     "kind",
     "label",
+    "ntfy",
     "send",
+    "send_message",
     "timeout",
     "to_dict",
+    "variables",
     "wanted",
     "webhook",
     "when"
@@ -3116,10 +3168,23 @@
      "when"
     ],
     "label": [],
+    "ntfy": [
+     "timeout",
+     "token_env",
+     "url",
+     "url_env",
+     "when"
+    ],
     "send": [
      "summary"
     ],
+    "send_message": [
+     "payload",
+     "text",
+     "title"
+    ],
     "to_dict": [],
+    "variables": [],
     "wanted": [
      "summary"
     ],
@@ -3134,6 +3199,7 @@
    "returns": {
     "command": "CommandNotify",
     "desktop": "DesktopNotify",
+    "ntfy": "NtfyNotify",
     "webhook": "WebhookNotify"
    }
   },
@@ -6915,9 +6981,12 @@
     "desktop",
     "kind",
     "label",
+    "ntfy",
     "send",
+    "send_message",
     "timeout",
     "to_dict",
+    "variables",
     "wanted",
     "webhook",
     "when"
@@ -6937,10 +7006,23 @@
      "when"
     ],
     "label": [],
+    "ntfy": [
+     "timeout",
+     "token_env",
+     "url",
+     "url_env",
+     "when"
+    ],
     "send": [
      "summary"
     ],
+    "send_message": [
+     "payload",
+     "text",
+     "title"
+    ],
     "to_dict": [],
+    "variables": [],
     "wanted": [
      "summary"
     ],
@@ -6955,6 +7037,79 @@
    "returns": {
     "command": "CommandNotify",
     "desktop": "DesktopNotify",
+    "ntfy": "NtfyNotify",
+    "webhook": "WebhookNotify"
+   }
+  },
+  "NtfyNotify": {
+   "attrs": [
+    "command",
+    "desktop",
+    "kind",
+    "label",
+    "ntfy",
+    "send",
+    "send_message",
+    "timeout",
+    "to_dict",
+    "token_env",
+    "url",
+    "url_env",
+    "variables",
+    "wanted",
+    "webhook",
+    "when"
+   ],
+   "init": [
+    "timeout",
+    "token_env",
+    "url",
+    "url_env",
+    "when"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "timeout",
+     "when"
+    ],
+    "desktop": [
+     "timeout",
+     "when"
+    ],
+    "label": [],
+    "ntfy": [
+     "timeout",
+     "token_env",
+     "url",
+     "url_env",
+     "when"
+    ],
+    "send": [
+     "summary"
+    ],
+    "send_message": [
+     "payload",
+     "text",
+     "title"
+    ],
+    "to_dict": [],
+    "variables": [],
+    "wanted": [
+     "summary"
+    ],
+    "webhook": [
+     "headers_env",
+     "timeout",
+     "url",
+     "url_env",
+     "when"
+    ]
+   },
+   "returns": {
+    "command": "CommandNotify",
+    "desktop": "DesktopNotify",
+    "ntfy": "NtfyNotify",
     "webhook": "WebhookNotify"
    }
   },
@@ -11557,11 +11712,14 @@
     "headers_env",
     "kind",
     "label",
+    "ntfy",
     "send",
+    "send_message",
     "timeout",
     "to_dict",
     "url",
     "url_env",
+    "variables",
     "wanted",
     "webhook",
     "when"
@@ -11584,10 +11742,23 @@
      "when"
     ],
     "label": [],
+    "ntfy": [
+     "timeout",
+     "token_env",
+     "url",
+     "url_env",
+     "when"
+    ],
     "send": [
      "summary"
     ],
+    "send_message": [
+     "payload",
+     "text",
+     "title"
+    ],
     "to_dict": [],
+    "variables": [],
     "wanted": [
      "summary"
     ],
@@ -11602,6 +11773,7 @@
    "returns": {
     "command": "CommandNotify",
     "desktop": "DesktopNotify",
+    "ntfy": "NtfyNotify",
     "webhook": "WebhookNotify"
    }
   },
@@ -11710,6 +11882,7 @@
      "chart",
      "cluster",
      "codegen",
+     "cycle",
      "deploy",
      "dev",
      "doctor",
@@ -11743,6 +11916,7 @@
      "support-bundle",
      "targets",
      "train",
+     "train-init",
      "train-prune",
      "train-queue",
      "train-wait",
@@ -12035,8 +12209,30 @@
     "arguments": [],
     "flags": [],
     "subcommands": [
-     "serve"
+     "install",
+     "serve",
+     "status",
+     "uninstall"
     ]
+   },
+   "builder install": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--exec-sha256",
+     "--host",
+     "--image",
+     "--namespace",
+     "--no-publish-only",
+     "--print",
+     "--publish",
+     "--publish-only",
+     "--state-dir",
+     "--transport",
+     "--user"
+    ],
+    "subcommands": []
    },
    "builder serve": {
     "arguments": [],
@@ -12056,6 +12252,25 @@
      "--publish-only",
      "--state-dir",
      "--transport"
+    ],
+    "subcommands": []
+   },
+   "builder status": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--exec-sha256",
+     "--json",
+     "--namespace",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "builder uninstall": {
+    "arguments": [],
+    "flags": [
+     "--host"
     ],
     "subcommands": []
    },
@@ -12241,6 +12456,29 @@
      "--out",
      "--transport",
      "--version"
+    ],
+    "subcommands": []
+   },
+   "cycle": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "report"
+    ]
+   },
+   "cycle report": {
+    "arguments": [],
+    "flags": [
+     "--context",
+     "--json",
+     "--kubeconfig",
+     "--markdown",
+     "--namespace",
+     "--since",
+     "--state-dir",
+     "--target",
+     "--train-state-dir",
+     "--transport"
     ],
     "subcommands": []
    },
@@ -12485,7 +12723,14 @@
     "flags": [
      "--approve",
      "--approve-if-policy",
-     "--pipeline"
+     "--cluster",
+     "--interval",
+     "--namespace",
+     "--pipeline",
+     "--state-dir",
+     "--timeout",
+     "--transport",
+     "--wait"
     ],
     "subcommands": []
    },
@@ -12547,12 +12792,18 @@
     "flags": [
      "--approve",
      "--approve-if-policy",
+     "--cluster",
      "--commit",
      "--digest",
+     "--interval",
+     "--namespace",
      "--pipeline",
      "--plan",
      "--receipt",
      "--seed-from",
+     "--state-dir",
+     "--timeout",
+     "--transport",
      "--wait"
     ],
     "subcommands": []
@@ -12581,6 +12832,7 @@
     "arguments": [],
     "flags": [],
     "subcommands": [
+     "alarms",
      "approve",
      "build",
      "builds",
@@ -12597,6 +12849,24 @@
      "sync",
      "wait"
     ]
+   },
+   "gitops alarms": {
+    "arguments": [],
+    "flags": [
+     "--context",
+     "--desktop",
+     "--follow",
+     "--interval",
+     "--json",
+     "--kubeconfig",
+     "--namespace",
+     "--no-desktop",
+     "--polls",
+     "--state-dir",
+     "--transport",
+     "--waiting-after"
+    ],
+    "subcommands": []
    },
    "gitops approve": {
     "arguments": [
@@ -12702,13 +12972,16 @@
      "--build-storage",
      "--builder-image",
      "--builder-selector",
+     "--canary",
      "--cluster-rbac",
      "--context",
      "--credentials-secret",
      "--delete-volumes",
      "--env",
      "--exec-sha256",
+     "--force",
      "--image",
+     "--interval",
      "--kubeconfig",
      "--main-auto-approve",
      "--main-branch",
@@ -12721,7 +12994,9 @@
      "--storage",
      "--storage-class",
      "--tags",
-     "--transport"
+     "--timeout",
+     "--transport",
+     "--wait"
     ],
     "subcommands": []
    },
@@ -13407,12 +13682,15 @@
      "--context",
      "--from",
      "--infra",
+     "--interval",
      "--json",
      "--kubeconfig",
      "--namespace",
      "--repo",
      "--state-dir",
-     "--transport"
+     "--timeout",
+     "--transport",
+     "--wait"
     ],
     "subcommands": []
    },
@@ -14028,6 +14306,8 @@
     ],
     "flags": [
      "--branches",
+     "--compare",
+     "--compare-phase",
      "--json",
      "--promote",
      "--promote-run",
@@ -14036,6 +14316,24 @@
      "--retire",
      "--retire-remote",
      "--state-dir"
+    ],
+    "subcommands": []
+   },
+   "train-init": {
+    "arguments": [
+     "path"
+    ],
+    "flags": [
+     "--base",
+     "--branch",
+     "--builds",
+     "--force",
+     "--from",
+     "--host",
+     "--images",
+     "--json",
+     "--name",
+     "--repository"
     ],
     "subcommands": []
    },
@@ -14325,6 +14623,8 @@
    "build-platforms-invalid",
    "build-timed-out",
    "builder-not-approved",
+   "builder-service-failed",
+   "builder-service-invalid",
    "bundle-empty",
    "bundle-image-archive-missing",
    "bundle-image-mismatch",
@@ -14429,6 +14729,7 @@
    "credential-helper-failed",
    "credentials-file-not-private",
    "cross-origin-location-refused",
+   "cycle-options-invalid",
    "deadline-exceeded",
    "deleted-resource-reappeared",
    "delivery-not-succeeded",
@@ -14553,11 +14854,13 @@
    "generation-precondition-failed",
    "git-timed-out",
    "git-unavailable",
+   "gitops-alarm-failed",
    "gitops-approval-stale",
    "gitops-artifact-changed",
    "gitops-build-cancelled",
    "gitops-build-not-running",
    "gitops-build-ref-unknown",
+   "gitops-canary-failed",
    "gitops-cluster-failed",
    "gitops-config-invalid",
    "gitops-controller-locked",
@@ -14584,6 +14887,7 @@
    "gitops-target-invalid",
    "gitops-target-required",
    "gitops-token-expiring",
+   "gitops-wait-timeout",
    "grant-expired",
    "grant-mismatch",
    "heavy-command-empty",
@@ -15017,9 +15321,12 @@
    "train-branches-required",
    "train-busy",
    "train-checkout-dirty",
+   "train-compare-invalid",
    "train-git-failed",
    "train-host-unavailable",
    "train-images-failed",
+   "train-init-exists",
+   "train-init-invalid",
    "train-interrupted",
    "train-invalid",
    "train-load-failed",
@@ -15370,6 +15677,7 @@
    "checks": {},
    "cli_contract": {},
    "codegen": {},
+   "cycle": {},
    "dev": {},
    "envs": {},
    "errors": {},
@@ -15918,6 +16226,9 @@
    }
   },
   "piceli.infra": {
+   "Alarms": {
+    "class": "Alarms"
+   },
    "Branch": {
     "class": "Branch"
    },
@@ -15992,6 +16303,9 @@
    },
    "Node": {
     "class": "Node"
+   },
+   "Notify": {
+    "class": "Notify"
    },
    "OpenStack": {
     "class": "OpenStack"
@@ -16870,6 +17184,10 @@
   "piceli.cli_contract",
   "piceli.codegen",
   "piceli.codegen.crd",
+  "piceli.cycle",
+  "piceli.cycle.local",
+  "piceli.cycle.record",
+  "piceli.cycle.report",
   "piceli.deploy_events",
   "piceli.dev",
   "piceli.dev.client",
@@ -16902,6 +17220,8 @@
   "piceli.gcp.credentials",
   "piceli.gcp.gke",
   "piceli.gitops",
+  "piceli.gitops.alarms",
+  "piceli.gitops.canary",
   "piceli.gitops.config",
   "piceli.gitops.controller",
   "piceli.gitops.heartbeat",
@@ -16928,7 +17248,9 @@
   "piceli.importing.generate",
   "piceli.importing.sources",
   "piceli.infra",
+  "piceli.infra.build_host_status",
   "piceli.infra.builder_serve",
+  "piceli.infra.builder_service",
   "piceli.infra.builders",
   "piceli.infra.builds",
   "piceli.infra.cluster",
@@ -16961,6 +17283,7 @@
   "piceli.infra.multicluster",
   "piceli.infra.nix_releases",
   "piceli.infra.pipelines",
+  "piceli.infra.previews",
   "piceli.infra.promote",
   "piceli.infra.promotion",
   "piceli.infra.provenance",
@@ -16982,13 +17305,16 @@
   "piceli.k8s.cli.cluster_access",
   "piceli.k8s.cli.codegen",
   "piceli.k8s.cli.contract",
+  "piceli.k8s.cli.cycle",
   "piceli.k8s.cli.deploy_pipeline",
   "piceli.k8s.cli.dev",
   "piceli.k8s.cli.dev_nix",
   "piceli.k8s.cli.env",
+  "piceli.k8s.cli.env_preview",
   "piceli.k8s.cli.env_push",
   "piceli.k8s.cli.env_stop",
   "piceli.k8s.cli.gitops",
+  "piceli.k8s.cli.gitops_watch",
   "piceli.k8s.cli.heavy",
   "piceli.k8s.cli.host",
   "piceli.k8s.cli.importing",
@@ -17179,11 +17505,13 @@
   "piceli.testing.pytest_plugin",
   "piceli.train",
   "piceli.train.cargo",
+  "piceli.train.compare",
   "piceli.train.engine",
   "piceli.train.git",
   "piceli.train.hosts",
   "piceli.train.images",
   "piceli.train.impact",
+  "piceli.train.init",
   "piceli.train.local",
   "piceli.train.model",
   "piceli.train.notify",
@@ -17229,5 +17557,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.27.1"
+ "version": "0.28.0"
 }

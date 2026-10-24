@@ -303,6 +303,17 @@ def status(
         emit_json({**body, "target": ssh.address})
 
 
+def _remember_switch(status: dict[str, Any], rev: str, address: str) -> None:
+    """0.28.0: keep the attempt that switched to ``rev`` for ``piceli cycle
+    report`` (:mod:`piceli.cycle.local`); never fails the command."""
+    from piceli.cycle.local import remember_host
+    from piceli.hosts.remote import matches
+
+    attempt = status.get("last_attempt")
+    if isinstance(attempt, dict) and matches(attempt, rev):
+        remember_host(str(status.get("host") or address), attempt)
+
+
 @host_app.command("wait")
 def wait(
     target: TargetArgument,
@@ -361,6 +372,7 @@ def wait(
         )
         if state == "deployed":
             say(f"{rev} runs on {ssh.address}: {_describe(current.get('current'))}")
+            _remember_switch(current, rev, ssh.address)
             emit_json({**body, "state": "deployed"})
             return
         if state == "failed":

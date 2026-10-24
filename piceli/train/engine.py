@@ -171,6 +171,8 @@ class TrainRun:
         notifications (:mod:`piceli.train.notify`).
     :param warn: Prints an observer's warning line (default: nowhere).
     :param queue: The queued request this run serves (recorded as ``queue``).
+    :param queued_at: When the queued request was enqueued (its cycle's
+        ``queued`` phase, :mod:`piceli.cycle`).
     :param promote_run: Promote the head of this earlier run (its id, or
         ``last``) instead of running branches (``--promote-run``); the run is
         then a promotion only, with the same record, events, observers and
@@ -200,6 +202,7 @@ class TrainRun:
         queue: str | None = None,
         promote_run: str | None = None,
         retire: str | None = None,
+        queued_at: str | None = None,
     ) -> None:
         if push and not promote:
             raise TrainError("train-push-needs-promote", "--push needs --promote")
@@ -267,6 +270,9 @@ class TrainRun:
         self.observers: list[EventSink] = []
         self.notified: list[dict[str, Any]] = []
         self.queue_id = queue
+        #: 0.28.0: cycle metrics (piceli.cycle): enqueued, promote and push times.
+        self.queued_at = queued_at
+        self.timings: dict[str, float] = {}
         #: ``--promote-run``: the run as asked (an id or ``last``).
         self.promote_run_of = promote_run
         #: ``Runner`` hook: the host a command was placed on (``step-placed``).
@@ -403,12 +409,16 @@ class TrainRun:
             self.git.set_ref(self.last_ref, self.head)
             self.last = {"ref": self.last_ref, "head": self.head}
         if self.promote_requested:
+            began = time.monotonic()
             self.promotion = self._promote()
+            self.timings["promoting"] = round(time.monotonic() - began, 3)
             if self.push_requested and self.promotion.get("state") in {
                 "promoted",
                 "publish-failed",
             }:
+                began = time.monotonic()
                 self.pushed = self._push(self.promotion["tag"])
+                self.timings["pushing"] = round(time.monotonic() - began, 3)
             if self.retire_mode:
                 self.retired = self._retire()
         self.finished = time.time()
@@ -425,6 +435,7 @@ class TrainRun:
             ok=result["ok"],
             duration=result["duration"],
             summary=summary,
+            cycle=result.get("cycle"),
         )
         if self.observe and self.train.notify:
             self._notify(summary)
@@ -1098,7 +1109,7 @@ class TrainRun:
             state = "running"
         else:
             state = "ejected" if self.ejected() else "joined"
-        return {
+        body: dict[str, Any] = {
             "schema": RUN_SCHEMA,
             "state": state,
             "ok": (
@@ -1131,6 +1142,14 @@ class TrainRun:
             **({"queue": self.queue_id} if self.queue_id else {}),
             **({"retire": self.retired} if self.retired else {}),
         }
+        if self.finished is not None:
+            from piceli.cycle.record import train_cycle
+
+            # 0.28.0: the run's cycle and its phases (piceli.cycle).
+            body["cycle"] = train_cycle(
+                body, queued_at=self.queued_at, timings=self.timings
+            )
+        return body
 
     # ------------------------------------------------- promote a past run
 

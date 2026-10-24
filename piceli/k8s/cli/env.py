@@ -72,6 +72,55 @@ PolicyOption = Annotated[
 ]
 
 
+# 0.28.0: --cluster or --state-dir asks the GitOps controller (a preview).
+ClusterOption = Annotated[
+    str | None,
+    typer.Option(
+        "--cluster",
+        help="Ask the GitOps controller of this composition's Cluster "
+        "(infra.py:CLUSTER, its credentials profile) instead of --pipeline: "
+        "a preview of the branch, now",
+        show_default=False,
+    ),
+]
+StateDirOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--state-dir", help="With the controller: a local controller's state directory"
+    ),
+]
+ControllerNamespaceOption = Annotated[
+    str, typer.Option("--namespace", help="With the controller: its namespace")
+]
+TransportOption = Annotated[
+    str,
+    typer.Option("--transport", help="https, or loopback-http for a local test API"),
+]
+TimeoutOption = Annotated[
+    str,
+    typer.Option(
+        "--timeout", help="With the controller and --wait: give up after (10m, 1h)"
+    ),
+]
+IntervalOption = Annotated[
+    float,
+    typer.Option(
+        "--interval",
+        help="With the controller and --wait: seconds between status reads",
+        min=1,
+    ),
+]
+
+
+def _given(**options: Any) -> list[str]:
+    """The ``--pipeline`` options passed with the controller (refused)."""
+    return [
+        "--" + name.replace("_", "-")
+        for name, value in options.items()
+        if value not in (None, False, [], ())
+    ]
+
+
 def load(entry: str | None) -> Any:
     """The pipeline named by ``--pipeline`` or ``$PICELI_PIPELINE`` (rejects)."""
     if not entry:
@@ -172,16 +221,51 @@ def up(
         bool,
         typer.Option(
             "--wait",
-            help="When the budget is full, refuse (env-budget-full) instead of "
-            "stopping the least recently pushed environment",
+            help="With --pipeline: when the budget is full, refuse "
+            "(env-budget-full) instead of stopping the least recently pushed "
+            "environment. With the controller: wait until the preview is ready "
+            "and print its URL (exit 0), failed (1) or timed out (2)",
         ),
     ] = False,
+    cluster: ClusterOption = None,
+    state_dir: StateDirOption = None,
+    namespace: ControllerNamespaceOption = "piceli-system",
+    transport: TransportOption = "https",
+    timeout: TimeoutOption = "10m",
+    interval: IntervalOption = 2.0,
 ) -> None:
     """Deploy BRANCH into its namespace (created when absent), isolated.
 
-    Plans the namespace, the environments the budget stops, the deploy and
-    the seed; approve the printed env_hash (or --approve-if-policy).
+    With --pipeline: plans the namespace, the environments the budget stops,
+    the deploy and the seed; approve the printed env_hash (or
+    --approve-if-policy). With --cluster (or --state-dir): asks the GitOps
+    controller to deploy BRANCH's preview now, with the images a train
+    offered for its head when there are any.
     """
+    if cluster is not None or state_dir is not None:
+        from piceli.k8s.cli import env_preview
+
+        env_preview.run(
+            branch,
+            action="up",
+            cluster=cluster,
+            state_dir=state_dir,
+            namespace=namespace,
+            transport=transport,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+            refused=_given(
+                commit=commit,
+                digest=digest,
+                receipt=receipt,
+                seed_from=seed_from,
+                plan=plan,
+                approve=approve,
+                approve_if_policy=approve_if_policy,
+            ),
+        )
+        return
     from piceli.envs import EnvError, env_up
     from piceli.pipeline import PipelineError
 
@@ -228,8 +312,41 @@ def down(
     pipeline: PipelineOption = None,
     approve: ApproveOption = None,
     approve_if_policy: PolicyOption = False,
+    cluster: ClusterOption = None,
+    state_dir: StateDirOption = None,
+    namespace: ControllerNamespaceOption = "piceli-system",
+    transport: TransportOption = "https",
+    wait: Annotated[
+        bool,
+        typer.Option(
+            "--wait",
+            help="With the controller: wait until the preview is removed",
+        ),
+    ] = False,
+    timeout: TimeoutOption = "10m",
+    interval: IntervalOption = 2.0,
 ) -> None:
-    """Delete BRANCH's environment: its claims, namespace and volumes (never main's)."""
+    """Delete BRANCH's environment: its claims, namespace and volumes (never main's).
+
+    With --cluster (or --state-dir): asks the GitOps controller to tear
+    BRANCH's preview down; it stays down until the branch's next push.
+    """
+    if cluster is not None or state_dir is not None:
+        from piceli.k8s.cli import env_preview
+
+        env_preview.run(
+            branch,
+            action="down",
+            cluster=cluster,
+            state_dir=state_dir,
+            namespace=namespace,
+            transport=transport,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+            refused=_given(approve=approve, approve_if_policy=approve_if_policy),
+        )
+        return
     from piceli.envs import EnvError, env_down
 
     declared = load(pipeline)

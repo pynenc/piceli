@@ -113,6 +113,110 @@ piceli gitops wait main 3f2a91c --kubeconfig cluster.kubeconfig --context my-clu
 # main 3f2a91c: deployed
 ```
 
+(gitops-enable-wait)=
+### Wait for every environment after an install: `--wait` (0.28.0)
+
+`piceli gitops enable infra.py --approve sha256:… --wait` installs or
+upgrades the controller, then waits until every environment runs the
+revision it follows with its checks passed. While it waits it prints one
+line per environment when its state changes, and once a minute:
+
+```text
+waiting up to 900s for every environment to run its revision
+main: deploying, stage build 2m
+staging: building (waiting for a build host) 3m
+main: running 3f2a91c07d4e, checks passed
+staging: failed in stage checks (pipeline-checks-failed)
+staging: failed in stage checks (pipeline-checks-failed) at 8c1d2e3f4a5b
+  failing checks: home (status 503)
+  log tail:
+    ...
+```
+
+It stops at the first failure: an environment that failed (its reason
+code, stage and log tail), checks that fail on a running release, a
+composition that does not import at its commit (nothing can deploy), or
+Git unreadable for two polls. It only judges the status after the new
+controller's first poll, so an old status never ends the wait.
+`--timeout` (default `15m`) and `--interval` (seconds between reads,
+default 10) tune it.
+
+Exit codes, for scripts:
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | every environment runs its revision, checks passed |
+| 1 | a failure (the JSON's `wait.failure`: `env`, `reason`, `stage`, `commit`, `detail`, `log_tail`) |
+| 2 | the time ran out (`gitops-wait-timeout`); also a refused argument, before any wait |
+| 3 | no `--approve`: the plan was printed, nothing installed |
+
+`piceli promote HOST --from ENV --approve sha256:… --wait` does the same
+for a Nix host ({ref}`promote-wait`).
+
+(gitops-enable-canary)=
+### Test an upgrade before it replaces the controller: `--canary` (0.28.0)
+
+A new controller version can fail on a composition the old one deployed
+(a keyword the new API renamed, a stricter check). Without a test, you
+find out only after the live controller was replaced, and nothing deploys
+until you fix it. `--canary` runs the new version first:
+
+```bash
+piceli gitops enable infra.py --image ghcr.io/example/piceli@sha256:… \
+  --approve sha256:… --canary --wait
+```
+
+Before the approved plan replaces the controller, Piceli runs the new
+image once, as a Kubernetes Job in the controller's namespace. The Job
+runs the new version's own code (`piceli gitops canary`) and, applying
+nothing:
+
+- imports the composition at the followed branch's head;
+- resolves the revision each environment would deploy;
+- loads each build spec and resolves each component, without building
+  (an image the live controller already built for the same sources is
+  reused; any other counts as a build);
+- plans each environment (a dry run: what would change), so refusals such
+  as `retained-content-differs` or `versioned-secret-generated` show up.
+
+```text
+canary: running ghcr.io/example/piceli@sha256:… on the composition (nothing is applied)
+composition: imports at 3f2a91c07d4e
+main: imports, plans 3 changes, builds 2 components: ok
+rc: not checked (waiting for a ref of shop)
+canary: ok
+```
+
+A failure refuses the upgrade with `gitops-canary-failed` (exit 2),
+naming the first failure; the live controller keeps running:
+
+```text
+composition: does not import at 8c1d2e3f4a5b (composition-invalid): importing infra.py failed: TypeError: ...
+canary: failed
+rejected: the new controller's canary failed: the composition: import failed (composition-invalid): ...; the live controller was not replaced [gitops-canary-failed]
+```
+
+`--force` replaces the controller anyway. A passing canary goes on to the
+normal install, and `--wait` after it. Under `--json` the result is the
+`canary` object of the output. `--timeout` (default `15m`) bounds the Job.
+
+Why a Job with the new image: only it runs the new version's code, with
+the controller's own Git credentials and access, inside the cluster. The
+Job's pod is the new controller's pod with three changes: it runs `gitops
+canary` instead of `gitops run`, its state directory is an empty scratch
+volume (never the live state claim), and its config is a copy in its own
+ConfigMap. It plans with "plan only" and has no way to build, copy images,
+create namespaces or apply. The Job, its pod and its ConfigMap are removed
+when the command ends: pass, fail or crash (the Job also removes itself ten
+minutes after it ends).
+
+What it does not check: builds themselves (only that they can start),
+checks after a deploy, and environments waiting for a ref that does not
+exist yet. The image must be 0.28.0 or newer (an older one has no `gitops
+canary`, and the canary fails saying so). With no controller installed
+yet there is nothing to replace, and the canary is skipped. It runs only
+with `--approve`, for a composition (`gitops enable infra.py`).
+
 Each deploy records the digest of the check set it verified (its
 `checks_hash`), so unchanged checks never run again on the next sync of an
 unchanged release, and a changed check set always does. On start, the
@@ -473,6 +577,132 @@ Anything else is a rejected request (`rejected_requests` in the status).
 The builder image must be the controller's Piceli version. Its registry
 must be on a node that works: `Registry.in_cluster(on=...)` places it, and
 moving it means a new claim, which the next builds and mirrors fill again.
+
+(builder-service)=
+#### Run a build host as a service (0.28.0)
+
+`builder serve` in a terminal stops when the terminal closes or the machine
+sleeps, and builds wait. `piceli builder install` makes the build host
+serve on its own. Run it **on the build host itself**, in the directory
+where `--cluster MODULE:ATTR` loads, with the same arguments `builder serve`
+takes:
+
+```sh
+# Smoke test first: the credentials this host needs, then one build.
+piceli builder serve --cluster infra.py:my_cluster --host builder-1 --check
+piceli builder serve --cluster infra.py:my_cluster --host builder-1 --once --json
+
+# Install the service (as you: a user service).
+piceli builder install --cluster infra.py:my_cluster --host builder-1
+# Or as root, running as the user "builder" (a system service).
+sudo piceli builder install --cluster infra.py:my_cluster --host builder-1 \
+  --user builder --state-dir /var/lib/piceli-builder
+
+# Remove it.
+piceli builder uninstall --host builder-1
+```
+
+- **Linux:** a systemd unit `piceli-builder-builder-1.service`, in
+  `/etc/systemd/system` as root, else in `~/.config/systemd/user`. A user
+  service stops when you log out unless lingering is on
+  (`sudo loginctl enable-linger $USER`). Logs go to the journal:
+  `journalctl -u piceli-builder-builder-1 -f` (add `--user` for a user
+  service).
+- **macOS:** a launchd property list `piceli.builder.builder-1.plist`, a
+  LaunchDaemon in `/Library/LaunchDaemons` as root, else a LaunchAgent in
+  `~/Library/LaunchAgents`. Logs go to `builder.log` in the state
+  directory (default `~/.cache/piceli/builder`).
+
+The service runs the same `piceli` program that ran `install` (its absolute
+path; the Piceli version is in the unit's description), with the exact
+`builder serve` arguments. It starts again 10 seconds after a failure and
+is stopped with SIGINT, as Ctrl-C stops `serve` (SIGTERM, which launchd
+sends, stops it the same way). Its `PATH` holds the directories where
+docker, git and kubectl are now; `install` refuses when one is missing
+(`builder-service-invalid`, naming it). `--print` writes the unit to
+stdout and changes nothing.
+
+Before it writes anything, `install` runs the checks of `builder serve
+--check`: the cluster's credential profile and kubeconfig reach the
+controller, the keys of each `--publish` cache are in this machine's
+secrets, and the host holds every credential its NixReleases need. A
+missing one refuses with `infra-credential-missing`, naming it and the
+command that adds it. No secret value goes into the unit or its arguments:
+only `HOME`, `PATH`, and `PICELI_CREDENTIALS_DIR` / `PICELI_PROFILES_DIR`
+when they are set where `install` runs.
+
+**One service per host name.** Never run two servers under the same
+`--host` name: the controller takes them for one host. Different names on
+one machine or many are fine; the controller decides which claim wins.
+
+**The service user.** It needs access to the container engine (on Linux,
+the `docker` group) and holds its own Piceli state: its credential profile
+(`~/.config/piceli/profiles`, `piceli login`), its secrets
+(`~/.config/piceli/credentials`, `piceli secrets ...`), its Git access
+(credential helper or SSH keys) and its state directory. Run `piceli
+login` and `piceli secrets` as that user, or set `PICELI_PROFILES_DIR` and
+`PICELI_CREDENTIALS_DIR` before `install`. As root, `install` checks with
+that user's home, and the `piceli` program it runs must be one that user
+may run (for example installed under `/usr/local/bin` or in its own home).
+
+**Kubernetes permissions.** The credential profile of `builder serve`
+needs, and nothing more:
+
+- in the controller's namespace (`piceli-system`): ConfigMaps `get`,
+  `create`, `patch` (it reads the status, writes its requests);
+- to push images, in the registry's namespace: services `get`, pods `get`
+  and `list`, `pods/portforward` `create` (the push goes through
+  `kubectl port-forward service/<registry>`).
+
+A host that delivers into the nodes over SSH, or only publishes Nix
+releases, needs only the first line.
+
+**NixOS.** Keep the unit in your configuration instead: `piceli builder
+install ... --print` shows it, and this is the same service:
+
+```nix
+users.users.builder.extraGroups = [ "docker" ];
+systemd.services.piceli-builder-builder-1 = {
+  description = "Piceli build host builder-1";
+  wantedBy = [ "multi-user.target" ];
+  wants = [ "network-online.target" ];
+  after = [ "network-online.target" "docker.service" ];
+  path = [ pkgs.docker pkgs.git pkgs.kubectl ];
+  environment.HOME = "/var/lib/piceli-builder";
+  serviceConfig = {
+    User = "builder";
+    WorkingDirectory = "/srv/deploy";  # where infra.py is
+    ExecStart = "/path/to/piceli builder serve --cluster infra.py:my_cluster --host builder-1";
+    Restart = "on-failure";
+    RestartSec = 10;
+    KillSignal = "SIGINT";
+    TimeoutStopSec = 120;
+  };
+};
+```
+
+#### Which build hosts serve: `piceli builder status` (0.28.0)
+
+```sh
+piceli builder status --cluster infra.py:my_cluster [--json]
+```
+
+```text
+builder-1        building      Piceli 0.28.0   seen 2026-11-02T09:14:05Z; claim 3f2a91c07d4e live (build); last build 3f2a91c07d4e claimed
+builder-2        claim-expired Piceli 0.27.1   seen 2026-11-02T08:40:00Z; claim 8c1d2e3f4a5b expired; last build 8c1d2e3f4a5b claimed
+builder-3        quarantined   Piceli 0.28.0   seen 2026-11-01T21:00:00Z; last build 1a2b3c4d5e6f built; QUARANTINED since ...
+builder-4        never seen (declared; is builder serve running there? ...)
+```
+
+One line per build host the controller heard from, and per declared host:
+its Piceli version, when it was last seen (a claim, a progress report, an
+answer or a health record), the build it holds (`live`, or `expired` after
+10 minutes without a report), its last build and outcome (`claimed`,
+`built`, `published`, `failed`) and its quarantine. A declared host never
+seen is not serving. Each claim and progress report carries the host's
+Piceli version; the controller keeps each host's last sighting in its
+status (`controller.build_hosts`). `--json` prints
+`piceli.builder-status.v1`.
 
 #### Delivery into the nodes, without a registry
 
@@ -1000,6 +1230,28 @@ branch without an upstream, or behind, ahead of or diverged from it
 do; without one the plan only tags `HEAD`, and `--approve` tags and pushes
 the tag.
 
+(promote-wait)=
+##### Follow the release to the host: `--wait` (0.28.0)
+
+`--wait` follows the release to the host after the push:
+
+```sh
+piceli promote web-1 --from main --composition infra.py --repo ../hosts \
+    --approve sha256:<digest> --wait --timeout 15m
+# web-1: promoted web-v1.4.1 at 9b1e0c2d3f4a
+# web-1: publishing (waiting for a build host) 1m
+# web-1: publishing (build host builder-1) 2m
+# web-1: published; the host has not run it yet 6m
+# web-1: running web-v1.4.1, checks passed
+```
+
+It reads the controller's publish of the tag (a failed publish is the
+first failure, with the build host's log tail) and the host's own status
+over SSH, as `piceli host wait` does (a failed or rolled-back attempt is a
+failure). Exit 0: the host runs the tag with its checks passed; 1: a
+failure; 2: the time ran out (`gitops-wait-timeout`). The JSON carries the
+result under `wait`.
+
 ### Removed objects are deleted (pruning)
 
 New in 0.14.7. Every sync, of a branch, a named environment or main, and of
@@ -1058,6 +1310,93 @@ or `piceli gitops sync ENV` (one try, no loop of restore point, apply and
 rollback on every poll).
 `Pipeline(prune=False)` turns pruning off; `piceli deploy` (outside an
 environment) prunes only with `Pipeline(prune=True)`.
+
+(gitops-alarms)=
+### Alarms (0.28.0)
+
+The controller can tell you when something needs you, instead of you
+finding out when you look. Declare where alarms go on the composition's
+`Controller`:
+
+```python
+from piceli.infra import Alarms, Controller, Notify
+
+controller = Controller(
+    on="node-1",
+    alarms=Alarms(
+        targets=[
+            Notify.ntfy("https://ntfy.example.org/deploys"),
+            Notify.webhook(url_env="ALARM_WEBHOOK_URL"),
+            Notify.desktop(),
+        ],
+        secret="piceli-alarms",  # holds ALARM_WEBHOOK_URL
+        waiting_after="10m",
+    ),
+)
+```
+
+The targets are the merge train's notifiers ({doc}`train`):
+`Notify.ntfy(url)` posts a short text to an [ntfy](https://ntfy.sh) topic,
+`Notify.webhook(url)` posts the alarm as JSON (`piceli.alarm.v1`), and
+`Notify.desktop()` is a desktop notification on your machine (below).
+`when="failure"` skips the "recovered" and "restarted" messages.
+
+After every poll the controller sends an alarm when:
+
+| Event | When | Next command in the message |
+| --- | --- | --- |
+| `env-failed` | an environment failed, failed two attempts in a row, or its checks fail on the running release | `piceli gitops status` |
+| `env-waiting` | an environment waits longer than `waiting_after` for a build host (`build-waiting`) or an approval (`approval-required`) | `piceli gitops builds`, or the `piceli gitops approve ENV HASH` line |
+| `nix-release-failed` | a `NixRelease` publish failed | `piceli gitops builds --state failed` |
+| `nix-release-waiting` | a `NixRelease` publish waits longer than `waiting_after` for a build host or an approval | `piceli gitops builds`, or its approve line |
+| `composition-failed` | the composition's own repository does not import at its commit, so nothing deploys | `piceli gitops status` |
+| `controller-restarted` | the controller runs a new Piceli version | `piceli gitops status` |
+
+Each message is short and names the environment or host, the reason code
+and the next command:
+
+```text
+piceli: staging failed
+staging failed in stage build (component-build-failed) at 3f2a91c07d4e: error: cargo build failed. Next: piceli gitops status
+```
+
+Each alarm is sent **once**: the controller keeps the alarms it sent in its
+state, so a later poll or a restart does not send it again. When the
+problem ends it sends one message (`staging recovered (was
+component-build-failed)`); a branch environment that is torn down sends
+nothing more.
+
+**Secrets.** A URL or token that is a secret is named by environment
+variable (`url_env=`, `token_env=` for ntfy, `headers_env=` for a webhook)
+and stored in the Kubernetes Secret named by `Alarms(secret=)`, in the
+controller's namespace, under a key of the same name:
+
+```sh
+kubectl -n piceli-system create secret generic piceli-alarms \
+  --from-literal=ALARM_WEBHOOK_URL='https://hooks.example.org/T0/abc'
+```
+
+The controller's pod gets each variable from that Secret. The value is
+never in the controller's arguments, logs, state or status; a target is
+shown by its host name or `$VARIABLE` only.
+
+**A failed send never stops the controller.** It is logged with
+`gitops-alarm-failed` and listed under `controller.alarms.failures` in
+`piceli gitops status --json`, next to the open alarms and how many were
+sent.
+
+**Desktop notifications** cannot come from the cluster. Run the follower on
+your machine; it reads the controller's status and raises the same alarms:
+
+```sh
+piceli gitops alarms --kubeconfig cluster.kubeconfig --context my-cluster
+# ALARM staging failed: staging failed in stage build (...). Next: piceli gitops status
+piceli gitops alarms --follow --kubeconfig cluster.kubeconfig --context my-cluster
+```
+
+Without `--follow` it prints the alarms as they stand (and the sends the
+controller could not make) and exits. `--follow` reads every `--interval`
+seconds (30 by default) and raises each new alarm once, until you stop it.
 
 ### Traces, events and metrics (OpenTelemetry)
 
@@ -1217,6 +1556,58 @@ the runs: `kind` (`stop`, `start`, `teardown`), `action` (the same), `state`
 `started_at`, `finished_at`, `namespace` and, for a stop, `stop` (`by`,
 `via`, `at`). A torn-down branch environment keeps its entries in the
 history (the newest 20 such environments).
+
+(gitops-cycle-report)=
+
+#### Cycle report (0.28.0)
+
+A **cycle** is one commit's way from a push to running with its checks
+passed, on one target: an environment, a Nix release, a Nix host or a
+train. Piceli records each cycle and its phases, so you do not keep the
+table by hand:
+
+- the controller adds `cycle` to each history run and to each environment
+  in its status: `queued` (first seen to its first step), `approval`,
+  `waiting-for-host`, `building` and `delivering` (a build host's build:
+  asked, claimed, built and uploaded, delivered; or the controller's own
+  builds), `applying` and `checking`. The same seconds go with the
+  `piceli.deploy.finished` OpenTelemetry event (`piceli.cycle.seconds`,
+  `piceli.cycle.phase.<name>.seconds`), through the composition's
+  existing `telemetry=`;
+- a Nix release keeps its stages (`approval`, `queue`, `fetch`, `build`,
+  `publish`), as before;
+- a train run keeps `cycle` in its `run.json` and on its root span:
+  `queued`, `merging`, `testing <step>`, `promoting`, `images`,
+  `publishing`, `pushing`;
+- `piceli host wait` keeps the host switch it saw (`polling`,
+  `downloading`, `activating`, `checking`, `boot`) in
+  `~/.local/state/piceli/cycle/hosts.json` (the newest 200).
+
+`piceli cycle report` reads them:
+
+```console
+$ piceli cycle report --since 7d --kubeconfig kc --context prod
+cycle report since 2026-10-17T09:00:00Z: 3 target(s), push to running and checked
+  environment  main                 12 cycle(s)  p50 6m 40s  p90 9m 12s  slowest phase building (4m 05s)  slowest cycle 11m 30s (3f2a91c0d4e5)
+  nix-host     web-1                4 cycle(s)  p50 8m 02s  p90 9m 40s  slowest phase building (5m 10s)  slowest cycle 9m 40s (77ab01c2d3e4)
+  train        shop                 9 cycle(s)  p50 14m 20s  p90 21m 03s  slowest phase testing unit (9m 30s)  slowest cycle 21m 03s (a1b2c3d4e5f6)
+  note: main: push time unknown for 12 of 12 cycle(s); timed from when Piceli first saw the commit (first at 2026-10-17T09:12:00Z)
+```
+
+Per target it gives the count of cycles that ended running and checked
+(and how many failed), the p50 (median) and p90 (nine in ten were as
+fast or faster) of their time, nearest-rank, the
+slowest phase (the highest p50 by phase) and the slowest single cycle.
+`--target NAME` keeps one target, `--since` takes `24h`, `7d` or an ISO
+time, `--json` prints `piceli.cycle-report.v1` and `--markdown` prints a
+table to paste into your docs, marked as generated. The controller is read
+only with `--kubeconfig` and `--context` (or `--state-dir`); without them
+the report has the local trains and hosts and says so.
+
+What it cannot know, it says: the controller learns of a push when it polls,
+so a cycle runs from when Piceli first saw the commit. A Nix host's switch
+is known only when `piceli host wait` saw it; a host cycle starts at the
+controller's release of the same commit when the report has it.
 
 #### Compatibility of the documents
 

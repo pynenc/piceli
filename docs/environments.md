@@ -404,6 +404,72 @@ one commit per source (its revision) and renders it from the components'
 contracts; `Stack` then holds `Component`s. A single-source
 `follow=Branch(...)` keeps its meaning here.
 
+(previews-in-minutes)=
+### Previews in minutes
+
+```{admonition} New in 0.28.0
+:class: note
+
+`env up`/`env down` with `--cluster`, `url=` and `down_when_merged=` are new.
+```
+
+A composition's branch rule can also say where a branch's preview is
+reached, and drop it once the branch is merged:
+
+```python
+Environment.per_branch(
+    Branches("wp-*"),
+    namespace="shop-{branch}",
+    follow={shop: "{branch}", catalog: "main"},
+    url="https://{branch}.preview.example.org",  # {branch}, {namespace}
+    down_when_merged=True,
+    auto_approve=True,
+)
+```
+
+After a push, ask for the preview instead of waiting for the controller's
+next poll:
+
+```text
+$ piceli env up wp-login --cluster infra.py:cluster --wait
+preview up of wp-login recorded; the controller acts within seconds
+wp-login: requested; waiting for the controller
+wp-login: deploying, stage apply
+wp-login: running 3f2a9c1b7d4e, checks passed
+preview ready: https://wp-login.preview.example.org
+```
+
+- **Now, not at the next poll.** The controller looks for requests every
+  2 seconds between polls and polls at once when one waits. It then reads
+  the remotes, so the push you just made is seen.
+- **No rebuild.** When a merge train or a `Step.images` push offered images
+  for the branch's head (see {doc}`train`, `Controller(prebuilt=True)`), the
+  controller takes them: it builds only what nobody offered.
+- **The URL.** `url=` is a pattern; `{branch}` is the branch as a DNS label
+  (`wp/Login` gives `wp-login`). Piceli creates no Ingress or DNS record for
+  it: a wildcard ingress of the cluster, or the app, serves that host. The
+  URL is printed once, only when the preview runs the branch's head with
+  its checks passed. Without `url=`, reach the preview with `piceli access
+  wp-login --cluster infra.py:cluster`.
+- **Any branch.** A branch outside the rule's patterns gets a preview on
+  request too (its next pushes deploy it until `env down`).
+- **Down.** `piceli env down wp-login --cluster infra.py:cluster` tears the
+  preview down; it stays down until the branch's next push. Deleting the
+  branch tears it down as before. With `down_when_merged=True`, so does a
+  merge: once the branch's own commits are in `main`. A squash or rebase
+  merge leaves them out; delete the branch then (most Git hosts can do it
+  on merge).
+- **Exit codes** as `piceli gitops enable --wait`: `0` ready, `1` failed (or
+  the controller refused the request; the reason code is printed), `2`
+  timed out (`--timeout 10m` by default, `gitops-wait-timeout`). Without
+  `--wait` the command only records the request. `--state-dir` names a
+  local controller instead of `--cluster`.
+
+With prebuilt images, a preview is ready a few seconds after `env up`, plus
+the time the cluster takes to roll out the pods and run the checks: up to 2
+seconds until the controller wakes, about a second to read the remotes and
+apply, and up to 2 seconds until the command reads the result.
+
 ### One place to look
 
 - `piceli envs --pipeline MODULE:ATTR [--json]`: every environment with its

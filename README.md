@@ -66,14 +66,26 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.27
+## What's new in 0.28
 
-- **Versioned Secrets**: `app.secret("turn", {...}, versioned=True)` names
-  the Secret after a short keyed hash of its values. A changed value makes a
-  new Secret, the workloads that use it roll in the same apply, and old
-  versions are deleted once nothing mounts them. Use it for config files
-  that hold a secret; see the
-  [guide](https://docs.pynenc.org/projects/piceli/en/stable/secrets.html).
+- **Alarms**: the GitOps controller sends ntfy or webhook alarms when an
+  environment fails, waits too long for a build host or an approval, a Nix
+  release fails, or the composition stops importing; `piceli gitops alarms
+  --follow` raises them on your desktop.
+- **Safer upgrades**: `piceli gitops enable --canary` tries the new
+  controller version on your composition without applying anything before
+  it replaces the live one, and `--wait` waits until every environment runs
+  the new revision with its checks passed (exit codes for scripts).
+- **Previews in minutes**: `piceli env up BRANCH --cluster ... --wait`
+  deploys a branch now, reusing the images the train built, and prints its
+  URL when it is ready.
+- **Build hosts as services**: `piceli builder install` sets up a systemd
+  or launchd service on the build host; `piceli builder status` shows which
+  hosts serve.
+- **Faster adoption and numbers**: `piceli train init --from SCRIPT` writes a
+  starting train spec, `--compare` runs your old script beside the train, and
+  `piceli cycle report` gives push-to-running times per target; see the
+  [guide](https://docs.pynenc.org/projects/piceli/en/latest/gitops.html).
 
 ## Web UI
 

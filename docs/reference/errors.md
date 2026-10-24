@@ -68,6 +68,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`build-platforms-invalid`](#error-build-platforms-invalid) | host-build | no |
 | [`build-timed-out`](#error-build-timed-out) | build-spec | yes |
 | [`builder-not-approved`](#error-builder-not-approved) | build-spec | no |
+| [`builder-service-failed`](#error-builder-service-failed) | dev | yes |
+| [`builder-service-invalid`](#error-builder-service-invalid) | dev | no |
 | [`bundle-empty`](#error-bundle-empty) | bundle | no |
 | [`bundle-image-archive-missing`](#error-bundle-image-archive-missing) | bundle | no |
 | [`bundle-image-mismatch`](#error-bundle-image-mismatch) | bundle | no |
@@ -172,6 +174,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`credential-helper-failed`](#error-credential-helper-failed) | publish | yes |
 | [`credentials-file-not-private`](#error-credentials-file-not-private) | artifacts-input | no |
 | [`cross-origin-location-refused`](#error-cross-origin-location-refused) | artifacts-registry | no |
+| [`cycle-options-invalid`](#error-cycle-options-invalid) | cli | no |
 | [`deadline-exceeded`](#error-deadline-exceeded) | kubernetes | yes |
 | [`deleted-resource-reappeared`](#error-deleted-resource-reappeared) | execution | no |
 | [`delivery-not-succeeded`](#error-delivery-not-succeeded) | images | no |
@@ -296,11 +299,13 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`generation-precondition-failed`](#error-generation-precondition-failed) | execution | no |
 | [`git-timed-out`](#error-git-timed-out) | inputs | yes |
 | [`git-unavailable`](#error-git-unavailable) | inputs | no |
+| [`gitops-alarm-failed`](#error-gitops-alarm-failed) | gitops | yes |
 | [`gitops-approval-stale`](#error-gitops-approval-stale) | gitops | yes |
 | [`gitops-artifact-changed`](#error-gitops-artifact-changed) | gitops | no |
 | [`gitops-build-cancelled`](#error-gitops-build-cancelled) | gitops | yes |
 | [`gitops-build-not-running`](#error-gitops-build-not-running) | gitops | yes |
 | [`gitops-build-ref-unknown`](#error-gitops-build-ref-unknown) | gitops | yes |
+| [`gitops-canary-failed`](#error-gitops-canary-failed) | gitops | no |
 | [`gitops-cluster-failed`](#error-gitops-cluster-failed) | gitops | yes |
 | [`gitops-config-invalid`](#error-gitops-config-invalid) | gitops | no |
 | [`gitops-controller-locked`](#error-gitops-controller-locked) | gitops | yes |
@@ -327,6 +332,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`gitops-target-invalid`](#error-gitops-target-invalid) | gitops | no |
 | [`gitops-target-required`](#error-gitops-target-required) | gitops | no |
 | [`gitops-token-expiring`](#error-gitops-token-expiring) | gitops | no |
+| [`gitops-wait-timeout`](#error-gitops-wait-timeout) | gitops | yes |
 | [`grant-expired`](#error-grant-expired) | build-spec | yes |
 | [`grant-mismatch`](#error-grant-mismatch) | artifacts-input | yes |
 | [`heavy-command-empty`](#error-heavy-command-empty) | maintenance | no |
@@ -760,9 +766,12 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`train-branches-required`](#error-train-branches-required) | train | no |
 | [`train-busy`](#error-train-busy) | train | yes |
 | [`train-checkout-dirty`](#error-train-checkout-dirty) | train | yes |
+| [`train-compare-invalid`](#error-train-compare-invalid) | train | no |
 | [`train-git-failed`](#error-train-git-failed) | train | yes |
 | [`train-host-unavailable`](#error-train-host-unavailable) | train | yes |
 | [`train-images-failed`](#error-train-images-failed) | train | yes |
+| [`train-init-exists`](#error-train-init-exists) | train | no |
+| [`train-init-invalid`](#error-train-init-invalid) | train | no |
 | [`train-interrupted`](#error-train-interrupted) | train | no |
 | [`train-invalid`](#error-train-invalid) | train | no |
 | [`train-load-failed`](#error-train-load-failed) | train | no |
@@ -831,6 +840,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`watch-timeout`](#error-watch-timeout) | maintenance | yes |
 
 ## Command-line contract (any command)
+
+(error-cycle-options-invalid)=
+### `cycle-options-invalid`
+
+**Cycle report options invalid.** `piceli cycle report` got a `--since` that is neither a duration (`30m`, `24h`, `7d`, `2w`) nor an ISO time, or both `--json` and `--markdown`.
+
+- **Fix:** Pass `--since 24h` (or an ISO time such as 2026-10-01T00:00:00Z) and one of `--json` or `--markdown`.
+- **Retry-safe:** no
 
 (error-deploy-flags-conflict)=
 ### `deploy-flags-conflict`
@@ -4349,6 +4366,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Read the failed checks in the run (`piceli runs`, the deployment history), push a fix (a new revision) or run `piceli gitops sync ENV` to try the same revision again.
 - **Retry-safe:** no
 
+(error-gitops-alarm-failed)=
+### `gitops-alarm-failed`
+
+**Controller alarm not sent.** A target of `Controller(alarms=Alarms(...))` (ntfy or a webhook) refused the alarm, timed out, or its URL or token variable is unset (the key is missing from the `Alarms(secret=)` Secret). The poll and the deploys go on; the failure is listed under `controller.alarms.failures` in the status.
+
+- **Fix:** Check the target's URL, that the Secret named by `Alarms(secret=)` has a key for each variable the targets name, and that the controller can reach the target; `piceli gitops alarms` shows the failed sends.
+- **Retry-safe:** yes
+
 (error-gitops-approval-stale)=
 ### `gitops-approval-stale`
 
@@ -4388,6 +4413,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Run `piceli gitops status` for the tags and heads the controller sees, push the tag first, or promote another commit to the environment with `piceli promote`.
 - **Retry-safe:** yes
+
+(error-gitops-canary-failed)=
+### `gitops-canary-failed`
+
+**The new controller failed its canary.** `piceli gitops enable infra.py --approve HASH --canary` ran the new controller image once, as a Job that imports the composition and plans every environment without applying anything, and it failed: the composition does not import on the new version, an environment does not resolve, load its build specs or plan (a refusal such as `retained-content-differs`), or the Job could not run (the image cannot be pulled, an image older than 0.28.0 has no `gitops canary`, or it timed out). The live controller was not replaced.
+
+- **Fix:** Read the first failure in the message and the `canary` object of the JSON; fix the composition or pick another image, then run the command again. `--force` replaces the controller anyway.
+- **Retry-safe:** no
 
 (error-gitops-cluster-failed)=
 ### `gitops-cluster-failed`
@@ -4596,6 +4629,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Create a new token and update the `password` of the credentials Secret (`--credentials-secret`, in the controller's namespace) before `expires_at`; the controller reads it on its next poll.
 - **Retry-safe:** no
+
+(error-gitops-wait-timeout)=
+### `gitops-wait-timeout`
+
+**Wait ran out of time.** `piceli gitops enable --wait` or `piceli promote HOST --from ENV --wait` saw neither every target running the expected revision with its checks passed nor a failure before `--timeout`: a build may be slow, waiting for a build host or an approval, or the controller has not polled yet. The command exits 2.
+
+- **Fix:** Read the last progress lines; check `piceli gitops status` (and `piceli host status` for a host); wait longer with a larger `--timeout`.
+- **Retry-safe:** yes
 
 (error-promote-dirty)=
 ### `promote-dirty`
@@ -5157,6 +5198,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 
 ## Development builds on a cluster builder (`Cluster(dev=DevBuilds(...))`, `piceli dev …`)
+
+(error-builder-service-failed)=
+### `builder-service-failed`
+
+**Service manager call failed.** `piceli builder install` or `uninstall` (0.28.0) wrote or removed the unit, but `systemctl` or `launchctl` failed. The message holds the command and its output.
+
+- **Fix:** Read the output; check the unit with `systemctl status piceli-builder-HOST` (or `launchctl print`), fix the cause and run the command again.
+- **Retry-safe:** yes
+
+(error-builder-service-invalid)=
+### `builder-service-invalid`
+
+**Build host service refused.** `piceli builder install` (0.28.0) wrote nothing: this machine has no systemd or launchd, a program `builder serve` runs (docker, git, kubectl) is not in `PATH`, it ran as root without `--user USER` (or with `--user` without root), or the running `piceli` program cannot be found. The message says which.
+
+- **Fix:** Install the missing program or add its directory to `PATH`; as root pass `--user USER`, else drop `--user`; then run `piceli builder install` again (`--print` shows the unit without writing it).
+- **Retry-safe:** no
 
 (error-dev-cache-clear-failed)=
 ### `dev-cache-clear-failed`
@@ -7218,6 +7275,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Commit or stash the changes in that worktree, then run the train again.
 - **Retry-safe:** yes
 
+(error-train-compare-invalid)=
+### `train-compare-invalid`
+
+**Train compare request not valid.** --compare runs the old command and the train side by side and never moves or pushes anything, so it refuses --promote, --push, --queue, --retire and --promote-run; it also needs a non-empty command, a valid --compare-phase expression and a scratch clone of the repository.
+
+- **Fix:** Drop the flags the message names, or run the train without --compare.
+- **Retry-safe:** no
+
 (error-train-git-failed)=
 ### `train-git-failed`
 
@@ -7241,6 +7306,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Read the images step's log; check the composition, the build host and the cluster's registry, then run `piceli train APP --promote-run last` again or let the controller build.
 - **Retry-safe:** yes
+
+(error-train-init-exists)=
+### `train-init-exists`
+
+**Train spec file already exists.** `piceli train-init` would overwrite a file that is already there.
+
+- **Fix:** Pick another path, or add --force to overwrite it.
+- **Retry-safe:** no
+
+(error-train-init-invalid)=
+### `train-init-invalid`
+
+**Train init input not usable.** The script given to --from cannot be read, or an option is not valid: --images is not a composition module path (infra.py[:ATTR]), --repository was given without --images, --host is not a build host name, --builds is not MODULE:ATTR with --host, or --name is not a DNS label.
+
+- **Fix:** Fix the option named in the message and run `piceli train-init` again.
+- **Retry-safe:** no
 
 (error-train-interrupted)=
 ### `train-interrupted`

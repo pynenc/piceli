@@ -277,6 +277,23 @@ def train(
             "that is not a fast-forward of that head",
         ),
     ] = None,
+    compare_with: Annotated[
+        str | None,
+        typer.Option(
+            "--compare",
+            help="Run this old command first, in a scratch clone ({branches}: "
+            "the branches, {repo}: the clone), then the train on the same "
+            "branches, and print both side by side; never promotes or pushes",
+        ),
+    ] = None,
+    compare_phase: Annotated[
+        str | None,
+        typer.Option(
+            "--compare-phase",
+            help="With --compare: a regular expression for the old command's "
+            "output lines that start a phase (its first group names it)",
+        ),
+    ] = None,
 ) -> None:
     """Merge branches onto the base one tested merge at a time; eject failures."""
     from piceli.train.engine import TrainRun, locate
@@ -298,6 +315,32 @@ def train(
     if push and not promote and promote_run is None:
         reject("train-push-needs-promote", "--push pushes a promotion: add --promote")
     mode = "remote" if retire_remote else "local" if retire else None
+    if compare_with is not None:
+        given = [
+            flag
+            for flag, on in (
+                ("--promote", promote),
+                ("--push", push),
+                ("--queue", queue),
+                ("--retire", bool(mode)),
+                ("--promote-run", promote_run is not None),
+            )
+            if on
+        ]
+        if given:
+            reject(
+                "train-compare-invalid",
+                f"--compare never moves or pushes anything: drop {', '.join(given)}",
+            )
+        if not branches:
+            reject(
+                "train-branches-required",
+                "name the candidate branches: --branches a b c",
+            )
+        if not compare_with.strip():
+            reject("train-compare-invalid", "--compare needs the old command")
+    elif compare_phase is not None:
+        reject("train-compare-invalid", "--compare-phase goes with --compare")
     if mode and not promote and promote_run is None:
         reject(
             "train-retire-invalid", "--retire retires promoted branches: add --promote"
@@ -312,6 +355,18 @@ def train(
     except TrainError as error:
         reject(error.code, str(error))
     state = TrainState.for_train(loaded.train.name, state_dir)
+    if compare_with is not None:
+        _compare(
+            loaded,
+            repo=repo,
+            spec_path=spec_path,
+            branches=branches or [],
+            state=state,
+            command=compare_with,
+            marker=compare_phase,
+            as_json=as_json,
+        )
+        return
     run = TrainRun(
         loaded,
         repo=repo,
@@ -402,6 +457,7 @@ def build_request(state_dir: Path | None) -> Callable[[Mapping[str, Any]], Any]:
             queue=str(request["id"]),
             promote_run=request.get("promote_run") or None,
             retire=request.get("retire") or None,
+            queued_at=request.get("queued_at") or None,
         )
 
     return build
@@ -484,6 +540,201 @@ def _queued_run(
         emit_json(queued_body(request, position))
 
 
+def _compare(
+    loaded: Any,
+    *,
+    repo: Path,
+    spec_path: str | None,
+    branches: list[str],
+    state: Any,
+    command: str,
+    marker: str | None,
+    as_json: bool,
+) -> None:
+    """``--compare``: the old command in a scratch clone, then the train
+    (no promotion, no observers), then both side by side."""
+    import re
+    import subprocess
+
+    from piceli.train.compare import (
+        PHASE_MARKER,
+        compare,
+        render_table,
+        run_old,
+        train_side,
+    )
+    from piceli.train.engine import TrainRun
+    from piceli.train.model import TrainError
+    from piceli.train.runner import fan_out
+
+    if marker is not None:
+        try:
+            re.compile(marker)
+        except re.error as error:
+            reject("train-compare-invalid", f"--compare-phase: {error}")
+    run = TrainRun(
+        loaded,
+        repo=repo,
+        spec_path=spec_path,
+        branches=branches,
+        state=state,
+        events=fan_out(_human),
+        warn=say,
+        observe=False,
+    )
+    try:
+        run.prepare()
+    except TrainError as error:
+        reject(error.code, str(error))
+    tips = {c.branch: c.tip for c in run.candidates}
+    say(f"old command: {command}")
+    try:
+        old = run_old(
+            command,
+            repo=repo,
+            base=run.start,
+            tips=tips,
+            marker=marker or PHASE_MARKER,
+            echo=lambda line: say(f"  old | {line}"),
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        reject("train-compare-invalid", f"could not prepare the old command: {error}")
+    say(
+        f"old command: {old['verdict']} in {old['wall']:.1f} s (exit {old['exit_code']})"
+    )
+    say(f"train {loaded.train.name}: the same branches, nothing promoted")
+    try:
+        result = run.run()
+    except TrainError as error:
+        fail(error.code, str(error), run=run.run_id)
+    log = state.runs / run.run_id / "compare-old.log"
+    try:
+        log.write_text(old["output"] + "\n")
+        old["log"] = str(log)
+    except OSError:
+        pass
+    body = compare(branches, old, train_side(result))
+    say(render_table(body))
+    if as_json:
+        emit_json(body)
+    if not body["agree"]:
+        raise typer.Exit(EXIT_FAILED)
+
+
+def subcommand_argv(argv: list[str]) -> list[str]:
+    """``piceli train init ...`` is ``piceli train-init ...``."""
+    if argv[:2] == ["train", "init"]:
+        return ["train-init", *argv[2:]]
+    return argv
+
+
+def train_init(
+    path: Annotated[
+        Path,
+        typer.Argument(help="The spec file to write"),
+    ] = Path("train_spec.py"),
+    script: Annotated[
+        Path | None,
+        typer.Option(
+            "--from",
+            help="A shell script to read: its test commands become steps, the "
+            "rest stays as TODO comments",
+        ),
+    ] = None,
+    name: Annotated[
+        str | None,
+        typer.Option("--name", help="The train's name (default: the repository's)"),
+    ] = None,
+    base: Annotated[
+        str | None,
+        typer.Option(
+            "--base", help="The base branch (default: the script's, else main)"
+        ),
+    ] = None,
+    images: Annotated[
+        str | None,
+        typer.Option(
+            "--images",
+            help="COMPOSITION[:ATTR]: add Step.images for the GitOps controller "
+            "of this composition module (declared Controller(prebuilt=True))",
+        ),
+    ] = None,
+    repository: Annotated[
+        str | None,
+        typer.Option(
+            "--repository",
+            help="With --images: the composition's repository URL, when it is "
+            "not this one",
+        ),
+    ] = None,
+    branch: Annotated[
+        str,
+        typer.Option(
+            "--branch", help="With --repository: the branch the controller follows"
+        ),
+    ] = "main",
+    host: Annotated[
+        str | None,
+        typer.Option("--host", help="Run the cargo steps on this declared build host"),
+    ] = None,
+    builds: Annotated[
+        str | None,
+        typer.Option(
+            "--builds",
+            help="With --host: MODULE:ATTR of the DevBuilds (or Cluster with "
+            "dev=) declaring it",
+        ),
+    ] = None,
+    force: Annotated[
+        bool, typer.Option("--force", help="Overwrite an existing file")
+    ] = False,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Print the result object on stdout")
+    ] = False,
+) -> None:
+    """Write a starting train spec, from a shell script or as a template."""
+    from piceli.train.init import write_spec
+    from piceli.train.model import TrainError
+
+    try:
+        body = write_spec(
+            path,
+            script=script,
+            name=name,
+            base=base,
+            images=images,
+            repository=repository,
+            branch=branch,
+            host=host,
+            builds=builds,
+            force=force,
+            cwd=Path.cwd(),
+        )
+    except TrainError as error:
+        reject(error.code, str(error))
+    steps = ", ".join(s["name"] for s in body["steps"]) or "none"
+    say(
+        f"wrote {body['path']}: train {body['train']} on {body['base']}; steps: {steps}"
+    )
+    for item in body["todo"]:
+        say(f"  TODO line {item['line']}: {item['text']}")
+    if body["source"] is not None:
+        say(
+            f"  {len(body['todo'])} line(s) left as TODO, {len(body['handled'])} "
+            f"done by the train itself, {len(body['repeated'])} repeated"
+        )
+    if not body["loads"]:
+        say(f"  the spec does not load: {body['load_error']}")
+    else:
+        compare = f" --compare '{body['compare']}'" if body["compare"] else ""
+        say(f"next: piceli train {body['path']} --branches BRANCH...{compare}")
+    if as_json:
+        emit_json(body)
+    if not body["loads"]:
+        raise typer.Exit(EXIT_FAILED)
+
+
 def register(root: typer.Typer) -> None:
     root.command("train")(train)
+    root.command("train-init")(train_init)
     root.command("train-prune")(train_prune)

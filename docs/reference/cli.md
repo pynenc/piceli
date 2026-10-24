@@ -39,7 +39,10 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli artifacts retention`](#cli-artifacts-retention) | Report which registry manifests the last releases, pins and live workloads keep, and delete the rest. | reads | yes |
 | [`piceli build job`](#cli-build-job) | Build at a commit as a Job on a builder node (plan, then --approve HASH). | writes | yes |
 | [`piceli build job-run`](#cli-build-job-run) | Inside the build Job: build and push; print the receipt line. | none | no |
+| [`piceli builder install`](#cli-builder-install) | Run builder serve as a service on this machine (systemd or launchd). | reads | no |
 | [`piceli builder serve`](#cli-builder-serve) | Take the builds the controller publishes, build and deliver them, answer it. | writes | no |
+| [`piceli builder status`](#cli-builder-status) | List the build hosts the controller heard from and what each last did. | reads | no |
+| [`piceli builder uninstall`](#cli-builder-uninstall) | Stop, disable and remove the build host service builder install wrote. | none | no |
 | [`piceli bundle`](#cli-bundle) | Package the app for a cluster Piceli never accesses (kustomize, prepare.sh, images). | none | no |
 | [`piceli cache prune`](#cli-cache-prune) | Remove what no release, rollback or resume needs: stale temporary directories and partial files, runs beyond --keep-last, unused delivery receipts, and (over --budget) build outputs and logs. | none | no |
 | [`piceli cache status`](#cli-cache-status) | Show the disk used per state directory and category, and Piceli's temporary directories. Read-only. | none | no |
@@ -50,6 +53,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli cluster init`](#cli-cluster-init) | Set the cluster up: node labels, registry and mirrors, controller, UI (plan first; --approve HASH applies). | writes | yes |
 | [`piceli cluster status`](#cli-cluster-status) | Nodes, registry and mirrors, controller, UI and Git Secret of a declared cluster (read-only). | reads | no |
 | [`piceli codegen crd`](#cli-codegen-crd) | Generate pydantic models for one CRD version, from a file or a cluster. | reads | no |
+| [`piceli cycle report`](#cli-cycle-report) | Push to running and checked per target: p50, p90, count, slowest phase and slowest cycle, from the controller's history and local records. | reads | no |
 | [`piceli deploy`](#cli-deploy) | Deploy a pipeline: inputs → build → deliver → plan → apply → checks. | writes | yes |
 | [`piceli dev cache clear`](#cli-dev-cache-clear) | Empty free lineages' cargo targets (a corrupted cache); busy ones are skipped. | writes | no |
 | [`piceli dev cancel`](#cli-dev-cancel) | Cancel a queued or running run (its Job and pod are deleted). | writes | no |
@@ -70,6 +74,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli env up`](#cli-env-up) | Deploy BRANCH into its namespace (created when absent), isolated. | writes | yes |
 | [`piceli envs`](#cli-envs) | List every environment: branch, namespace, commit, deploy state, health, age. | reads | no |
 | [`piceli explain`](#cli-explain) | Explain an error code: cause, fix and whether a retry can succeed. | none | no |
+| [`piceli gitops alarms`](#cli-gitops-alarms) | The controller's alarms: failed or waiting environments, failed Nix releases, a composition that does not import, a new version. With --follow, each new one also as a desktop notification. | reads | no |
 | [`piceli gitops approve`](#cli-gitops-approve) | Approve the pending plan of ENV; the controller applies it on its next poll. | writes | yes |
 | [`piceli gitops build`](#cli-gitops-build) | Ask the controller to build NAME now: a NixRelease plans --ref, an environment rebuilds its images; the same gate, plan and approval apply. | writes | no |
 | [`piceli gitops builds`](#cli-gitops-builds) | List every build the controller knows (NixRelease publishes, image builds, train handoffs): trigger, commit, host, stage, log tail, targets. | reads | no |
@@ -171,6 +176,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli support-bundle`](#cli-support-bundle) | Collect a read-only, redacted snapshot of a namespace (no Secrets, no env values). | reads | no |
 | [`piceli targets`](#cli-targets) | Every environment and NixHost: commit or tag, pinned product commit, checks, state. | reads | no |
 | [`piceli train`](#cli-train) | Merge branches onto the base one tested merge at a time; eject failures. | none | yes |
+| [`piceli train-init`](#cli-train-init) | Write a starting train spec, from a shell script or as a template. | none | no |
 | [`piceli train-prune`](#cli-train-prune) | Bound what a train keeps: worktrees, cargo targets, the content store, runs. | none | no |
 | [`piceli train-queue`](#cli-train-queue) | A train's queue: waiting requests with their flags; cancel one, or serve them. | none | no |
 | [`piceli train-wait`](#cli-train-wait) | Wait until a train run ends; exit with its verdict. | none | no |
@@ -669,6 +675,37 @@ Inside the build Job: build and push; print the receipt line.
 - **Output contract:** conforms
 - **Notes:** The command the Job runs; it prints one receipt line on stdout. The approval was the plan hash of `build job`. With --sources and --component it builds a composition's components from their piceli.toml (the Job the composition controller runs).
 
+(cli-builder-install)=
+### `piceli builder install`
+
+Run builder serve as a service on this machine (systemd or launchd).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster whose controller to serve |
+| `--host` | text | required | The declared build host this machine is (one service per name) |
+| `--publish` | text (repeatable) |  | MODULE:ATTR of a piceli.infra.NixCache this host publishes to (repeat); its keys must be in this machine's piceli secrets |
+| `--publish-only`, `--no-publish-only` | boolean |  | Passed on to builder serve |
+| `--image` | text |  | The builder image (passed on to builder serve) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--user` | text |  | As root: the user the service runs as (a system service); without root the service runs as you (a user service) |
+| `--state-dir` | path |  | builder serve's state directory (Git mirrors; launchd's builder.log); default ~/.cache/piceli/builder of the service user |
+| `--print` | boolean | `False` | Write the unit (or property list) to stdout and change nothing |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=DevBuilds(hosts=[...])), credential profile, the controller's status, MODULE:ATTR of each --publish NixCache and its keys from this machine's credentials (checked, never written to the unit), PATH (docker, git, kubectl)
+- **Writes:** /etc/systemd/system or ~/.config/systemd/user/piceli-builder-HOST.service (Linux), /Library/LaunchDaemons or ~/Library/LaunchAgents/piceli.builder.HOST.plist (macOS), systemctl daemon-reload, enable, restart (launchctl bootstrap)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.28.0. Runs the same checks as builder serve --check first (the profile reaches the controller; every credential the host needs is present, else infra-credential-missing names it) and refuses when docker, git or kubectl is missing (builder-service-invalid). The unit runs the piceli program that ran install (absolute path, version in its description), in the directory install ran in, with Restart=on-failure, RestartSec=10 and KillSignal=SIGINT; it holds directories, never a secret. As root it needs --user USER (a system service); otherwise it is a user service. --print writes the unit to stdout and changes nothing. A failing systemctl or launchctl is builder-service-failed.
+
 (cli-builder-serve)=
 ### `piceli builder serve`
 
@@ -701,6 +738,51 @@ Take the builds the controller publishes, build and deliver them, answer it.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** 0.21.0. Runs until Ctrl-C (--once: one build). The builder image must be the controller's Piceli version. 0.22.0: each delivered image's provenance is pushed as an OCI referrer when the registry takes it; a build showing a machine-health signature records a health event on the host, and a quarantined host claims nothing (quarantined in --once --json). 0.25.0: --publish MODULE:ATTR (repeatable) also takes the nix-publish builds of the NixReleases that name this host as builder, only for those caches; every key is read at start (infra-credential-missing, dev-nix-key-mismatch refuse it) and never leaves the host: a claim carries the cache key's signature over it. A native host with --publish only publishes. The publish itself was approved by the release's policy or gitops approve of its plan digest. 0.25.0: --publish-only (needs --publish, else dev-nix-invalid) claims only those publishes on any kind of host, never an image build (said once), and needs no cluster registry: a remote publisher is a docker host with an SSH context to itself, since a native host is the machine running Piceli. A host declared runs=False implies --publish-only and is refused without --publish or with --no-publish-only (dev-host-publish-only); without --host it is never the default. 0.26.0: before each publish the host fetches the plan's private flake inputs into its own store (its own git-token or git-ssh-key, or for credentials="controller" the controller's token sealed to the claim's one-time key), else build-failed with infra-nix-input-unreachable before any build; at start it warns per release of an input it holds no credential for, and --check claims nothing and prints piceli.builder-check.v1 (each release's mode, inputs and credential states; exit 1 when one is missing).
+
+(cli-builder-status)=
+### `piceli builder status`
+
+List the build hosts the controller heard from and what each last did.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster whose controller to serve |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=DevBuilds(hosts=[...])), credential profile, the controller's status
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.28.0. Read-only (controller.build_hosts, builds_wanted and build_health in gitops status); piceli.builder-status.v1 under --json.
+
+(cli-builder-uninstall)=
+### `piceli builder uninstall`
+
+Stop, disable and remove the build host service builder install wrote.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--host` | text | required | The build host's service |
+
+**Contract**
+
+- **Reads:** the unit or property list of --host
+- **Writes:** the unit or property list (removed); systemctl disable --now (launchctl bootout)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.28.0. state absent when none is installed (nothing runs).
 
 (cli-bundle)=
 ### `piceli bundle`
@@ -972,6 +1054,35 @@ Generate pydantic models for one CRD version, from a file or a cluster.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** A file never contacts a cluster; --from-cluster sends one GET of the CRD through an explicit --kubeconfig and --context (exec plugins only with --allow-exec). Deterministic: the same schema always generates the same module. --out replaces only a file piceli generated, unless --force.
+
+(cli-cycle-report)=
+### `piceli cycle report`
+
+Push to running and checked per target: p50, p90, count, slowest phase and slowest cycle, from the controller's history and local records.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--since` | text |  | Only cycles that ended in this window (24h, 30m, 7d) or after this ISO time; default: all that are kept |
+| `--target` | text |  | Only this target (environment, host, train) |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+| `--markdown` | boolean | `False` | Print a Markdown table on stdout (to paste into docs) |
+| `--train-state-dir` | path |  | Train state root (default $XDG_STATE_HOME/piceli/train) |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir (optional), the controller's status and history, local train run records, host switches piceli host wait kept
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.28.0. Read-only. --json prints piceli.cycle-report.v1; --markdown prints a Markdown table on stdout instead; --since (24h, 7d or an ISO time) and --target filter it (cycle-options-invalid). Without --kubeconfig/--context or --state-dir the controller is not read.
 
 (cli-deploy)=
 ### `piceli deploy`
@@ -1324,17 +1435,24 @@ Delete BRANCH's environment: its claims, namespace and volumes (never main's).
 | `--pipeline` | text | env `PICELI_PIPELINE` | The pipeline: MODULE:ATTR or path/to/file.py:ATTR naming a Pipeline that declares envs=EnvConfig(...) (default: $PICELI_PIPELINE) |
 | `--approve` | text |  | The env_hash to execute (from the plan) |
 | `--approve-if-policy` | boolean | `False` | Execute without --approve when the owner allows it: EnvConfig(auto_approve=True) for branch environments, or the pipeline's auto_approve policy for the deploy (never for main's teardown or seed) |
+| `--cluster` | text |  | Ask the GitOps controller of this composition's Cluster (infra.py:CLUSTER, its credentials profile) instead of --pipeline: a preview of the branch, now |
+| `--state-dir` | path |  | With the controller: a local controller's state directory |
+| `--namespace` | text | `piceli-system` | With the controller: its namespace |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--wait` | boolean | `False` | With the controller: wait until the preview is removed |
+| `--timeout` | text | `10m` | With the controller and --wait: give up after (10m, 1h) |
+| `--interval` | float | `2.0` | With the controller and --wait: seconds between status reads |
 
 **Contract**
 
-- **Reads:** pipeline module (--pipeline or $PICELI_PIPELINE), kubeconfig
-- **Writes:** <state_dir>/branches/<namespace> (removed)
+- **Reads:** pipeline module (--pipeline or $PICELI_PIPELINE), kubeconfig, --cluster infra.py:CLUSTER (its credentials profile) or --state-dir
+- **Writes:** <state_dir>/branches/<namespace> (removed), --state-dir requests (local controller)
 - **Cluster:** writes
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Refuses the main branch and the main namespace always (env-main-protected) and a namespace without this app's piceli.io/env-of label or of another branch (env-namespace-not-managed). The plan lists the claims and the volumes bound to them; with --approve HASH (or --approve-if-policy and EnvConfig(auto_approve=True)) it deletes the claims, the namespace and those volumes. An absent environment prints state absent (exit 0).
+- **Notes:** Refuses the main branch and the main namespace always (env-main-protected) and a namespace without this app's piceli.io/env-of label or of another branch (env-namespace-not-managed). The plan lists the claims and the volumes bound to them; with --approve HASH (or --approve-if-policy and EnvConfig(auto_approve=True)) it deletes the claims, the namespace and those volumes. An absent environment prints state absent (exit 0). 0.28.0: with --cluster (or --state-dir) it asks the GitOps controller to tear the branch's preview down; it stays down until the branch's next push. --wait waits until it is removed (exit 0), rejected (1) or timed out (2).
 
 (cli-env-push)=
 ### `piceli env push`
@@ -1451,18 +1569,24 @@ Deploy BRANCH into its namespace (created when absent), isolated.
 | `--plan` | boolean | `False` | Plan only; print the env_hash |
 | `--approve` | text |  | The env_hash to execute (from the plan) |
 | `--approve-if-policy` | boolean | `False` | Execute without --approve when the owner allows it: EnvConfig(auto_approve=True) for branch environments, or the pipeline's auto_approve policy for the deploy (never for main's teardown or seed) |
-| `--wait` | boolean | `False` | When the budget is full, refuse (env-budget-full) instead of stopping the least recently pushed environment |
+| `--wait` | boolean | `False` | With --pipeline: when the budget is full, refuse (env-budget-full) instead of stopping the least recently pushed environment. With the controller: wait until the preview is ready and print its URL (exit 0), failed (1) or timed out (2) |
+| `--cluster` | text |  | Ask the GitOps controller of this composition's Cluster (infra.py:CLUSTER, its credentials profile) instead of --pipeline: a preview of the branch, now |
+| `--state-dir` | path |  | With the controller: a local controller's state directory |
+| `--namespace` | text | `piceli-system` | With the controller: its namespace |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--timeout` | text | `10m` | With the controller and --wait: give up after (10m, 1h) |
+| `--interval` | float | `2.0` | With the controller and --wait: seconds between status reads |
 
 **Contract**
 
-- **Reads:** pipeline module (--pipeline or $PICELI_PIPELINE), kubeconfig, state_dir, build receipt (--receipt)
-- **Writes:** <state_dir>/branches/<namespace> (journal, release state, secrets)
+- **Reads:** pipeline module (--pipeline or $PICELI_PIPELINE), kubeconfig, state_dir, build receipt (--receipt), --cluster infra.py:CLUSTER (its credentials profile) or --state-dir
+- **Writes:** <state_dir>/branches/<namespace> (journal, release state, secrets), --state-dir requests (local controller)
 - **Cluster:** writes
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** The branch's namespace is <prefix><slug> (at most 63 characters, hash suffix when cut); main maps to the main namespace, which is never created. Branch environments never build: images come from --digest NAME=REF or --receipt. The app is isolated at render time (relative Service names, no NodePort, hostPort or hostPath, namespace-qualified cluster objects, its own generated Secrets) and gets a default-deny NetworkPolicy across namespaces and a ResourceQuota. The plan (--plan, or without an approval) lists the namespace to create, the environments the budget stops (max_envs, least recently pushed first; scaled to zero, kept), the deploy's combined plan and the seed (--seed-from main). --approve-if-policy runs a branch when EnvConfig(auto_approve=True), or when the pipeline's auto_approve policy allows the deploy and nothing is stopped; main only by the policy. --wait refuses with env-budget-full instead of stopping.
+- **Notes:** The branch's namespace is <prefix><slug> (at most 63 characters, hash suffix when cut); main maps to the main namespace, which is never created. Branch environments never build: images come from --digest NAME=REF or --receipt. The app is isolated at render time (relative Service names, no NodePort, hostPort or hostPath, namespace-qualified cluster objects, its own generated Secrets) and gets a default-deny NetworkPolicy across namespaces and a ResourceQuota. The plan (--plan, or without an approval) lists the namespace to create, the environments the budget stops (max_envs, least recently pushed first; scaled to zero, kept), the deploy's combined plan and the seed (--seed-from main). --approve-if-policy runs a branch when EnvConfig(auto_approve=True), or when the pipeline's auto_approve policy allows the deploy and nothing is stopped; main only by the policy. --wait refuses with env-budget-full instead of stopping. 0.28.0: with --cluster infra.py:CLUSTER (or --state-dir) it asks a composition's GitOps controller instead: a preview request in the ConfigMap piceli-gitops-requests, served within seconds (the controller wakes for it), taking the images a train offered for the branch's head; a branch outside the rule's patterns gets one on request. --wait then waits until the preview runs its head with its checks passed and prints its URL (Environment.per_branch(url=...)) once (exit 0), the failure or a rejected request (exit 1), or the timeout (gitops-wait-timeout, exit 2). The --pipeline options are refused there (gitops-request-invalid).
 
 (cli-envs)=
 ### `piceli envs`
@@ -1508,6 +1632,36 @@ Explain an error code: cause, fix and whether a retry can succeed.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** `--run ID --spec SPEC` explains a past execution instead, from the local state (same as `piceli release status --spec SPEC --run ID`).
+
+(cli-gitops-alarms)=
+### `piceli gitops alarms`
+
+The controller's alarms: failed or waiting environments, failed Nix releases, a composition that does not import, a new version. With --follow, each new one also as a desktop notification.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--follow` | boolean | `False` | Keep reading the status and raise each new alarm as a desktop notification (Ctrl-C stops) |
+| `--interval` | float | `30.0` | Seconds between two status reads |
+| `--waiting-after` | text |  | How long a wait for a build host or an approval may last (default: the controller's Alarms(waiting_after=), else 10m) |
+| `--desktop`, `--no-desktop` | boolean | `True` | With --follow: raise desktop notifications |
+| `--polls` | integer | `0` | With --follow: stop after this many reads (0: never) |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir, the controller's status
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.28.0. Read-only. Each alarm is shown once per run of the command (a resolved one once more); --follow keeps reading every --interval seconds (--polls N stops after N reads). --json prints piceli.gitops-alarms.v1 with each alarm as piceli.alarm.v1. The controller itself sends to the ntfy and webhook targets of Controller(alarms=Alarms(...)).
 
 (cli-gitops-approve)=
 ### `piceli gitops approve`
@@ -1704,6 +1858,11 @@ Install the GitOps controller (plan first; --approve HASH installs).
 | `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
 | `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
 | `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--wait` | boolean | `False` | After the install, wait until every environment runs its revision with its checks passed (exit 0), or report the first failure (exit 1) or the timeout (exit 2) |
+| `--timeout` | text | `15m` | With --wait or --canary: give up after (15m, 1h) |
+| `--interval` | float | `10.0` | With --wait or --canary: seconds between reads |
+| `--canary` | boolean | `False` | With --approve, for a composition: before replacing the live controller, run the new image once as a Job that imports the composition and plans every environment without applying anything; a failure refuses the replacement (gitops-canary-failed) |
+| `--force` | boolean | `False` | With --canary: replace the controller even if its canary failed |
 
 **Contract**
 
@@ -1712,9 +1871,9 @@ Install the GitOps controller (plan first; --approve HASH installs).
 - **Cluster:** writes
 - **Approval required:** yes
 - **Safe to retry:** yes
-- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Reads the pipeline's named environments and idle_stop from the working tree (--root, default .) into the controller config (gitops-pipeline-invalid when the file is there and does not load). Without --approve prints the install plan (Namespace, ServiceAccount, scoped Role/ClusterRole and bindings, state PersistentVolumeClaim, config ConfigMap, one-replica Deployment) and its hash, exit 3. --image must be pinned by digest (gitops-image-unpinned); --repo must carry no credentials (gitops-repo-invalid): they come from the Secret named by --credentials-secret, which is mounted and never read or printed. A changed plan is refused (gitops-plan-changed). Given a composition module (infra.py, no :ATTR) the controller config holds every source, component and environment of it instead (composition-invalid when it does not load); without --kubeconfig the composition's Cluster credentials profile is used. `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
+- **Notes:** Reads the pipeline's named environments and idle_stop from the working tree (--root, default .) into the controller config (gitops-pipeline-invalid when the file is there and does not load). Without --approve prints the install plan (Namespace, ServiceAccount, scoped Role/ClusterRole and bindings, state PersistentVolumeClaim, config ConfigMap, one-replica Deployment) and its hash, exit 3. --image must be pinned by digest (gitops-image-unpinned); --repo must carry no credentials (gitops-repo-invalid): they come from the Secret named by --credentials-secret, which is mounted and never read or printed. A changed plan is refused (gitops-plan-changed). Given a composition module (infra.py, no :ATTR) the controller config holds every source, component and environment of it instead (composition-invalid when it does not load); without --kubeconfig the composition's Cluster credentials profile is used. 0.28.0, --wait: after the install, waits until every environment runs its revision with its checks passed (exit 0), reports the first failure (environment, stage, reason code, log tail; a composition that does not import; exit 1) or the timeout (gitops-wait-timeout, exit 2); progress lines on stderr, the result under wait in the JSON. 0.28.0, --canary (with --approve, a composition): before the plan replaces a running controller, runs the new image once as a Job (gitops canary: scratch state, its own ConfigMap, plan only) that imports the composition, resolves every environment, loads its builds and plans it; a failure refuses the replacement (gitops-canary-failed, exit 2) unless --force; the Job and its ConfigMap are removed when it ends; the result under canary in the JSON. `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
 
 (cli-gitops-hosts)=
 ### `piceli gitops hosts`
@@ -2919,6 +3078,9 @@ Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV; w
 | `--repo` | path | `.` | With --from: the flake's working copy |
 | `--bump` | text | `patch` | With --from: major, minor or patch |
 | `--approve` | text |  | With --from: the promotion plan's digest |
+| `--wait` | boolean | `False` | With --from --approve: wait until the host runs the new tag with its checks passed (exit 0), or report the first failure (exit 1) or the timeout (exit 2) |
+| `--timeout` | text | `15m` | With --wait: give up after (15m, 1h) |
+| `--interval` | float | `10.0` | With --wait: seconds between reads |
 | `--json` | boolean | `False` | Print one JSON object on stdout |
 
 **Contract**
@@ -2930,7 +3092,7 @@ Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV; w
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Writes a request; the controller accepts only a commit it saw on that branch (gitops-promote-unknown otherwise), a named environment only when it follows Promote() (gitops-promote-not-allowed), and the environment then waits for gitops approve of its plan hash. 0.25.0, promote HOST --from ENV: without --approve it prints the plan (pinned, the lock change old rev -> new rev, the commit message, the tag, the remote and branch) with its digest and exits 3. A lock that already pins the commit exits 0 with state current: with a tag of the pattern at HEAD there is nothing to do; without one the plan only tags HEAD and --approve tags and pushes the tag. --approve recomputes the plan (promote-plan-changed when it differs), commits flake.lock alone, tags and pushes with git push --atomic (promote-push-failed exits 1; the commit and tag stay local). Refuses a dirty working copy (promote-dirty), one behind, ahead of or diverged from its upstream (promote-not-in-sync), an environment without a passed run (promotion-not-verified) and an unreadable history (promotion-history-unreachable).
+- **Notes:** Writes a request; the controller accepts only a commit it saw on that branch (gitops-promote-unknown otherwise), a named environment only when it follows Promote() (gitops-promote-not-allowed), and the environment then waits for gitops approve of its plan hash. 0.25.0, promote HOST --from ENV: without --approve it prints the plan (pinned, the lock change old rev -> new rev, the commit message, the tag, the remote and branch) with its digest and exits 3. A lock that already pins the commit exits 0 with state current: with a tag of the pattern at HEAD there is nothing to do; without one the plan only tags HEAD and --approve tags and pushes the tag. --approve recomputes the plan (promote-plan-changed when it differs), commits flake.lock alone, tags and pushes with git push --atomic (promote-push-failed exits 1; the commit and tag stay local). Refuses a dirty working copy (promote-dirty), one behind, ahead of or diverged from its upstream (promote-not-in-sync), an environment without a passed run (promotion-not-verified) and an unreadable history (promotion-history-unreachable). 0.28.0, --from --wait: after the push (or when the tag is current), waits until the host runs the tag with its checks passed (exit 0), reports the first failure (a failed publish of the tag in the controller's status, or the host's failed or rolled-back attempt over SSH; exit 1) or the timeout (gitops-wait-timeout, exit 2); progress lines on stderr, the result under wait in the JSON.
 
 (cli-publish)=
 ### `piceli publish`
@@ -4023,17 +4185,49 @@ Merge branches onto the base one tested merge at a time; eject failures.
 | `--retire` | boolean | `False` | Once promoted, rename each joined branch to_delete_<date>_<branch> (never deleted); a branch checked out with changes, or one that moved after it joined, is left alone |
 | `--retire-remote` | boolean | `False` | --retire, and delete each retired branch on the remote after the push (only while it is at the joined commit; needs --push) |
 | `--promote-run` | text |  | Promote the head an earlier run reached (its id, or 'last'), without running it again; refused when the base moved in a way that is not a fast-forward of that head |
+| `--compare` | text |  | Run this old command first, in a scratch clone ({branches}: the branches, {repo}: the clone), then the train on the same branches, and print both side by side; never promotes or pushes |
+| `--compare-phase` | text |  | With --compare: a regular expression for the old command's output lines that start a phase (its first group names it) |
 
 **Contract**
 
 - **Reads:** the train spec module (MODULE[:ATTR]), then the same module in each merged tree, the Git repository (branches, base, tested), the steps' tools (cargo, scripts of the merged tree), Train(builds=): the declared build hosts (their engines, queues, health), --promote-run: an earlier run's record
-- **Writes:** worktrees of the repository at stable paths under the train cache (removed after each trial), unreferenced merge commits; refs/piceli/train/<name>/last, $XDG_STATE_HOME/piceli/train/<name> (run records, events, logs, flaky.jsonl, the queue), $XDG_CACHE_HOME/piceli/train (slot locks, shared cargo targets, the content store), build hosts: dev runs of the merged tree (their queues, warm caches, health events), --promote: the tag, tested and the base (fast-forward only), publish steps, --promote with Step.images: images pushed to the cluster's registry, a prebuilt request to its controller, --push: the remote's tag, tested and base
+- **Writes:** worktrees of the repository at stable paths under the train cache (removed after each trial), unreferenced merge commits; refs/piceli/train/<name>/last, $XDG_STATE_HOME/piceli/train/<name> (run records, events, logs, flaky.jsonl, the queue), $XDG_CACHE_HOME/piceli/train (slot locks, shared cargo targets, the content store), build hosts: dev runs of the merged tree (their queues, warm caches, health events), --promote: the tag, tested and the base (fast-forward only), publish steps, --promote with Step.images: images pushed to the cluster's registry, a prebuilt request to its controller, --push: the remote's tag, tested and base, --compare: a scratch clone (removed), the old command's output in the run's directory
 - **Cluster:** none
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.26.0. Runs the train's steps, which run code: the explicit branch list is the approval, and --promote/--push the approval to move refs and push. Without --promote no ref changes; nothing is pushed without --push (which needs --promote). Each candidate set is merged with git merge --no-ff onto the train's head in a temporary worktree; its steps come from the merged tree's spec. A failing set is bisected. --json prints one piceli.train.v1 object. --queue on a busy train writes a queued request (keeping its flags, --promote-run too, with last resolved when queued) and returns at once (piceli.train.queued.v1, exit 0); every run serves the train's queue when it ends. A run that raises midway (a --promote-run too) is recorded failed (run-failed: train-git-failed, train-host-unavailable, train-run-failed, train-run-cancelled), notified, exit 1. Exit 0: every branch joined (or was already in) and the promotion and push asked for succeeded; 1: a branch was ejected (train-step-failed, train-step-timeout, train-merge-conflict, train-merge-failed, train-spec-invalid), the promotion was refused (train-not-fast-forward, train-checkout-dirty), a publish step or the push failed; 2: rejected before anything ran (train-not-found, train-branch-unknown, train-busy, ...). Steps may run on the train's build hosts (Train(builds=, hosts=)) through the dev run machinery; a step with inputs that passed before is reused. --promote-run RUN promotes an earlier run's head without running it (train-run-unknown, train-not-fast-forward); no host for a step fails the run (train-host-unavailable).
+- **Notes:** 0.26.0. Runs the train's steps, which run code: the explicit branch list is the approval, and --promote/--push the approval to move refs and push. Without --promote no ref changes; nothing is pushed without --push (which needs --promote). Each candidate set is merged with git merge --no-ff onto the train's head in a temporary worktree; its steps come from the merged tree's spec. A failing set is bisected. --json prints one piceli.train.v1 object. --queue on a busy train writes a queued request (keeping its flags, --promote-run too, with last resolved when queued) and returns at once (piceli.train.queued.v1, exit 0); every run serves the train's queue when it ends. A run that raises midway (a --promote-run too) is recorded failed (run-failed: train-git-failed, train-host-unavailable, train-run-failed, train-run-cancelled), notified, exit 1. Exit 0: every branch joined (or was already in) and the promotion and push asked for succeeded; 1: a branch was ejected (train-step-failed, train-step-timeout, train-merge-conflict, train-merge-failed, train-spec-invalid), the promotion was refused (train-not-fast-forward, train-checkout-dirty), a publish step or the push failed; 2: rejected before anything ran (train-not-found, train-branch-unknown, train-busy, ...). Steps may run on the train's build hosts (Train(builds=, hosts=)) through the dev run machinery; a step with inputs that passed before is reused. --promote-run RUN promotes an earlier run's head without running it (train-run-unknown, train-not-fast-forward); no host for a step fails the run (train-host-unavailable). --compare COMMAND (0.28.0) runs the old command in a scratch clone first, then the train on the same branches without promoting, and prints both side by side (piceli.train-compare.v1 under --json); exit 0 when both agree on pass or fail, 1 when they disagree; refuses --promote, --push, --queue, --retire, --promote-run (train-compare-invalid).
+
+(cli-train-init)=
+### `piceli train-init`
+
+Write a starting train spec, from a shell script or as a template.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `PATH` | path | `train_spec.py` |  |
+| `--from` | path |  | A shell script to read: its test commands become steps, the rest stays as TODO comments |
+| `--name` | text |  | The train's name (default: the repository's) |
+| `--base` | text |  | The base branch (default: the script's, else main) |
+| `--images` | text |  | COMPOSITION[:ATTR]: add Step.images for the GitOps controller of this composition module (declared Controller(prebuilt=True)) |
+| `--repository` | text |  | With --images: the composition's repository URL, when it is not this one |
+| `--branch` | text | `main` | With --repository: the branch the controller follows |
+| `--host` | text |  | Run the cargo steps on this declared build host |
+| `--builds` | text |  | With --host: MODULE:ATTR of the DevBuilds (or Cluster with dev=) declaring it |
+| `--force` | boolean | `False` | Overwrite an existing file |
+| `--json` | boolean | `False` | Print the result object on stdout |
+
+**Contract**
+
+- **Reads:** --from: the shell script, the directory's project files (Cargo.toml, pyproject.toml, package.json), the written spec, loaded once with the train's loader
+- **Writes:** the spec file (only a new file, or an existing one with --force)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** no
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.28.0. Also spelled piceli train init. Never runs the script. cargo, pytest (and uv/poetry run, python -m), tox, nox, npm, pnpm, yarn, make, just and go commands become steps; git commands are what the train does; shell glue is skipped; every other command line stays in the spec as a TODO comment with a hint. --images COMPOSITION[:ATTR] [--repository URL --branch B] adds Step.images; --host NAME [--builds MODULE:ATTR] runs the cargo steps on a build host. --json prints one piceli.train-init.v1 object. Exit 0: written and it loads; 1: written but it does not load (load_error); 2: nothing written (train-init-exists, train-init-invalid).
 
 (cli-train-prune)=
 ### `piceli train-prune`

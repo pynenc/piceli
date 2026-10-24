@@ -658,6 +658,12 @@ class TrainTelemetry:
             ],
             "piceli.train.duration_ms": int(float(event.get("duration") or 0) * 1000),
         }
+        cycle = event.get("cycle")
+        if isinstance(cycle, Mapping):  # 0.28.0: piceli.cycle
+            attributes["piceli.cycle.seconds"] = cycle.get("seconds")
+            for name, seconds in sorted((cycle.get("phases") or {}).items()):
+                key = str(name).replace(" ", ".")
+                attributes[f"piceli.cycle.phase.{key}.seconds"] = seconds
         start = self.root_start or at
         self._send_spans(
             [

@@ -1358,6 +1358,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
                 "--promote: the tag, tested and the base (fast-forward only), publish steps",
                 "--promote with Step.images: images pushed to the cluster's registry, a prebuilt request to its controller",
                 "--push: the remote's tag, tested and base",
+                "--compare: a scratch clone (removed), the old command's output in the run's directory",
             ),
             approval_required=True,
             safe_to_retry=True,
@@ -1388,7 +1389,40 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "through the dev run machinery; a step with inputs that passed "
             "before is reused. --promote-run RUN promotes an earlier run's head "
             "without running it (train-run-unknown, train-not-fast-forward); "
-            "no host for a step fails the run (train-host-unavailable).",
+            "no host for a step fails the run (train-host-unavailable). "
+            "--compare COMMAND (0.28.0) runs the old command in a scratch clone "
+            "first, then the train on the same branches without promoting, and "
+            "prints both side by side (piceli.train-compare.v1 under --json); "
+            "exit 0 when both agree on pass or fail, 1 when they disagree; "
+            "refuses --promote, --push, --queue, --retire, --promote-run "
+            "(train-compare-invalid).",
+        ),
+        "train-init": _C(
+            "Write a starting train spec: from a shell script (its test "
+            "commands become steps) or as a commented template.",
+            reads=(
+                "--from: the shell script",
+                "the directory's project files (Cargo.toml, pyproject.toml, package.json)",
+                "the written spec, loaded once with the train's loader",
+            ),
+            writes=(
+                "the spec file (only a new file, or an existing one with --force)",
+            ),
+            approval_required=False,
+            safe_to_retry=False,
+            long_running=False,
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.28.0. Also spelled piceli train init. Never runs the script. "
+            "cargo, pytest (and uv/poetry run, python -m), tox, nox, npm, pnpm, "
+            "yarn, make, just and go commands become steps; git commands are what "
+            "the train does; shell glue is skipped; every other command line "
+            "stays in the spec as a TODO comment with a hint. --images "
+            "COMPOSITION[:ATTR] [--repository URL --branch B] adds Step.images; "
+            "--host NAME [--builds MODULE:ATTR] runs the cargo steps on a build "
+            "host. --json prints one piceli.train-init.v1 object. Exit 0: written "
+            "and it loads; 1: written but it does not load (load_error); 2: "
+            "nothing written (train-init-exists, train-init-invalid).",
         ),
         "train-prune": _C(
             "Bound what a train keeps on this machine: trial worktrees, cargo "
@@ -1570,7 +1604,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             cluster="writes",
             approval_required=True,
             contract="conforms",
-            exit_codes=(0, 2, 3),
+            exit_codes=(0, 1, 2, 3),
             notes="Reads the pipeline's named environments and idle_stop from "
             "the working tree (--root, default .) into the controller config "
             "(gitops-pipeline-invalid when the file is there and does not "
@@ -1585,8 +1619,20 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "composition module (infra.py, no :ATTR) the controller config holds "
             "every source, component and environment of it instead "
             "(composition-invalid when it does not load); without --kubeconfig "
-            "the composition's Cluster credentials profile is used. "
-            + _EXPLICIT_CONTEXT,
+            "the composition's Cluster credentials profile is used. 0.28.0, "
+            "--wait: after the install, waits until every environment runs its "
+            "revision with its checks passed (exit 0), reports the first failure "
+            "(environment, stage, reason code, log tail; a composition that does "
+            "not import; exit 1) or the timeout (gitops-wait-timeout, exit 2); "
+            "progress lines on stderr, the result under wait in the JSON. "
+            "0.28.0, --canary (with --approve, a composition): before the plan "
+            "replaces a running controller, runs the new image once as a Job "
+            "(gitops canary: scratch state, its own ConfigMap, plan only) that "
+            "imports the composition, resolves every environment, loads its "
+            "builds and plans it; a failure refuses the replacement "
+            "(gitops-canary-failed, exit 2) unless --force; the Job and its "
+            "ConfigMap are removed when it ends; the result under canary in "
+            "the JSON. " + _EXPLICIT_CONTEXT,
         ),
         "gitops cache clear": _C(
             "Ask the GitOps controller to empty its cluster build cache (the "
@@ -1667,6 +1713,25 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             notes="0.26.0. Read-only. --json prints piceli.builds.v1; --target "
             "and --state (a stage, or active) filter it.",
         ),
+        "cycle report": _C(
+            "Report how long push to running-and-checked takes per target "
+            "(environment, Nix release, Nix host, train): p50, p90, count, "
+            "slowest phase and slowest cycle.",
+            reads=(
+                "kubeconfig or --state-dir (optional)",
+                "the controller's status and history",
+                "local train run records",
+                "host switches piceli host wait kept",
+            ),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.28.0. Read-only. --json prints piceli.cycle-report.v1; "
+            "--markdown prints a Markdown table on stdout instead; --since "
+            "(24h, 7d or an ISO time) and --target filter it "
+            "(cycle-options-invalid). Without --kubeconfig/--context or "
+            "--state-dir the controller is not read.",
+        ),
         "gitops suspects": _C(
             "List the deployed images a build host (or the builder node) built, "
             "in every environment and component, from the provenance the "
@@ -1704,6 +1769,23 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             contract="conforms",
             exit_codes=(0, 2),
             notes="0.22.0. Read-only (controller.build_health in gitops status).",
+        ),
+        "gitops alarms": _C(
+            "Show the GitOps controller's alarms (failed or waiting "
+            "environments, failed or waiting NixReleases, a composition that "
+            "does not import, a new controller version) and the alarms it "
+            "could not send; --follow raises each new one as a desktop "
+            "notification.",
+            reads=("kubeconfig or --state-dir", "the controller's status"),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.28.0. Read-only. Each alarm is shown once per run of the "
+            "command (a resolved one once more); --follow keeps reading every "
+            "--interval seconds (--polls N stops after N reads). --json prints "
+            "piceli.gitops-alarms.v1 with each alarm as piceli.alarm.v1. The "
+            "controller itself sends to the ntfy and webhook targets of "
+            "Controller(alarms=Alarms(...)).",
         ),
         "gitops release-host": _C(
             "Ask the GitOps controller to forget a build host's or the builder "
@@ -1977,6 +2059,67 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "release of an input it holds no credential for, and --check claims "
             "nothing and prints piceli.builder-check.v1 (each release's mode, "
             "inputs and credential states; exit 1 when one is missing).",
+        ),
+        "builder install": _C(
+            "On a build host: write and start a service (systemd on Linux, "
+            "launchd on macOS) that runs builder serve with these arguments.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Cluster with dev=DevBuilds(hosts=[...]))",
+                "credential profile",
+                "the controller's status",
+                "MODULE:ATTR of each --publish NixCache and its keys from this "
+                "machine's credentials (checked, never written to the unit)",
+                "PATH (docker, git, kubectl)",
+            ),
+            writes=(
+                "/etc/systemd/system or ~/.config/systemd/user/"
+                "piceli-builder-HOST.service (Linux), /Library/LaunchDaemons or "
+                "~/Library/LaunchAgents/piceli.builder.HOST.plist (macOS)",
+                "systemctl daemon-reload, enable, restart (launchctl bootstrap)",
+            ),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.28.0. Runs the same checks as builder serve --check first "
+            "(the profile reaches the controller; every credential the host "
+            "needs is present, else infra-credential-missing names it) and "
+            "refuses when docker, git or kubectl is missing "
+            "(builder-service-invalid). The unit runs the piceli program that "
+            "ran install (absolute path, version in its description), in the "
+            "directory install ran in, with Restart=on-failure, RestartSec=10 "
+            "and KillSignal=SIGINT; it holds directories, never a secret. As "
+            "root it needs --user USER (a system service); otherwise it is a "
+            "user service. --print writes the unit to stdout and changes "
+            "nothing. A failing systemctl or launchctl is "
+            "builder-service-failed.",
+        ),
+        "builder uninstall": _C(
+            "On a build host: stop, disable and remove the service builder "
+            "install wrote.",
+            reads=("the unit or property list of --host",),
+            writes=(
+                "the unit or property list (removed); systemctl disable --now "
+                "(launchctl bootout)",
+            ),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.28.0. state absent when none is installed (nothing runs).",
+        ),
+        "builder status": _C(
+            "List each build host the GitOps controller heard from: Piceli "
+            "version, last seen, live or expired claim, last build and its "
+            "outcome, quarantine; and the declared hosts never seen.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Cluster with dev=DevBuilds(hosts=[...]))",
+                "credential profile",
+                "the controller's status",
+            ),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.28.0. Read-only (controller.build_hosts, builds_wanted and "
+            "build_health in gitops status); piceli.builder-status.v1 under "
+            "--json.",
         ),
         "dev hosts": _C(
             "Show each declared build host: up or down (and why), its platforms, "
@@ -2670,7 +2813,13 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(promote-dirty), one behind, ahead of or diverged from its upstream "
             "(promote-not-in-sync), an environment without a passed run "
             "(promotion-not-verified) and an unreadable history "
-            "(promotion-history-unreachable).",
+            "(promotion-history-unreachable). 0.28.0, --from --wait: after "
+            "the push (or when the tag is current), waits until the host runs "
+            "the tag with its checks passed (exit 0), reports the first failure "
+            "(a failed publish of the tag in the controller's status, or the "
+            "host's failed or rolled-back attempt over SSH; exit 1) or the "
+            "timeout (gitops-wait-timeout, exit 2); progress lines on stderr, "
+            "the result under wait in the JSON.",
         ),
         "doctor": _C(
             "Check free disk and memory against the next build's needs, and "
@@ -2756,9 +2905,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
                 "kubeconfig",
                 "state_dir",
                 "build receipt (--receipt)",
+                "--cluster infra.py:CLUSTER (its credentials profile) or --state-dir",
             ),
             writes=(
                 "<state_dir>/branches/<namespace> (journal, release state, secrets)",
+                "--state-dir requests (local controller)",
             ),
             cluster="writes",
             approval_required=True,
@@ -2780,13 +2931,31 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(--seed-from main). --approve-if-policy runs a branch when "
             "EnvConfig(auto_approve=True), or when the pipeline's auto_approve "
             "policy allows the deploy and nothing is stopped; main only by the "
-            "policy. --wait refuses with env-budget-full instead of stopping.",
+            "policy. --wait refuses with env-budget-full instead of stopping. "
+            "0.28.0: with --cluster infra.py:CLUSTER (or --state-dir) it asks a "
+            "composition's GitOps controller instead: a preview request in the "
+            "ConfigMap piceli-gitops-requests, served within seconds (the "
+            "controller wakes for it), taking the images a train offered for "
+            "the branch's head; a branch outside the rule's patterns gets one "
+            "on request. --wait then waits until the preview runs its head "
+            "with its checks passed and prints its URL "
+            "(Environment.per_branch(url=...)) once (exit 0), the failure or "
+            "a rejected request (exit 1), or the timeout (gitops-wait-timeout, "
+            "exit 2). The --pipeline options are refused there "
+            "(gitops-request-invalid).",
         ),
         "env down": _C(
             "Delete a branch environment: its claims, namespace and volumes "
             "(approval by env_hash; never main's).",
-            reads=("pipeline module (--pipeline or $PICELI_PIPELINE)", "kubeconfig"),
-            writes=("<state_dir>/branches/<namespace> (removed)",),
+            reads=(
+                "pipeline module (--pipeline or $PICELI_PIPELINE)",
+                "kubeconfig",
+                "--cluster infra.py:CLUSTER (its credentials profile) or --state-dir",
+            ),
+            writes=(
+                "<state_dir>/branches/<namespace> (removed)",
+                "--state-dir requests (local controller)",
+            ),
             cluster="writes",
             approval_required=True,
             safe_to_retry=True,
@@ -2799,7 +2968,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "volumes bound to them; with --approve HASH (or --approve-if-policy "
             "and EnvConfig(auto_approve=True)) it deletes the claims, the "
             "namespace and those volumes. An absent environment prints state "
-            "absent (exit 0).",
+            "absent (exit 0). 0.28.0: with --cluster (or --state-dir) it asks "
+            "the GitOps controller to tear the branch's preview down; it stays "
+            "down until the branch's next push. --wait waits until it is "
+            "removed (exit 0), rejected (1) or timed out (2).",
         ),
         "env seed": _C(
             "Restore main's latest restore point into a branch environment's "
