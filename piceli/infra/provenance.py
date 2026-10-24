@@ -29,11 +29,13 @@ from typing import Any
 STATEMENT = "https://in-toto.io/Statement/v1"
 SLSA_PROVENANCE = "https://slsa.dev/provenance/v1"
 BUILD_TYPE = "https://piceli.dev/gitops-build/v1"
-#: How a record names the kind of builder.
-BUILDERS = ("host", "cluster-job")
+#: How a record names the kind of builder (0.26.0: ``train``, a merge
+#: train's images step).
+BUILDERS = ("host", "cluster-job", "train")
 _KEYS = (
     "builder",
     "host",
+    "train",
     "node",
     "builder_image",
     "commits",
@@ -55,11 +57,22 @@ def record(
     node: str | None = None,
     toolchains: Mapping[str, Any] | None = None,
     platforms: Iterable[str] = (),
+    train: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """A provenance record (see the module doc); absent values are left out."""
+    """A provenance record (see the module doc); absent values are left out.
+
+    ``train`` (0.26.0): the merge train run that built it (``name``,
+    ``run``, ``tag``)."""
     found: dict[str, Any] = {
         "builder": builder,
         "host": str(host)[:64],
+        "train": {
+            key: str(train[key])[:100]
+            for key in ("name", "run", "tag")
+            if train.get(key)
+        }
+        if train
+        else None,
         "node": None if node is None else str(node)[:64],
         "builder_image": None if builder_image is None else str(builder_image)[:300],
         "commits": {str(k): str(v)[:64] for k, v in sorted(dict(commits).items())},
@@ -74,10 +87,13 @@ def record(
 
 
 def from_receipt(receipt: Mapping[str, Any], host: str) -> dict[str, Any]:
-    """The record of a build host's ``built`` answer (its receipt)."""
+    """The record of a build host's ``built`` answer (its receipt), or of a
+    train's ``prebuilt`` offer (0.26.0: its receipt names the train run)."""
     toolchains = receipt.get("toolchains")
+    train = receipt.get("train")
     return record(
-        builder="host",
+        builder="train" if isinstance(train, Mapping) else "host",
+        train=train if isinstance(train, Mapping) else None,
         host=str(receipt.get("host") or host),
         builder_image=receipt.get("image"),
         commits=dict(receipt.get("commits") or {}),
@@ -124,7 +140,7 @@ def statement(repository: str, digest: str, provenance: Mapping[str, Any]) -> by
                 },
                 "internalParameters": {
                     key: provenance[key]
-                    for key in ("node", "toolchains")
+                    for key in ("node", "toolchains", "train")
                     if provenance.get(key)
                 },
                 "resolvedDependencies": dependencies,

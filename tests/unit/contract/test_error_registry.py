@@ -38,6 +38,7 @@ FIRST_ARGUMENT = {
     "_result_error",
     "ImportFailure",
     "PipelineError",
+    "TrainError",
     "EnvError",
     "CompositionError",
     "_refuse",
@@ -104,6 +105,8 @@ DYNAMIC = {
     "gitops-run-interrupted",
     # infra.nix_releases.FAILED: the reason of a NixRelease a build host failed
     "gitops-nix-release-failed",
+    # infra.nix_releases.CANCELLED: the reason of a build gitops cancel dropped
+    "gitops-build-cancelled",
     # delivery_inputs.discover_tool: f"{name}-tool-required"
     "docker-tool-required",
     "ssh-tool-required",
@@ -172,6 +175,21 @@ DYNAMIC = {
     "bundle-unsafe-network",
     "bundle-unsafe-rbac",
     "bundle-unsafe-node-port",
+}
+DYNAMIC |= {
+    # train.engine: a trial's or branch's reason, and promote/push outcomes
+    # recorded in the result (piceli.train.v1)
+    "train-merge-conflict",
+    "train-merge-failed",
+    "train-step-failed",
+    "train-step-timeout",
+    "train-publish-failed",
+    "train-push-failed",
+    # train.telemetry: the one warning line of an export that failed
+    "train-telemetry-failed",
+    # train.engine: the reason of a run that raised midway (run-failed)
+    "train-run-failed",
+    "train-run-cancelled",
 }
 # Registered for the CLI contract itself (piceli/cli_contract.py users).
 CONTRACT = {"unknown-error-code"}

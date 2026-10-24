@@ -4,5 +4,5 @@ export default defineConfig({
   plugins: [react()],
   base: './',
   build: { outDir: '../piceli/server/static', emptyOutDir: true },
-  test: { environment: 'jsdom', include: ['src/**/*.test.{ts,tsx}'], restoreMocks: true },
+  test: { environment: 'jsdom', include: ['src/**/*.test.{ts,tsx}'], restoreMocks: true, setupFiles: ['src/test-setup.ts'], testTimeout: 30000 },
 });

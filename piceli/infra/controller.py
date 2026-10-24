@@ -748,6 +748,12 @@ def _wanted_builds(state: Mapping[str, Any], now: float) -> list[dict[str, Any]]
     return public(state, now)
 
 
+def _offers(state: Mapping[str, Any]) -> list[dict[str, Any]]:
+    from piceli.infra.remote_builds import public_offers
+
+    return public_offers(state)
+
+
 def _failing(record: Mapping[str, Any], reason: str) -> str:
     """``; failing: name: detail, ...`` of a check failure's checks (0.19)."""
     checks = record.get("checks") or {}
@@ -1495,6 +1501,64 @@ class CompositionController:
         )
         self._wake_waiting()
 
+    def _prebuilt(self, body: Mapping[str, Any]) -> None:
+        """A merge train's ``prebuilt`` offer (0.26.0): checked and kept until
+        a step's own change key asks for it (see
+        :mod:`piceli.infra.remote_builds`)."""
+        from piceli.infra import remote_builds
+
+        cluster = getattr(self._composition, "cluster", None)
+        controller = getattr(cluster, "controller", None)
+        if not getattr(controller, "prebuilt", False):
+            raise GitOpsError(
+                "gitops-request-invalid",
+                "this controller takes no prebuilt images (Controller(prebuilt=True))",
+            )
+        if getattr(controller, "delivery", "registry") == "nodes":
+            raise GitOpsError(
+                "gitops-request-invalid",
+                "prebuilt images go through the registry; this controller "
+                "delivers into the nodes",
+            )
+        registry = self.composition.registry
+        names = remote_builds.offered(
+            self.state,
+            body,
+            present=self._in_registry,
+            repository=self._repository,
+            components=self._offerable(),
+            registry=getattr(registry, "host", None),
+            now=self.clock(),
+        )
+        self.log(f"prebuilt offer from {body.get('host')}: {', '.join(names)}")
+        self._wake_waiting()
+
+    def _offerable(self) -> list[str]:
+        """The images an offer may name: the composition's components and
+        the images of its pipeline environments' build specs (read from the
+        composition repository's checkout)."""
+        names = {item.name for item in self.composition.components}
+        checkout = None if self.repo is None else self.repo.checkout
+        if checkout is None:
+            return sorted(names)
+        from piceli.infra.pipelines import load_spec, spec_paths
+
+        for env in self.composition.environments:
+            pipeline = getattr(env, "pipeline", None)
+            if pipeline is None:
+                continue
+            try:
+                for path, _build in spec_paths(pipeline, checkout):
+                    spec = load_spec(
+                        (checkout / path).read_bytes(),
+                        path,
+                        repo=self.repo.settings.name,  # type: ignore[union-attr]
+                    )
+                    names |= {image.name for image in spec.spec.images}
+            except (CompositionError, OSError):
+                continue
+        return sorted(names)
+
     def _wake_waiting(self) -> None:
         """Environments waiting for a build go at once, not at their next try."""
         for record in self._envs().values():
@@ -1552,8 +1616,12 @@ class CompositionController:
                     if publish is not None:  # 0.25.0: proves the cache's key
                         self.nix.check_claim(publish, body)
                     remote_builds.claim(self.state, body, self.clock())
+                    if publish is not None:  # 0.26.0: credentials="controller"
+                        self.nix.seal(publish, body, self._git_credential())
                 elif kind == "built":
                     self._delivered(body)
+                elif kind == "prebuilt":
+                    self._prebuilt(body)
                 elif kind == "nix-published":
                     self.nix.published(body)
                 elif kind == "build-failed":
@@ -1566,6 +1634,16 @@ class CompositionController:
                     self._rebuild(body)
                 elif kind == "host-release":
                     self._release_host(body)
+                elif kind == "build":  # 0.26.0: started by hand
+                    if not self.nix.request(body):
+                        self._build_env(body)
+                elif kind == "build-cancel":
+                    if not self.nix.cancel(str(body.get("name")), body.get("by")):
+                        self._cancel_env(body)
+                elif kind == "build-progress":
+                    from piceli.infra import remote_builds
+
+                    remote_builds.progress(self.state, body)
                 else:
                     raise GitOpsError("gitops-request-invalid", "unknown request kind")
             except GitOpsError as error:
@@ -1729,6 +1807,83 @@ class CompositionController:
                 rebuild.setdefault(name, [])
                 if component not in rebuild[name]:
                     rebuild[name].append(component)
+
+    def _group_records(self, name: str) -> dict[str, dict[str, Any]]:
+        return {
+            key: record
+            for key, record in self._envs().items()
+            if key == name or record.get("group") == name
+        }
+
+    def _build_env(self, body: Mapping[str, Any]) -> None:
+        """``piceli gitops build ENV`` (0.26.0): rebuild every image of the
+        environment at the commit it follows and deploy it, through its
+        usual plan and approval (``--ref`` may name that commit or ref)."""
+        from piceli.infra import remote_builds
+
+        name = str(body.get("name"))
+        names = {item.group for item in self._instances()}
+        if name not in names:
+            raise GitOpsError(
+                "gitops-request-invalid", "build names no NixRelease or environment"
+            )
+        if body.get("approve"):
+            raise GitOpsError(
+                "gitops-request-invalid",
+                "an environment's plan is approved with piceli gitops approve",
+            )
+        records = self._group_records(name)
+        ref = body.get("ref")
+        if ref:
+            known: set[str] = set()
+            for record in records.values():
+                known |= {str(v) for v in (record.get("revision") or {}).values()}
+                for value in (record.get("refs") or {}).values():
+                    text = str(value)
+                    known |= {text, text.removeprefix("refs/heads/"),
+                              text.removeprefix("refs/tags/")}  # fmt: skip
+            if str(ref) not in known:
+                raise GitOpsError(
+                    "gitops-build-ref-unknown",
+                    f"environment {name} builds the commit it follows, not {ref}: "
+                    "promote another one with piceli promote",
+                )
+        remote_builds.clear_failures(self.state)
+        components = {item.name for item in self.composition.components}
+        for record in records.values():
+            components |= set(record.get("components") or {})
+        via = body.get("via") if body.get("via") in ("cli", "ui") else "cli"
+        by = f" by {str(body['by'])[:120]}" if body.get("by") else ""
+        self.state["forced"][name] = {"trigger": f"{via} build{by}"}
+        rebuild = self.state.setdefault("rebuild", {})
+        rebuild[name] = sorted(set(rebuild.get(name) or ()) | components)
+
+    def _cancel_env(self, body: Mapping[str, Any]) -> None:
+        """``piceli gitops cancel ENV`` (0.26.0): drop the image builds the
+        environment waits for on build hosts (an in-cluster build Job runs
+        to its end)."""
+        from piceli.infra import remote_builds
+
+        name = str(body.get("name"))
+        owners = set(self._group_records(name))
+        if not owners:
+            raise GitOpsError(
+                "gitops-request-invalid", "cancel names no NixRelease or environment"
+            )
+        wanted = self.state.get(remote_builds.STATE_KEY) or {}
+        found = [
+            key
+            for key, entry in wanted.items()
+            if entry.get("owner") in owners and entry.get("kind") != "nix-publish"
+        ]
+        if not found:
+            raise GitOpsError(
+                "gitops-build-not-running",
+                f"environment {name} waits for no build on a build host",
+            )
+        for key in found:
+            remote_builds.cancel(self.state, key, body.get("by"), self.clock())
+        self.log(f"{name}: build cancelled ({len(found)} wanted build(s) dropped)")
 
     # ------------------------------------------------------------ deploy
     def _repository(self, component: str) -> str:
@@ -1970,7 +2125,7 @@ class CompositionController:
     def _cached(self, component: str, digest: str) -> BuiltImage | None:
         found = read_json(self._cache_path(component, digest))
         if not isinstance(found, Mapping) or not found.get("pull_ref"):
-            return None
+            return self._from_offer(component, digest)
         return BuiltImage(
             str(found["pull_ref"]),
             str(found.get("manifest_digest") or ""),
@@ -1980,6 +2135,58 @@ class CompositionController:
                 for k, v in found.items()
                 if k not in ("pull_ref", "manifest_digest")
             },
+        )
+
+    def _from_offer(self, component: str, digest: str) -> BuiltImage | None:
+        """0.26.0: a train's offer under this exact change key (computed by
+        this controller), its digest still in the registry: recorded and used
+        as this controller's own build."""
+        from piceli.infra import remote_builds
+
+        offer = remote_builds.take_offer(self.state, component, digest)
+        if offer is None or not self._in_registry(str(offer["pull_ref"])):
+            return None
+        extra: dict[str, Any] = {
+            "host": offer.get("host"),
+            "provenance": offer.get("provenance"),
+            "prebuilt": True,
+        }
+        if offer.get("platforms"):
+            extra = {"platforms": offer["platforms"], **extra}
+        image = BuiltImage(str(offer["pull_ref"]), str(offer["manifest_digest"]), extra)
+        self._remember(component, digest, image)
+        train = (offer.get("provenance") or {}).get("train") or {}
+        self.log(
+            f"{component}: prebuilt image {image.manifest_digest[:19]} from "
+            f"{offer.get('host')} taken"
+            + (f" (train {train.get('name')} run {train.get('run')})" if train else "")
+        )
+        return image
+
+    def _unused_offer(
+        self,
+        entry: dict[str, Any],
+        component: str,
+        key: str,
+        sources: Mapping[str, str],
+    ) -> None:
+        """0.26.0: a component built although a train offered it: the
+        offer's key is not this controller's, and the sources whose commits
+        differ say why (``prebuilt`` in its status entry)."""
+        from piceli.infra import remote_builds
+
+        why = remote_builds.unused_offer(self.state, component, key, sources)
+        if why is None:
+            return
+        entry["prebuilt"] = why
+        differs = ", ".join(
+            f"{name} {str(item['offered'] or '-')[:12]} offered, "
+            f"{str(item['here'] or '-')[:12]} here"
+            for name, item in why["differs"].items()
+        )
+        self.log(
+            f"{component}: prebuilt offer not used, its key differs"
+            + (f" ({differs})" if differs else " (same commits, other inputs)")
         )
 
     def _remember(self, component: str, digest: str, image: BuiltImage) -> None:
@@ -2078,6 +2285,11 @@ class CompositionController:
                 "health": (previous.get(component.name) or {}).get("health", "unknown"),
                 "updated_at": now,
             }
+            if cached is None and source and commit:
+                self._unused_offer(
+                    components[component.name], component.name, digest,
+                    {source: commit},
+                )  # fmt: skip
         record["components"] = components
         if to_build or to_mirror:
             self._stage(record, "build")  # show "building" while it runs
@@ -2227,6 +2439,10 @@ class CompositionController:
                     "health": (previous.get(image.name) or {}).get("health", "unknown"),
                     "updated_at": now,
                 }
+                if cached is None:
+                    self._unused_offer(
+                        components[image.name], image.name, key.key, key.sources
+                    )
             if changed:
                 commits = {
                     source: revision[source] for source, _ in spec.contexts.values()
@@ -3197,7 +3413,13 @@ class CompositionController:
             return self._publish()
         self._requests()
         self._desired()
-        self.nix.poll(self.composition.nix_releases, self.refs, gate=self._promotion)
+        self.nix.poll(
+            self.composition.nix_releases,
+            self.refs,
+            gate=self._promotion,
+            lock=self._flake_lock,
+            sources=[(source.key, source.url) for source in self.composition.sources],
+        )
         if not self.swept and not failed:  # only on a complete view of the sources
             self.swept = True
             try:
@@ -3635,6 +3857,8 @@ class CompositionController:
                 # Added in 0.21.0: what this controller waits for build hosts
                 # to build (piceli builder serve reads it).
                 "builds_wanted": _wanted_builds(self.state, self.clock()),
+                # Added in 0.26.0: images a merge train offered (only when any).
+                **({"prebuilt": offers} if (offers := _offers(self.state)) else {}),
                 # Added in 0.22.0: health events and quarantine of its build
                 # hosts and builder node, and the last rebuild request.
                 **(
@@ -3937,6 +4161,26 @@ class CompositionController:
             )
             | ({"requested_at": str(at)[:32]} if at else {}),
         )
+
+    def _git_credential(self) -> dict[str, str] | None:
+        """The HTTPS token of the mounted Git Secret, for a NixRelease with
+        ``credentials="controller"`` (0.26.0); never logged."""
+        from piceli.dev.nix_inputs import read_controller_credential
+
+        remote = next(iter(self.sources.remotes.values()), None)
+        return read_controller_credential(getattr(remote, "credentials_dir", None))
+
+    def _flake_lock(self, target: Any, commit: str) -> bytes | None:
+        """The ``flake.lock`` of a NixRelease's commit, from the source's
+        mirror (0.26.0: its private inputs go into the plan); ``None`` when
+        it has none or it cannot be read."""
+        from piceli.infra import promotion
+
+        try:
+            self.sources.fetch(target.source.key)
+            return self.sources.read(target.source.key, commit, promotion.LOCK_FILE)
+        except GitOpsError:
+            return None
 
     def _promotion(self, target: Any, commit: str) -> dict[str, Any]:
         """A gated NixRelease's commit checked against this controller's own

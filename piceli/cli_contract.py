@@ -1339,6 +1339,141 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "unreachable or its checks failed; 2: no module and no controller "
             "named (targets-input-required) or a module that does not load.",
         ),
+        "train": _C(
+            "Merge candidate branches onto the base one tested merge at a time; "
+            "eject the failing ones with the step that failed.",
+            reads=(
+                "the train spec module (MODULE[:ATTR]), then the same module in each merged tree",
+                "the Git repository (branches, base, tested)",
+                "the steps' tools (cargo, scripts of the merged tree)",
+                "Train(builds=): the declared build hosts (their engines, queues, health)",
+                "--promote-run: an earlier run's record",
+            ),
+            writes=(
+                "worktrees of the repository at stable paths under the train cache (removed after each trial)",
+                "unreferenced merge commits; refs/piceli/train/<name>/last",
+                "$XDG_STATE_HOME/piceli/train/<name> (run records, events, logs, flaky.jsonl, the queue)",
+                "$XDG_CACHE_HOME/piceli/train (slot locks, shared cargo targets, the content store)",
+                "build hosts: dev runs of the merged tree (their queues, warm caches, health events)",
+                "--promote: the tag, tested and the base (fast-forward only), publish steps",
+                "--promote with Step.images: images pushed to the cluster's registry, a prebuilt request to its controller",
+                "--push: the remote's tag, tested and base",
+            ),
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.26.0. Runs the train's steps, which run code: the explicit "
+            "branch list is the approval, and --promote/--push the approval to "
+            "move refs and push. Without --promote no ref changes; nothing is "
+            "pushed without --push (which needs --promote). Each candidate set "
+            "is merged with git merge --no-ff onto the train's head in a "
+            "temporary worktree; its steps come from the merged tree's spec. "
+            "A failing set is bisected. --json prints one piceli.train.v1 "
+            "object. --queue on a busy train writes a queued request (keeping "
+            "its flags, --promote-run too, with last resolved when queued) and "
+            "returns at once (piceli.train.queued.v1, exit 0); "
+            "every run serves the train's queue when it ends. A run that "
+            "raises midway (a --promote-run too) is recorded failed "
+            "(run-failed: train-git-failed, train-host-unavailable, "
+            "train-run-failed, train-run-cancelled), notified, exit 1. Exit 0: every branch joined (or was already in) and the "
+            "promotion and push asked for succeeded; 1: a branch was ejected "
+            "(train-step-failed, train-step-timeout, train-merge-conflict, train-merge-failed, "
+            "train-spec-invalid), the promotion was refused "
+            "(train-not-fast-forward, train-checkout-dirty), a publish step "
+            "or the push failed; 2: rejected before anything ran "
+            "(train-not-found, train-branch-unknown, train-busy, ...). "
+            "Steps may run on the train's build hosts (Train(builds=, hosts=)) "
+            "through the dev run machinery; a step with inputs that passed "
+            "before is reused. --promote-run RUN promotes an earlier run's head "
+            "without running it (train-run-unknown, train-not-fast-forward); "
+            "no host for a step fails the run (train-host-unavailable).",
+        ),
+        "train-prune": _C(
+            "Bound what a train keeps on this machine: trial worktrees, cargo "
+            "target directories, the content store and old runs.",
+            reads=(
+                "the train cache ($XDG_CACHE_HOME/piceli/train)",
+                "the train's state directory (runs)",
+                "a train spec, when given instead of a name (its retention)",
+            ),
+            writes=(
+                "removes leftover worktrees, unused or least recently used target "
+                "directories and store records, unreferenced store bytes, old runs",
+            ),
+            approval_required=False,
+            safe_to_retry=True,
+            long_running=False,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.26.0. Never removes what a running trial holds, the newest "
+            "runs (keep_runs) or flaky.jsonl. --dry-run removes nothing. Every "
+            "train run prunes the same way at its end. --json prints one "
+            "piceli.train-prune.v1 object (removed: path, kind, bytes, why; "
+            "sizes and limits).",
+        ),
+        "trains": _C(
+            "Show the trains: the run in progress (branches, step, start, elapsed, "
+            "host, log tail), recent runs with step durations, per-step trends, "
+            "flaky tests, and which run produced what each target runs.",
+            reads=(
+                "$XDG_STATE_HOME/piceli/train/<name> (run records, events.jsonl, "
+                "step logs, flaky.jsonl, the lock's owner)",
+                "--composition/--infra: what piceli targets reads (the controller, "
+                "hosts over ssh)",
+            ),
+            cluster="reads",
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.26.0. Read-only; safe to retry; never takes a train's lock. "
+            "--json prints one piceli.trains.v1 object. --follow streams the "
+            "running step's log until the run ends. A record still running "
+            "with no live process holding the lock shows as interrupted. Reads "
+            "a cluster only with --composition/--infra. Exit 2: an unknown "
+            "train name (train-unknown).",
+        ),
+        "train-queue": _C(
+            "List a train's queue (waiting requests with their branches, flags "
+            "and when they were queued), cancel one, or serve it here.",
+            reads=(
+                "$XDG_STATE_HOME/piceli/train/<name>/queue (waiting, running, done)",
+            ),
+            writes=(
+                "--cancel: moves the request to queue/done as cancelled",
+                "--drain: what piceli train writes, for each request served",
+            ),
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.26.0. Without options read-only; --json prints one "
+            "piceli.train.queue.v1 object (a request whose process died shows "
+            "stale). --cancel ID cancels a waiting request "
+            "(train-queue-not-waiting, train-queue-not-found). --drain runs "
+            "each queued request's steps with the flags it was queued with "
+            "(the request was the approval) until the queue is empty, first "
+            "putting back a request whose serving process died; a request "
+            "whose branches are gone is rejected (train-branch-unknown).",
+        ),
+        "train-wait": _C(
+            "Wait until a train run ends and exit with its verdict.",
+            reads=(
+                "$XDG_STATE_HOME/piceli/train/<name>/runs/<run>/run.json and the "
+                "train's lock (every --interval)",
+            ),
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.26.0. Read-only; safe to retry. RUN is a run id, a queue "
+            "id (q-…, waits for the run that serves it; train-queue-cancelled, "
+            "train-queue-not-found) or a train's name (its running run, else "
+            "its newest). A run that failed midway (run-failed) exits 1. --json prints "
+            "the run's piceli.train.summary.v1. Exit 0: the run ended ok; 1: "
+            "a branch was ejected, the promotion or push failed, the run was "
+            "killed (train-interrupted) or --timeout ran out "
+            "(train-wait-timeout); 2: no such run (train-run-not-found).",
+        ),
         "host wait": _C(
             "Wait until a Nix host runs a commit or tag with its checks passed.",
             reads=(
@@ -1487,6 +1622,50 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "composition controller. 0.25.0: ENV may name a NixRelease (its host): "
             "the controller publishes its newest tag now, with the release's "
             "approval; a sync of every environment also retries failed releases.",
+        ),
+        "gitops build": _C(
+            "Ask the GitOps controller to build a NixRelease (--ref: a tag of "
+            "it, its branch or a full commit; the newest without one) or an "
+            "environment's images now, through the same gate, plan and approval.",
+            reads=("kubeconfig or --state-dir",),
+            writes=("--state-dir requests (local controller)",),
+            cluster="writes",
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.26.0. Writes a build request; the controller plans it on its "
+            "next poll, recorded as triggered by cli with the requester (--by, "
+            "else the user name). A NixRelease waits in approval-required unless "
+            "auto_approve or --approve names the plan's digest. An environment "
+            "rebuilds every image at the commit it follows (--ref may name it). "
+            "An unknown target or ref is dropped (gitops-request-invalid or "
+            "gitops-build-ref-unknown in gitops status).",
+        ),
+        "gitops cancel": _C(
+            "Ask the GitOps controller to cancel a NixRelease's or an "
+            "environment's queued or running build.",
+            reads=("kubeconfig or --state-dir",),
+            writes=("--state-dir requests (local controller)",),
+            cluster="writes",
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.26.0. Unclaimed, the build is dropped; claimed, the build "
+            "host stops at its next stage and its answer is refused. A cancelled "
+            "image build fails its step until piceli gitops sync; a cancelled "
+            "publish waits for a newer tag, a sync or a build. Nothing running: "
+            "gitops-build-not-running in gitops status.",
+        ),
+        "gitops builds": _C(
+            "List every build the GitOps controller knows (NixRelease publishes, "
+            "image builds, train handoffs) with its trigger, commit, tag, host, "
+            "stage times, log tail, duration and the targets that run it now.",
+            reads=("kubeconfig or --state-dir", "the controller's status and history"),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.26.0. Read-only. --json prints piceli.builds.v1; --target "
+            "and --state (a stage, or active) filter it.",
         ),
         "gitops suspects": _C(
             "List the deployed images a build host (or the builder node) built, "
@@ -1790,7 +1969,14 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "the machine running Piceli. A host declared runs=False implies "
             "--publish-only and is refused without --publish or with "
             "--no-publish-only (dev-host-publish-only); without --host it is "
-            "never the default.",
+            "never the default. 0.26.0: before each publish the host fetches the "
+            "plan's private flake inputs into its own store (its own git-token or "
+            'git-ssh-key, or for credentials="controller" the controller\'s '
+            "token sealed to the claim's one-time key), else build-failed with "
+            "infra-nix-input-unreachable before any build; at start it warns per "
+            "release of an input it holds no credential for, and --check claims "
+            "nothing and prints piceli.builder-check.v1 (each release's mode, "
+            "inputs and credential states; exit 1 when one is missing).",
         ),
         "dev hosts": _C(
             "Show each declared build host: up or down (and why), its platforms, "
@@ -2151,6 +2337,33 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "part, and --from-env reads AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY. "
             "An argument is refused (infra-credential-refused) without "
             "echoing it. Prints the name and the parts' names, never a value.",
+        ),
+        "secrets git-token": _C(
+            "Store a Git token a build host fetches private flake inputs with "
+            "as a local credential.",
+            reads=("stdin (--prompt)",),
+            writes=("$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)",),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.26.0. The token, its host (--host; it is used for no other) "
+            "and a user name (--username, default git). A build host fetches the "
+            "private inputs of a NixRelease or `dev nix build` with it before the "
+            "build, never inside it. Prints the name and the host, never the "
+            "token; an argument is refused (infra-credential-refused) without "
+            "echoing it. It reaches another build host with `piceli secrets "
+            "backup --only NAME` and `piceli secrets restore`.",
+        ),
+        "secrets git-ssh-key": _C(
+            "Store a read-only deploy key a build host fetches private git+ssh "
+            "flake inputs with as a local credential.",
+            reads=("--file PATH", "--known-hosts PATH"),
+            writes=("$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)",),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.26.0. The key, its host (--host; used for no other) and, "
+            "optionally, that host's known_hosts lines. Used before the build by "
+            "the build host's fetch step, never inside the build. Prints the "
+            "name and the host, never the key.",
         ),
         "secrets user-data": _C(
             "Store a server's user data (a cloud-config, a script or a bootstrap "

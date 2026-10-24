@@ -663,6 +663,26 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["gitops", "sync", "Not_A_Label", "--state-dir", str(p)],
         "gitops-request-invalid",
     ),
+    "gitops build": (
+        lambda p: [
+            "gitops",
+            "build",
+            "web-1",
+            "--approve",
+            "nope",
+            "--state-dir",
+            str(p),
+        ],
+        "gitops-request-invalid",
+    ),
+    "gitops cancel": (
+        lambda p: ["gitops", "cancel", "Not_A_Label", "--state-dir", str(p)],
+        "gitops-request-invalid",
+    ),
+    "gitops builds": (
+        lambda p: ["gitops", "builds", "--state", "nope", "--state-dir", str(p)],
+        "gitops-request-invalid",
+    ),
     "gitops suspects": (
         lambda p: ["gitops", "suspects", "--host", "mini", "--since", "yesterday"],
         "gitops-request-invalid",
@@ -762,6 +782,14 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["secrets", "s3", "cache-s3"],
         "infra-prompt-required",
     ),
+    "secrets git-ssh-key": (
+        lambda p: ["secrets", "git-ssh-key", "git", "--host", "github.com"],
+        "infra-prompt-required",
+    ),
+    "secrets git-token": (
+        lambda p: ["secrets", "git-token", "git", "--host", "github.com"],
+        "infra-prompt-required",
+    ),
     "secrets backup": (
         lambda p: [
             "secrets",
@@ -810,6 +838,23 @@ CASES: dict[str, tuple[Argv, str]] = {
         "host-invalid",
     ),
     "targets": (lambda p: ["targets"], "targets-input-required"),
+    "trains": (
+        lambda p: ["trains", "no-such-train", "--state-dir", str(p / "state")],
+        "train-unknown",
+    ),
+    "train-queue": (
+        lambda p: ["train-queue", "no-such-train", "--state-dir", str(p / "state")],
+        "train-unknown",
+    ),
+    "train-wait": (
+        lambda p: ["train-wait", "no-such-run", "--state-dir", str(p / "state")],
+        "train-run-not-found",
+    ),
+    "train": (
+        lambda p: ["train", "no_such_module:train", "--branches", "feature"],
+        "train-not-found",
+    ),
+    "train-prune": (lambda p: ["train-prune", "Not A Name"], "train-not-found"),
     "host wait": (
         lambda p: ["host", "wait", "no_such_module:web", "v1.0.0"],
         "host-not-found",

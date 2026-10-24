@@ -30,6 +30,7 @@ LATEST_ONLY = {
     "reference_app",
     "restore_points",
     "state",
+    "train",
     "when_to_use",
 }
 # JSON Schema ``$id``s are identifiers, not links, and never change.

@@ -58,7 +58,11 @@ STATES = (
 )  # fmt: skip
 #: The order ``setup`` walks them in: what the owner types, what Piceli
 #: generates, the user data (right before apply), the S3 pairs.
-GROUPS = ("provider", "profile", "generated", "user-data", "s3")
+GROUPS = ("provider", "profile", "generated", "user-data", "s3", "git")
+#: 0.26.0: a build host's Git credential of private flake inputs (either kind
+#: serves), and the composition's Git Secret, which lives in the cluster.
+GIT_KINDS = ("git-token", "git-ssh-key")
+CLUSTER_GIT_KIND = "cluster-git-secret"
 _REPLACE = {"state-key", "nix-signing-key", "age-identity"}
 PENDING = "created by the next infra apply"
 #: An S3 pair the owner makes by hand (0.25.3), after its ``hint``.
@@ -91,6 +95,8 @@ class Item:
             return "user-data"
         if kind == "s3-keys":
             return "s3"
+        if kind in (*GIT_KINDS, CLUSTER_GIT_KIND):
+            return "git"
         return "provider"
 
     @property
@@ -353,6 +359,11 @@ def _state(secret: NeededSecret, index: _Index) -> tuple[str, str | None]:
 
     if secret.kind == "profile":
         return _profile_state(secret.name)
+    if secret.kind == CLUSTER_GIT_KIND:
+        return "pending", (
+            "in the cluster (Secret piceli-build-git), not in this store; "
+            "piceli cluster status shows whether it is there"
+        )
     body, why = _read(secret.name)
     if why is not None:
         return "damaged", why
@@ -370,6 +381,8 @@ def _state(secret: NeededSecret, index: _Index) -> tuple[str, str | None]:
                 )
         return "missing", None
     stored = body.get("kind")
+    if secret.kind in GIT_KINDS and stored in GIT_KINDS:
+        return "present", None
     if stored != secret.kind:
         held = f"a {stored}" if isinstance(stored, str) else "no known kind"
         return "damaged", f"holds {held}, not a {secret.kind}"
@@ -610,7 +623,46 @@ def report(
         "complete": not any(i.blocking for i in items),
         "backup": backup_state(),
         "warnings": _warnings(decls, items),
+        **({"nix_inputs": found} if (found := nix_inputs(decls)) else {}),
     }
+
+
+def nix_inputs(decls: Iterable[Any]) -> list[dict[str, Any]]:
+    """0.26.0: how each NixRelease fetches its private flake inputs: its
+    mode (``host``: the build host's own credential; ``controller``: the
+    composition's Git Secret, sealed per build), the credentials it names,
+    whether this machine holds each (the build host itself says with
+    ``piceli builder serve --check``), never a value."""
+    from piceli.dev.nix_inputs import DEFAULT_CREDENTIAL, credential_state
+    from piceli.infra.nix_releases import NixRelease
+
+    found = []
+    for item in decls:
+        if not isinstance(item, NixRelease):
+            continue
+        declared = dict(item.inputs)
+        gate = item.gate.input if item.gate is not None else None
+        row: dict[str, Any] = {
+            "release": item.host.name,
+            "builder": item.builder,
+            "credentials": item.credentials,
+            "gate_input": gate,
+            "declared": declared,
+        }
+        if item.credentials == "controller":
+            row["where"] = (
+                "the composition's Git Secret (piceli secrets git), sealed by the "
+                "controller for each build; piceli cluster status shows it"
+            )
+        else:
+            names = sorted({DEFAULT_CREDENTIAL, *declared.values()})
+            row["where"] = (
+                f"in the Piceli secrets of build host {item.builder}: piceli "
+                f"builder serve --host {item.builder} --check says which it holds"
+            )
+            row["here"] = {name: credential_state(name) for name in names}
+        found.append(row)
+    return found
 
 
 def items_of(document: Mapping[str, Any]) -> list[Item]:
@@ -667,6 +719,14 @@ def table(document: Mapping[str, Any]) -> list[str]:
         if row.get("detail"):
             text += f" [{row['detail']}]"
         lines.append(f"  {row['name'].ljust(width)}  {text}")
+    for row in document.get("nix_inputs") or ():
+        lines.append("")
+        lines.append(
+            f"flake inputs of {row['release']}: credentials {row['credentials']}; "
+            + row["where"]
+        )
+        for name, state in (row.get("here") or {}).items():
+            lines.append(f"  {name}: {state} on this machine")
     backup = document["backup"]
     said = {
         "empty": "nothing stored yet",

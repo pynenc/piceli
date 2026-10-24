@@ -298,6 +298,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`git-unavailable`](#error-git-unavailable) | inputs | no |
 | [`gitops-approval-stale`](#error-gitops-approval-stale) | gitops | yes |
 | [`gitops-artifact-changed`](#error-gitops-artifact-changed) | gitops | no |
+| [`gitops-build-cancelled`](#error-gitops-build-cancelled) | gitops | yes |
+| [`gitops-build-not-running`](#error-gitops-build-not-running) | gitops | yes |
+| [`gitops-build-ref-unknown`](#error-gitops-build-ref-unknown) | gitops | yes |
 | [`gitops-cluster-failed`](#error-gitops-cluster-failed) | gitops | yes |
 | [`gitops-config-invalid`](#error-gitops-config-invalid) | gitops | no |
 | [`gitops-controller-locked`](#error-gitops-controller-locked) | gitops | yes |
@@ -413,6 +416,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`infra-k3s-not-ready`](#error-infra-k3s-not-ready) | infra | yes |
 | [`infra-kubeconfig-invalid`](#error-infra-kubeconfig-invalid) | infra | no |
 | [`infra-load-failed`](#error-infra-load-failed) | infra | no |
+| [`infra-nix-input-unreachable`](#error-infra-nix-input-unreachable) | dev | yes |
 | [`infra-no-cluster`](#error-infra-no-cluster) | infra | no |
 | [`infra-not-applied`](#error-infra-not-applied) | infra | no |
 | [`infra-not-found`](#error-infra-not-found) | infra | no |
@@ -750,6 +754,40 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`timed-out`](#error-timed-out) | artifacts-delivery | yes |
 | [`too-many-redirects`](#error-too-many-redirects) | artifacts-registry | yes |
 | [`tool-pin-mismatch`](#error-tool-pin-mismatch) | artifacts-input | no |
+| [`train-branch-unknown`](#error-train-branch-unknown) | train | no |
+| [`train-branches-required`](#error-train-branches-required) | train | no |
+| [`train-busy`](#error-train-busy) | train | yes |
+| [`train-checkout-dirty`](#error-train-checkout-dirty) | train | yes |
+| [`train-git-failed`](#error-train-git-failed) | train | yes |
+| [`train-host-unavailable`](#error-train-host-unavailable) | train | yes |
+| [`train-images-failed`](#error-train-images-failed) | train | yes |
+| [`train-interrupted`](#error-train-interrupted) | train | no |
+| [`train-invalid`](#error-train-invalid) | train | no |
+| [`train-load-failed`](#error-train-load-failed) | train | no |
+| [`train-merge-conflict`](#error-train-merge-conflict) | train | no |
+| [`train-merge-failed`](#error-train-merge-failed) | train | no |
+| [`train-not-fast-forward`](#error-train-not-fast-forward) | train | no |
+| [`train-not-found`](#error-train-not-found) | train | no |
+| [`train-notify-failed`](#error-train-notify-failed) | train | yes |
+| [`train-publish-failed`](#error-train-publish-failed) | train | yes |
+| [`train-push-failed`](#error-train-push-failed) | train | yes |
+| [`train-push-needs-promote`](#error-train-push-needs-promote) | train | no |
+| [`train-queue-cancelled`](#error-train-queue-cancelled) | train | no |
+| [`train-queue-not-found`](#error-train-queue-not-found) | train | no |
+| [`train-queue-not-waiting`](#error-train-queue-not-waiting) | train | no |
+| [`train-repo-invalid`](#error-train-repo-invalid) | train | no |
+| [`train-retire-invalid`](#error-train-retire-invalid) | train | no |
+| [`train-run-cancelled`](#error-train-run-cancelled) | train | yes |
+| [`train-run-failed`](#error-train-run-failed) | train | yes |
+| [`train-run-not-found`](#error-train-run-not-found) | train | no |
+| [`train-run-unknown`](#error-train-run-unknown) | train | no |
+| [`train-spec-invalid`](#error-train-spec-invalid) | train | no |
+| [`train-step-failed`](#error-train-step-failed) | train | no |
+| [`train-step-timeout`](#error-train-step-timeout) | train | yes |
+| [`train-telemetry-failed`](#error-train-telemetry-failed) | train | yes |
+| [`train-telemetry-unavailable`](#error-train-telemetry-unavailable) | train | no |
+| [`train-unknown`](#error-train-unknown) | train | no |
+| [`train-wait-timeout`](#error-train-wait-timeout) | train | yes |
 | [`transport-error`](#error-transport-error) | kubernetes | yes |
 | [`ui-access-failed`](#error-ui-access-failed) | access | yes |
 | [`ui-access-port-conflict`](#error-ui-access-port-conflict) | access | no |
@@ -4316,6 +4354,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Run `piceli publish` without `--approve`, review the new digest and approve it.
 - **Retry-safe:** no
 
+(error-gitops-build-cancelled)=
+### `gitops-build-cancelled`
+
+**Build cancelled.** `piceli gitops cancel NAME` (or the UI's Cancel) dropped the build: unclaimed it was never built; a build host that held it stopped before its next stage and its answer was refused.
+
+- **Fix:** Start it again with `piceli gitops build NAME` (or `piceli gitops sync NAME`); a NixRelease also publishes its next new tag or head.
+- **Retry-safe:** yes
+
+(error-gitops-build-not-running)=
+### `gitops-build-not-running`
+
+**No build to cancel.** `piceli gitops cancel NAME` named a NixRelease with no planned, queued or running publish, or an environment that waits for no build on a build host (an in-cluster build Job runs to its end).
+
+- **Fix:** Run `piceli gitops builds --target NAME --state active` to see what runs; nothing needs cancelling when it lists nothing.
+- **Retry-safe:** yes
+
+(error-gitops-build-ref-unknown)=
+### `gitops-build-ref-unknown`
+
+**Build names an unknown ref.** `piceli gitops build NAME --ref REF` (or the UI's Build now) named a ref the target does not have: a NixRelease builds a tag of its pattern, its followed branch or a full 40-character commit; an environment builds only the commit or ref it follows.
+
+- **Fix:** Run `piceli gitops status` for the tags and heads the controller sees, push the tag first, or promote another commit to the environment with `piceli promote`.
+- **Retry-safe:** yes
+
 (error-gitops-cluster-failed)=
 ### `gitops-cluster-failed`
 
@@ -5347,6 +5409,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Upload failed.** The archive did not reach the run's pod (exec refused or broken), did not match its SHA-256, held an unsafe path, or did not arrive in time.
 
 - **Fix:** Run again; check that your credentials allow `pods/exec` in namespace `piceli-dev`.
+- **Retry-safe:** yes
+
+(error-infra-nix-input-unreachable)=
+### `infra-nix-input-unreachable`
+
+**Private flake input not fetched.** Before a Nix build (a NixRelease on its build host, or `piceli dev nix build`), the build host fetches the flake's private inputs (the promotion gate's input, the inputs whose repository is a Source of the composition, and `NixRelease(inputs=)` or `--input`) into its Nix store, and one of them could not be fetched: the message names the input, its URL (never a credential) and the credential tried. Or the plan names an input that `flake.lock` at the commit does not lock at that URL. Nothing was built.
+
+- **Fix:** Store the Git token on the machine that runs the build (`piceli secrets git-token NAME --host HOST --prompt`, or `piceli secrets restore` of a backup made with `--only NAME`), check it can read the repository, map the input to that credential (`NixRelease(inputs={"app": "NAME"})` or `--input app=NAME`), then retry (`piceli gitops sync NAME` or the same command).
 - **Retry-safe:** yes
 
 
@@ -7085,3 +7155,278 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Pass `--composition MODULE` (environments and NixReleases), `--infra MODULE` (NixHosts and their servers) and, to read another controller than the composition's home cluster's (its `piceli login` profile), `--kubeconfig FILE --context NAME` or `--state-dir`.
 - **Retry-safe:** no
+
+
+## The pre-merge train (`piceli.train.Train`, `piceli train`)
+
+(error-train-branch-unknown)=
+### `train-branch-unknown`
+
+**Unknown candidate branch.** A candidate does not name a commit, is named twice, or is the train's base or tested branch.
+
+- **Fix:** Pass existing feature branches, each once.
+- **Retry-safe:** no
+
+(error-train-branches-required)=
+### `train-branches-required`
+
+**No candidate branches.** `piceli train` needs at least one branch to merge.
+
+- **Fix:** Name the branches: `piceli train APP --branches a b c`.
+- **Retry-safe:** no
+
+(error-train-busy)=
+### `train-busy`
+
+**Train already running.** Another run of the same train holds its lock in the state directory.
+
+- **Fix:** Wait for that run to finish, then run the train again.
+- **Retry-safe:** yes
+
+(error-train-checkout-dirty)=
+### `train-checkout-dirty`
+
+**Branch checked out with changes.** The base or tested branch is checked out in a worktree with uncommitted changes, so it cannot be fast-forwarded there. Nothing was tagged or moved.
+
+- **Fix:** Commit or stash the changes in that worktree, then run the train again.
+- **Retry-safe:** yes
+
+(error-train-git-failed)=
+### `train-git-failed`
+
+**Git command failed.** A Git command the train needed failed (a worktree, a ref update, a diff).
+
+- **Fix:** Run `git status` and `git worktree prune` in the repository, then run the train again.
+- **Retry-safe:** yes
+
+(error-train-host-unavailable)=
+### `train-host-unavailable`
+
+**No host could take a train step.** Every host a step may run on (its hosts, else the train's) was down, quarantined or unavailable at start, and no fallback to this machine applies (Train(fallback=None), or this machine was already tried).
+
+- **Fix:** Check `piceli dev hosts`, release a quarantined host once fixed, or allow the fallback with Train(fallback="local"); then run the train again.
+- **Retry-safe:** yes
+
+(error-train-images-failed)=
+### `train-images-failed`
+
+**Train images not built or offered.** The images step could not compute the controller's change keys, build an image, push it to the cluster's registry, or offer it to the controller. The promotion stands; the controller builds the images itself as before.
+
+- **Fix:** Read the images step's log; check the composition, the build host and the cluster's registry, then run `piceli train APP --promote-run last` again or let the controller build.
+- **Retry-safe:** yes
+
+(error-train-interrupted)=
+### `train-interrupted`
+
+**Train run stopped before it finished.** The run's record still says running but no process holds the train's lock: the run was killed.
+
+- **Fix:** Read its last state with `piceli trains NAME`, then run the train again.
+- **Retry-safe:** no
+
+(error-train-invalid)=
+### `train-invalid`
+
+**Train declaration invalid.** The `Train(...)` or one of its steps is invalid: a name that is not a DNS label, two steps with one name, no test step, a tag without `{n}`, an empty argv.
+
+- **Fix:** Fix the declaration as the message says.
+- **Retry-safe:** no
+
+(error-train-load-failed)=
+### `train-load-failed`
+
+**Train module failed to load.** Importing the train's spec module raised an exception or took too long.
+
+- **Fix:** Run `python path/to/module.py` to see the error, fix the module, then run the train again.
+- **Retry-safe:** no
+
+(error-train-merge-conflict)=
+### `train-merge-conflict`
+
+**Branch conflicts with the train.** Merging the branch onto the train's head (the base plus the branches already joined) conflicts. The train never resolves a conflict.
+
+- **Fix:** Merge or rebase the branch on the base, resolve the conflict, then queue it again.
+- **Retry-safe:** no
+
+(error-train-merge-failed)=
+### `train-merge-failed`
+
+**Merging the branch failed.** Git could not make the merge commit for a reason other than a conflict (a damaged object, a full disk, a refused ref). The result gives Git's message. A missing Git identity is not one: the train then commits as Piceli train <train@piceli.invalid>.
+
+- **Fix:** Read Git's message in the result, fix the repository or the machine, then queue the branch again.
+- **Retry-safe:** no
+
+(error-train-not-fast-forward)=
+### `train-not-fast-forward`
+
+**Promotion is not a fast-forward.** The base or tested branch moved outside the train during the run (or was never an ancestor of the train's head), so moving it to the head would drop commits. Nothing was tagged or moved.
+
+- **Fix:** Bring the branch back onto the train's history (merge it into the base by the train), then run the train again.
+- **Retry-safe:** no
+
+(error-train-not-found)=
+### `train-not-found`
+
+**Train not found.** The module given to `piceli train` cannot be imported, has no such attribute, the attribute is not a `piceli.train.Train`, or the module declares no Train or several.
+
+- **Fix:** Pass `MODULE:ATTR` or `path/to/file.py:ATTR` naming one `Train`.
+- **Retry-safe:** no
+
+(error-train-notify-failed)=
+### `train-notify-failed`
+
+**Train notification failed.** A notifier of the train (a command, a webhook or the desktop) failed or ran past its timeout. The run's result is unchanged.
+
+- **Fix:** Check the notifier's command, URL or environment variables; the run's outcome is in `piceli train-wait RUN` and `piceli trains`.
+- **Retry-safe:** yes
+
+(error-train-publish-failed)=
+### `train-publish-failed`
+
+**Publish step failed.** The promotion happened (the tag and branches moved), but a publish step exited non-zero.
+
+- **Fix:** Read the publish step's log and run the publish script by hand for the tag.
+- **Retry-safe:** yes
+
+(error-train-push-failed)=
+### `train-push-failed`
+
+**Train push failed.** `git push --atomic` of the tag, tested and the base was refused or failed; nothing was pushed. The local promotion stands.
+
+- **Fix:** Fetch, check whether the remote's base moved, then push the tag and branches, or run the train again.
+- **Retry-safe:** yes
+
+(error-train-push-needs-promote)=
+### `train-push-needs-promote`
+
+**--push without --promote.** `--push` pushes a promotion (the tag, tested and the base), so it needs `--promote`.
+
+- **Fix:** Add `--promote`, or leave out `--push`.
+- **Retry-safe:** no
+
+(error-train-queue-cancelled)=
+### `train-queue-cancelled`
+
+**Queued request cancelled.** The request was cancelled with `piceli train-queue NAME --cancel ID` before it ran.
+
+- **Fix:** Queue the branches again with `piceli train APP --branches … --queue` if they should still join.
+- **Retry-safe:** no
+
+(error-train-queue-not-found)=
+### `train-queue-not-found`
+
+**No such queued request.** No train under the state root has a queued request with that id.
+
+- **Fix:** List the queue with `piceli train-queue NAME`, and pass the --state-dir the train used.
+- **Retry-safe:** no
+
+(error-train-queue-not-waiting)=
+### `train-queue-not-waiting`
+
+**Request no longer waiting.** Only a waiting request can be cancelled; this one is running or finished.
+
+- **Fix:** Wait for it with `piceli train-wait ID`; a run in progress is stopped by its own process.
+- **Retry-safe:** no
+
+(error-train-repo-invalid)=
+### `train-repo-invalid`
+
+**Train repository invalid.** The train's `repo` is not a Git repository, or its base branch does not exist.
+
+- **Fix:** Point `Train(repo=...)` at the repository (relative to the spec module) and create the base branch.
+- **Retry-safe:** no
+
+(error-train-retire-invalid)=
+### `train-retire-invalid`
+
+**--retire without a promotion, or --retire-remote without --push.** `--retire` renames the branches a promotion joined, so it needs `--promote` (or `--promote-run`); `--retire-remote` also deletes them on the remote once the push made them redundant, so it needs `--push`.
+
+- **Fix:** Add `--promote` (and `--push` for `--retire-remote`), or leave out the retire flag.
+- **Retry-safe:** no
+
+(error-train-run-cancelled)=
+### `train-run-cancelled`
+
+**Train run cancelled.** The run was interrupted (Ctrl-C) after it started. It is recorded as failed (run-failed) and its notifications were sent; no ref moved after the interruption.
+
+- **Fix:** Run the train again when you want the branches judged.
+- **Retry-safe:** yes
+
+(error-train-run-failed)=
+### `train-run-failed`
+
+**Train run failed midway.** The run raised an unexpected error after it started. It is recorded as failed (run-failed), with what had joined so far, and its notifications were sent.
+
+- **Fix:** Read the run with `piceli trains NAME` and its step logs, then run the train again; report the error if it repeats.
+- **Retry-safe:** yes
+
+(error-train-run-not-found)=
+### `train-run-not-found`
+
+**No such train run.** No train under the state root has a run with that id, and no train has that name.
+
+- **Fix:** Take the run id from `piceli train --json` or `piceli trains`, and pass the --state-dir the train used.
+- **Retry-safe:** no
+
+(error-train-run-unknown)=
+### `train-run-unknown`
+
+**No such train run to promote.** `--promote-run` names a run with no record under the train's state directory, one that did not finish, or one that joined nothing.
+
+- **Fix:** Name a finished run that joined branches (its id is in the result and under runs/), or `last`.
+- **Retry-safe:** no
+
+(error-train-spec-invalid)=
+### `train-spec-invalid`
+
+**Spec of the merged tree invalid.** The train's spec module is missing from the merged tree, or fails to import there, or no longer declares the Train.
+
+- **Fix:** Fix the spec module on the branch (it is read from the commit under test).
+- **Retry-safe:** no
+
+(error-train-step-failed)=
+### `train-step-failed`
+
+**A train step failed.** A step of the merged tree's spec exited non-zero (a failed build, a test that failed again on its retry, a check). The result names the step, its log and an output tail.
+
+- **Fix:** Read the step's log, fix the branch on top of the current base, then queue it again.
+- **Retry-safe:** no
+
+(error-train-step-timeout)=
+### `train-step-timeout`
+
+**A train step timed out.** A step ran longer than its `timeout` and was stopped with its process group.
+
+- **Fix:** Find what hangs in the step's log, or raise the step's `timeout`.
+- **Retry-safe:** yes
+
+(error-train-telemetry-failed)=
+### `train-telemetry-failed`
+
+**Train telemetry not exported.** The OTLP collector was unreachable, slow or refused the spans, or the telemetry configuration is unusable. The run is unaffected.
+
+- **Fix:** Check that the collector listens on the configured OTLP/HTTP endpoint and OTEL_EXPORTER_OTLP_* settings.
+- **Retry-safe:** yes
+
+(error-train-telemetry-unavailable)=
+### `train-telemetry-unavailable`
+
+**Train telemetry needs the telemetry extra.** The spec declares `Train(telemetry=Otlp(..., protocol="http/protobuf"))`, which is sent as protobuf, and the OTLP protobuf classes (`opentelemetry-proto`) are not installed. The train refuses before it runs rather than send JSON a protobuf-only collector would reject.
+
+- **Fix:** Install the extra (`pip install 'piceli[telemetry]'`, or `uv tool install 'piceli[telemetry]'`), or remove `telemetry=` from the spec.
+- **Retry-safe:** no
+
+(error-train-unknown)=
+### `train-unknown`
+
+**No such train.** No train of that name has run with this state root, so it has no state directory.
+
+- **Fix:** Run `piceli trains` to list the trains, or pass the --state-dir the train used.
+- **Retry-safe:** no
+
+(error-train-wait-timeout)=
+### `train-wait-timeout`
+
+**Train run still running.** The run had not ended when the --timeout of `piceli train-wait` ran out.
+
+- **Fix:** Wait again (`piceli train-wait RUN`), or follow it with `piceli trains NAME --follow`.
+- **Retry-safe:** yes

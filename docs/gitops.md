@@ -576,6 +576,79 @@ elsewhere when the host is quarantined, and deployed through the usual
 plan, approval and checks. `controller.last_rebuild` in the status says
 what it took; a host that built nothing deployed is a rejected request.
 
+### Images a merge train built: `prebuilt` (0.26.0)
+
+A merge train that promotes a commit can build its images first, for
+components and for pipeline environments' build specs (`Step.images`, see
+{doc}`train`), and offer them with a `prebuilt` request
+before the push this controller reacts to. Declare
+`Controller(on="node-a", prebuilt=True)` to take them (off by default).
+The controller keeps an offer after checking that it names a declared
+component or an image of a pipeline build spec, that its reference points
+into that image's repository of
+this registry and is pinned by its digest, and that the digest is in the
+registry. It uses an offer only when a step's own change key for the
+component (computed from its own clone of the commit) is the offered key,
+and the digest is still in the registry: the image is then recorded as
+its own build, with the train's provenance (`builder: "train"`, the run,
+the tag and the host), and the step deploys without asking a host or
+starting a Job. An offer under another key is never used. Current offers
+show in the status (`controller.prebuilt`), each with the commit of every
+source its key was made with (`sources`). When a step builds a component
+although an offer of it exists, the component's status entry says why
+(`prebuilt`: `{"used": false, "key": ..., "differs": {source: {"offered",
+"here"}}}`): typically another repository the build reads moved between
+the train's offer and this controller's poll, so its key differs and it
+builds as before. Registry delivery only: a controller delivering into the
+nodes refuses offers.
+
+(gitops-builds)=
+### Every build: list, start, cancel (0.26.0)
+
+`piceli gitops builds` lists every build the controller knows, newest
+first: NixRelease publishes, environment image builds (on a build host or
+the in-cluster builder) and merge-train handoffs (`prebuilt` offers).
+`--target NAME` and `--state STAGE` (or `active`) filter it; `--json`
+prints `piceli.builds.v1`, the document the UI's Builds page shows:
+
+```json
+{"schema": "piceli.builds.v1", "builds": [{
+  "id": "web-1@2026-10-24T10:00:00Z", "kind": "nix-publish", "target": "web-1",
+  "trigger": {"kind": "cli", "by": "ana", "detail": "cli web-v1.4.0"},
+  "commit": "3f2c…", "tag": "web-v1.4.0", "branch": null, "host": "mini",
+  "stage": "published",
+  "stages": [{"stage": "approval-required", "started_at": "…", "finished_at": "…", "seconds": 40.0},
+             {"stage": "queued", "…": "…"}, {"stage": "fetching-inputs", "…": "…"},
+             {"stage": "building", "…": "…"}, {"stage": "uploading", "…": "…"}],
+  "log_tail": null, "requested_at": "…", "started_at": "…", "finished_at": "…",
+  "seconds": 312.4, "plan_digest": "sha256:…", "reason": null, "images": [],
+  "running_on": ["web-1"],
+  "actions": {"approve": false, "retry": true, "cancel": false}}]}
+```
+
+The trigger's `kind` is `tag`, `branch`, `schedule`, `push`, `sync`, `cli`,
+`ui` or `train`. The stage is `approval-required`, `queued`,
+`fetching-inputs`, `building`, `signing`, `uploading`, `published`,
+`failed`, `cancelled` or `rejected` (the promotion gate); a NixRelease's
+signing and upload run as one step on the build host and show as
+`uploading`. `running_on` names the targets (`piceli targets`) whose
+deployed revision is the build's commit (or tag).
+
+While a build host builds, it reports its stage and the last 4000
+characters of its log (`build-progress`, at each stage and at most every
+15 seconds), so the record of a running build shows its stage and a live
+log tail. At each stage it also checks that the build is still wanted:
+one cancelled, or superseded by a newer commit, stops there.
+
+`piceli gitops build NAME [--ref TAG|COMMIT]` starts a build by hand: a
+NixRelease plans the ref ({ref}`below <gitops-nix-releases>`), an
+environment rebuilds every image at the commit it follows and deploys it
+with its usual plan and approval (`--ref` may only name that commit or
+ref). `piceli gitops cancel NAME` drops a NixRelease's publish, or the
+image builds an environment waits for on build hosts: the step fails with
+`cancelled` until `piceli gitops sync` (an in-cluster build Job runs to its
+end). Retry is `piceli gitops sync NAME`.
+
 ### Faulty build hosts and nodes: quarantine (0.22.0)
 
 The controller records a health event for a build host when its
@@ -720,6 +793,29 @@ What happens when a tag appears in the source:
    is signed by the cache's key and names the planned build, commit, tag
    and attribute, and the pointer is the tag's. Anything else is a
    rejected request (`rejected_requests`).
+
+**A branch, a schedule, by hand (0.26.0).** A host that follows
+`Branch("main")` publishes each new head of the branch: the plan names the
+branch and its pointer (`piceli/<build>/refs/heads/main.json`) and no tag,
+and the build host checks that the commit is on the branch before it
+builds. `schedule=` plans the newest tag or head again on a schedule
+(`hourly`, `daily` at 00:00 UTC, `weekly` on Monday, or five cron fields
+`MINUTE HOUR DAY MONTH WEEKDAY` in UTC):
+
+```python
+web_release = NixRelease(web, source=hosts, builder="mini", schedule="0 4 * * *")
+```
+
+`piceli gitops build web-1 --ref web-v1.4.0` (a tag of the release, its
+branch or a full commit; the newest without `--ref`) plans that ref now,
+and so does the UI's **Build now**. Every trigger goes through the same
+gate, plan and approval; `--approve sha256:<digest>` approves it in one go
+when the plan's digest is that one. The release records `trigger_kind`
+(`tag`, `branch`, `schedule`, `sync`, `cli`, `ui`) and `requested_by`.
+`piceli gitops cancel web-1` drops a planned, queued or running publish:
+a build host that holds it stops before its next stage and its answer is
+refused; the release is `cancelled` (`gitops-build-cancelled`) until a
+newer tag or head, a sync or a build.
 
 A failed fetch, build or publish is answered `build-failed`: the release
 is `failed` with the host's reason and output tail

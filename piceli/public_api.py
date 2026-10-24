@@ -26,4 +26,5 @@ PUBLIC_MODULES: tuple[str, ...] = (
     "piceli.pipeline",
     "piceli.server.cluster_install",
     "piceli.testing",
+    "piceli.train",
 )

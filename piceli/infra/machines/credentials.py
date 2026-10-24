@@ -42,7 +42,10 @@ _SCHEMA = "piceli.credential.v1"
 #: (``piceli secrets nix-cache``); ``s3-keys``: the access key id and secret
 #: of a bucket's S3 API (``piceli secrets s3``; by part since 0.25); ``age-identity``: a host's
 #: age X25519 identity for sops-nix (``piceli secrets age``); ``user-data``:
-#: a server's user data at creation (``piceli secrets user-data``).
+#: a server's user data at creation (``piceli secrets user-data``); 0.26:
+#: ``git-token``: a Git host's token a build host fetches private flake
+#: inputs with (``piceli secrets git-token``); ``git-ssh-key``: a deploy key
+#: for the same (``piceli secrets git-ssh-key``).
 KINDS = (
     "provider-token",
     "state-key",
@@ -50,6 +53,8 @@ KINDS = (
     "s3-keys",
     "age-identity",
     "user-data",
+    "git-token",
+    "git-ssh-key",
 )
 _SET_UP = {
     "provider-token": "piceli secrets provider {} --prompt",
@@ -58,6 +63,8 @@ _SET_UP = {
     "s3-keys": "piceli secrets s3 {} --prompt",
     "age-identity": "piceli secrets age {} --generate",
     "user-data": "piceli secrets user-data {} --file PATH",
+    "git-token": "piceli secrets git-token {} --host HOST --prompt",
+    "git-ssh-key": "piceli secrets git-ssh-key {} --host HOST --file PATH",
 }
 #: ``piceli secrets delete --kind``: the ``piceli secrets`` command's name of
 #: each kind (a stored kind's own name is accepted too).
@@ -68,6 +75,8 @@ KIND_OPTIONS = {
     "s3": "s3-keys",
     "age": "age-identity",
     "user-data": "user-data",
+    "git-token": "git-token",
+    "git-ssh-key": "git-ssh-key",
 }
 #: Nova takes at most 65535 bytes of base64: 49149 bytes of user data.
 MAX_USER_DATA = 49149

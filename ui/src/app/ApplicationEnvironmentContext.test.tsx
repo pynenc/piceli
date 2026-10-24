@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { ApplicationEnvironmentContext } from './ApplicationEnvironmentContext';
@@ -33,7 +33,7 @@ it('connects runtime to the exact published environment and component identities
 
 it('does not infer a relationship from a matching namespace or component name', async () => {
   const fetch = open(true, 'shop');
-  await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+  await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
   expect(screen.queryByRole('navigation', { name: 'Related infrastructure' })).toBeNull();
 });
 

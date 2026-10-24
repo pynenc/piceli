@@ -81,6 +81,45 @@ cost, and the DNS records. It reads what the last `piceli infra` commands
 recorded; it never runs OpenTofu or reads a credential. Plans and applies
 stay on the command line (see {doc}`infrastructure`).
 
+`piceli ui serve … --trains` adds **Trains** to the Delivery group (from
+0.26.0): the local merge trains, as `piceli trains` shows them, built by
+the same functions. The run in progress shows its branches, the steps done
+and the running step with its host, elapsed time and the tail of its log,
+refreshed every two seconds; then the queue (each waiting request's
+branches, flags and when it was queued), recent runs, step durations (median and
+last), flaky tests with their last first failure, and, with
+`--train-composition MODULE`, which run produced what each environment and
+NixHost runs (read as `piceli targets` reads them, at most once a minute).
+`--train-state-dir DIR` reads another state root. It runs nothing and
+takes no lock (see {doc}`train`).
+
+### Builds
+
+**Builds** (Delivery group, 0.26.0, for any session that reads the
+composition) lists every build the GitOps controller knows, as `piceli
+gitops builds` does: NixRelease publishes, environment image builds and
+merge-train handoffs. Each build shows what triggered it (a tag, a branch,
+a schedule, the CLI or this page, with who asked), its commit and tag, the
+build host, its stage with a time for each one (queued, fetching inputs,
+building, signing, uploading, then published, failed or cancelled), its
+duration, the targets that run it now and, while it runs, the tail of its
+log, refreshed every three seconds. Filters narrow the list to one target
+or one state.
+
+Sessions that may sync (`composition_sync`) also get the actions. **Approve**
+opens the plan (the commit, tag or branch, the attribute and build host,
+the manifest and pointers it writes, the promotion gate's result) with its
+exact digest; approving takes a confirmation and writes the request `piceli
+gitops approve` writes. **Retry** is `piceli gitops sync`, **Cancel build**
+is `piceli gitops cancel`. **Build now** takes a target and a tag or commit
+(empty: the newest) and writes the request `piceli gitops build` writes:
+the build still goes through the gate, plan and approval.
+
+```{image} _static/ui/builds.webp
+:alt: The Builds page with a running image build's live log tail, a NixRelease publish waiting for approval and the Build now form
+:width: 720px
+```
+
 ```{image} _static/ui/navigation-badges.webp
 :alt: Navigation with approval, environment and registry counts and an Environments sub-menu listing each environment
 :width: 720px

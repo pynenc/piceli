@@ -71,7 +71,10 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli envs`](#cli-envs) | List every environment: branch, namespace, commit, deploy state, health, age. | reads | no |
 | [`piceli explain`](#cli-explain) | Explain an error code: cause, fix and whether a retry can succeed. | none | no |
 | [`piceli gitops approve`](#cli-gitops-approve) | Approve the pending plan of ENV; the controller applies it on its next poll. | writes | yes |
+| [`piceli gitops build`](#cli-gitops-build) | Ask the controller to build NAME now: a NixRelease plans --ref, an environment rebuilds its images; the same gate, plan and approval apply. | writes | no |
+| [`piceli gitops builds`](#cli-gitops-builds) | List every build the controller knows (NixRelease publishes, image builds, train handoffs): trigger, commit, host, stage, log tail, targets. | reads | no |
 | [`piceli gitops cache clear`](#cli-gitops-cache-clear) | Ask the controller to empty its build cache (a corrupted cargo cache). | writes | no |
+| [`piceli gitops cancel`](#cli-gitops-cancel) | Cancel NAME's queued or running build: unclaimed it is dropped, claimed the build host stops at its next stage. | writes | no |
 | [`piceli gitops disable`](#cli-gitops-disable) | Remove the controller (plan first; --approve HASH removes). Never an environment. | writes | yes |
 | [`piceli gitops enable`](#cli-gitops-enable) | Install the GitOps controller (plan first; --approve HASH installs). | writes | yes |
 | [`piceli gitops hosts`](#cli-gitops-hosts) | The health events and quarantine the controller recorded per build host. | reads | no |
@@ -149,6 +152,8 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli secrets cluster`](#cli-secrets-cluster) | Store another cluster's credentials for the GitOps controller (never printed). | writes | no |
 | [`piceli secrets delete`](#cli-secrets-delete) | Delete a stored credential (a spent bootstrap key, an old token); never printed. | none | yes |
 | [`piceli secrets git`](#cli-secrets-git) | Store the Git token the controller and cluster builds use (read from stdin, never printed). | writes | no |
+| [`piceli secrets git-ssh-key`](#cli-secrets-git-ssh-key) | Store a read-only deploy key a build host fetches private git+ssh flake inputs with. | none | no |
+| [`piceli secrets git-token`](#cli-secrets-git-token) | Store a Git token a build host fetches private flake inputs with (never printed). | none | no |
 | [`piceli secrets nix-cache`](#cli-secrets-nix-cache) | A Nix binary cache's signing key: generate or import it; print its public key. | none | no |
 | [`piceli secrets provider`](#cli-secrets-provider) | Store a provider's API credential, part by part (never printed). | none | no |
 | [`piceli secrets restore`](#cli-secrets-restore) | Restore the secret store from an encrypted backup (plans first when not empty). | none | yes |
@@ -164,6 +169,11 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli status`](#cli-status) | Say whether the app is up and how to reach it. Read-only. | reads | no |
 | [`piceli support-bundle`](#cli-support-bundle) | Collect a read-only, redacted snapshot of a namespace (no Secrets, no env values). | reads | no |
 | [`piceli targets`](#cli-targets) | Every environment and NixHost: commit or tag, pinned product commit, checks, state. | reads | no |
+| [`piceli train`](#cli-train) | Merge branches onto the base one tested merge at a time; eject failures. | none | yes |
+| [`piceli train-prune`](#cli-train-prune) | Bound what a train keeps: worktrees, cargo targets, the content store, runs. | none | no |
+| [`piceli train-queue`](#cli-train-queue) | A train's queue: waiting requests with their flags; cancel one, or serve them. | none | no |
+| [`piceli train-wait`](#cli-train-wait) | Wait until a train run ends; exit with its verdict. | none | no |
+| [`piceli trains`](#cli-trains) | The trains: the run in progress, recent runs, step trends, flaky tests, deployed by which run. | reads | no |
 | [`piceli ui backup`](#cli-ui-backup) | Back up an offline UI control store and its release journal. | none | no |
 | [`piceli ui cluster-observe`](#cli-ui-cluster-observe) | Serve OIDC-scoped cluster observation and configured delivery. | writes | yes |
 | [`piceli ui cluster-serve`](#cli-ui-cluster-serve) | Serve OIDC-scoped cluster observation and configured delivery. | writes | yes |
@@ -672,6 +682,7 @@ Take the builds the controller publishes, build and deliver them, answer it.
 | `--image` | text |  | The builder image (default: the host's, else DevBuilds(image=)); the same Piceli version as the controller |
 | `--namespace` | text | `piceli-system` | The controller's namespace |
 | `--once` | boolean | `False` | Build at most one wanted build, then exit |
+| `--check` | boolean | `False` | Claim nothing: list the NixReleases this host publishes, how each fetches its private flake inputs (credentials host or controller) and whether this host holds each credential, then exit (1 when one is missing) |
 | `--poll` | float | `15.0` | Seconds between looks when idle |
 | `--state-dir` | path |  | Where Git mirrors live (default ~/.cache/piceli/builder) |
 | `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
@@ -688,7 +699,7 @@ Take the builds the controller publishes, build and deliver them, answer it.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.21.0. Runs until Ctrl-C (--once: one build). The builder image must be the controller's Piceli version. 0.22.0: each delivered image's provenance is pushed as an OCI referrer when the registry takes it; a build showing a machine-health signature records a health event on the host, and a quarantined host claims nothing (quarantined in --once --json). 0.25.0: --publish MODULE:ATTR (repeatable) also takes the nix-publish builds of the NixReleases that name this host as builder, only for those caches; every key is read at start (infra-credential-missing, dev-nix-key-mismatch refuse it) and never leaves the host: a claim carries the cache key's signature over it. A native host with --publish only publishes. The publish itself was approved by the release's policy or gitops approve of its plan digest. 0.25.0: --publish-only (needs --publish, else dev-nix-invalid) claims only those publishes on any kind of host, never an image build (said once), and needs no cluster registry: a remote publisher is a docker host with an SSH context to itself, since a native host is the machine running Piceli. A host declared runs=False implies --publish-only and is refused without --publish or with --no-publish-only (dev-host-publish-only); without --host it is never the default.
+- **Notes:** 0.21.0. Runs until Ctrl-C (--once: one build). The builder image must be the controller's Piceli version. 0.22.0: each delivered image's provenance is pushed as an OCI referrer when the registry takes it; a build showing a machine-health signature records a health event on the host, and a quarantined host claims nothing (quarantined in --once --json). 0.25.0: --publish MODULE:ATTR (repeatable) also takes the nix-publish builds of the NixReleases that name this host as builder, only for those caches; every key is read at start (infra-credential-missing, dev-nix-key-mismatch refuse it) and never leaves the host: a claim carries the cache key's signature over it. A native host with --publish only publishes. The publish itself was approved by the release's policy or gitops approve of its plan digest. 0.25.0: --publish-only (needs --publish, else dev-nix-invalid) claims only those publishes on any kind of host, never an image build (said once), and needs no cluster registry: a remote publisher is a docker host with an SSH context to itself, since a native host is the machine running Piceli. A host declared runs=False implies --publish-only and is refused without --publish or with --no-publish-only (dev-host-publish-only); without --host it is never the default. 0.26.0: before each publish the host fetches the plan's private flake inputs into its own store (its own git-token or git-ssh-key, or for credentials="controller" the controller's token sealed to the claim's one-time key), else build-failed with infra-nix-input-unreachable before any build; at start it warns per release of an input it holds no credential for, and --check claims nothing and prints piceli.builder-check.v1 (each release's mode, inputs and credential states; exit 1 when one is missing).
 
 (cli-bundle)=
 ### `piceli bundle`
@@ -1122,6 +1133,7 @@ Build a flake output on a Nix build host; with --publish, sign and push it.
 | `--context` | text |  | With --kubeconfig: its context |
 | `--state-dir` | path |  | With --release: a local controller's state directory |
 | `--namespace` | text | `piceli-system` | With --release: the controller's namespace |
+| `--input` | text (repeatable) |  | A private flake input to fetch on the build host before the build, NAME or NAME=CREDENTIAL (a git-token in this machine's piceli secrets; default: git); repeat. The NixRelease of the composition that publishes this output adds its own |
 | `--artifacts-dir` | path | `piceli-dev-artifacts` | Where an image lands (RUN/) |
 | `--queue-timeout` | integer | `3600` | Seconds to wait for a slot |
 | `--quiet` | boolean | `False` | Do not stream the build's log |
@@ -1522,6 +1534,61 @@ Approve the pending plan of ENV; the controller applies it on its next poll.
 - **Output contract:** conforms
 - **Notes:** This is the owner's approval: run it only with the hash the owner approved. Writes a request to the ConfigMap piceli-gitops-requests; a hash the environment is no longer waiting for is dropped (gitops-approval-stale in gitops status). 0.25.0: ENV may name a NixRelease waiting in approval-required; the hash is its plan digest, and approving it lets a build host build, sign and publish that tag.
 
+(cli-gitops-build)=
+### `piceli gitops build`
+
+Ask the controller to build NAME now: a NixRelease plans --ref, an environment rebuilds its images; the same gate, plan and approval apply.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--ref` | text |  | A tag of the release, its branch or a full commit (default: the newest); an environment builds the commit it follows |
+| `--approve` | text |  | Approve the plan in one go when its digest is this sha256:... (a NixRelease) |
+| `--by` | text |  | Who asks (default: your user name) |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir
+- **Writes:** --state-dir requests (local controller)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. Writes a build request; the controller plans it on its next poll, recorded as triggered by cli with the requester (--by, else the user name). A NixRelease waits in approval-required unless auto_approve or --approve names the plan's digest. An environment rebuilds every image at the commit it follows (--ref may name it). An unknown target or ref is dropped (gitops-request-invalid or gitops-build-ref-unknown in gitops status).
+
+(cli-gitops-builds)=
+### `piceli gitops builds`
+
+List every build the controller knows (NixRelease publishes, image builds, train handoffs): trigger, commit, host, stage, log tail, targets.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--target` | text |  | Only this target's builds |
+| `--state` | text |  | Only builds in this stage (queued, building, published, failed, ...), or active for the unfinished ones |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir, the controller's status and history
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. Read-only. --json prints piceli.builds.v1; --target and --state (a stage, or active) filter it.
+
 (cli-gitops-cache-clear)=
 ### `piceli gitops cache clear`
 
@@ -1546,6 +1613,32 @@ Ask the controller to empty its build cache (a corrupted cargo cache).
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** 0.19.0. Writes a request to the ConfigMap piceli-gitops-requests; the controller runs a short Job on the builder node between steps and records controller.cache_clear (at, crates, state) in gitops status. The next build is cold for what was cleared. A controller without --builder-image drops it (gitops-request-invalid).
+
+(cli-gitops-cancel)=
+### `piceli gitops cancel`
+
+Cancel NAME's queued or running build: unclaimed it is dropped, claimed the build host stops at its next stage.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--by` | text |  | Who asks (default: your user name) |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir
+- **Writes:** --state-dir requests (local controller)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. Unclaimed, the build is dropped; claimed, the build host stops at its next stage and its answer is refused. A cancelled image build fails its step until piceli gitops sync; a cancelled publish waits for a newer tag, a sync or a build. Nothing running: gitops-build-not-running in gitops status.
 
 (cli-gitops-disable)=
 ### `piceli gitops disable`
@@ -3495,6 +3588,52 @@ Store the Git token the controller and cluster builds use (read from stdin, neve
 - **Output contract:** conforms
 - **Notes:** The token is read from stdin only (typed without echo, or piped); a token argument or PICELI_GIT_TOKEN is refused (secrets-token-refused) without echoing it. Creates or updates the Secret without a plan; prints its name and key names, never a value. Needs piceli cluster init first (cluster-not-initialized).
 
+(cli-secrets-git-ssh-key)=
+### `piceli secrets git-ssh-key`
+
+Store a read-only deploy key a build host fetches private git+ssh flake inputs with.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--host` | text | required | The Git host it is for (github.com); no other |
+| `--file` | path |  | The deploy key: an OpenSSH private key file |
+| `--known-hosts` | path |  | That host's known_hosts lines (ssh-keyscan HOST); without it the host's key is taken on first use, each time |
+
+**Contract**
+
+- **Reads:** --file PATH, --known-hosts PATH
+- **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. The key, its host (--host; used for no other) and, optionally, that host's known_hosts lines. Used before the build by the build host's fetch step, never inside the build. Prints the name and the host, never the key.
+
+(cli-secrets-git-token)=
+### `piceli secrets git-token`
+
+Store a Git token a build host fetches private flake inputs with (never printed).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--host` | text | required | The Git host it is for (github.com); used for no other |
+| `--prompt` | boolean | `False` | Read the token from stdin (typed without echo, or piped) |
+| `--username` | text | `git` | The Git user name sent with the token |
+
+**Contract**
+
+- **Reads:** stdin (--prompt)
+- **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. The token, its host (--host; it is used for no other) and a user name (--username, default git). A build host fetches the private inputs of a NixRelease or `dev nix build` with it before the build, never inside it. Prints the name and the host, never the token; an argument is refused (infra-credential-refused) without echoing it. It reaches another build host with `piceli secrets backup --only NAME` and `piceli secrets restore`.
+
 (cli-secrets-nix-cache)=
 ### `piceli secrets nix-cache`
 
@@ -3841,6 +3980,137 @@ Every environment and NixHost: commit or tag, pinned product commit, checks, sta
 - **Output contract:** conforms
 - **Notes:** 0.25.0. Read-only; safe to retry. --json prints one piceli.targets.v1 object. An unreachable controller or host never fails the view: its rows say unreachable with the reason (host rows still work with the home cluster down; a missing login profile of the home cluster shows profile-not-found with a piceli login hint). Exit 0: every target reachable, none failed; 1: a target failed, rolled back, is unreachable or its checks failed; 2: no module and no controller named (targets-input-required) or a module that does not load.
 
+(cli-train)=
+### `piceli train`
+
+Merge branches onto the base one tested merge at a time; eject failures.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `APP` | text | required |  |
+| `BRANCHES` | text |  |  |
+| `--branches` | boolean | `False` | Starts the list of candidate branches |
+| `--promote` | boolean | `False` | Tag the joined head and move tested and the base by fast-forward only, then run the publish steps |
+| `--push` | boolean | `False` | Push the tag, tested and the base (needs --promote) |
+| `--queue` | boolean | `False` | When the train is busy, queue the request and return at once (its id and position); the running train serves it next |
+| `--json` | boolean | `False` | Print the result object on stdout |
+| `--state-dir` | path |  | Train state root (default $XDG_STATE_HOME/piceli/train, else ~/.local/state/piceli/train) |
+| `--retire` | boolean | `False` | Once promoted, rename each joined branch to_delete_<date>_<branch> (never deleted); a branch checked out with changes, or one that moved after it joined, is left alone |
+| `--retire-remote` | boolean | `False` | --retire, and delete each retired branch on the remote after the push (only while it is at the joined commit; needs --push) |
+| `--promote-run` | text |  | Promote the head an earlier run reached (its id, or 'last'), without running it again; refused when the base moved in a way that is not a fast-forward of that head |
+
+**Contract**
+
+- **Reads:** the train spec module (MODULE[:ATTR]), then the same module in each merged tree, the Git repository (branches, base, tested), the steps' tools (cargo, scripts of the merged tree), Train(builds=): the declared build hosts (their engines, queues, health), --promote-run: an earlier run's record
+- **Writes:** worktrees of the repository at stable paths under the train cache (removed after each trial), unreferenced merge commits; refs/piceli/train/<name>/last, $XDG_STATE_HOME/piceli/train/<name> (run records, events, logs, flaky.jsonl, the queue), $XDG_CACHE_HOME/piceli/train (slot locks, shared cargo targets, the content store), build hosts: dev runs of the merged tree (their queues, warm caches, health events), --promote: the tag, tested and the base (fast-forward only), publish steps, --promote with Step.images: images pushed to the cluster's registry, a prebuilt request to its controller, --push: the remote's tag, tested and base
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. Runs the train's steps, which run code: the explicit branch list is the approval, and --promote/--push the approval to move refs and push. Without --promote no ref changes; nothing is pushed without --push (which needs --promote). Each candidate set is merged with git merge --no-ff onto the train's head in a temporary worktree; its steps come from the merged tree's spec. A failing set is bisected. --json prints one piceli.train.v1 object. --queue on a busy train writes a queued request (keeping its flags, --promote-run too, with last resolved when queued) and returns at once (piceli.train.queued.v1, exit 0); every run serves the train's queue when it ends. A run that raises midway (a --promote-run too) is recorded failed (run-failed: train-git-failed, train-host-unavailable, train-run-failed, train-run-cancelled), notified, exit 1. Exit 0: every branch joined (or was already in) and the promotion and push asked for succeeded; 1: a branch was ejected (train-step-failed, train-step-timeout, train-merge-conflict, train-merge-failed, train-spec-invalid), the promotion was refused (train-not-fast-forward, train-checkout-dirty), a publish step or the push failed; 2: rejected before anything ran (train-not-found, train-branch-unknown, train-busy, ...). Steps may run on the train's build hosts (Train(builds=, hosts=)) through the dev run machinery; a step with inputs that passed before is reused. --promote-run RUN promotes an earlier run's head without running it (train-run-unknown, train-not-fast-forward); no host for a step fails the run (train-host-unavailable).
+
+(cli-train-prune)=
+### `piceli train-prune`
+
+Bound what a train keeps: worktrees, cargo targets, the content store, runs.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TRAIN` | text | required |  |
+| `--dry-run` | boolean | `False` | Say what would go; remove nothing |
+| `--json` | boolean | `False` | Print the result object on stdout |
+| `--state-dir` | path |  | Train state root (as for piceli train) |
+| `--cache-dir` | path |  | The train cache (default $XDG_CACHE_HOME/piceli/train, else ~/.cache/piceli/train; a spec's Train(cache=) wins) |
+
+**Contract**
+
+- **Reads:** the train cache ($XDG_CACHE_HOME/piceli/train), the train's state directory (runs), a train spec, when given instead of a name (its retention)
+- **Writes:** removes leftover worktrees, unused or least recently used target directories and store records, unreferenced store bytes, old runs
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. Never removes what a running trial holds, the newest runs (keep_runs) or flaky.jsonl. --dry-run removes nothing. Every train run prunes the same way at its end. --json prints one piceli.train-prune.v1 object (removed: path, kind, bytes, why; sizes and limits).
+
+(cli-train-queue)=
+### `piceli train-queue`
+
+A train's queue: waiting requests with their flags; cancel one, or serve them.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--cancel` | text |  | Cancel this waiting request (its q-… id) |
+| `--drain` | boolean | `False` | Serve the queue here until it is empty (resumes a request whose process died); runs each request's steps with its flags |
+| `--state-dir` | path |  | Train state root (default $XDG_STATE_HOME/piceli/train, else ~/.local/state/piceli/train) |
+| `--json` | boolean | `False` | Print one piceli.train.queue.v1 object on stdout |
+
+**Contract**
+
+- **Reads:** $XDG_STATE_HOME/piceli/train/<name>/queue (waiting, running, done)
+- **Writes:** --cancel: moves the request to queue/done as cancelled, --drain: what piceli train writes, for each request served
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. Without options read-only; --json prints one piceli.train.queue.v1 object (a request whose process died shows stale). --cancel ID cancels a waiting request (train-queue-not-waiting, train-queue-not-found). --drain runs each queued request's steps with the flags it was queued with (the request was the approval) until the queue is empty, first putting back a request whose serving process died; a request whose branches are gone is rejected (train-branch-unknown).
+
+(cli-train-wait)=
+### `piceli train-wait`
+
+Wait until a train run ends; exit with its verdict.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `RUN` | text | required |  |
+| `--timeout` | float | `0.0` | Seconds to wait (0: no limit) |
+| `--interval` | float | `2.0` | Seconds between checks |
+| `--state-dir` | path |  | Train state root (default $XDG_STATE_HOME/piceli/train, else ~/.local/state/piceli/train) |
+| `--json` | boolean | `False` | Print the run's piceli.train.summary.v1 on stdout |
+
+**Contract**
+
+- **Reads:** $XDG_STATE_HOME/piceli/train/<name>/runs/<run>/run.json and the train's lock (every --interval)
+- **Writes:** nothing (read-only)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. Read-only; safe to retry. RUN is a run id, a queue id (q-…, waits for the run that serves it; train-queue-cancelled, train-queue-not-found) or a train's name (its running run, else its newest). A run that failed midway (run-failed) exits 1. --json prints the run's piceli.train.summary.v1. Exit 0: the run ended ok; 1: a branch was ejected, the promotion or push failed, the run was killed (train-interrupted) or --timeout ran out (train-wait-timeout); 2: no such run (train-run-not-found).
+
+(cli-trains)=
+### `piceli trains`
+
+The trains: the run in progress, recent runs, step trends, flaky tests, deployed by which run.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text |  |  |
+| `--runs` | integer | `10` | Recent runs to show |
+| `--trend` | integer | `10` | Executions per step a trend's median uses |
+| `--follow` | boolean | `False` | Stream the running step's log until the run ends (needs NAME or a single train) |
+| `--composition` | text |  | Also show what each environment and NixHost runs and the run that produced it (as piceli targets reads them) |
+| `--infra` | text |  | MODULE declaring NixHosts (as piceli targets) |
+| `--timeout` | float | `20.0` | Seconds to wait for each host |
+| `--interval` | float | `1.0` | Seconds between --follow polls |
+| `--state-dir` | path |  | Train state root (default $XDG_STATE_HOME/piceli/train, else ~/.local/state/piceli/train) |
+| `--json` | boolean | `False` | Print one piceli.trains.v1 object on stdout |
+
+**Contract**
+
+- **Reads:** $XDG_STATE_HOME/piceli/train/<name> (run records, events.jsonl, step logs, flaky.jsonl, the lock's owner), --composition/--infra: what piceli targets reads (the controller, hosts over ssh)
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.26.0. Read-only; safe to retry; never takes a train's lock. --json prints one piceli.trains.v1 object. --follow streams the running step's log until the run ends. A record still running with no live process holding the lock shows as interrupted. Reads a cluster only with --composition/--infra. Exit 2: an unknown train name (train-unknown).
+
 (cli-ui-backup)=
 ### `piceli ui backup`
 
@@ -4063,6 +4333,9 @@ Register an existing definition or inventory scope and serve the bundled UI.
 | `--docker-socket` | path | `/var/run/docker.sock` | Explicit local Docker daemon socket |
 | `--state-dir` | path |  | Private UI state directory (default: $XDG_STATE_HOME/piceli/ui) |
 | `--infra` | text |  | Also show the machines of a piceli.infra.Infrastructure MODULE:ATTR (read-only) |
+| `--trains` | boolean | `False` | Also show the local merge trains (piceli trains; read-only) |
+| `--train-state-dir` | path |  | Train state root for --trains (default $XDG_STATE_HOME/piceli/train) |
+| `--train-composition` | text |  | With --trains: also show which run produced what each environment and NixHost of this composition MODULE runs |
 
 **Contract**
 

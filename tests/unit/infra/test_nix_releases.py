@@ -61,6 +61,7 @@ def _world(
     *,
     auto: bool = False,
     infra: str = INFRA,
+    credentials_dir: Path | None = None,
 ) -> dict[str, Any]:
     from piceli.infra.machines.credentials import save_credential
 
@@ -81,7 +82,9 @@ def _world(
     controller = CompositionController(
         config,
         state_dir=state,
-        sources=SourceSet(composition.sources, state / "sources"),
+        sources=SourceSet(
+            composition.sources, state / "sources", credentials_dir=credentials_dir
+        ),
         ports=FakePorts(),
         channel=channel,
         clock=lambda: clock["now"],
@@ -108,6 +111,7 @@ def _worker(
     caches: list[Any] | None = None,
     host: str = "mini",
     said: list[str] | None = None,
+    fetch: Callable[..., Any] | str | None = "fake",
 ) -> tuple[BuilderServe, list[dict[str, Any]]]:
     """``builder serve`` on ``host`` with a publisher whose Nix steps are fakes."""
     seen: list[dict[str, Any]] = []
@@ -130,6 +134,9 @@ def _worker(
         build=build or fake_build,
         push=fake_push,
         host=host,
+        fetch=(lambda pairs, _say, **_kw: {"state": "fetched", "inputs": []})
+        if fetch == "fake"
+        else fetch,  # type: ignore[arg-type]
     )
     controller = world["controller"]
     worker = BuilderServe(
@@ -183,8 +190,10 @@ def test_declarations_that_do_not_hold_are_refused(world: dict[str, Any]) -> Non
                   follow=Tag("web-v*"), cache=_cache(world))  # fmt: skip
     branch = NixHost("web-1", server="ssh://root@web-1.example.org",
                      flake=".#web-1", follow=Branch("main"), cache=_cache(world))  # fmt: skip
+    # 0.26.0: a branch's commits are published too.
+    assert NixRelease(branch, source=hosts, builder="mini").target().branch == "main"
     for kwargs, words in (
-        ({"host": branch, "source": hosts, "builder": "mini"}, "publishes tags"),
+        ({"host": web, "source": hosts, "builder": "mini", "schedule": "x"}, "cron"),
         ({"host": web, "source": "hosts", "builder": "mini"}, "Source"),
         ({"host": web, "source": hosts, "builder": "Mini Host"}, "build host"),
         ({"host": web, "source": hosts, "builder": "mini", "auto_approve": 1},
@@ -758,3 +767,235 @@ def test_a_release_whose_cache_has_no_key_is_rejected_and_publishes_nothing(
     record = controller.nix.records()["web-1"]
     assert (record["state"], record["tag"]) == ("baseline", "web-v1.1.0")
     assert "reason" not in record and "refusal" not in record
+
+
+# ------------------------------------------------------------------ 0.26.0: inputs
+
+APP = "ssh://git@github.com/org/app"
+FLAKE_LOCK = json.dumps(
+    {
+        "version": 7,
+        "root": "root",
+        "nodes": {
+            "root": {"inputs": {"app": "app", "nixpkgs": "nixpkgs"}},
+            "app": {
+                "locked": {
+                    "type": "git",
+                    "url": APP,
+                    "rev": "c" * 40,
+                    "narHash": "sha256-AAAA",
+                }
+            },
+            "nixpkgs": {
+                "locked": {
+                    "type": "github",
+                    "owner": "NixOS",
+                    "repo": "nixpkgs",
+                    "rev": "d" * 40,
+                    "narHash": "sha256-BBBB",
+                }
+            },
+        },
+    }
+)
+
+
+def _inputs_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    infra = INFRA.replace(
+        "auto_approve=AUTO)", 'auto_approve=AUTO, inputs={"app": "app-token"})'
+    )
+    world = _world(tmp_path, monkeypatch, auto=True, infra=infra)
+    world["controller"].poll_once()
+    world["commit"] = world["repo"].commit({"flake.lock": FLAKE_LOCK})
+    world["repo"].tag("web-v1.1.0")
+    return world
+
+
+def test_the_plan_names_the_private_inputs_and_the_host_fetches_them_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = _inputs_world(tmp_path, monkeypatch)
+    controller = world["controller"]
+    record = _release(controller.poll_once())
+    assert record["state"] == "waiting-build"
+    assert record["plan"]["inputs"] == [
+        {"input": "app", "url": f"git+{APP}", "credential": "app-token",
+         "why": "declared"},
+    ]  # fmt: skip
+    assert world["composition"].to_dict()["nix_releases"][0]["inputs"] == {
+        "app": "app-token"
+    }
+    order: list[str] = []
+
+    def fetch(pairs: Any, say: Any, **_kw: Any) -> dict[str, Any]:
+        ((entry, locked),) = pairs
+        order.append("fetch")
+        assert entry["credential"] == "app-token" and locked["url"] == APP
+        return {"state": "fetched", "inputs": [{"name": "app"}]}
+
+    def build(checkout: Path, attribute: str, say: Any) -> str:
+        order.append("build")
+        return STORE
+
+    worker, _ = _worker(world, tmp_path, fetch=fetch, build=build)
+    assert worker.once() is not None
+    done = _release(controller.poll_once())
+    assert done["state"] == "published", done.get("failure")
+    assert order == ["fetch", "build"]
+    assert {"inputs", "build", "publish"} <= set(done["stages"])
+
+
+def test_an_unreachable_input_fails_the_release_before_any_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = _inputs_world(tmp_path, monkeypatch)
+    controller = world["controller"]
+    controller.poll_once()
+    built: list[str] = []
+
+    def fetch(pairs: Any, say: Any, **_kw: Any) -> dict[str, Any]:
+        raise DevError(
+            "infra-nix-input-unreachable",
+            f"app git+{APP} (credential app-token over HTTPS): fatal: "
+            "Authentication failed",
+        )
+
+    worker, _ = _worker(
+        world, tmp_path, fetch=fetch, build=lambda *_a: built.append("x") or STORE
+    )
+    assert worker.once() is not None
+    failed = _release(controller.poll_once())
+    assert failed["state"] == "failed" and not built
+    assert failed["failure"]["reason"] == (
+        f"infra-nix-input-unreachable: app git+{APP} (credential app-token over "
+        "HTTPS): fatal: Authentication failed"
+    )
+    # A host without a fetcher refuses the plan the same way.
+    controller.channel.add_request(*sync_request())
+    controller.poll_once()
+    worker, _ = _worker(
+        world, tmp_path, fetch=None, build=lambda *_a: built.append("x") or STORE
+    )
+    assert worker.once() is not None
+    failed = _release(controller.poll_once())
+    assert failed["failure"]["reason"].startswith(
+        f"infra-nix-input-unreachable: app git+{APP}: this build host fetches no"
+    )
+    assert not built
+
+
+def test_a_release_without_private_inputs_keeps_its_plan(world: dict[str, Any]) -> None:
+    world["controller"].poll_once()
+    world["repo"].commit({"flake.lock": FLAKE_LOCK})
+    world["repo"].tag("web-v1.1.0")
+    record = _release(world["controller"].poll_once())
+    assert "inputs" not in record["plan"]  # nixpkgs is public; nothing declared
+    assert "inputs" not in world["composition"].to_dict()["nix_releases"][0]
+
+
+def test_declared_inputs_are_checked(world: dict[str, Any]) -> None:
+    from piceli.infra import NixRelease, Source
+
+    release = next(iter(world["composition"].nix_releases))
+    host = _host_of(world)
+    with pytest.raises(CompositionError):
+        NixRelease(host, source=Source(release.source.url, name="hosts"),
+                   builder="mini", inputs={"app": "Not A Name"})  # fmt: skip
+    found = NixRelease(host, source=Source(release.source.url, name="hosts"),
+                       builder="mini", inputs={"app": "git"})  # fmt: skip
+    assert found.target().inputs == (("app", "git"),)
+
+
+def _host_of(world: dict[str, Any]) -> Any:
+    from piceli.infra import NixCache, NixHost, Tag
+
+    cache = NixCache(PUBLIC, url=f"file://{world['cache']}")
+    return NixHost("web-1", server="ssh://root@web-1.example.org", flake=".#web-1",
+                   follow=Tag("web-v*"), cache=cache)  # fmt: skip
+
+
+GIT_TOKEN = "ghs_" + "c0ntr0ll3r" * 3
+
+
+def test_a_controller_release_seals_its_git_token_to_the_claiming_host_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import piceli.dev.nix_inputs as nix_inputs
+
+    secret = tmp_path / "git-secret"
+    secret.mkdir()
+    (secret / "username").write_text("x-access-token")
+    (secret / "password").write_text(GIT_TOKEN)
+    monkeypatch.setattr(nix_inputs, "git_hosts", lambda _sources: ["github.com"])
+    infra = INFRA.replace(
+        "auto_approve=AUTO)",
+        'auto_approve=AUTO, inputs={"app": "unused"}, credentials="controller")',
+    )
+    world = _world(tmp_path, monkeypatch, auto=True, infra=infra,
+                   credentials_dir=secret)  # fmt: skip
+    controller = world["controller"]
+    controller.poll_once()
+    world["repo"].commit({"flake.lock": FLAKE_LOCK})
+    world["repo"].tag("web-v1.1.0")
+    record = _release(controller.poll_once())
+    plan = record["plan"]
+    assert plan["credentials"] == "controller" and plan["git_hosts"] == ["github.com"]
+    assert plan["inputs"][0]["credential"] == "controller"
+    (wanted,) = controller.poll_once()["controller"]["builds_wanted"]
+
+    # A claim without a key to seal to is refused; nothing is sealed.
+    proof = Publisher([_cache(world)], build=lambda *_a: STORE,
+                      push=lambda *_a: {}, host="mini").proof(wanted, "mini")  # fmt: skip
+    world["channel"].add_request(*build_claim_request(wanted["id"], "mini", proof))
+    status = controller.poll_once()
+    assert status["rejected_requests"][-1]["reason"] == "gitops-request-invalid"
+
+    seen: list[Any] = []
+
+    def fetch(
+        pairs: Any, say: Any, controller: Any = None, **_kw: Any
+    ) -> dict[str, Any]:
+        seen.append(controller)
+        return {"state": "fetched", "inputs": []}
+
+    worker, _ = _worker(world, tmp_path, fetch=fetch)
+    assert worker.once() is not None
+    done = _release(controller.poll_once())
+    assert done["state"] == "published", done.get("failure")
+    assert seen == [{"hosts": ["github.com"], "username": "x-access-token",
+                     "token": GIT_TOKEN}]  # fmt: skip
+    assert worker._openers == {} and worker._sealed == {}  # forgotten
+    # The token is in no status, history, request or state file.
+    for path in world["state"].rglob("*"):
+        if path.is_file():
+            assert GIT_TOKEN.encode() not in path.read_bytes(), path
+
+
+def test_the_sealed_token_opens_only_with_the_claims_key_and_build() -> None:
+    from piceli.dev import nix_inputs
+
+    private, public = nix_inputs.new_recipient()
+    other, _ = nix_inputs.new_recipient()
+    aad = nix_inputs.seal_aad("b-1", "mini")
+    sealed = nix_inputs.seal(public, {"token": GIT_TOKEN}, aad)
+    assert GIT_TOKEN not in json.dumps(sealed)
+    assert nix_inputs.unseal(private, sealed, aad) == {"token": GIT_TOKEN}
+    for key, extra in ((other, aad), (private, nix_inputs.seal_aad("b-1", "evil"))):
+        with pytest.raises(ValueError):
+            nix_inputs.unseal(key, sealed, extra)
+
+
+def test_builder_check_lists_each_release_and_its_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.dev import nix_inputs
+
+    world = _inputs_world(tmp_path, monkeypatch)
+    status = world["controller"].poll_once()
+    (found,) = nix_inputs.host_check(status, "mini")
+    assert found["credentials"] == "host" and found["planned"]
+    assert found["inputs"] == [{"input": "app", "url": f"git+{APP}",
+                                "credential": "app-token", "state": "missing"}]  # fmt: skip
+    nix_inputs.save_git_token("app-token", "github.com", "git", "tok-" + "q" * 20)
+    assert nix_inputs.host_check(status, "mini")[0]["inputs"][0]["state"] == "present"
+    assert nix_inputs.host_check(status, "other") == []

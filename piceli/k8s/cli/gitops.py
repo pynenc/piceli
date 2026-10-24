@@ -1348,6 +1348,169 @@ def sync(
     )
 
 
+def _requester(by: str | None) -> str | None:
+    """Who asks (``--by``, else this machine's user name): recorded with the build."""
+    if by:
+        return by
+    import getpass
+
+    try:
+        return getpass.getuser()
+    except (KeyError, OSError):
+        return None
+
+
+@app.command("build")
+def build(
+    name: Annotated[
+        str, typer.Argument(help="The NixRelease (its host) or environment to build")
+    ],
+    ref: Annotated[
+        str | None,
+        typer.Option(
+            "--ref",
+            help="A tag of the release, its branch or a full commit (default: "
+            "the newest); an environment builds the commit it follows",
+        ),
+    ] = None,
+    approve: Annotated[
+        str | None,
+        typer.Option(
+            "--approve",
+            help="Approve the plan in one go when its digest is this sha256:... "
+            "(a NixRelease)",
+        ),
+    ] = None,
+    by: Annotated[
+        str | None, typer.Option("--by", help="Who asks (default: your user name)")
+    ] = None,
+    kubeconfig: KubeconfigOption = None,
+    context: ContextOption = None,
+    namespace: NamespaceOption = "piceli-system",
+    state_dir: StateDirOption = None,
+    transport: TransportOption = "https",
+) -> None:
+    """Ask the controller to build NAME now: a NixRelease plans --ref, an
+    environment rebuilds its images; the same gate, plan and approval apply."""
+    from piceli.gitops.state import build_request
+
+    with _guard():
+        key, body = build_request(
+            name, ref, via="cli", by=_requester(by), approve=approve
+        )
+    with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
+        with _guard():
+            channel.add_request(key, body)
+    say(
+        f"build of {name}" + (f" at {ref}" if ref else "") + " recorded; the "
+        "controller plans it on its next poll (piceli gitops builds --target "
+        f"{name}; approve with piceli gitops approve {name} DIGEST"
+        + (" unless the digest is the one given" if approve else "")
+        + ")"
+    )
+    emit_json(
+        {
+            "state": "requested",
+            "request": key,
+            "name": name,
+            "ref": ref,
+            "trigger": {"kind": "cli", "by": body.get("by")},
+            "approve": approve,
+        }
+    )
+
+
+@app.command("cancel")
+def cancel(
+    name: Annotated[
+        str, typer.Argument(help="The NixRelease or environment whose build to cancel")
+    ],
+    by: Annotated[
+        str | None, typer.Option("--by", help="Who asks (default: your user name)")
+    ] = None,
+    kubeconfig: KubeconfigOption = None,
+    context: ContextOption = None,
+    namespace: NamespaceOption = "piceli-system",
+    state_dir: StateDirOption = None,
+    transport: TransportOption = "https",
+) -> None:
+    """Cancel NAME's queued or running build: unclaimed it is dropped,
+    claimed the build host stops at its next stage."""
+    from piceli.gitops.state import build_cancel_request
+
+    with _guard():
+        key, body = build_cancel_request(name, via="cli", by=_requester(by))
+    with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
+        with _guard():
+            channel.add_request(key, body)
+    say(
+        f"cancel of {name}'s build recorded; the controller drops it on its next "
+        "poll (gitops-build-not-running in gitops status when none runs)"
+    )
+    emit_json({"state": "requested", "request": key, "name": name})
+
+
+@app.command("builds")
+def builds(
+    target: Annotated[
+        str | None, typer.Option("--target", help="Only this target's builds")
+    ] = None,
+    stage: Annotated[
+        str | None,
+        typer.Option(
+            "--state",
+            help="Only builds in this stage (queued, building, published, failed, "
+            "...), or active for the unfinished ones",
+        ),
+    ] = None,
+    kubeconfig: KubeconfigOption = None,
+    context: ContextOption = None,
+    namespace: NamespaceOption = "piceli-system",
+    state_dir: StateDirOption = None,
+    transport: TransportOption = "https",
+    as_json: JsonOption = False,
+) -> None:
+    """List every build the controller knows (NixRelease publishes, image
+    builds, train handoffs): trigger, commit, host, stage, log tail, targets."""
+    import time
+
+    from piceli.infra import builds as projection
+
+    if stage is not None and stage != "active" and stage not in projection.STAGES:
+        reject(
+            "gitops-request-invalid",
+            f"--state is active or one of {', '.join(projection.STAGES)}",
+        )
+    with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
+        with _guard():
+            status = channel.read_status()
+            read = getattr(channel, "read_history", None)
+            history = read() if callable(read) else None
+    if status is None:
+        reject("gitops-not-installed", "no GitOps controller status")
+    document = projection.records(
+        status, history, now=time.time(), target=target, state=stage
+    )
+    say(f"{len(document['builds'])} build(s)")
+    for item in document["builds"]:
+        trigger = item["trigger"]
+        ref = item.get("tag") or item.get("branch") or ""
+        say(
+            f"  {item['kind']:<13} {item.get('target') or '-':<20} {item['stage']:<17} "
+            f"{(item.get('commit') or '')[:12]:<12} {ref:<16} "
+            f"{trigger.get('kind') or '-'}"
+            + (f" by {trigger['by']}" if trigger.get("by") else "")
+            + (f" on {item['host']}" if item.get("host") else "")
+            + (
+                f"; runs on {', '.join(item['running_on'])}"
+                if item["running_on"]
+                else ""
+            )
+        )
+    if as_json:
+        emit_json(document)
+
+
 HostArgument = Annotated[
     str,
     typer.Argument(help="The build host (as builder serve names it) or builder node"),

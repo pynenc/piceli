@@ -607,7 +607,8 @@ cache = NixCache(
   container CLI's own `ssh://`, nothing else installed), a
   `DevProfile(nix=True)` run mounts the host's `/nix` read-only (the store
   and the daemon's socket) and sets `NIX_REMOTE=daemon`: the run image needs
-  only `python3`, evaluation runs in the container, the builds in the host
+  only `python3` (and `git` to fetch private flake inputs), evaluation
+  runs in the container, the builds in the host
   daemon's sandbox, and the store (the cache that makes the next build
   fast) is the host's own. A **native** host uses its own `nix`, and its
   run's out-link keeps the lineage's last build from garbage collection.
@@ -634,6 +635,22 @@ piceli dev nix build nixosConfigurations.web-1.config.system.build.openstackImag
 piceli dev nix build nixosConfigurations.web-1.config.system.build.toplevel \
   --ref v1.4.0 --publish infra.py:cache
 piceli dev nix build ... --approve sha256:<digest>
+```
+
+**Private flake inputs** (0.26.0). `--input NAME[=CREDENTIAL]` (repeat)
+names an input of `flake.lock` that the build host fetches into its store
+before the build, with a `git-token` of this machine's Piceli secrets
+(`piceli secrets git-token NAME --host github.com --prompt`; default name
+`git`); with `--publish`, the composition's `NixRelease` of that output
+adds its own (its gate's input, its `inputs=`, the inputs that are its
+`Source`s), and the plan lists them all. The build never sees the token; an
+input that cannot be fetched refuses before the build
+(`infra-nix-input-unreachable`, naming the input, its URL and the
+credential). See {doc}`nix_hosts` (private flake inputs).
+
+```sh
+piceli dev nix build nixosConfigurations.web-1.config.system.build.toplevel \
+  --ref v1.4.0 --publish infra.py:cache --input app=git
 ```
 
 The approved command builds the commit as any run: isolated, with no key

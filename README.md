@@ -66,20 +66,29 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.25
+## What's new in 0.26
 
-- **The controller publishes Nix host releases**: push a host's tag and the
-  GitOps controller plans the release, waits for approval (or your
-  `auto_approve`) and has a builder that holds the cache's keys build, sign
-  and publish it; no hand-run publish step.
-- **A promotion gate**: a host only gets a build whose product commit an
-  environment ran with its checks passed; `piceli promote HOST --from ENV`
-  pins that commit, tags and pushes after approval.
-- **Tag prefixes per host**: `web-v*` and `api-v*` release two hosts from
-  one repository without seeing each other's tags.
-- **One view of every target**: `piceli targets` (and the UI's Targets
-  view) lists each environment and Nix host with its commit or tag, the
-  product commit it pins, its checks and its state.
+- **A pre-merge train**: `piceli train` merges your branches onto the base,
+  runs the checks of the merged commit (only the tests the change reaches,
+  with a retry of only the failed ones), bisects out the branches that fail
+  and promotes what passed; steps can run on build hosts, with warm and
+  reused builds; see the
+  [guide](https://docs.pynenc.org/projects/piceli/en/latest/train.html).
+- **Watch and queue trains**: `piceli trains` (and the UI's Trains view)
+  shows the run in progress, recent runs, step trends and flaky tests;
+  runs queue per train, export an OpenTelemetry trace and notify you when
+  they end.
+- **Images straight to the controller**: a promoted train builds the
+  images from the tested commit and hands them to a GitOps controller
+  declared `Controller(prebuilt=True)`, which deploys without building
+  again.
+- **Private flake inputs**: a Nix build fetches the private inputs its
+  `flake.lock` pins with the build host's own Git credential or the
+  composition's, sealed per build by the controller.
+- **Builds you can see and start**: Nix releases follow a branch or a
+  schedule, `piceli gitops build` and `piceli gitops cancel` start and
+  stop a build, and the UI's Builds page shows every build with its stage
+  and live log.
 
 ## Web UI
 

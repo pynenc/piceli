@@ -1458,6 +1458,152 @@
     "mount": "CacheMount"
    }
   },
+  "CargoCheck": {
+   "attr_types": {
+    "select": "Impact"
+   },
+   "attrs": [
+    "args",
+    "cargo",
+    "command",
+    "env",
+    "hosts",
+    "images",
+    "inputs",
+    "kind",
+    "name",
+    "on_push",
+    "outputs",
+    "phase",
+    "publish",
+    "select",
+    "timeout",
+    "to_dict",
+    "uses_cargo"
+   ],
+   "init": [
+    "args",
+    "env",
+    "hosts",
+    "inputs",
+    "name",
+    "on_push",
+    "outputs",
+    "select",
+    "timeout"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "cargo",
+     "env",
+     "hosts",
+     "inputs",
+     "name",
+     "outputs",
+     "timeout"
+    ],
+    "images": [
+     "branch",
+     "components",
+     "composition",
+     "name",
+     "platforms",
+     "repository",
+     "timeout"
+    ],
+    "publish": [
+     "argv",
+     "cargo",
+     "env",
+     "hosts",
+     "inputs",
+     "name",
+     "outputs",
+     "timeout"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "command": "CommandStep",
+    "images": "ImagesStep",
+    "publish": "PublishStep"
+   }
+  },
+  "CargoTests": {
+   "attr_types": {
+    "select": "Impact"
+   },
+   "attrs": [
+    "args",
+    "cargo",
+    "command",
+    "env",
+    "hosts",
+    "images",
+    "inputs",
+    "kind",
+    "name",
+    "on_push",
+    "outputs",
+    "phase",
+    "publish",
+    "retry",
+    "select",
+    "timeout",
+    "to_dict",
+    "uses_cargo"
+   ],
+   "init": [
+    "args",
+    "env",
+    "hosts",
+    "inputs",
+    "name",
+    "on_push",
+    "outputs",
+    "retry",
+    "select",
+    "timeout"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "cargo",
+     "env",
+     "hosts",
+     "inputs",
+     "name",
+     "outputs",
+     "timeout"
+    ],
+    "images": [
+     "branch",
+     "components",
+     "composition",
+     "name",
+     "platforms",
+     "repository",
+     "timeout"
+    ],
+    "publish": [
+     "argv",
+     "cargo",
+     "env",
+     "hosts",
+     "inputs",
+     "name",
+     "outputs",
+     "timeout"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "command": "CommandStep",
+    "images": "ImagesStep",
+    "publish": "PublishStep"
+   }
+  },
   "CheckContext": {
    "attrs": [
     "api_client",
@@ -1910,6 +2056,124 @@
     "to_dict": []
    }
   },
+  "CommandNotify": {
+   "attrs": [
+    "argv",
+    "command",
+    "desktop",
+    "kind",
+    "label",
+    "send",
+    "timeout",
+    "to_dict",
+    "wanted",
+    "webhook",
+    "when"
+   ],
+   "init": [
+    "argv",
+    "timeout",
+    "when"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "timeout",
+     "when"
+    ],
+    "desktop": [
+     "timeout",
+     "when"
+    ],
+    "label": [],
+    "send": [
+     "summary"
+    ],
+    "to_dict": [],
+    "wanted": [
+     "summary"
+    ],
+    "webhook": [
+     "headers_env",
+     "timeout",
+     "url",
+     "url_env",
+     "when"
+    ]
+   },
+   "returns": {
+    "command": "CommandNotify",
+    "desktop": "DesktopNotify",
+    "webhook": "WebhookNotify"
+   }
+  },
+  "CommandStep": {
+   "attrs": [
+    "argv",
+    "cargo",
+    "command",
+    "env",
+    "hosts",
+    "images",
+    "inputs",
+    "kind",
+    "name",
+    "outputs",
+    "phase",
+    "publish",
+    "runs_cargo",
+    "timeout",
+    "to_dict",
+    "uses_cargo"
+   ],
+   "init": [
+    "argv",
+    "env",
+    "hosts",
+    "inputs",
+    "name",
+    "outputs",
+    "runs_cargo",
+    "timeout"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "cargo",
+     "env",
+     "hosts",
+     "inputs",
+     "name",
+     "outputs",
+     "timeout"
+    ],
+    "images": [
+     "branch",
+     "components",
+     "composition",
+     "name",
+     "platforms",
+     "repository",
+     "timeout"
+    ],
+    "publish": [
+     "argv",
+     "cargo",
+     "env",
+     "hosts",
+     "inputs",
+     "name",
+     "outputs",
+     "timeout"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "command": "CommandStep",
+    "images": "ImagesStep",
+    "publish": "PublishStep"
+   }
+  },
   "Component": {
    "attr_types": {
     "source": "Source"
@@ -2223,6 +2487,7 @@
     "image",
     "on",
     "poll",
+    "prebuilt",
     "quarantine_after",
     "quarantine_window",
     "sync",
@@ -2236,6 +2501,7 @@
     "image",
     "on",
     "poll",
+    "prebuilt",
     "quarantine_after",
     "quarantine_window",
     "sync",
@@ -2817,6 +3083,55 @@
     "create": "DeploymentSessionArchive",
     "from_json": "DeploymentSessionArchive",
     "inputs": "SecretVersionRef"
+   }
+  },
+  "DesktopNotify": {
+   "attrs": [
+    "command",
+    "desktop",
+    "kind",
+    "label",
+    "send",
+    "timeout",
+    "to_dict",
+    "wanted",
+    "webhook",
+    "when"
+   ],
+   "init": [
+    "timeout",
+    "when"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "timeout",
+     "when"
+    ],
+    "desktop": [
+     "timeout",
+     "when"
+    ],
+    "label": [],
+    "send": [
+     "summary"
+    ],
+    "to_dict": [],
+    "wanted": [
+     "summary"
+    ],
+    "webhook": [
+     "headers_env",
+     "timeout",
+     "url",
+     "url_env",
+     "when"
+    ]
+   },
+   "returns": {
+    "command": "CommandNotify",
+    "desktop": "DesktopNotify",
+    "webhook": "WebhookNotify"
    }
   },
   "DevBuilds": {
@@ -4952,6 +5267,99 @@
    "methods": {},
    "pydantic": true
   },
+  "ImagesStep": {
+   "attrs": [
+    "branch",
+    "cargo",
+    "command",
+    "components",
+    "composition",
+    "env",
+    "hosts",
+    "images",
+    "inputs",
+    "kind",
+    "name",
+    "outputs",
+    "phase",
+    "platforms",
+    "publish",
+    "repository",
+    "timeout",
+    "to_dict",
+    "uses_cargo"
+   ],
+   "init": [
+    "branch",
+    "components",
+    "composition",
+    "env",
+    "hosts",
+    "inputs",
+    "name",
+    "outputs",
+    "platforms",
+    "repository",
+    "timeout"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "cargo",
+     "env",
+     "hosts",
+     "inputs",
+     "name",
+     "outputs",
+     "timeout"
+    ],
+    "images": [
+     "branch",
+     "components",
+     "composition",
+     "name",
+     "platforms",
+     "repository",
+     "timeout"
+    ],
+    "publish": [
+     "argv",
+     "cargo",
+     "env",
+     "hosts",
+     "inputs",
+     "name",
+     "outputs",
+     "timeout"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "command": "CommandStep",
+    "images": "ImagesStep",
+    "publish": "PublishStep"
+   }
+  },
+  "Impact": {
+   "attrs": [
+    "dev_targets",
+    "ignore",
+    "lockfile",
+    "outside",
+    "roots",
+    "to_dict"
+   ],
+   "init": [
+    "dev_targets",
+    "ignore",
+    "lockfile",
+    "outside",
+    "roots"
+   ],
+   "methods": {
+    "to_dict": []
+   }
+  },
   "ImportSecretSpec": {
    "attr_types": {
     "secret": "LiveSecretKey"
@@ -6142,17 +6550,23 @@
    "attrs": [
     "auto_approve",
     "builder",
+    "credentials",
     "gate",
     "host",
+    "inputs",
     "name",
+    "schedule",
     "source",
     "target"
    ],
    "init": [
     "auto_approve",
     "builder",
+    "credentials",
     "gate",
     "host",
+    "inputs",
+    "schedule",
     "source"
    ],
    "methods": {
@@ -6480,6 +6894,55 @@
    },
    "returns": {
     "parse": "NodeTarget"
+   }
+  },
+  "Notify": {
+   "attrs": [
+    "command",
+    "desktop",
+    "kind",
+    "label",
+    "send",
+    "timeout",
+    "to_dict",
+    "wanted",
+    "webhook",
+    "when"
+   ],
+   "init": [
+    "timeout",
+    "when"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "timeout",
+     "when"
+    ],
+    "desktop": [
+     "timeout",
+     "when"
+    ],
+    "label": [],
+    "send": [
+     "summary"
+    ],
+    "to_dict": [],
+    "wanted": [
+     "summary"
+    ],
+    "webhook": [
+     "headers_env",
+     "timeout",
+     "url",
+     "url_env",
+     "when"
+    ]
+   },
+   "returns": {
+    "command": "CommandNotify",
+    "desktop": "DesktopNotify",
+    "webhook": "WebhookNotify"
    }
   },
   "ObservedResource": {
@@ -6834,6 +7297,7 @@
   },
   "Otlp": {
    "attrs": [
+    "ca_file",
     "ca_secret",
     "endpoint",
     "from_dict",
@@ -6843,6 +7307,7 @@
     "to_dict"
    ],
    "init": [
+    "ca_file",
     "ca_secret",
     "endpoint",
     "headers_secret",
@@ -7854,6 +8319,73 @@
     "from_dict": "Promotion"
    }
   },
+  "PublishStep": {
+   "attrs": [
+    "argv",
+    "cargo",
+    "command",
+    "env",
+    "hosts",
+    "images",
+    "inputs",
+    "kind",
+    "name",
+    "outputs",
+    "phase",
+    "publish",
+    "runs_cargo",
+    "timeout",
+    "to_dict",
+    "uses_cargo"
+   ],
+   "init": [
+    "argv",
+    "env",
+    "hosts",
+    "inputs",
+    "name",
+    "outputs",
+    "runs_cargo",
+    "timeout"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "cargo",
+     "env",
+     "hosts",
+     "inputs",
+     "name",
+     "outputs",
+     "timeout"
+    ],
+    "images": [
+     "branch",
+     "components",
+     "composition",
+     "name",
+     "platforms",
+     "repository",
+     "timeout"
+    ],
+    "publish": [
+     "argv",
+     "cargo",
+     "env",
+     "hosts",
+     "inputs",
+     "name",
+     "outputs",
+     "timeout"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "command": "CommandStep",
+    "images": "ImagesStep",
+    "publish": "PublishStep"
+   }
+  },
   "PythonCheck": {
    "attrs": [
     "call",
@@ -8578,16 +9110,22 @@
    "attrs": [
     "attribute",
     "auto_approve",
+    "branch",
     "build",
     "builder",
+    "credentials",
+    "describe_follow",
     "from_dict",
     "gate",
+    "head",
+    "inputs",
     "key_unset",
     "latest",
     "name",
     "pattern",
     "prereleases",
     "public_key",
+    "schedule",
     "source",
     "store_url",
     "to_dict",
@@ -8596,21 +9134,29 @@
    "init": [
     "attribute",
     "auto_approve",
+    "branch",
     "build",
     "builder",
+    "credentials",
     "gate",
+    "inputs",
     "key_unset",
     "name",
     "pattern",
     "prereleases",
     "public_key",
+    "schedule",
     "source",
     "store_url"
    ],
    "methods": {
+    "describe_follow": [],
     "from_dict": [
      "sources",
      "value"
+    ],
+    "head": [
+     "refs"
     ],
     "latest": [
      "tags"
@@ -9106,6 +9652,28 @@
     "describe": []
    },
    "pydantic": true
+  },
+  "Retention": {
+   "attrs": [
+    "keep_runs",
+    "log_days",
+    "store_days",
+    "store_size",
+    "target_days",
+    "targets_size",
+    "to_dict"
+   ],
+   "init": [
+    "keep_runs",
+    "log_days",
+    "store_days",
+    "store_size",
+    "target_days",
+    "targets_size"
+   ],
+   "methods": {
+    "to_dict": []
+   }
   },
   "Role": {
    "attr_types": {
@@ -10152,6 +10720,69 @@
    "methods": {},
    "pydantic": true
   },
+  "Step": {
+   "attrs": [
+    "cargo",
+    "command",
+    "env",
+    "hosts",
+    "images",
+    "inputs",
+    "kind",
+    "name",
+    "outputs",
+    "phase",
+    "publish",
+    "timeout",
+    "to_dict",
+    "uses_cargo"
+   ],
+   "init": [
+    "env",
+    "hosts",
+    "inputs",
+    "name",
+    "outputs",
+    "timeout"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "cargo",
+     "env",
+     "hosts",
+     "inputs",
+     "name",
+     "outputs",
+     "timeout"
+    ],
+    "images": [
+     "branch",
+     "components",
+     "composition",
+     "name",
+     "platforms",
+     "repository",
+     "timeout"
+    ],
+    "publish": [
+     "argv",
+     "cargo",
+     "env",
+     "hosts",
+     "inputs",
+     "name",
+     "outputs",
+     "timeout"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "command": "CommandStep",
+    "images": "ImagesStep",
+    "publish": "PublishStep"
+   }
+  },
   "StreamedOciRegistryClient": {
    "attrs": [
     "authenticate",
@@ -10508,6 +11139,80 @@
     "capture": "ToolPin"
    }
   },
+  "Train": {
+   "attrs": [
+    "base",
+    "builds",
+    "cache",
+    "fallback",
+    "from_dict",
+    "host_names",
+    "hosts",
+    "local_slots",
+    "notify",
+    "parallel",
+    "publish_steps",
+    "remote",
+    "repo",
+    "sccache",
+    "tag",
+    "tag_name",
+    "target_dir",
+    "telemetry",
+    "test_steps",
+    "tested",
+    "to_dict"
+   ],
+   "init": [
+    "base",
+    "builds",
+    "cache",
+    "fallback",
+    "hosts",
+    "local_slots",
+    "name",
+    "notify",
+    "parallel",
+    "remote",
+    "repo",
+    "retention",
+    "sccache",
+    "steps",
+    "tag",
+    "target_dir",
+    "telemetry",
+    "tested"
+   ],
+   "methods": {
+    "from_dict": [
+     "data"
+    ],
+    "host_names": [],
+    "tag_name": [
+     "date",
+     "n"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "from_dict": "Train"
+   }
+  },
+  "TrainError": {
+   "attrs": [
+    "add_note",
+    "args",
+    "with_traceback"
+   ],
+   "init": [
+    "code",
+    "message"
+   ],
+   "methods": {
+    "add_note": null,
+    "with_traceback": null
+   }
+  },
   "Ui": {
    "attrs": [
     "access",
@@ -10818,6 +11523,61 @@
    "methods": {},
    "pydantic": true
   },
+  "WebhookNotify": {
+   "attrs": [
+    "command",
+    "desktop",
+    "headers_env",
+    "kind",
+    "label",
+    "send",
+    "timeout",
+    "to_dict",
+    "url",
+    "url_env",
+    "wanted",
+    "webhook",
+    "when"
+   ],
+   "init": [
+    "headers_env",
+    "timeout",
+    "url",
+    "url_env",
+    "when"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "timeout",
+     "when"
+    ],
+    "desktop": [
+     "timeout",
+     "when"
+    ],
+    "label": [],
+    "send": [
+     "summary"
+    ],
+    "to_dict": [],
+    "wanted": [
+     "summary"
+    ],
+    "webhook": [
+     "headers_env",
+     "timeout",
+     "url",
+     "url_env",
+     "when"
+    ]
+   },
+   "returns": {
+    "command": "CommandNotify",
+    "desktop": "DesktopNotify",
+    "webhook": "WebhookNotify"
+   }
+  },
   "Workload": {
    "attr_types": {
     "security": "Security"
@@ -10955,6 +11715,11 @@
      "status",
      "support-bundle",
      "targets",
+     "train",
+     "train-prune",
+     "train-queue",
+     "train-wait",
+     "trains",
      "ui",
      "watch"
     ]
@@ -11250,6 +12015,7 @@
     "arguments": [],
     "flags": [
      "--allow-exec",
+     "--check",
      "--cluster",
      "--exec-sha256",
      "--host",
@@ -11568,6 +12334,7 @@
      "--dev",
      "--host",
      "--image",
+     "--input",
      "--json",
      "--kubeconfig",
      "--name",
@@ -11788,7 +12555,10 @@
     "flags": [],
     "subcommands": [
      "approve",
+     "build",
+     "builds",
      "cache",
+     "cancel",
      "disable",
      "enable",
      "hosts",
@@ -11815,6 +12585,36 @@
     ],
     "subcommands": []
    },
+   "gitops build": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--approve",
+     "--by",
+     "--context",
+     "--kubeconfig",
+     "--namespace",
+     "--ref",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops builds": {
+    "arguments": [],
+    "flags": [
+     "--context",
+     "--json",
+     "--kubeconfig",
+     "--namespace",
+     "--state",
+     "--state-dir",
+     "--target",
+     "--transport"
+    ],
+    "subcommands": []
+   },
    "gitops cache": {
     "arguments": [],
     "flags": [],
@@ -11827,6 +12627,20 @@
     "flags": [
      "--context",
      "--crate",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops cancel": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--by",
+     "--context",
      "--kubeconfig",
      "--namespace",
      "--state-dir",
@@ -12892,6 +13706,8 @@
      "cluster",
      "delete",
      "git",
+     "git-ssh-key",
+     "git-token",
      "nix-cache",
      "provider",
      "restore",
@@ -12969,6 +13785,28 @@
      "--exec-sha256",
      "--prompt",
      "--transport",
+     "--username"
+    ],
+    "subcommands": []
+   },
+   "secrets git-ssh-key": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--file",
+     "--host",
+     "--known-hosts"
+    ],
+    "subcommands": []
+   },
+   "secrets git-token": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--host",
+     "--prompt",
      "--username"
     ],
     "subcommands": []
@@ -13143,6 +13981,77 @@
     ],
     "subcommands": []
    },
+   "train": {
+    "arguments": [
+     "app",
+     "branches"
+    ],
+    "flags": [
+     "--branches",
+     "--json",
+     "--promote",
+     "--promote-run",
+     "--push",
+     "--queue",
+     "--retire",
+     "--retire-remote",
+     "--state-dir"
+    ],
+    "subcommands": []
+   },
+   "train-prune": {
+    "arguments": [
+     "train"
+    ],
+    "flags": [
+     "--cache-dir",
+     "--dry-run",
+     "--json",
+     "--state-dir"
+    ],
+    "subcommands": []
+   },
+   "train-queue": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--cancel",
+     "--drain",
+     "--json",
+     "--state-dir"
+    ],
+    "subcommands": []
+   },
+   "train-wait": {
+    "arguments": [
+     "run"
+    ],
+    "flags": [
+     "--interval",
+     "--json",
+     "--state-dir",
+     "--timeout"
+    ],
+    "subcommands": []
+   },
+   "trains": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--composition",
+     "--follow",
+     "--infra",
+     "--interval",
+     "--json",
+     "--runs",
+     "--state-dir",
+     "--timeout",
+     "--trend"
+    ],
+    "subcommands": []
+   },
    "ui": {
     "arguments": [],
     "flags": [],
@@ -13299,6 +14208,9 @@
      "--source-file",
      "--source-root",
      "--state-dir",
+     "--train-composition",
+     "--train-state-dir",
+     "--trains",
      "--url-prefix"
     ],
     "subcommands": []
@@ -13603,6 +14515,9 @@
    "git-unavailable",
    "gitops-approval-stale",
    "gitops-artifact-changed",
+   "gitops-build-cancelled",
+   "gitops-build-not-running",
+   "gitops-build-ref-unknown",
    "gitops-cluster-failed",
    "gitops-config-invalid",
    "gitops-controller-locked",
@@ -13718,6 +14633,7 @@
    "infra-k3s-not-ready",
    "infra-kubeconfig-invalid",
    "infra-load-failed",
+   "infra-nix-input-unreachable",
    "infra-no-cluster",
    "infra-not-applied",
    "infra-not-found",
@@ -14055,6 +14971,40 @@
    "timed-out",
    "too-many-redirects",
    "tool-pin-mismatch",
+   "train-branch-unknown",
+   "train-branches-required",
+   "train-busy",
+   "train-checkout-dirty",
+   "train-git-failed",
+   "train-host-unavailable",
+   "train-images-failed",
+   "train-interrupted",
+   "train-invalid",
+   "train-load-failed",
+   "train-merge-conflict",
+   "train-merge-failed",
+   "train-not-fast-forward",
+   "train-not-found",
+   "train-notify-failed",
+   "train-publish-failed",
+   "train-push-failed",
+   "train-push-needs-promote",
+   "train-queue-cancelled",
+   "train-queue-not-found",
+   "train-queue-not-waiting",
+   "train-repo-invalid",
+   "train-retire-invalid",
+   "train-run-cancelled",
+   "train-run-failed",
+   "train-run-not-found",
+   "train-run-unknown",
+   "train-spec-invalid",
+   "train-step-failed",
+   "train-step-timeout",
+   "train-telemetry-failed",
+   "train-telemetry-unavailable",
+   "train-unknown",
+   "train-wait-timeout",
    "transport-error",
    "ui-access-failed",
    "ui-access-port-conflict",
@@ -14399,6 +15349,7 @@
    "telemetry": {},
    "tempfiles": {},
    "testing": {},
+   "train": {},
    "utils": {},
    "version": {
     "params": null
@@ -15773,6 +16724,40 @@
      "url"
     ]
    }
+  },
+  "piceli.train": {
+   "CargoCheck": {
+    "class": "CargoCheck"
+   },
+   "CargoTests": {
+    "class": "CargoTests"
+   },
+   "CommandStep": {
+    "class": "CommandStep"
+   },
+   "DEFAULT_IGNORE": {},
+   "DEFAULT_ROOTS": {},
+   "Impact": {
+    "class": "Impact"
+   },
+   "Notify": {
+    "class": "Notify"
+   },
+   "PublishStep": {
+    "class": "PublishStep"
+   },
+   "Retention": {
+    "class": "Retention"
+   },
+   "Step": {
+    "class": "Step"
+   },
+   "Train": {
+    "class": "Train"
+   },
+   "TrainError": {
+    "class": "TrainError"
+   }
   }
  },
  "modules": [
@@ -15852,6 +16837,8 @@
   "piceli.dev.jobs",
   "piceli.dev.model",
   "piceli.dev.nix",
+  "piceli.dev.nix_fetch",
+  "piceli.dev.nix_inputs",
   "piceli.dev.nix_publish",
   "piceli.dev.nix_verify",
   "piceli.dev.pack",
@@ -15899,6 +16886,7 @@
   "piceli.infra",
   "piceli.infra.builder_serve",
   "piceli.infra.builders",
+  "piceli.infra.builds",
   "piceli.infra.cluster",
   "piceli.infra.cluster_init",
   "piceli.infra.composition",
@@ -15976,6 +16964,8 @@
   "piceli.k8s.cli.secrets_status",
   "piceli.k8s.cli.state",
   "piceli.k8s.cli.targets",
+  "piceli.k8s.cli.train",
+  "piceli.k8s.cli.trains",
   "piceli.k8s.cli.ui",
   "piceli.k8s.cli.ui_forward",
   "piceli.k8s.cli.ui_remote",
@@ -16099,6 +17089,7 @@
   "piceli.services",
   "piceli.services.access",
   "piceli.services.authority",
+  "piceli.services.builds",
   "piceli.services.cluster_build_control",
   "piceli.services.cluster_evaluation",
   "piceli.services.cluster_status",
@@ -16125,6 +17116,7 @@
   "piceli.services.remote_access",
   "piceli.services.render_worker",
   "piceli.services.store",
+  "piceli.services.trains",
   "piceli.settings",
   "piceli.state",
   "piceli.state.archive",
@@ -16140,6 +17132,26 @@
   "piceli.testing.fake_api",
   "piceli.testing.infra",
   "piceli.testing.pytest_plugin",
+  "piceli.train",
+  "piceli.train.cargo",
+  "piceli.train.engine",
+  "piceli.train.git",
+  "piceli.train.hosts",
+  "piceli.train.images",
+  "piceli.train.impact",
+  "piceli.train.local",
+  "piceli.train.model",
+  "piceli.train.notify",
+  "piceli.train.prune",
+  "piceli.train.queue",
+  "piceli.train.reuse",
+  "piceli.train.runner",
+  "piceli.train.spec",
+  "piceli.train.state",
+  "piceli.train.status",
+  "piceli.train.steps",
+  "piceli.train.summary",
+  "piceli.train.telemetry",
   "piceli.utils"
  ],
  "pydantic_attrs": [
@@ -16172,5 +17184,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.25.3"
+ "version": "0.26.0"
 }

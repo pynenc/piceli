@@ -449,7 +449,11 @@ def test_builder_serve_records_health_and_a_quarantined_host_claims_nothing(
     for _ in range(2):
         worker.answered.clear()  # offered again (an explicit gitops sync)
         assert worker.once() == "a" * 20
-    failed = [body for _key, body in worker.channel.requests]
+    failed = [
+        body
+        for _key, body in worker.channel.requests
+        if body["kind"] != "build-progress"  # 0.26.0: its stages, its log tail
+    ]
     assert [body["kind"] for body in failed] == ["build-failed", "build-failed"]
     assert any("health event on mini: internal-compiler-error" in x for x in lines)
     assert worker.quarantine is not None

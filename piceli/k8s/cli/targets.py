@@ -103,43 +103,21 @@ def _hosts(
     return {**read_hosts(reads, timeout + 5), **failed}, where
 
 
-def targets(
-    composition: Annotated[
-        str | None,
-        typer.Option(
-            "--composition",
-            help="MODULE (or file.py) declaring the environments and NixReleases",
-        ),
-    ] = None,
-    infra: Annotated[
-        str | None,
-        typer.Option(
-            "--infra",
-            help="MODULE declaring NixHosts and the Infrastructure of their "
-            "servers (applied addresses, pinned host keys)",
-        ),
-    ] = None,
-    kubeconfig: KubeconfigOption = None,
-    context: ContextOption = None,
-    namespace: NamespaceOption = "piceli-system",
-    state_dir: StateDirOption = None,
-    transport: TransportOption = "https",
-    timeout: Annotated[
-        float,
-        typer.Option("--timeout", help="Seconds to wait for each host", min=1),
-    ] = 20.0,
-    as_json: JsonOption = False,
-) -> None:
-    """Every environment and NixHost: commit or tag, pinned product commit, checks, state."""
+def collect(
+    composition: str | None,
+    infra: str | None,
+    kubeconfig: Path | None = None,
+    context: str | None = None,
+    namespace: str = "piceli-system",
+    state_dir: Path | None = None,
+    transport: str = "https",
+    timeout: float = 20.0,
+) -> tuple[dict[str, Any], dict[str, Any] | None, str | None, str | None]:
+    """``(piceli.targets.v1 document, controller body, reason, detail)``:
+    what ``piceli targets`` shows (also ``piceli trains --composition``)."""
     from piceli.k8s.cli.host import load_module_of
-    from piceli.targets import build, declared, exit_code, table
+    from piceli.targets import build, declared
 
-    if composition is None and infra is None and kubeconfig is None and not state_dir:
-        reject(
-            "targets-input-required",
-            "name the targets: --composition MODULE, --infra MODULE, or the "
-            "controller (--kubeconfig FILE --context NAME, or --state-dir)",
-        )
     values: list[Any] = []
     infra_values: list[Any] = []
     for ref in (composition, infra):
@@ -168,6 +146,55 @@ def targets(
         body, controller_reason=reason, controller_detail=detail,
         targets=found, hosts=hosts, where=where,
     )  # fmt: skip
+    return document, body, reason, detail
+
+
+def targets(
+    composition: Annotated[
+        str | None,
+        typer.Option(
+            "--composition",
+            help="MODULE (or file.py) declaring the environments and NixReleases",
+        ),
+    ] = None,
+    infra: Annotated[
+        str | None,
+        typer.Option(
+            "--infra",
+            help="MODULE declaring NixHosts and the Infrastructure of their "
+            "servers (applied addresses, pinned host keys)",
+        ),
+    ] = None,
+    kubeconfig: KubeconfigOption = None,
+    context: ContextOption = None,
+    namespace: NamespaceOption = "piceli-system",
+    state_dir: StateDirOption = None,
+    transport: TransportOption = "https",
+    timeout: Annotated[
+        float,
+        typer.Option("--timeout", help="Seconds to wait for each host", min=1),
+    ] = 20.0,
+    as_json: JsonOption = False,
+) -> None:
+    """Every environment and NixHost: commit or tag, pinned product commit, checks, state."""
+    from piceli.targets import exit_code, table
+
+    if composition is None and infra is None and kubeconfig is None and not state_dir:
+        reject(
+            "targets-input-required",
+            "name the targets: --composition MODULE, --infra MODULE, or the "
+            "controller (--kubeconfig FILE --context NAME, or --state-dir)",
+        )
+    document, body, reason, detail = collect(
+        composition,
+        infra,
+        kubeconfig,
+        context,
+        namespace,
+        state_dir,
+        transport,
+        timeout,
+    )
     for line in table(document):
         say(line)
     if body is None:

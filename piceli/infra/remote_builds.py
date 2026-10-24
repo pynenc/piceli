@@ -41,6 +41,19 @@ the config digest on the node before answering. A node that lacks the
 image anyway cannot pull it from anywhere (the ``.invalid`` domain never
 resolves): its pod fails to start and the rollout's checks fail.
 
+Prebuilt images (0.26.0, ``Controller(prebuilt=True)``): a merge train
+that promoted a commit may build its images before the controller sees the
+commit (``Step.images``: built from the tested commit, pushed to this
+registry) and offer them with a ``prebuilt`` request. :func:`offered`
+checks each offer (a declared component, a reference into the component's
+own repository of this registry, pinned by its digest, the digest present)
+and keeps it by component and key. When a step later needs a component and
+has no cached image, :func:`take_offer` hands it the offer **whose key is
+the change key the controller computed itself**; the controller checks the
+digest is still in its registry, then records the image as its own build,
+with the train's provenance. A build is never asked for then: no host wait,
+no Job. An offer under any other key is never used.
+
 Importing this module is side-effect free.
 """
 
@@ -61,6 +74,11 @@ STATE_KEY = "host_builds"
 #: Builds a host reported failed, by id: the same inputs are not offered
 #: again until ``piceli gitops sync`` (0.22.0).
 FAILED_KEY = "host_builds_failed"
+#: Prebuilt offers by component and key (0.26.0).
+OFFERS_KEY = "prebuilt"
+#: Offers kept per component (the newest).
+OFFERS_PER_COMPONENT = 20
+_KEY = re.compile(r"[A-Za-z0-9:._-]{1,100}")
 #: A claim with no answer for this long may be claimed again.
 CLAIM_SECONDS = 4 * 3600
 WAITING = "build-waiting"
@@ -400,6 +418,40 @@ def failed(state: dict[str, Any], body: Mapping[str, Any]) -> None:
     }
 
 
+def progress(state: dict[str, Any], body: Mapping[str, Any]) -> None:
+    """A build host's stage and log tail (0.26.0, ``build-progress``): kept
+    on the wanted build it holds (``progress`` in ``builds_wanted``); one of
+    a build no longer wanted (cancelled, answered) is dropped quietly."""
+    entry = (state.get(STATE_KEY) or {}).get(str(body.get("id")))
+    if entry is None or (entry.get("claimed") or {}).get("host") != body.get("host"):
+        return
+    entry["progress"] = {
+        "stage": str(body.get("stage") or "")[:16],
+        "at": str(body.get("at") or "")[:40],
+        "log_tail": str(body.get("log_tail") or "")[-4000:],
+    }
+
+
+def cancel(state: dict[str, Any], build: str, by: Any, now: float) -> None:
+    """``piceli gitops cancel`` of an image build (0.26.0): it is no longer
+    wanted (a host that holds it stops at its next stage; its answer is
+    refused) and its inputs count as failed, so the waiting step fails with
+    ``cancelled`` instead of asking again, until ``piceli gitops sync``."""
+    wanted = state.get(STATE_KEY) or {}
+    entry = wanted.pop(build, None)
+    if entry is None:
+        return
+    failures = state.setdefault(FAILED_KEY, {})
+    failures[build] = {
+        "host": (entry.get("claimed") or {}).get("host") or "none",
+        "reason": "cancelled" + (f" by {str(by)[:120]}" if by else ""),
+        "log_tail": str((entry.get("progress") or {}).get("log_tail") or ""),
+        "owner": entry.get("owner"),
+        "at": _iso(now),
+        "cancelled": True,
+    }
+
+
 def delivered(
     state: dict[str, Any],
     body: Mapping[str, Any],
@@ -532,3 +584,149 @@ def _node_delivered(
         "platforms": dict(sorted(configs.items())),
         "nodes": sorted(nodes),
     }
+
+
+def offered(
+    state: dict[str, Any],
+    body: Mapping[str, Any],
+    *,
+    present: Callable[[str], bool],
+    repository: Callable[[str], str],
+    components: Sequence[str],
+    registry: str | None,
+    now: float,
+) -> list[str]:
+    """Check a ``prebuilt`` request and keep its offers (see the module doc);
+    the components offered.
+
+    :param repository: The component's repository in this registry.
+    :param components: The images an offer may name: the composition's
+        components and its pipeline build specs' images.
+    :param registry: The registry's host (``None``: not checked).
+    :raises GitOpsError: ``gitops-request-invalid``.
+    """
+    images = body.get("images")
+    if not isinstance(images, Mapping) or not images:
+        raise GitOpsError("gitops-request-invalid", "a prebuilt offer holds no images")
+    receipt = body.get("receipt")
+    receipt = receipt if isinstance(receipt, Mapping) else {}
+    from piceli.infra import provenance
+
+    record = provenance.from_receipt(receipt, str(body.get("host") or "?"))
+    checked: dict[str, dict[str, Any]] = {}
+    for name, image in images.items():
+        if not isinstance(image, Mapping):
+            raise GitOpsError("gitops-request-invalid", f"image {name}: not an object")
+        if name not in components:
+            raise GitOpsError(
+                "gitops-request-invalid",
+                f"image {name}: not a component or build-spec image of the composition",
+            )
+        key = str(image.get("key") or "")
+        if not _KEY.fullmatch(key):
+            raise GitOpsError("gitops-request-invalid", f"image {name}: no change key")
+        pull_ref = str(image.get("pull_ref") or "")
+        digest = str(image.get("manifest_digest") or "")
+        if not _DIGEST.fullmatch(digest) or not pull_ref.endswith("@" + digest):
+            raise GitOpsError(
+                "gitops-request-invalid", f"image {name}: not pinned by its digest"
+            )
+        where = pull_ref.rsplit("@", 1)[0]
+        host, _, path = where.partition("/")
+        if path != repository(name) or (registry is not None and host != registry):
+            raise GitOpsError(
+                "gitops-request-invalid",
+                f"image {name}: not in this registry's repository {repository(name)}",
+            )
+        if not present(pull_ref):
+            raise GitOpsError(
+                "gitops-request-invalid",
+                f"image {name}: {digest} is not in the registry",
+            )
+        platforms = image.get("platforms")
+        sources = image.get("sources")
+        checked[name] = {
+            "key": key,
+            "pull_ref": pull_ref,
+            "manifest_digest": digest,
+            "platforms": dict(platforms) if isinstance(platforms, Mapping) else {},
+            "source": str(image.get("source") or "")[:100],
+            "commit": str(image.get("commit") or "")[:64],
+            # Every source's commit the key was made with (status explains
+            # an offer the controller computed another key for).
+            "sources": {
+                str(k)[:100]: str(v)[:64] for k, v in sorted(sources.items())[:16]
+            }
+            if isinstance(sources, Mapping)
+            else {},
+            "host": str(body.get("host") or "?")[:64],
+            "provenance": record,
+            "at": _iso(now),
+            "epoch": now,
+        }
+    offers = state.setdefault(OFFERS_KEY, {})
+    for name, item in checked.items():
+        kept = offers.setdefault(name, {})
+        kept[item["key"]] = item
+        for old in sorted(kept, key=lambda k: float(kept[k].get("epoch") or 0))[
+            :-OFFERS_PER_COMPONENT
+        ]:
+            del kept[old]
+    return sorted(checked)
+
+
+def take_offer(
+    state: Mapping[str, Any], component: str, key: str
+) -> dict[str, Any] | None:
+    """The offer of ``component`` under ``key`` (the controller's own change
+    key), or ``None``. The offer stays until it is replaced or aged out."""
+    found = ((state.get(OFFERS_KEY) or {}).get(component) or {}).get(key)
+    return dict(found) if isinstance(found, Mapping) else None
+
+
+def unused_offer(
+    state: Mapping[str, Any],
+    component: str,
+    key: str,
+    sources: Mapping[str, str],
+) -> dict[str, Any] | None:
+    """Why the newest offer of ``component`` was not used for a step whose
+    own change key is ``key``, made with ``sources`` (``{source: commit}``):
+    ``{"used": False, "key": the offered key, "differs": {source:
+    {"offered", "here"}}}`` naming every source whose commit differs (none:
+    the same commits, other inputs such as the platforms or the spec), or
+    ``None`` when no offer of it is kept or the newest has this key."""
+    kept = (state.get(OFFERS_KEY) or {}).get(component) or {}
+    if not kept:
+        return None
+    newest = max(kept.values(), key=lambda item: float(item.get("epoch") or 0))
+    if newest.get("key") == key:
+        return None
+    offered = dict(newest.get("sources") or {})
+    if not offered and newest.get("source"):
+        offered = {str(newest["source"]): str(newest.get("commit") or "")}
+    differs = {
+        name: {"offered": offered.get(name), "here": sources.get(name)}
+        for name in sorted(set(offered) | set(sources))
+        if offered.get(name) != sources.get(name)
+    }
+    return {"used": False, "key": str(newest.get("key")), "differs": differs}
+
+
+def public_offers(state: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """``prebuilt`` in the controller's status: each offer, newest first."""
+    found = []
+    for component, items in sorted((state.get(OFFERS_KEY) or {}).items()):
+        for key, item in items.items():
+            found.append(
+                {
+                    "component": component,
+                    "key": key,
+                    "image": item.get("pull_ref"),
+                    "host": item.get("host"),
+                    "train": (item.get("provenance") or {}).get("train"),
+                    **({"sources": item["sources"]} if item.get("sources") else {}),
+                    "at": item.get("at"),
+                }
+            )
+    return sorted(found, key=lambda item: str(item.get("at")), reverse=True)

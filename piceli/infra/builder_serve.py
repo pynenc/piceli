@@ -67,6 +67,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from piceli.infra import builds
+
 #: The container engine's named volume of the build cache (cargo targets,
 #: blobs, stage), per build host.
 CACHE_VOLUME = "piceli-build-cache"
@@ -366,6 +368,12 @@ class BuilderServe:
     _refused: set[str] = field(default_factory=set)
     #: 0.25.0: whether it said that it leaves image builds to other hosts.
     _skipping_said: bool = False
+    #: 0.26.0: each claimed controller-credential publish's one-claim
+    #: private key and the sealed credential the controller answered with.
+    _openers: dict[str, bytes] = field(default_factory=dict)
+    _sealed: dict[str, Any] = field(default_factory=dict)
+    #: 0.26.0: the build in hand's progress reports and cancel check.
+    _progress: Any = None
 
     # ------------------------------------------------------------ choosing
     def wanted(self) -> list[dict[str, Any]]:
@@ -436,15 +444,23 @@ class BuilderServe:
         host may win the same poll)."""
         from piceli.gitops.state import build_claim_request
 
-        if (entry.get("claimed") or {}).get("host") == self.host:
+        build = str(entry["id"])
+        held = (entry.get("claimed") or {}).get("host") == self.host
+        if held and (build in self._openers or not self._wants_seal(entry)):
+            self._sealed[build] = entry.get("sealed")
             return True
+        recipient = None
+        if self._wants_seal(entry):  # 0.26.0: credentials="controller"
+            from piceli.dev.nix_inputs import new_recipient
+
+            self._openers[build], recipient = new_recipient()
         proof = (
-            self.publisher.proof(entry, self.host)
+            self.publisher.proof(entry, self.host, recipient)
             if entry.get("kind") == "nix-publish"
             else None
         )
         self.channel.add_request(
-            *build_claim_request(str(entry["id"]), self.host, proof)
+            *build_claim_request(build, self.host, proof, recipient)
         )
         deadline = self.clock() + self.claim_wait
         while self.clock() < deadline:
@@ -453,6 +469,7 @@ class BuilderServe:
                 if current.get("id") == entry["id"]:
                     holder = (current.get("claimed") or {}).get("host")
                     if holder == self.host:
+                        self._sealed[build] = current.get("sealed")
                         return True
                     if holder:
                         return False
@@ -460,6 +477,43 @@ class BuilderServe:
             else:
                 return False  # no longer wanted
         return False
+
+    @staticmethod
+    def _wants_seal(entry: Mapping[str, Any]) -> bool:
+        plan = entry.get("plan") or {}
+        return (
+            entry.get("kind") == "nix-publish"
+            and plan.get("credentials") == "controller"
+            and bool(plan.get("inputs"))
+        )
+
+    def _controller_credential(self, entry: Mapping[str, Any]) -> Any:
+        """The controller's Git credential sealed for this build (0.26.0),
+        opened with the claim's private key, which is then forgotten;
+        ``None`` when none came."""
+        from piceli.dev.nix_inputs import seal_aad, unseal
+
+        build = str(entry["id"])
+        private = self._openers.pop(build, None)
+        sealed = self._sealed.pop(build, None)
+        if not self._wants_seal(entry) or private is None:
+            return None
+        if not isinstance(sealed, Mapping) or "box" not in sealed:
+            if isinstance(sealed, Mapping) and sealed.get("error"):
+                self.say(f"builder: {sealed['error']}")
+            return None
+        try:
+            found = unseal(private, sealed, seal_aad(build, self.host))
+        except ValueError as error:
+            self.say(f"builder: {error}")
+            return None
+        finally:
+            del private
+        return {
+            "hosts": list((entry.get("plan") or {}).get("git_hosts") or ()),
+            "username": str(found.get("username") or "git"),
+            "token": str(found.get("token") or ""),
+        }
 
     # ------------------------------------------------------------ building
     def quarantined(self) -> dict[str, Any] | None:
@@ -512,8 +566,13 @@ class BuilderServe:
         began = self.clock()
         tail: deque[str] = deque(maxlen=TAIL_LINES)
         self.signals = []
+        self._progress = self._reporter(build, tail)
         try:
             images = self.build(entry, tail)
+        except builds.Cancelled:
+            self.answered.add(build)
+            self.say(f"builder: {build} was cancelled; stopped")
+            return build
         except BuildFailed as error:
             from piceli.dev.pod import health_signal
             from piceli.gitops.state import build_failed_request
@@ -560,6 +619,20 @@ class BuilderServe:
         self.say(f"builder: {build} delivered in {receipt['seconds']:.0f}s")
         return build
 
+    def _reporter(self, build: str, tail: deque[str]) -> builds.Progress:
+        """Progress reports of ``build`` (0.26.0): its stage, its log tail."""
+        return builds.Progress(
+            self.channel, build, self.host, clock=self.clock, tail=lambda: tail
+        )
+
+    def _stage(self, name: str) -> None:
+        if self._progress is not None:
+            self._progress.stage(name)
+
+    def _report(self) -> None:
+        if self._progress is not None:
+            self._progress.report()
+
     def release(self, entry: Mapping[str, Any]) -> str:
         """Fetch, check the tag, build and publish a NixRelease (0.25.0);
         answer ``nix-published`` or ``build-failed`` with the output's tail."""
@@ -579,9 +652,13 @@ class BuilderServe:
         def line(text: str) -> None:
             tail.append(text)
             self.say(text)
+            self._report()
+
+        self._progress = self._reporter(build, tail)
 
         @contextlib.contextmanager
         def stage(name: str) -> Any:
+            self._stage(name)  # 0.26.0: reported; a cancelled build stops
             began = self.clock()
             try:
                 yield
@@ -598,15 +675,34 @@ class BuilderServe:
             checkout = self.root / "checkouts" / f"{source}-{_slug(url)}"
             with stage("fetch"):
                 export_source(url, commit, checkout, self.root / "git", self.git)
-                pointed = nix_releases.tag_commit(
-                    url, str(plan["tag"]), self.root / "git", self.git
+                pointed = (
+                    nix_releases.tag_commit(
+                        url, str(plan["tag"]), self.root / "git", self.git
+                    )
+                    if plan.get("tag")
+                    else commit  # 0.26.0: a branch's commit, or a commit alone
+                )
+                on_branch = not plan.get("branch") or builds.branch_contains(
+                    url, str(plan["branch"]), commit, self.root / "git", self.git
                 )
             if pointed != commit:
                 raise BuildFailed(
                     f"tag {plan['tag']} of {source} points at "
                     f"{(pointed or 'nothing')[:12]}, not {commit[:12]}"
                 )
-            done = self.publisher.publish(entry, checkout, line, stage)
+            if not on_branch:
+                raise BuildFailed(
+                    f"commit {commit[:12]} is not on branch {plan['branch']} of {source}"
+                )
+            controller = self._controller_credential(entry)
+            done = self.publisher.publish(
+                entry, checkout, line, stage, controller=controller
+            )
+            controller = None
+        except builds.Cancelled:
+            self.answered.add(build)
+            self.say(f"builder: {build} was cancelled; stopped")
+            return build
         except Exception as error:  # every refusal answers, with its tail
             from piceli.errors import ERRORS
 
@@ -679,6 +775,7 @@ class BuilderServe:
             out.mkdir(parents=True)
             os.chmod(out, 0o777)  # the image's user writes here
             sources: dict[str, Path] = {}
+            self._stage("fetch")
             for name, commit in sorted(_commits(entry).items()):
                 url = urls.get(name)
                 if not url:
@@ -697,17 +794,20 @@ class BuilderServe:
                     return
                 tail.append(text)
                 self.say(text)
+                self._report()
                 signal = health_signal((text,)) if len(self.signals) < 8 else None
                 if signal is not None and all(
                     item["kind"] != signal["kind"] for item in self.signals
                 ):
                     self.signals.append(signal)
 
+            self._stage("build")
             code = self.container(job_argv(entry), sources, out, line)
             if code != 0 or not receipt_line:
                 raise BuildFailed(f"the build exited {code}", "\n".join(tail))
             receipt = decode_receipt(receipt_line[-1][len(RECEIPT_MARKER) :])
             self.toolchains = dict(receipt.get("toolchains") or {})
+            self._stage("push")
             return self.deliver(entry, receipt, out)
 
     def deliver(
