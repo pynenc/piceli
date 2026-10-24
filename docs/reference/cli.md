@@ -172,6 +172,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli support-bundle`](#cli-support-bundle) | Collect a read-only, redacted snapshot of a namespace (no Secrets, no env values). | reads | no |
 | [`piceli targets`](#cli-targets) | Every environment and NixHost: commit or tag, pinned product commit, checks, state. | reads | no |
 | [`piceli train`](#cli-train) | Merge branches onto the base one tested merge at a time; eject failures. | none | yes |
+| [`piceli train-init`](#cli-train-init) | Write a starting train spec, from a shell script or as a template. | none | no |
 | [`piceli train-prune`](#cli-train-prune) | Bound what a train keeps: worktrees, cargo targets, the content store, runs. | none | no |
 | [`piceli train-queue`](#cli-train-queue) | A train's queue: waiting requests with their flags; cancel one, or serve them. | none | no |
 | [`piceli train-wait`](#cli-train-wait) | Wait until a train run ends; exit with its verdict. | none | no |
@@ -4060,17 +4061,49 @@ Merge branches onto the base one tested merge at a time; eject failures.
 | `--retire` | boolean | `False` | Once promoted, rename each joined branch to_delete_<date>_<branch> (never deleted); a branch checked out with changes, or one that moved after it joined, is left alone |
 | `--retire-remote` | boolean | `False` | --retire, and delete each retired branch on the remote after the push (only while it is at the joined commit; needs --push) |
 | `--promote-run` | text |  | Promote the head an earlier run reached (its id, or 'last'), without running it again; refused when the base moved in a way that is not a fast-forward of that head |
+| `--compare` | text |  | Run this old command first, in a scratch clone ({branches}: the branches, {repo}: the clone), then the train on the same branches, and print both side by side; never promotes or pushes |
+| `--compare-phase` | text |  | With --compare: a regular expression for the old command's output lines that start a phase (its first group names it) |
 
 **Contract**
 
 - **Reads:** the train spec module (MODULE[:ATTR]), then the same module in each merged tree, the Git repository (branches, base, tested), the steps' tools (cargo, scripts of the merged tree), Train(builds=): the declared build hosts (their engines, queues, health), --promote-run: an earlier run's record
-- **Writes:** worktrees of the repository at stable paths under the train cache (removed after each trial), unreferenced merge commits; refs/piceli/train/<name>/last, $XDG_STATE_HOME/piceli/train/<name> (run records, events, logs, flaky.jsonl, the queue), $XDG_CACHE_HOME/piceli/train (slot locks, shared cargo targets, the content store), build hosts: dev runs of the merged tree (their queues, warm caches, health events), --promote: the tag, tested and the base (fast-forward only), publish steps, --promote with Step.images: images pushed to the cluster's registry, a prebuilt request to its controller, --push: the remote's tag, tested and base
+- **Writes:** worktrees of the repository at stable paths under the train cache (removed after each trial), unreferenced merge commits; refs/piceli/train/<name>/last, $XDG_STATE_HOME/piceli/train/<name> (run records, events, logs, flaky.jsonl, the queue), $XDG_CACHE_HOME/piceli/train (slot locks, shared cargo targets, the content store), build hosts: dev runs of the merged tree (their queues, warm caches, health events), --promote: the tag, tested and the base (fast-forward only), publish steps, --promote with Step.images: images pushed to the cluster's registry, a prebuilt request to its controller, --push: the remote's tag, tested and base, --compare: a scratch clone (removed), the old command's output in the run's directory
 - **Cluster:** none
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.26.0. Runs the train's steps, which run code: the explicit branch list is the approval, and --promote/--push the approval to move refs and push. Without --promote no ref changes; nothing is pushed without --push (which needs --promote). Each candidate set is merged with git merge --no-ff onto the train's head in a temporary worktree; its steps come from the merged tree's spec. A failing set is bisected. --json prints one piceli.train.v1 object. --queue on a busy train writes a queued request (keeping its flags, --promote-run too, with last resolved when queued) and returns at once (piceli.train.queued.v1, exit 0); every run serves the train's queue when it ends. A run that raises midway (a --promote-run too) is recorded failed (run-failed: train-git-failed, train-host-unavailable, train-run-failed, train-run-cancelled), notified, exit 1. Exit 0: every branch joined (or was already in) and the promotion and push asked for succeeded; 1: a branch was ejected (train-step-failed, train-step-timeout, train-merge-conflict, train-merge-failed, train-spec-invalid), the promotion was refused (train-not-fast-forward, train-checkout-dirty), a publish step or the push failed; 2: rejected before anything ran (train-not-found, train-branch-unknown, train-busy, ...). Steps may run on the train's build hosts (Train(builds=, hosts=)) through the dev run machinery; a step with inputs that passed before is reused. --promote-run RUN promotes an earlier run's head without running it (train-run-unknown, train-not-fast-forward); no host for a step fails the run (train-host-unavailable).
+- **Notes:** 0.26.0. Runs the train's steps, which run code: the explicit branch list is the approval, and --promote/--push the approval to move refs and push. Without --promote no ref changes; nothing is pushed without --push (which needs --promote). Each candidate set is merged with git merge --no-ff onto the train's head in a temporary worktree; its steps come from the merged tree's spec. A failing set is bisected. --json prints one piceli.train.v1 object. --queue on a busy train writes a queued request (keeping its flags, --promote-run too, with last resolved when queued) and returns at once (piceli.train.queued.v1, exit 0); every run serves the train's queue when it ends. A run that raises midway (a --promote-run too) is recorded failed (run-failed: train-git-failed, train-host-unavailable, train-run-failed, train-run-cancelled), notified, exit 1. Exit 0: every branch joined (or was already in) and the promotion and push asked for succeeded; 1: a branch was ejected (train-step-failed, train-step-timeout, train-merge-conflict, train-merge-failed, train-spec-invalid), the promotion was refused (train-not-fast-forward, train-checkout-dirty), a publish step or the push failed; 2: rejected before anything ran (train-not-found, train-branch-unknown, train-busy, ...). Steps may run on the train's build hosts (Train(builds=, hosts=)) through the dev run machinery; a step with inputs that passed before is reused. --promote-run RUN promotes an earlier run's head without running it (train-run-unknown, train-not-fast-forward); no host for a step fails the run (train-host-unavailable). --compare COMMAND (0.28.0) runs the old command in a scratch clone first, then the train on the same branches without promoting, and prints both side by side (piceli.train-compare.v1 under --json); exit 0 when both agree on pass or fail, 1 when they disagree; refuses --promote, --push, --queue, --retire, --promote-run (train-compare-invalid).
+
+(cli-train-init)=
+### `piceli train-init`
+
+Write a starting train spec, from a shell script or as a template.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `PATH` | path | `train_spec.py` |  |
+| `--from` | path |  | A shell script to read: its test commands become steps, the rest stays as TODO comments |
+| `--name` | text |  | The train's name (default: the repository's) |
+| `--base` | text |  | The base branch (default: the script's, else main) |
+| `--images` | text |  | COMPOSITION[:ATTR]: add Step.images for the GitOps controller of this composition module (declared Controller(prebuilt=True)) |
+| `--repository` | text |  | With --images: the composition's repository URL, when it is not this one |
+| `--branch` | text | `main` | With --repository: the branch the controller follows |
+| `--host` | text |  | Run the cargo steps on this declared build host |
+| `--builds` | text |  | With --host: MODULE:ATTR of the DevBuilds (or Cluster with dev=) declaring it |
+| `--force` | boolean | `False` | Overwrite an existing file |
+| `--json` | boolean | `False` | Print the result object on stdout |
+
+**Contract**
+
+- **Reads:** --from: the shell script, the directory's project files (Cargo.toml, pyproject.toml, package.json), the written spec, loaded once with the train's loader
+- **Writes:** the spec file (only a new file, or an existing one with --force)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** no
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.28.0. Also spelled piceli train init. Never runs the script. cargo, pytest (and uv/poetry run, python -m), tox, nox, npm, pnpm, yarn, make, just and go commands become steps; git commands are what the train does; shell glue is skipped; every other command line stays in the spec as a TODO comment with a hint. --images COMPOSITION[:ATTR] [--repository URL --branch B] adds Step.images; --host NAME [--builds MODULE:ATTR] runs the cargo steps on a build host. --json prints one piceli.train-init.v1 object. Exit 0: written and it loads; 1: written but it does not load (load_error); 2: nothing written (train-init-exists, train-init-invalid).
 
 (cli-train-prune)=
 ### `piceli train-prune`

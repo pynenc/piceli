@@ -31,6 +31,18 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   ENV --approve DIGEST --wait` does the same for the Nix host. Exit 0: all
   good; 1: a failure; 2: timeout (`gitops-wait-timeout`). See
   {ref}`gitops-enable-wait`.
+- **Adopt the train in ten minutes.** `piceli train init train_spec.py
+  --from scripts/merge.sh` writes a starting train spec from a shell
+  script: cargo, pytest, npm, make and similar commands become steps, the
+  base branch is read, and every line it cannot translate stays as a TODO
+  comment (also printed). Without `--from` it writes a commented template.
+  `--images infra.py` adds `Step.images` for a `Controller(prebuilt=True)`,
+  `--host NAME` runs the cargo steps on a build host; an existing file is
+  kept unless `--force`. `piceli train SPEC --branches ... --compare
+  "COMMAND"` runs the old command in a scratch clone, then the train on the
+  same branches without promoting, and prints a side-by-side table (wall
+  time, time per phase, tests, failures, retries, and whether both agree).
+  See {ref}`train-adopt`.
 
 ## Version 0.27.0
 

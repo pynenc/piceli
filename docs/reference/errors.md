@@ -762,9 +762,12 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`train-branches-required`](#error-train-branches-required) | train | no |
 | [`train-busy`](#error-train-busy) | train | yes |
 | [`train-checkout-dirty`](#error-train-checkout-dirty) | train | yes |
+| [`train-compare-invalid`](#error-train-compare-invalid) | train | no |
 | [`train-git-failed`](#error-train-git-failed) | train | yes |
 | [`train-host-unavailable`](#error-train-host-unavailable) | train | yes |
 | [`train-images-failed`](#error-train-images-failed) | train | yes |
+| [`train-init-exists`](#error-train-init-exists) | train | no |
+| [`train-init-invalid`](#error-train-init-invalid) | train | no |
 | [`train-interrupted`](#error-train-interrupted) | train | no |
 | [`train-invalid`](#error-train-invalid) | train | no |
 | [`train-load-failed`](#error-train-load-failed) | train | no |
@@ -7236,6 +7239,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Commit or stash the changes in that worktree, then run the train again.
 - **Retry-safe:** yes
 
+(error-train-compare-invalid)=
+### `train-compare-invalid`
+
+**Train compare request not valid.** --compare runs the old command and the train side by side and never moves or pushes anything, so it refuses --promote, --push, --queue, --retire and --promote-run; it also needs a non-empty command, a valid --compare-phase expression and a scratch clone of the repository.
+
+- **Fix:** Drop the flags the message names, or run the train without --compare.
+- **Retry-safe:** no
+
 (error-train-git-failed)=
 ### `train-git-failed`
 
@@ -7259,6 +7270,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Read the images step's log; check the composition, the build host and the cluster's registry, then run `piceli train APP --promote-run last` again or let the controller build.
 - **Retry-safe:** yes
+
+(error-train-init-exists)=
+### `train-init-exists`
+
+**Train spec file already exists.** `piceli train-init` would overwrite a file that is already there.
+
+- **Fix:** Pick another path, or add --force to overwrite it.
+- **Retry-safe:** no
+
+(error-train-init-invalid)=
+### `train-init-invalid`
+
+**Train init input not usable.** The script given to --from cannot be read, or an option is not valid: --images is not a composition module path (infra.py[:ATTR]), --repository was given without --images, --host is not a build host name, --builds is not MODULE:ATTR with --host, or --name is not a DNS label.
+
+- **Fix:** Fix the option named in the message and run `piceli train-init` again.
+- **Retry-safe:** no
 
 (error-train-interrupted)=
 ### `train-interrupted`

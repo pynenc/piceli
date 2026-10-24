@@ -11911,6 +11911,7 @@
      "support-bundle",
      "targets",
      "train",
+     "train-init",
      "train-prune",
      "train-queue",
      "train-wait",
@@ -14221,6 +14222,8 @@
     ],
     "flags": [
      "--branches",
+     "--compare",
+     "--compare-phase",
      "--json",
      "--promote",
      "--promote-run",
@@ -14229,6 +14232,24 @@
      "--retire",
      "--retire-remote",
      "--state-dir"
+    ],
+    "subcommands": []
+   },
+   "train-init": {
+    "arguments": [
+     "path"
+    ],
+    "flags": [
+     "--base",
+     "--branch",
+     "--builds",
+     "--force",
+     "--from",
+     "--host",
+     "--images",
+     "--json",
+     "--name",
+     "--repository"
     ],
     "subcommands": []
    },
@@ -15212,9 +15233,12 @@
    "train-branches-required",
    "train-busy",
    "train-checkout-dirty",
+   "train-compare-invalid",
    "train-git-failed",
    "train-host-unavailable",
    "train-images-failed",
+   "train-init-exists",
+   "train-init-invalid",
    "train-interrupted",
    "train-invalid",
    "train-load-failed",
@@ -17382,11 +17406,13 @@
   "piceli.testing.pytest_plugin",
   "piceli.train",
   "piceli.train.cargo",
+  "piceli.train.compare",
   "piceli.train.engine",
   "piceli.train.git",
   "piceli.train.hosts",
   "piceli.train.images",
   "piceli.train.impact",
+  "piceli.train.init",
   "piceli.train.local",
   "piceli.train.model",
   "piceli.train.notify",
