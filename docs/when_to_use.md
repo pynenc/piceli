@@ -55,10 +55,12 @@ What Piceli does not do today, so you can judge the fit:
 - **APIs still change.** Piceli is pre-alpha and its APIs change between
   releases ({doc}`changelog`).
 - **No package format.** Piceli has no reusable, versioned package of
-  components ({doc}`roadmap`). A vendor's Helm chart can be rendered with
+  components. A vendor's Helm chart can be rendered with
   `helm template` and its YAML loaded ({ref}`faq-existing-yaml`).
-- **Kubernetes only.** Piceli does not manage databases, DNS, buckets or
-  clusters ({doc}`roadmap`); it has GKE cluster helpers only.
+- **Not a cloud provisioner.** Piceli manages no databases and creates no
+  Kubernetes clusters (it has GKE cluster helpers only). Its machines
+  (servers, IP addresses, buckets and DNS records through OpenTofu, see
+  {doc}`infrastructure`) cover a few providers only.
 - **Python only.** Apps are written in Python.
 - **Pruning is deliberate.** Removed objects disappear only from a release
   spec with `prune = true`, and never Namespaces, volumes, claims or Secrets

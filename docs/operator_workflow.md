@@ -21,7 +21,8 @@ These features are available as Python library APIs, and some of them through
 - REST calls enforce roles (`viewer` is read-only) but not yet the per-operation
   and per-namespace scopes of `StandingPolicy`.
 
-See the {doc}`roadmap` for the plan to complete this workflow.
+The {doc}`roadmap` proposes retiring this layer: the GitOps controller
+and the web UI ({doc}`gitops`, {doc}`ui`) now do its job.
 ```
 
 ## Core Architecture
