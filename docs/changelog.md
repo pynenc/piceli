@@ -31,6 +31,18 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   ENV --approve DIGEST --wait` does the same for the Nix host. Exit 0: all
   good; 1: a failure; 2: timeout (`gitops-wait-timeout`). See
   {ref}`gitops-enable-wait`.
+- **Build hosts as services.** `piceli builder install --cluster
+  infra.py:my_cluster --host builder-1` (run on the build host) writes and
+  starts a systemd unit (Linux) or launchd property list (macOS) that runs
+  `builder serve` with the same arguments and Piceli program, restarts it
+  on failure and stops it with SIGINT. It runs the `builder serve --check`
+  checks first and refuses on a missing credential or a missing docker,
+  git or kubectl; `--print` only shows the unit; `piceli builder
+  uninstall --host builder-1` removes it. `piceli builder status` lists
+  each build host's Piceli version, last sighting, live or expired claim,
+  last build and quarantine, and the declared hosts never seen (claims
+  and progress reports now carry the host's version;
+  `controller.build_hosts` in the status). See {ref}`builder-service`.
 
 ## Version 0.27.1
 

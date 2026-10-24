@@ -591,6 +591,25 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["builder", "serve", "--cluster", "no_such_module:c"],
         "cluster-not-found",
     ),
+    "builder install": (
+        lambda p: [
+            "builder",
+            "install",
+            "--cluster",
+            "no_such_module:c",
+            "--host",
+            "b-1",
+        ],
+        "cluster-not-found",
+    ),
+    "builder uninstall": (
+        lambda p: ["builder", "uninstall", "--host", "Not_A_Name"],
+        "builder-service-invalid",
+    ),
+    "builder status": (
+        lambda p: ["builder", "status", "--cluster", "no_such_module:c"],
+        "cluster-not-found",
+    ),
     "dev hosts": (
         lambda p: ["dev", "hosts", "--cluster", "no_such_module:c"],
         "cluster-not-found",

@@ -514,6 +514,132 @@ The builder image must be the controller's Piceli version. Its registry
 must be on a node that works: `Registry.in_cluster(on=...)` places it, and
 moving it means a new claim, which the next builds and mirrors fill again.
 
+(builder-service)=
+#### Run a build host as a service (0.28.0)
+
+`builder serve` in a terminal stops when the terminal closes or the machine
+sleeps, and builds wait. `piceli builder install` makes the build host
+serve on its own. Run it **on the build host itself**, in the directory
+where `--cluster MODULE:ATTR` loads, with the same arguments `builder serve`
+takes:
+
+```sh
+# Smoke test first: the credentials this host needs, then one build.
+piceli builder serve --cluster infra.py:my_cluster --host builder-1 --check
+piceli builder serve --cluster infra.py:my_cluster --host builder-1 --once --json
+
+# Install the service (as you: a user service).
+piceli builder install --cluster infra.py:my_cluster --host builder-1
+# Or as root, running as the user "builder" (a system service).
+sudo piceli builder install --cluster infra.py:my_cluster --host builder-1 \
+  --user builder --state-dir /var/lib/piceli-builder
+
+# Remove it.
+piceli builder uninstall --host builder-1
+```
+
+- **Linux:** a systemd unit `piceli-builder-builder-1.service`, in
+  `/etc/systemd/system` as root, else in `~/.config/systemd/user`. A user
+  service stops when you log out unless lingering is on
+  (`sudo loginctl enable-linger $USER`). Logs go to the journal:
+  `journalctl -u piceli-builder-builder-1 -f` (add `--user` for a user
+  service).
+- **macOS:** a launchd property list `piceli.builder.builder-1.plist`, a
+  LaunchDaemon in `/Library/LaunchDaemons` as root, else a LaunchAgent in
+  `~/Library/LaunchAgents`. Logs go to `builder.log` in the state
+  directory (default `~/.cache/piceli/builder`).
+
+The service runs the same `piceli` program that ran `install` (its absolute
+path; the Piceli version is in the unit's description), with the exact
+`builder serve` arguments. It starts again 10 seconds after a failure and
+is stopped with SIGINT, as Ctrl-C stops `serve` (SIGTERM, which launchd
+sends, stops it the same way). Its `PATH` holds the directories where
+docker, git and kubectl are now; `install` refuses when one is missing
+(`builder-service-invalid`, naming it). `--print` writes the unit to
+stdout and changes nothing.
+
+Before it writes anything, `install` runs the checks of `builder serve
+--check`: the cluster's credential profile and kubeconfig reach the
+controller, the keys of each `--publish` cache are in this machine's
+secrets, and the host holds every credential its NixReleases need. A
+missing one refuses with `infra-credential-missing`, naming it and the
+command that adds it. No secret value goes into the unit or its arguments:
+only `HOME`, `PATH`, and `PICELI_CREDENTIALS_DIR` / `PICELI_PROFILES_DIR`
+when they are set where `install` runs.
+
+**One service per host name.** Never run two servers under the same
+`--host` name: the controller takes them for one host. Different names on
+one machine or many are fine; the controller decides which claim wins.
+
+**The service user.** It needs access to the container engine (on Linux,
+the `docker` group) and holds its own Piceli state: its credential profile
+(`~/.config/piceli/profiles`, `piceli login`), its secrets
+(`~/.config/piceli/credentials`, `piceli secrets ...`), its Git access
+(credential helper or SSH keys) and its state directory. Run `piceli
+login` and `piceli secrets` as that user, or set `PICELI_PROFILES_DIR` and
+`PICELI_CREDENTIALS_DIR` before `install`. As root, `install` checks with
+that user's home, and the `piceli` program it runs must be one that user
+may run (for example installed under `/usr/local/bin` or in its own home).
+
+**Kubernetes permissions.** The credential profile of `builder serve`
+needs, and nothing more:
+
+- in the controller's namespace (`piceli-system`): ConfigMaps `get`,
+  `create`, `patch` (it reads the status, writes its requests);
+- to push images, in the registry's namespace: services `get`, pods `get`
+  and `list`, `pods/portforward` `create` (the push goes through
+  `kubectl port-forward service/<registry>`).
+
+A host that delivers into the nodes over SSH, or only publishes Nix
+releases, needs only the first line.
+
+**NixOS.** Keep the unit in your configuration instead: `piceli builder
+install ... --print` shows it, and this is the same service:
+
+```nix
+users.users.builder.extraGroups = [ "docker" ];
+systemd.services.piceli-builder-builder-1 = {
+  description = "Piceli build host builder-1";
+  wantedBy = [ "multi-user.target" ];
+  wants = [ "network-online.target" ];
+  after = [ "network-online.target" "docker.service" ];
+  path = [ pkgs.docker pkgs.git pkgs.kubectl ];
+  environment.HOME = "/var/lib/piceli-builder";
+  serviceConfig = {
+    User = "builder";
+    WorkingDirectory = "/srv/deploy";  # where infra.py is
+    ExecStart = "/path/to/piceli builder serve --cluster infra.py:my_cluster --host builder-1";
+    Restart = "on-failure";
+    RestartSec = 10;
+    KillSignal = "SIGINT";
+    TimeoutStopSec = 120;
+  };
+};
+```
+
+#### Which build hosts serve: `piceli builder status` (0.28.0)
+
+```sh
+piceli builder status --cluster infra.py:my_cluster [--json]
+```
+
+```text
+builder-1        building      Piceli 0.28.0   seen 2026-11-02T09:14:05Z; claim 3f2a91c07d4e live (build); last build 3f2a91c07d4e claimed
+builder-2        claim-expired Piceli 0.27.1   seen 2026-11-02T08:40:00Z; claim 8c1d2e3f4a5b expired; last build 8c1d2e3f4a5b claimed
+builder-3        quarantined   Piceli 0.28.0   seen 2026-11-01T21:00:00Z; last build 1a2b3c4d5e6f built; QUARANTINED since ...
+builder-4        never seen (declared; is builder serve running there? ...)
+```
+
+One line per build host the controller heard from, and per declared host:
+its Piceli version, when it was last seen (a claim, a progress report, an
+answer or a health record), the build it holds (`live`, or `expired` after
+10 minutes without a report), its last build and outcome (`claimed`,
+`built`, `published`, `failed`) and its quarantine. A declared host never
+seen is not serving. Each claim and progress report carries the host's
+Piceli version; the controller keeps each host's last sighting in its
+status (`controller.build_hosts`). `--json` prints
+`piceli.builder-status.v1`.
+
 #### Delivery into the nodes, without a registry
 
 When the cluster has no registry that works (or you prefer not to use

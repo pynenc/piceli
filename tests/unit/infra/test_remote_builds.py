@@ -545,3 +545,51 @@ def test_builder_serve_says_once_why_it_skips_a_build(
     entry = dict(wanted, claimed=None)
     assert worker.claim(entry) is False
     assert "claim refused: build host builder-2 already builds it" in lines[-1]
+
+
+def test_claims_and_reports_carry_the_hosts_piceli_version() -> None:
+    from piceli import __version__
+    from piceli.gitops.state import build_progress_request
+
+    assert build_claim_request("a" * 20, "builder-1")[1]["version"] == __version__
+    body = build_progress_request("a" * 20, "builder-1", "build", "", "t")[1]
+    assert body["version"] == __version__
+
+
+def test_the_controller_publishes_each_build_hosts_last_sighting(
+    world: dict[str, Any],
+) -> None:
+    """0.28.0: ``controller.build_hosts``: version, last seen, last build."""
+    from piceli.gitops.state import build_progress_request
+
+    controller, channel, clock = world["controller"], world["channel"], world["clock"]
+    status = controller.poll_once()
+    assert "build_hosts" not in status["controller"]  # only once a host showed up
+    (wanted,) = status["controller"]["builds_wanted"]
+    channel.add_request(*build_claim_request(wanted["id"], "builder-1"))
+    status = controller.poll_once()
+    seen = status["controller"]["build_hosts"]["builder-1"]
+    assert seen["version"] and seen["seen"] == "build-claim"
+    assert seen["last_build"]["id"] == wanted["id"]
+    assert seen["last_build"]["outcome"] == "claimed"
+    first = seen["seen_at"]
+
+    clock["now"] += 60
+    channel.add_request(
+        *build_progress_request(wanted["id"], "builder-1", "build", "", "t")
+    )
+    channel.add_request(*build_claim_request(wanted["id"], "builder-2"))
+    status = controller.poll_once()
+    hosts = status["controller"]["build_hosts"]
+    assert hosts["builder-1"]["seen_at"] > first
+    assert hosts["builder-1"]["seen"] == "build-progress"
+    # A refused claim is a sighting, never a build of its own.
+    assert hosts["builder-2"]["seen"] == "build-claim"
+    assert hosts["builder-2"].get("last_build") is None
+
+    channel.add_request(
+        *built_request(wanted["id"], "builder-1", _images(wanted), {"host": "x"})
+    )
+    status = controller.poll_once()
+    last = status["controller"]["build_hosts"]["builder-1"]["last_build"]
+    assert last["outcome"] == "built" and last["id"] == wanted["id"]

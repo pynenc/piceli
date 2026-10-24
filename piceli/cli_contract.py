@@ -2000,6 +2000,67 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "nothing and prints piceli.builder-check.v1 (each release's mode, "
             "inputs and credential states; exit 1 when one is missing).",
         ),
+        "builder install": _C(
+            "On a build host: write and start a service (systemd on Linux, "
+            "launchd on macOS) that runs builder serve with these arguments.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Cluster with dev=DevBuilds(hosts=[...]))",
+                "credential profile",
+                "the controller's status",
+                "MODULE:ATTR of each --publish NixCache and its keys from this "
+                "machine's credentials (checked, never written to the unit)",
+                "PATH (docker, git, kubectl)",
+            ),
+            writes=(
+                "/etc/systemd/system or ~/.config/systemd/user/"
+                "piceli-builder-HOST.service (Linux), /Library/LaunchDaemons or "
+                "~/Library/LaunchAgents/piceli.builder.HOST.plist (macOS)",
+                "systemctl daemon-reload, enable, restart (launchctl bootstrap)",
+            ),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.28.0. Runs the same checks as builder serve --check first "
+            "(the profile reaches the controller; every credential the host "
+            "needs is present, else infra-credential-missing names it) and "
+            "refuses when docker, git or kubectl is missing "
+            "(builder-service-invalid). The unit runs the piceli program that "
+            "ran install (absolute path, version in its description), in the "
+            "directory install ran in, with Restart=on-failure, RestartSec=10 "
+            "and KillSignal=SIGINT; it holds directories, never a secret. As "
+            "root it needs --user USER (a system service); otherwise it is a "
+            "user service. --print writes the unit to stdout and changes "
+            "nothing. A failing systemctl or launchctl is "
+            "builder-service-failed.",
+        ),
+        "builder uninstall": _C(
+            "On a build host: stop, disable and remove the service builder "
+            "install wrote.",
+            reads=("the unit or property list of --host",),
+            writes=(
+                "the unit or property list (removed); systemctl disable --now "
+                "(launchctl bootout)",
+            ),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.28.0. state absent when none is installed (nothing runs).",
+        ),
+        "builder status": _C(
+            "List each build host the GitOps controller heard from: Piceli "
+            "version, last seen, live or expired claim, last build and its "
+            "outcome, quarantine; and the declared hosts never seen.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Cluster with dev=DevBuilds(hosts=[...]))",
+                "credential profile",
+                "the controller's status",
+            ),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.28.0. Read-only (controller.build_hosts, builds_wanted and "
+            "build_health in gitops status); piceli.builder-status.v1 under "
+            "--json.",
+        ),
         "dev hosts": _C(
             "Show each declared build host: up or down (and why), its platforms, "
             "slots, running and waiting runs.",

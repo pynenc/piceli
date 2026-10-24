@@ -321,14 +321,24 @@ def build_claim_request(
     ``proof`` (0.25.0, a ``nix-publish``): the cache key's signature over
     the claim (:func:`piceli.infra.nix_releases.claim_message`), never a key.
     ``recipient`` (0.26.0): the one-claim public key the controller seals
-    its Git credential to, for a ``credentials="controller"`` release."""
+    its Git credential to, for a ``credentials="controller"`` release.
+    0.28.0: ``version``, the host's Piceli version (``piceli builder status``)."""
     if proof is None:
-        return request("build-claim", id=_build_id(build), host=str(host)[:64])
+        return request(
+            "build-claim", id=_build_id(build), host=str(host)[:64],
+            version=_piceli_version(),
+        )  # fmt: skip
     extra = {"recipient": str(recipient)[:64]} if recipient else {}
     return request(
         "build-claim", id=_build_id(build), host=str(host)[:64],
-        proof=str(proof)[:200], **extra,
+        proof=str(proof)[:200], version=_piceli_version(), **extra,
     )  # fmt: skip
+
+
+def _piceli_version() -> str:
+    from piceli import __version__
+
+    return str(__version__)[:40]
 
 
 def nix_published_request(
@@ -497,7 +507,8 @@ def build_cancel_request(
 def build_progress_request(
     build: str, host: str, stage: str, log_tail: str, at: str
 ) -> tuple[str, dict[str, Any]]:
-    """A build host's stage and log tail while it builds (0.26.0)."""
+    """A build host's stage and log tail while it builds (0.26.0), and
+    (0.28.0) its Piceli version."""
     import re
 
     if not re.fullmatch(r"[a-z]{1,16}", stage):
@@ -509,6 +520,7 @@ def build_progress_request(
         stage=stage,
         log_tail=str(log_tail)[-4000:],
         at=str(at)[:40],
+        version=_piceli_version(),
     )
 
 
