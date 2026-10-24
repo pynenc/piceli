@@ -6,6 +6,14 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.26.2
 
+- **GC roots on docker build hosts.** `BuildHost.docker(roots_dir=...)`: a
+  directory of the host (writable by uid 65532) its Nix steps bind-mount at
+  the same path, read-write, so the roots they make there are ones the
+  host's daemon honours. A fetched private input is rooted from the fetch
+  until the build ended (a step removes the build's directory then, on
+  failure too), and an `--image` build keeps `ROOTS_DIR/images/NAME` until
+  the next build of that name, for `infra apply`'s upload. Without it, a
+  docker host keeps no root, as before.
 - **The forward and access tests no longer race for ports under load.**
   They take their loopback ports from a slice of their own per pytest-xdist
   worker, below the ephemeral range, instead of a free port another process

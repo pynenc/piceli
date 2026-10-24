@@ -1192,6 +1192,7 @@
     "quarantine_after",
     "quarantine_policy",
     "quarantine_window",
+    "roots_dir",
     "runs",
     "slots",
     "state_dir"
@@ -1208,6 +1209,7 @@
     "platforms",
     "quarantine_after",
     "quarantine_window",
+    "roots_dir",
     "runs",
     "slots",
     "state_dir"

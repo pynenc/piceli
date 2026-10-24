@@ -97,13 +97,15 @@ def step_argv(host: Any, image: str | None, source: str) -> list[str]:
     if host.kind == "native":
         return [sys.executable, "-I", "-c", source]
     if host.kind == "docker":
-        from piceli.dev.hosts import NIX_MOUNT, ContainerCli
+        from piceli.dev.hosts import NIX_MOUNT, ContainerCli, roots_mount
 
         run_image = check_image(host, image)
+        roots_dir = getattr(host, "roots_dir", None)
+        roots = roots_mount(roots_dir) if roots_dir else ()
         return ContainerCli(host).argv(
             "run", "--rm", "-i", "--user", "0:0", "--cap-drop", "ALL",
             "--cap-add", "SETUID", "--cap-add", "SETGID",
-            "--security-opt", "no-new-privileges", *NIX_MOUNT,
+            "--security-opt", "no-new-privileges", *NIX_MOUNT, *roots,
             "--entrypoint", "python3", run_image, "-I", "-c", BOOT, source,
         )  # fmt: skip
     raise DevError(

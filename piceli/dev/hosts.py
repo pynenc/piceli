@@ -68,6 +68,14 @@ UNAVAILABLE = "dev-host-unavailable"
 #: 0.24: how a ``DevProfile(nix=True)`` run (and ``dev nix build
 #: --publish``) reaches a docker host's own Nix.
 NIX_MOUNT = ("-v", "/nix:/nix:ro", "-e", "NIX_REMOTE=daemon")
+
+
+def roots_mount(path: str) -> tuple[str, ...]:
+    """``BuildHost.roots_dir`` in a Nix step (0.26.2): the host's directory at
+    the same path, read-write, so the daemon finds the roots made there."""
+    return ("-v", f"{path}:{path}")
+
+
 NIX_PATH = "/nix/var/nix/profiles/default/bin:/nix/var/nix/profiles/system/sw/bin"
 
 

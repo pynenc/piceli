@@ -233,9 +233,22 @@ Nix's fetcher cache lives in the temporary directory too, so no clone of
 the private repository stays on the host. On a native build host each
 fetched tree gets an indirect GC root in a temporary directory, held until
 the build ended, so a garbage collection in between cannot take it. A docker
-host's fetch step has no directory of that host to keep a root in: there a
-collection between the fetch and the build (seconds) makes the build fail
-on the input, and a retry fetches it again. On a docker host the run image
+host's steps see the host's `/nix` read-only; give it a directory for roots
+(0.26.2), and they keep the same roots there:
+
+```python
+BuildHost.docker("nix-builder", context="ssh://builder@builder-1.example.org",
+                 runs=False, roots_dir="/var/lib/piceli/gcroots")
+```
+
+`roots_dir` is an absolute directory of the host, writable by uid 65532
+(on NixOS: `systemd.tmpfiles.rules = [ "d /var/lib/piceli/gcroots 0700
+65532 65532 -" ]`). The fetch step bind-mounts it at the same path,
+read-write (nothing else of the host), so the links it makes there are
+roots the host's daemon honours; a short step removes the build's
+directory when the build ended, on failure too. Without it a collection
+between the fetch and the build (seconds) makes the build fail on the
+input, and a retry fetches it again. On a docker host the run image
 needs `git` (and `python3`). An input that cannot be fetched fails the
 release before any build, naming the input, its URL (never a credential)
 and the credential tried, and, when the step ended before Git ran, what

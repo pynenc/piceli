@@ -28,6 +28,13 @@ overrides it, pinned by digest). It needs network access to pull
   repository to one deploy key, generated here.
 
 Every container and the volume are removed at the end, on failure too.
+
+0.26.2: ``BuildHost.docker(roots_dir=)`` (a volume here, mounted at the same
+path in the steps and the daemon): a fetched input cannot be deleted from
+the store while the build holds its root, and can after; and ``dev nix
+build --image`` of a flake whose private input ``nix flake lock`` locked
+(``ref``, ``revCount``, a repository with history) builds and keeps its
+image rooted for ``infra apply``.
 """
 
 from __future__ import annotations
@@ -74,6 +81,7 @@ chmod 700 /home/git/.ssh && chmod 600 /home/git/.ssh/authorized_keys
 git init -q --bare /home/git/app.git
 mkdir /w && cd /w && git init -q && echo private > README
 git add . && git -c user.email=a@b -c user.name=a commit -qm init
+echo more > CHANGES && git add . && git -c user.email=a@b -c user.name=a commit -qm two
 git push -q /home/git/app.git HEAD:refs/heads/main
 git -C /home/git/app.git symbolic-ref HEAD refs/heads/main
 chown -R git:git /home/git
@@ -88,6 +96,32 @@ nix --extra-experimental-features 'nix-command flakes' eval --impure --json --ex
   "let t = builtins.fetchTree { type = \"git\"; url = \"$URL\"; };
    in { inherit (t) narHash rev lastModified; }"
 """
+
+#: ``nix flake lock`` of a flake with the private input, as a user locks it.
+FLAKE_LOCK = r"""set -e
+printf '%s' "$KEY" > /tmp/k && chmod 600 /tmp/k
+export GIT_SSH_COMMAND="ssh -i /tmp/k -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+mkdir /f && cd /f && printf '%s' "$FLAKE" > flake.nix
+nix --extra-experimental-features 'nix-command flakes' flake lock >&2
+cat flake.lock
+"""
+#: A flake whose output is a disk image file reading the private input.
+IMAGE_FLAKE = """{
+  inputs.app = { url = "git+URL"; flake = false; };
+  outputs = { self, app }: let
+    image = system: derivation {
+      name = "piceli-test-image";
+      inherit system;
+      builder = "/bin/sh";
+      args = [ "-c" "/nix/var/nix/profiles/default/bin/mkdir $out && echo ${toString (builtins.length (builtins.attrNames (builtins.readDir app)))} > $out/nixos.qcow2" ];
+    };
+  in {
+    packages.x86_64-linux.image = image "x86_64-linux";
+    packages.aarch64-linux.image = image "aarch64-linux";
+  };
+}
+"""
+ROOTS = "/piceli-test-gcroots"
 
 
 class Engine:
@@ -172,6 +206,145 @@ def engine() -> Iterator[tuple[BuildHost, Engine]]:
         yield host, found
     finally:
         found.close()
+
+
+class Live:
+    """The build host's store and daemon, its roots_dir, the private repo."""
+
+    def __init__(self, docker: Engine, tag: str, monkeypatch: Any) -> None:
+        import piceli.dev.hosts as hosts
+
+        self.docker, self.tag = docker, tag
+        self.private, public = _deploy_key()
+        self.nixd = f"piceli-test-nixd-{tag}"
+        volume, roots = f"piceli-test-nix-{tag}", f"piceli-test-roots-{tag}"
+        docker.volumes += [volume, roots]
+        docker.run("volume", "create", volume)
+        docker.run("volume", "create", roots)
+        docker.run("run", "--rm", "-v", f"{volume}:/target", "--entrypoint", "sh",
+                   NIXOS, "-c", "cp -a /nix/. /target/")  # fmt: skip
+        docker.run("run", "--rm", "-v", f"{roots}:{ROOTS}", "--entrypoint", "chown",
+                   ALPINE, "65532:65532", ROOTS)  # fmt: skip
+        docker.start(self.nixd, "-v", f"{volume}:/nix", "-v", f"{roots}:{ROOTS}",
+                     "--entrypoint", "nix-daemon", NIXOS)  # fmt: skip
+        docker.wait_file(self.nixd, "/nix/var/nix/daemon-socket/socket")
+        monkeypatch.setattr(
+            hosts, "NIX_MOUNT", ("-v", f"{volume}:/nix:ro", "-e", "NIX_REMOTE=daemon")
+        )
+        monkeypatch.setattr(
+            hosts, "roots_mount", lambda path: ("-v", f"{roots}:{path}")
+        )
+        sshd = docker.start(f"piceli-test-sshd-{tag}", "-e", f"KEY={public}",
+                            "--entrypoint", "sh", ALPINE, "-c", SSHD)  # fmt: skip
+        docker.wait_log(sshd, "Server listening")
+        self.address = docker.run(
+            "inspect", "-f", "{{.NetworkSettings.IPAddress}}", sshd
+        ).strip()
+        self.url = f"ssh://git@{self.address}/home/git/app.git"
+
+    def lock(self, flake: str) -> str:
+        """``flake.lock`` of ``flake`` as ``nix flake lock`` writes it."""
+        return self.docker.run(
+            "run", "--rm", "-e", f"KEY={self.private}", "-e", f"FLAKE={flake}",
+            "--entrypoint", "sh", NIXOS, "-c", FLAKE_LOCK,
+        )  # fmt: skip
+
+    def delete(self, path: str) -> subprocess.CompletedProcess[bytes]:
+        """``nix store delete PATH`` by the daemon's own store."""
+        argv = self.docker.cli.argv(
+            "exec", self.nixd, "nix", "--extra-experimental-features", "nix-command",
+            "store", "delete", path,
+        )  # fmt: skip
+        return subprocess.run(argv, capture_output=True, timeout=300, check=False)
+
+
+@pytest.fixture
+def live(
+    engine: tuple[BuildHost, Engine], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Live:
+    if ENV.get("PICELI_TEST_NIX_STEP_HOST_NIX") == "1":
+        pytest.skip("the roots_dir tests run with a store volume")
+    found = Live(engine[1], secrets.token_hex(4), monkeypatch)
+    monkeypatch.setenv("PICELI_CREDENTIALS_DIR", str(tmp_path / "credentials"))
+    from piceli.dev import nix_inputs
+
+    nix_inputs.save_git_ssh_key("app-read", found.address, found.private)
+    return found
+
+
+def _rooted_host(engine: tuple[BuildHost, Engine]) -> BuildHost:
+    return BuildHost.docker(
+        "nix-host", context=engine[0].context, slots=1, roots_dir=ROOTS
+    )
+
+
+def test_a_fetched_input_is_rooted_on_a_docker_host_until_the_build_ended(
+    engine: tuple[BuildHost, Engine], live: Live, tmp_path: Path
+) -> None:
+    from piceli.dev import nix_inputs
+    from piceli.k8s.cli import builder
+
+    host = _rooted_host(engine)
+    image = ENV.get("PICELI_TEST_NIX_STEP_IMAGE") or BUILDER
+    lock = live.lock(IMAGE_FLAKE.replace("URL", live.url))
+    dev = DevBuilds(node=None, image=image, hosts=[host],
+                    profiles=[DevProfile.for_nix(timeout="2h")])  # fmt: skip
+    publisher = builder._publisher([], dev, host)
+    pairs = nix_inputs.resolve(
+        nix_inputs.covered(lock, declared={"app": "app-read"}), lock
+    )
+    said: list[str] = []
+    with publisher.fetch.roots() as roots:
+        outcome = publisher.fetch(pairs, said.append, roots=roots)
+        assert outcome["state"] == "fetched", said
+        tree = outcome["inputs"][0]["store_path"]
+        assert outcome["inputs"][0]["rooted"] is True, said
+        held = live.delete(tree)
+        assert held.returncode != 0, held.stdout + held.stderr  # still alive
+    released = live.delete(tree)
+    assert released.returncode == 0, released.stderr.decode()[-2000:]
+
+
+def test_dev_nix_build_image_with_a_private_input_on_a_docker_host(
+    engine: tuple[BuildHost, Engine],
+    live: Live,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from typer.testing import CliRunner
+
+    import piceli.k8s.cli.dev_nix as dev_nix
+    from piceli.dev.hosts import ContainerCli
+    from piceli.k8s.cli import app
+    from tests.unit.dev.test_pack import commit, repo
+
+    host = _rooted_host(engine)
+    image = ENV.get("PICELI_TEST_NIX_STEP_IMAGE") or BUILDER
+    flake = IMAGE_FLAKE.replace("URL", live.url)
+    lock = live.lock(flake)
+    assert '"revCount"' in lock  # as the report's lock
+    source = repo(tmp_path / "hosts", {"flake.nix": flake})
+    commit(source, {"flake.lock": lock})
+    monkeypatch.chdir(source)
+    dev = DevBuilds(node=None, image=image, hosts=[host],
+                    profiles=[DevProfile.for_nix(timeout="2h")])  # fmt: skip
+    monkeypatch.setattr(dev_nix, "load_dev", lambda _ref: dev)
+    arch = ContainerCli(host).platform().split("/")[-1]
+    system = {"amd64": "x86_64-linux", "arm64": "aarch64-linux"}[arch]
+    done = CliRunner().invoke(app, [
+        "dev", "nix", "build", f"packages.{system}.image", "--image",
+        "--name", "web-1-image", "--cluster", "infra.py:c", "--host",
+        "nix-host", "--input", "app=app-read", "--json",
+    ])  # fmt: skip
+    assert done.exit_code == 0, done.stdout + done.stderr
+    body = json.loads(done.stdout)
+    assert body["state"] == "built" and body["image"]["format"] == "qcow2"
+    assert live.private.splitlines()[1] not in done.stdout + done.stderr
+    # Kept for infra apply's upload until the next build of the name.
+    held = live.delete(body["store_path"])
+    assert held.returncode != 0, held.stderr.decode()[-2000:]
+    live.docker.run("exec", live.nixd, "rm", f"{ROOTS}/images/web-1-image")
+    assert live.delete(body["store_path"]).returncode == 0
 
 
 def test_builder_serve_fetches_a_private_input_with_the_builder_image(

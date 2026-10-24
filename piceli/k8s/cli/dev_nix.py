@@ -470,14 +470,13 @@ def build(
         )
     import contextlib
 
-    from piceli.tempfiles import temporary_directory
-
     held = contextlib.ExitStack()  # 0.26.0: the inputs' GC roots, until built
     if private:
-        roots = Path(held.enter_context(temporary_directory("nix-input-roots")))
+        fetcher = _fetcher(chosen, chosen_profile)
+        roots = held.enter_context(fetcher.roots())  # 0.26.2: docker roots_dir
         try:
-            _fetch_private(private, chosen, chosen_profile, root_dir, rev, roots)
-        except BaseException:  # a refusal exits: the directory still goes
+            _fetch_private(private, fetcher, root_dir, rev, roots)
+        except BaseException:  # a refusal exits: the roots still go
             held.close()
             raise
     request = RunRequest(
@@ -538,6 +537,7 @@ def build(
                            rev, target,
                            built_on=_built_on(chosen, chosen_profile))
         )  # fmt: skip
+        _keep_image(chosen, chosen_profile, label or "image", store_path)
         say(f"image {found_image['file']} (sha256 {found_image['sha256']})")
         say(f"  Image.from_build(NAME, {found_image['build']!r}) reads it")
     if cache is not None and plan is not None:
@@ -658,21 +658,31 @@ def _release_of(
 
 def _fetch_private(
     private: list[dict[str, str]],
-    host: Any,
-    profile: Any,
+    fetcher: Any,
     root: Path,
     rev: str | None,
-    roots: Path | None = None,
+    roots: Any = None,
 ) -> None:
     """Fetch the private inputs on the build host with this machine's
     credentials, before the build (else ``infra-nix-input-unreachable``)."""
     from piceli.dev.model import DevError
-    from piceli.dev.nix_inputs import fetch_inputs, resolve
-    from piceli.dev.nix_step import step_image
+    from piceli.dev.nix_inputs import resolve
 
     try:
         pairs = resolve(private, _lock_of(root, rev))
-        fetch_inputs(host, step_image(host, profile))(pairs, say, roots=roots)
+        fetcher(pairs, say, roots=roots)
+    except DevError as error:
+        reject(error.code, str(error))
+
+
+def _fetcher(host: Any, profile: Any) -> Any:
+    """The private inputs' fetch on ``host`` (else ``dev-nix-invalid``)."""
+    from piceli.dev.model import DevError
+    from piceli.dev.nix_inputs import fetch_inputs
+    from piceli.dev.nix_step import step_image
+
+    try:
+        return fetch_inputs(host, step_image(host, profile))
     except DevError as error:
         reject(error.code, str(error))
 
@@ -751,6 +761,17 @@ def _gate(covering: Any, root: Path, rev: str, **reach: Any) -> dict[str, Any]:
         return verify(gate, locked_rev(lock, gate.input), history, host=name)
     except PromotionError as error:
         reject(error.code, str(error), **error.detail)
+
+
+def _keep_image(host: Any, profile: Any, name: str, store_path: str) -> None:
+    """0.26.2: on a docker host with ``roots_dir``, a GC root of the image's
+    build there until the next one of ``name``, for ``infra apply``'s upload."""
+    from piceli.dev.nix_inputs import hold_root
+    from piceli.dev.nix_step import step_image
+
+    link = hold_root(host, step_image(host, profile), name, store_path, say)
+    if link is not None:
+        say(f"  kept on {host.name} by the GC root {link}")
 
 
 def _built_on(host: Any, profile: Any) -> dict[str, Any] | None:

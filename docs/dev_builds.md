@@ -679,7 +679,10 @@ image) and the image's file in its store (`store_file`), and `piceli infra
 apply` uploads the image from there, not from this machine
 ({ref}`image uploads <image-uploads>`). The host's Nix store must still hold it: a garbage
 collection in between fails the upload with `infra-image-unavailable`
-before anything is created (build again, or `upload="local"`).
+before anything is created (build again, or `upload="local"`). 0.26.2: on
+a docker host with `BuildHost.docker(roots_dir=...)` (see {doc}`nix_hosts`)
+the build keeps the image's GC root `ROOTS_DIR/images/NAME` there until the
+next build of the same `--name`, so a collection cannot take it.
 
 **Ref pointers.** After the manifest, publishing writes a signed pointer for
 the tag at the commit and for the branch `--ref` names (or `--branch NAME`):
