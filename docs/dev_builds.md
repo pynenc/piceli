@@ -363,7 +363,7 @@ incremental state), runs the command once more, and reports it:
 
 ```json
 "cache": {"lineage": "shop-rust-1a2b3c4d5e/0", "warm": true,
-          "repaired": {"kind": "link", "crates": ["canvas"], "entries": 3,
+          "repaired": {"kind": "link", "crates": ["geometry"], "entries": 3,
                        "first_error": ["error: linking with `cc` failed: exit status: 1", "…"]}}
 ```
 
@@ -374,7 +374,7 @@ To clear by hand:
 ```sh
 piceli dev cache clear --cluster infra.py:lab                      # every free lineage
 piceli dev cache clear --cluster infra.py:lab --lineage shop       # every lineage of a root source
-piceli dev cache clear --cluster infra.py:lab --lineage shop-rust-1a2b3c4d5e/0 --crate canvas
+piceli dev cache clear --cluster infra.py:lab --lineage shop-rust-1a2b3c4d5e/0 --crate geometry
 ```
 
 It runs a short Job on the builder (same user and claim as a run, no
@@ -643,7 +643,10 @@ before the build, with a `git-token` of this machine's Piceli secrets
 (`piceli secrets git-token NAME --host github.com --prompt`; default name
 `git`); with `--publish`, the composition's `NixRelease` of that output
 adds its own (its gate's input, its `inputs=`, the inputs that are its
-`Source`s), and the plan lists them all. The build never sees the token; an
+`Source`s), and the plan lists them all. 0.26.2: the composition is
+`--composition`, else the `--publish` module, else the `--dev` module; a
+build without `--publish` of another output of the flake (an `--image`)
+fetches what every `NixRelease` there covers, as the release path does. The build never sees the token; an
 input that cannot be fetched refuses before the build
 (`infra-nix-input-unreachable`, naming the input, its URL and the
 credential). See {doc}`nix_hosts` (private flake inputs).
@@ -679,7 +682,10 @@ image) and the image's file in its store (`store_file`), and `piceli infra
 apply` uploads the image from there, not from this machine
 ({ref}`image uploads <image-uploads>`). The host's Nix store must still hold it: a garbage
 collection in between fails the upload with `infra-image-unavailable`
-before anything is created (build again, or `upload="local"`).
+before anything is created (build again, or `upload="local"`). 0.26.2: on
+a docker host with `BuildHost.docker(roots_dir=...)` (see {doc}`nix_hosts`)
+the build keeps the image's GC root `ROOTS_DIR/images/NAME` there until the
+next build of the same `--name`, so a collection cannot take it.
 
 **Ref pointers.** After the manifest, publishing writes a signed pointer for
 the tag at the commit and for the branch `--ref` names (or `--branch NAME`):

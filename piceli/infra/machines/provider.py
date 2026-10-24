@@ -307,6 +307,32 @@ class Provider(ABC):
         """A reference to the server's status, if the provider has one."""
         return None
 
+    #: The attributes of a server resource that name its image (dotted for
+    #: a nested one: ``input.image``), for :meth:`server_image_changed`.
+    server_image_keys: tuple[str, ...] = ("image",)
+
+    def server_image_changed(self, change: Mapping[str, Any]) -> bool:
+        """Whether a planned server change (``before``, ``after``,
+        ``after_unknown``) gives it another image (0.26.2)."""
+
+        def get(values: Any, path: str) -> Any:
+            for part in path.split("."):
+                if not isinstance(values, Mapping):
+                    return None
+                values = values.get(part)
+            return values
+
+        before, after = change.get("before"), change.get("after")
+        unknown = change.get("after_unknown")
+        for key in self.server_image_keys:
+            if get(unknown, key) is True or (
+                "." in key and get(unknown, key.rsplit(".", 1)[0]) is True
+            ):
+                return True
+            if get(before, key) != get(after, key):
+                return True
+        return False
+
     # ------------------------------------------------------------ state
     @abstractmethod
     def labels_of(self, values: Mapping[str, Any]) -> Mapping[str, str]:

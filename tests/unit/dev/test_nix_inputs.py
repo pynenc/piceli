@@ -241,7 +241,8 @@ def _unquote(expr: str) -> str:
 
 def test_the_fetch_expression_quotes_any_attribute() -> None:
     locked = {"type": "git", "url": 'https://h/a"b\\c${x}', "rev": REV}
-    assert json.loads(_unquote(nix_fetch.fetch_expr(locked))) == locked
+    expected = {**locked, "shallow": False}  # 0.26.2: the whole history
+    assert json.loads(_unquote(nix_fetch.fetch_expr(locked))) == expected
 
 
 class FakeNix:

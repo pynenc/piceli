@@ -688,18 +688,42 @@ def test_flaky_tests_are_span_events() -> None:
 
 
 def test_a_collector_that_is_down_or_slow_never_slows_the_train(
-    toy: Toy, tmp_path: Path
+    toy: Toy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # What the export costs the train is the time the train's own thread
+    # spends in the sink: making it, each event, the flush at the end. It is
+    # measured there, not as the whole run less its duration, which on a
+    # loaded machine also counts the slower loading and Git work around it.
+    spent: dict[str, list[float]] = {"made": [], "event": [], "close": []}
+
+    def timed(kind: str, method: Any) -> Any:
+        def wrapper(self: TrainTelemetry, *args: Any, **kwargs: Any) -> Any:
+            began = time.monotonic()
+            try:
+                return method(self, *args, **kwargs)
+            finally:
+                spent[kind].append(time.monotonic() - began)
+
+        return wrapper
+
+    for kind, name in (("made", "__init__"), ("event", "__call__"), ("close", "close")):
+        monkeypatch.setattr(
+            TrainTelemetry, name, timed(kind, getattr(TrainTelemetry, name))
+        )
     with receiver(delay=30) as (url, _requests):
         observe_spec(toy, f'telemetry=Otlp({url!r}, protocol="http/protobuf"),')
         good(toy, "feat-a")
-        began = time.monotonic()
         status, body, err = run(toy, "--branches", "feat-a")
-        slow = time.monotonic() - began
     assert status == 0 and body["ok"] is True
     assert err.count("[train-telemetry-failed]") == 1
-    # The run's own work takes a few seconds; the export adds at most ~2.5 s.
-    assert slow < body["duration"] + 6
+    timeout = config_for(Otlp(url, protocol="http/protobuf"), {}).timeout  # type: ignore[union-attr]
+    assert len(spent["made"]) == 1 and len(spent["event"]) > 3
+    # The collector holds every request for 30 s: one request sent in line
+    # would cost the train the whole timeout (three in line: three times
+    # it). Queued, all of them together cost less than one.
+    assert sum(spent["made"] + spent["event"]) < timeout
+    # The flush waits at most the timeout (plus a little), never the 30 s.
+    assert spent["close"] and max(spent["close"]) < timeout + 2
     # Nobody listening at all.
     sink = TrainTelemetry(
         config_for(Otlp("http://127.0.0.1:9", protocol="http/protobuf"), {})
@@ -707,9 +731,8 @@ def test_a_collector_that_is_down_or_slow_never_slows_the_train(
     for n in range(500):  # more than the queue holds
         sink({"event": "trial-started", "trial": n})
         sink({"event": "trial-finished", "trial": n, "verdict": "passed"})
-    began = time.monotonic()
     sink.close()
-    assert time.monotonic() - began < 3
+    assert spent["close"][-1] < timeout + 2
     assert sink.exporter.dropped > 0
 
 

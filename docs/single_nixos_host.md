@@ -71,6 +71,9 @@ web = Server(
     ssh_keys=["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyOnly owner@example.org"],
     # Read once, at creation: a pre-authorized tailnet key (step 2).
     user_data=UserData("web-1-boot"),
+    # A new image recreates the server with the current key (a rebuild in
+    # place would boot with the spent one); the port keeps its addresses.
+    on_image_change="replace",
     ssh=Ssh(user="root", address="web-1.tail-example.ts.net"),  # over the tailnet
 )
 
@@ -152,6 +155,16 @@ networking.firewall.trustedInterfaces = [ "tailscale0" ];  # SSH on the tailnet 
 On an image with cloud-init (Debian, Ubuntu), store a cloud-config
 instead: `#cloud-config`, then `runcmd: [[tailscale, up, --auth-key=...]]`
 after installing Tailscale.
+
+The key is single-use, so the server declares `on_image_change="replace"`
+(0.26.2): a new first-boot image (a new `Image` checksum) replaces the
+server rather than rebuilding it in place, which would boot it with its
+original, spent key and leave it off the tailnet (and SSH with it). Store a
+fresh key with `piceli secrets user-data web-1-boot --file PATH` before
+that plan; the plan needs it (`infra-user-data-missing`) and the server
+comes back on the same port, with the same addresses. `piceli infra
+replace web_1.py:infra web-1` does the same on request
+({ref}`a new image: rebuilt or replaced <server-image-change>`).
 
 ## Steps
 

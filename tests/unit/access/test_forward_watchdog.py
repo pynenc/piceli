@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.ports import worker_port
+
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32", reason="process groups and signals are POSIX"
 )
@@ -39,13 +41,14 @@ from pathlib import Path
 args = sys.argv[1:]
 port = int(args[args.index("port-forward") + 2].split(":", 1)[0])
 Path(os.environ["FAKE_PIDS"], str(os.getpid())).write_text(str(port))
+held = []  # a healthy forward keeps its connections open
 with socket.socket() as server:
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind(("127.0.0.1", port))
     server.listen(8)
     while True:
         connection, _ = server.accept()
-        connection.close()
+        held.append(connection)
 """
 
 # A parent that starts one forward-like child in its own session, registers
@@ -120,12 +123,6 @@ environments = [
     )
 ]
 """
-
-
-def _free_port() -> int:
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        return int(listener.getsockname()[1])
 
 
 def _accepting(port: int) -> bool:
@@ -246,7 +243,7 @@ def test_a_killed_access_with_ui_leaves_no_kubectl_and_frees_its_ports(
         "XDG_STATE_HOME": str(tmp_path / "state"),
         "KUBECONFIG": str(tmp_path / "no-such-kubeconfig"),
         "FAKE_PIDS": str(pids_dir),
-        "FAKE_UI_PORT": str(_free_port()),
+        "FAKE_UI_PORT": str(worker_port()),
     }
     env.pop("PICELI_IN_CLUSTER", None)
     saved = subprocess.run(

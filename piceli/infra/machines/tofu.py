@@ -164,6 +164,11 @@ class Tofu:
     def version_text(self) -> str:
         return ".".join(map(str, self.version))
 
+    def redaction(self, env: Mapping[str, str]) -> list[str]:
+        """The values a run's output is redacted of: the known secrets and
+        the sensitive variables of ``env``."""
+        return [*self.secrets, *(v for k, v in env.items() if _secret_name(k))]
+
     def run(
         self,
         args: Sequence[str],
@@ -183,7 +188,7 @@ class Tofu:
             {"TF_IN_AUTOMATION": "1", "TF_INPUT": "0", "CHECKPOINT_DISABLE": "1"}
         )
         child.update(env)
-        secrets = [*self.secrets, *(v for k, v in env.items() if _secret_name(k))]
+        secrets = self.redaction(env)
         process = subprocess.Popen(
             [str(self.path), *args],
             cwd=cwd,

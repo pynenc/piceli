@@ -323,17 +323,17 @@ def test_the_command_runs_once_the_api_server_is_cut_off(
 def test_a_corrupted_cached_crate_is_cleared_and_the_command_runs_once_more(
     tmp_path: Path,
 ) -> None:
-    """0.19: the first run blames a truncated artifact of ``canvas``
+    """0.19: the first run blames a truncated artifact of ``geometry``
     in the lineage's target; it is removed and the second run passes."""
     script = "\n".join(
         [
-            'obj="$CARGO_TARGET_DIR/debug/incremental/canvas-3k2j1/s-1/x.o"',
+            'obj="$CARGO_TARGET_DIR/debug/incremental/geometry-3k2j1/s-1/x.o"',
             'if [ -f "$obj" ]; then',
-            "  echo '   Compiling canvas v0.4.0 (/x)'",
+            "  echo '   Compiling geometry v0.4.0 (/x)'",
             "  echo 'error: linking with `cc` failed: exit status: 1'",
-            "  echo '  = note: rust-lld: error: undefined hidden symbol: canvas::f'",
+            "  echo '  = note: rust-lld: error: undefined hidden symbol: geometry::f'",
             '  echo "          >>> referenced by $obj"',
-            "  echo 'error: could not compile `canvas` (bin \"canvas\") due to 1 previous error'",
+            "  echo 'error: could not compile `geometry` (bin \"geometry\") due to 1 previous error'",
             "  exit 101",
             "fi",
             "echo '    Finished `dev` profile [unoptimized] target(s) in 1.0s'",
@@ -342,17 +342,17 @@ def test_a_corrupted_cached_crate_is_cleared_and_the_command_runs_once_more(
     data = _archive({"app/build.sh": script})
     first, _ = _run(tmp_path, data, _spec(data, ["true"]), "seed")
     poisoned = Path(first["cache"]["lineage_dir"]) / "target"
-    (poisoned / "debug/incremental/canvas-3k2j1/s-1").mkdir(parents=True)
-    (poisoned / "debug/incremental/canvas-3k2j1/s-1/x.o").write_bytes(b"\0" * 7)
+    (poisoned / "debug/incremental/geometry-3k2j1/s-1").mkdir(parents=True)
+    (poisoned / "debug/incremental/geometry-3k2j1/s-1/x.o").write_bytes(b"\0" * 7)
     (poisoned / "debug/deps").mkdir(parents=True)
     (poisoned / "debug/deps/libapp-1.rlib").write_text("kept")
     result, lines = _run(tmp_path, data, _spec(data, ["sh", "build.sh"]), "repair")
     assert result["state"] == "passed", result
     repaired = result["cache"]["repaired"]
-    assert repaired["kind"] == "link" and repaired["crates"] == ["canvas"]
+    assert repaired["kind"] == "link" and repaired["crates"] == ["geometry"]
     assert repaired["entries"] == 1
     assert repaired["first_error"][0].startswith("error: linking with")
-    assert any("corrupted cache (link): cleared canvas" in line for line in lines)
+    assert any("corrupted cache (link): cleared geometry" in line for line in lines)
     assert (poisoned / "debug/deps/libapp-1.rlib").exists()
 
 

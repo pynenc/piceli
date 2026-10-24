@@ -1390,11 +1390,14 @@ class Publisher:
             raise DevError("dev-nix-cache-invalid", "no key for the plan's cache")
         from piceli.tempfiles import temporary_directory
 
-        # 0.26.0: the fetched inputs' GC roots live here until the build ended.
-        with temporary_directory("nix-input-roots") as roots:
+        # 0.26.0: the fetched inputs' GC roots live here until the build ended
+        # (0.26.2: on a docker host, under its roots_dir).
+        held = getattr(self.fetch, "roots", None)
+        with held() if held else temporary_directory("nix-input-roots") as roots:
             self.fetch_inputs(
-                plan, checkout, say, stage, controller=controller, roots=Path(roots)
-            )
+                plan, checkout, say, stage, controller=controller,
+                roots=roots if held else Path(roots),
+            )  # fmt: skip
             with stage("build"):
                 store_path = self.build(checkout, plan["attribute"], say)
         with stage("publish"):
@@ -1414,7 +1417,7 @@ class Publisher:
         stage: Callable[[str], Any],
         *,
         controller: Mapping[str, Any] | None = None,
-        roots: Path | None = None,
+        roots: Any = None,
     ) -> None:
         """Fetch the plan's private inputs on this host, before any build
         (0.26.0): each one as ``flake.lock`` of the checkout locks it.

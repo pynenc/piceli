@@ -33,7 +33,11 @@ ever reaches the input it was given for:
 With ``roots`` (a directory of the build host the client removes when the
 build ended; a native host's), each fetched tree also gets an indirect GC
 root there, so a garbage collection between the fetch and the build cannot
-take it. Nix's fetcher cache (``XDG_CACHE_HOME``) is in the temporary directory
+take it (on a docker host, 0.26.2: a directory under its
+``BuildHost.roots_dir``, mounted at the same path, so its daemon sees the
+links; ``{"release": DIR}`` removes it after the build, and ``{"hold":
+{"link", "path"}}`` roots one store path, the kept image of an ``--image``
+build). Nix's fetcher cache (``XDG_CACHE_HOME``) is in the temporary directory
 too, so no clone of a private repository stays on the host; the directory is
 removed on every exit. The fetched trees land in the host's store (through
 its daemon), where the build finds them by their ``narHash`` without
@@ -87,9 +91,21 @@ def nix_string(text: str) -> str:
     return f'"{escaped}"'
 
 
+def fetch_attrs(locked: Mapping[str, Any]) -> dict[str, Any]:
+    """The ``fetchTree`` attributes of a locked node, for every path that
+    fetches one (0.26.2): as ``flake.lock`` locks it, except that a ``git``
+    input is always fetched with its whole history (``shallow = false``,
+    whatever the lock or Nix's default), as ``nix flake lock`` fetched it, so
+    its ``revCount`` is checked too."""
+    attrs = dict(locked)
+    if attrs.get("type") == "git":
+        attrs["shallow"] = False
+    return attrs
+
+
 def fetch_expr(locked: Mapping[str, Any]) -> str:
     """The expression whose value is the store path of ``locked``'s tree."""
-    body = json.dumps(dict(locked), sort_keys=True)
+    body = json.dumps(fetch_attrs(locked), sort_keys=True)
     return f"(builtins.fetchTree (builtins.fromJSON {nix_string(body)})).outPath"
 
 
@@ -254,6 +270,7 @@ def fetch(
                 # Held until the client removes ``roots`` after the build: a
                 # garbage collection in between cannot take the tree.
                 link = os.path.join(roots, f"{index}-{name or 'input'}")
+                os.makedirs(roots, mode=0o700, exist_ok=True)
                 rooted = runner(root_argv(nix, link, path), env=env,
                                 capture_output=True, timeout=600)  # fmt: skip
                 entry["rooted"] = rooted.returncode == 0
@@ -262,6 +279,35 @@ def fetch(
                          "collection before the build would refetch it")  # fmt: skip
             done.append(entry)
     return {"state": "fetched", "inputs": done}
+
+
+def run(
+    request: Mapping[str, Any],
+    *,
+    runner: Runner = subprocess.run,
+    emit: Callable[[str], None] = lambda line: print(line, file=sys.stderr),
+    environ: Mapping[str, str] = os.environ,
+) -> dict[str, Any]:
+    """One request: ``release`` a roots directory, ``hold`` one root, else
+    :func:`fetch` the inputs (0.26.2)."""
+    released = request.get("release")
+    if isinstance(released, str) and os.path.isabs(released):
+        shutil.rmtree(released, ignore_errors=True)
+        return {"state": "released"}
+    hold = request.get("hold")
+    if isinstance(hold, Mapping):
+        link, path = str(hold.get("link") or ""), str(hold.get("path") or "")
+        nix = find_nix(environ)
+        if not (os.path.isabs(link) and path.startswith("/nix/store/")) or not nix:
+            return {"state": "failed", "detail": "nothing to hold, or no nix"}
+        os.makedirs(os.path.dirname(link), mode=0o700, exist_ok=True)
+        done = runner(root_argv(nix, link, path), capture_output=True, timeout=600)
+        if done.returncode != 0:
+            for line in (done.stderr or b"").decode("utf-8", "replace").splitlines():
+                emit(line)
+            return {"state": "failed", "detail": "nix refused the root"}
+        return {"state": "held"}
+    return fetch(request, runner=runner, emit=emit, environ=environ)
 
 
 def main() -> int:
@@ -273,9 +319,9 @@ def main() -> int:
         request = json.loads(sys.stdin.read())
     except ValueError:
         request = {}
-    outcome = fetch(request if isinstance(request, dict) else {})
+    outcome = run(request if isinstance(request, dict) else {})
     print(RESULT_MARKER + json.dumps(outcome, sort_keys=True), flush=True)
-    return 0 if outcome.get("state") == "fetched" else 1
+    return 0 if outcome.get("state") in ("fetched", "held", "released") else 1
 
 
 if __name__ == "__main__":  # pragma: no cover - runs on the host

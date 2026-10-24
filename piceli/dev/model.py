@@ -26,6 +26,8 @@ STATUS_CONFIG_MAP = "piceli-dev-status"
 
 _LABEL = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
 _PINNED = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
+#: ``BuildHost.roots_dir``: an absolute path, no ``..``, no ``:`` (a mount).
+_ROOTS_DIR = re.compile(r"(?!.*/\.\.?(?:/|$))/[A-Za-z0-9._/-]*[A-Za-z0-9._-]")
 _TOOL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")
 _ENV = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 _RESERVED_ENV = {"CARGO_TARGET_DIR", "CARGO_HOME", "HOME", "PICELI_DEV_SPEC"}
@@ -232,6 +234,13 @@ class BuildHost:
         then implies ``--publish-only``). ``dev run``, ``dev nix build`` and
         ``builder serve`` never pick it by default; ``--host`` still names
         it.
+    :param roots_dir: ``docker`` only (0.26.2): an absolute directory of the
+        host, writable by uid 65532, that its Nix steps bind-mount at the same
+        path, read-write, to keep GC roots the host's daemon honours: a
+        fetched private input's, from the fetch until the build ended, and
+        the last image of each ``--image`` build's name, for ``infra
+        apply``'s upload. ``None``: no root on a docker host (a garbage
+        collection in that window takes the path).
     """
 
     name: str
@@ -248,6 +257,7 @@ class BuildHost:
     quarantine_after: int | None = QUARANTINE_AFTER
     quarantine_window: str = QUARANTINE_WINDOW
     runs: bool = True
+    roots_dir: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _LABEL.fullmatch(self.name):
@@ -306,6 +316,13 @@ class BuildHost:
         object.__setattr__(self, "platforms", platforms)
         if self.image is not None and not _PINNED.fullmatch(self.image):
             raise _invalid(f"host {self.name}: image must be pinned by digest")
+        if self.roots_dir is not None and (
+            self.kind != "docker" or not _ROOTS_DIR.fullmatch(str(self.roots_dir))
+        ):
+            raise _invalid(
+                f"host {self.name}: roots_dir is an absolute path of the host "
+                "(docker hosts only)"
+            )
 
     @classmethod
     def docker(
@@ -342,6 +359,7 @@ class BuildHost:
                     "platforms": list(self.platforms),
                     "state_dir": self.state_dir,
                     "image": self.image,
+                    "roots_dir": self.roots_dir,
                     # 0.22.0: only when changed, so earlier declarations keep
                     # their hashes.
                     "quarantine_after": self.quarantine_after
@@ -381,6 +399,7 @@ class BuildHost:
             quarantine_after=value.get("quarantine_after", QUARANTINE_AFTER),
             quarantine_window=str(value.get("quarantine_window") or QUARANTINE_WINDOW),
             runs=bool(value.get("runs", True)),
+            roots_dir=value.get("roots_dir"),
         )
 
 

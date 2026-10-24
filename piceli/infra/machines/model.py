@@ -55,6 +55,8 @@ _LABEL_KEY = re.compile(
 )
 _LABEL_VALUE = re.compile(r"(?:[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?")
 _TOKEN = re.compile(r"[A-Za-z0-9][-A-Za-z0-9_.]{0,127}")
+#: ``Server(on_image_change=)``: rebuilt in place (the default) or replaced.
+ON_IMAGE_CHANGE = ("rebuild", "replace")
 _HOST = re.compile(r"[A-Za-z0-9](?:[-A-Za-z0-9.]{0,251}[A-Za-z0-9])?")
 _USER = re.compile(r"[a-z_][-a-z0-9_]{0,31}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -750,6 +752,15 @@ class Server:
     :param labels: Extra provider labels (``piceli.io/`` keys are Piceli's).
     :param user_data: :class:`UserData` given to the server at creation only
         (providers with ``supports_user_data``).
+    :param on_image_change: What a new ``image`` does to the server (0.26.2).
+        ``"rebuild"`` (the default) lets the provider update the image in
+        place: OpenStack rebuilds the server with Nova, which boots it with
+        its *original* user data (a plan doing so for a server with
+        ``user_data`` warns). ``"replace"`` destroys the server and creates
+        it again (``tofu plan -replace``), on the same persistent port
+        (``PrimaryIp``: same addresses), with the current user data, which
+        the plan then needs, as for a create. Choose it for a host that
+        bootstraps with a one-time key.
     """
 
     name: str
@@ -766,6 +777,7 @@ class Server:
     cluster: Cluster | None = None
     labels: Mapping[str, str] = field(default_factory=dict)
     user_data: UserData | None = None
+    on_image_change: str = "rebuild"
 
     def __post_init__(self) -> None:
         from piceli.infra import Cluster
@@ -846,6 +858,11 @@ class Server:
                 raise _invalid(
                     f"Server {self.name}: {self.provider.name} takes no user data here"
                 )
+        if self.on_image_change not in ON_IMAGE_CHANGE:
+            raise _invalid(
+                f"Server {self.name}: on_image_change is "
+                + " or ".join(repr(v) for v in ON_IMAGE_CHANGE)
+            )
         self.provider.check_server(self)
 
     def __hash__(self) -> int:
@@ -869,6 +886,12 @@ class Server:
             "install": list(self.install.argv) if self.install is not None else None,
             "cluster": self.cluster.name if self.cluster is not None else None,
             "user_data": self.user_data.secret if self.user_data else None,
+            # Only when chosen: the default leaves descriptions as they were.
+            **(
+                {"on_image_change": self.on_image_change}
+                if self.on_image_change != "rebuild"
+                else {}
+            ),
         }
 
 

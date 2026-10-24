@@ -754,6 +754,10 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["infra", "destroy", "no_such_machines:infra"],
         "infra-not-found",
     ),
+    "infra replace": (
+        lambda p: ["infra", "replace", "no_such_machines:infra", "web-1"],
+        "infra-not-found",
+    ),
     "infra status": (
         lambda p: ["infra", "status", "no_such_machines:infra"],
         "infra-not-found",

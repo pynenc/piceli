@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import urllib.parse
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
@@ -616,37 +617,121 @@ def run_fetcher(
     raise _refuse(f"{entry['input']} {entry['url']} ({entry['tried']}): {detail}")
 
 
-def fetch_inputs(host: Any, image: str | None) -> Callable[..., dict[str, Any]]:
-    """``(pairs, say, controller=None, roots=None) -> outcome``: fetch the
-    covered inputs (:func:`resolve`) on ``host`` with this machine's
-    credentials (:func:`plan_fetch`); on a native host, with ``roots`` (a
-    directory the caller removes when the build ended), each tree gets a GC
-    root there. ``image``: the build run's
-    (:func:`piceli.dev.nix_step.step_image`).
+class InputFetch:
+    """``fetch(pairs, say, controller=None, roots=None) -> outcome``: fetch
+    the covered inputs (:func:`resolve`) on the host with this machine's
+    credentials (:func:`plan_fetch`); with ``roots`` (from :meth:`roots`),
+    each tree gets a GC root there, held until the build ended."""
 
-    :raises DevError: ``dev-nix-invalid``, now, for a docker host without
-        an image (not a docker error at run time)."""
-    argv = fetcher_argv(host, image)
+    def __init__(
+        self, host: Any, image: str | None, runner: Callable[..., Any] | None = None
+    ) -> None:
+        self.host, self.image, self.runner = host, image, runner
+        self.argv = fetcher_argv(host, image)
 
-    def run(
+    def roots(self) -> Any:
+        """A context of where this build's input roots live, removed when it
+        exits: a temporary directory on a native host, a directory under
+        ``BuildHost.roots_dir`` on a docker host (0.26.2; removed by a step
+        there), else ``None`` (no root)."""
+        import contextlib
+        import secrets
+        from pathlib import Path
+
+        @contextlib.contextmanager
+        def held() -> Any:
+            if self.host.kind == "native":
+                from piceli.tempfiles import temporary_directory
+
+                with temporary_directory("nix-input-roots") as directory:
+                    yield Path(directory)
+                return
+            roots_dir = getattr(self.host, "roots_dir", None)
+            if self.host.kind != "docker" or not roots_dir:
+                yield None
+                return
+            path = f"{roots_dir.rstrip('/')}/inputs-{secrets.token_hex(8)}"
+            try:
+                yield path
+            finally:
+                self._step({"release": path}, lambda _line: None)
+
+        return held()
+
+    def _step(
+        self, request: Mapping[str, Any], say: Callable[[str], None]
+    ) -> subprocess.CompletedProcess[bytes] | None:
+        try:
+            return (self.runner or subprocess.run)(
+                self.argv, input=json.dumps(dict(request)).encode(),
+                capture_output=True, timeout=600,
+            )  # fmt: skip
+        except (OSError, subprocess.TimeoutExpired) as error:
+            say(f"warning: the GC root step did not run ({type(error).__name__})")
+            return None
+
+    def __call__(
+        self,
         pairs: Sequence[tuple[Mapping[str, str], Mapping[str, Any]]],
         say: Callable[[str], None],
         controller: Mapping[str, Any] | None = None,
         roots: Any = None,
     ) -> dict[str, Any]:
         request, tried = plan_fetch(pairs, controller=controller)
-        if roots is not None and host.kind == "native":
-            # GC roots of the fetched trees, held until the caller removes
-            # ``roots`` after the build. A docker host's fetch step has no
-            # directory of that host to keep a root in.
+        if roots is not None:
             request["roots"] = str(roots)
         for item in tried:
             say(f"input {item['input']} {item['url']} ({item['tried']})")
-        outcome = run_fetcher(argv, request, tried, say=say)
+        outcome = run_fetcher(self.argv, request, tried, say=say, runner=self.runner)
         del request
         return outcome
 
-    return run
+
+def fetch_inputs(
+    host: Any, image: str | None, runner: Callable[..., Any] | None = None
+) -> InputFetch:
+    """The fetch of private inputs on ``host`` (:class:`InputFetch`).
+    ``image``: the build run's (:func:`piceli.dev.nix_step.step_image`).
+
+    :raises DevError: ``dev-nix-invalid``, now, for a docker host without
+        an image (not a docker error at run time)."""
+    return InputFetch(host, image, runner)
+
+
+def hold_root(
+    host: Any,
+    image: str | None,
+    name: str,
+    store_path: str,
+    say: Callable[[str], None],
+    *,
+    runner: Callable[..., Any] | None = None,
+) -> str | None:
+    """Root ``store_path`` (an ``--image`` build's) as ``ROOTS_DIR/images/NAME``
+    on a docker host with ``roots_dir`` (0.26.2), until the next build of
+    ``name`` replaces it, so a garbage collection before ``infra apply``'s
+    upload cannot take it. The link, or ``None`` (no ``roots_dir``, or Nix
+    refused: said)."""
+    from piceli.dev.nix_fetch import RESULT_MARKER
+
+    roots_dir = getattr(host, "roots_dir", None)
+    if getattr(host, "kind", None) != "docker" or not roots_dir:
+        return None
+    link = f"{roots_dir.rstrip('/')}/images/{name}"
+    done = InputFetch(host, image, runner)._step(
+        {"hold": {"link": link, "path": store_path}}, say
+    )
+    lines = (done.stdout or b"").decode("utf-8", "replace") if done else ""
+    for line in lines.splitlines():
+        if line.startswith(RESULT_MARKER):
+            try:
+                if json.loads(line[len(RESULT_MARKER) :]).get("state") == "held":
+                    return link
+            except (ValueError, AttributeError):
+                pass
+    say(f"warning: no GC root for image {name} on {host.name}; a garbage "
+        "collection before infra apply's upload would take it")  # fmt: skip
+    return None
 
 
 # ---------------------------------------------------------------- per job

@@ -4,6 +4,55 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.26.2
+
+**Upgrade notes**
+
+- **Nix hosts: render the host module again and switch once.** The host
+  agent now activates a new system in a new order (below). A host keeps the
+  old agent until its module is rendered again and switched to one time.
+  Deploy stages are now `activate`, `checks` and `boot` (were `switch` and
+  `checks`).
+- **`secrets status` exits 1 for S3 key pairs the owner has not stored.**
+  An S3 (object storage) key pair the owner makes by hand
+  (`NixCache(write_credentials=, read_credentials=)`) was `pending`; it is
+  now `missing` until stored. Pairs the next `infra apply` creates stay
+  `pending`.
+
+**Changes**
+
+- **A Nix host makes a new system the boot default only after its checks
+  pass.** The agent records a pending attempt, activates the new system
+  for this boot only (`switch-to-configuration test`), runs the checks, and
+  then sets the profile and the boot default. A failed check activates the
+  previous system again. An agent that died mid-attempt rolls it back on
+  its next start (`host-deploy-interrupted`), and a reboot comes up on the
+  previous system.
+- **`piceli host status` and `wait` never hang on SSH (Secure Shell).** A
+  status read connects within 10 s and gives up after 30 s. A session that
+  breaks after login is the new `host-ssh-failed`; `host-unreachable` stays
+  for no session at all. `wait` keeps waiting until `--timeout`.
+- **Replace a server instead of rebuilding it.**
+  `Server(on_image_change="replace")` recreates a server whose image
+  changed, on the same IP addresses and with its current user data (the
+  first-boot secret). The default, `"rebuild"`, rebuilds it in place as
+  before, and now warns when the server has user data, which a rebuild
+  reuses although it was single-use. `piceli infra replace REF SERVER`
+  replaces one server on request, through the usual plan and approval.
+- **`infra apply` reads the OpenTofu state once** instead of three times
+  (each read costs about 1 s of CPU).
+- **Garbage-collection roots on docker build hosts.**
+  `BuildHost.docker(roots_dir=...)` keeps what a build fetched or made safe
+  from Nix's garbage collector while it is needed: a fetched private input
+  until the build ends, an `--image` build until the next build of that
+  name.
+- **`dev nix build` fetches the private inputs the release path fetches**,
+  so a plain `--image` build of a flake with private inputs no longer fails.
+- **Tests:** the forward, telemetry and parallel-train tests no longer fail
+  on a busy machine.
+- **Docs:** a shorter roadmap, one object-model page instead of three, and
+  unused images removed.
+
 ## Version 0.26.1
 
 - **Private flake inputs are fetched on a docker build host.** The fetch

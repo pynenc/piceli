@@ -13,7 +13,10 @@ What each declared object becomes:
   one of ``flavors=``). ``Server(user_data=UserData(...))`` sets
   ``user_data`` from a sensitive variable, ignored after creation
   (``lifecycle.ignore_changes``); the provider keeps only its SHA-1 in the
-  state.
+  state. A new image is an in-place Nova rebuild (``image_id`` updated),
+  which keeps the original user data; ``Server(on_image_change="replace")``
+  (0.26.2) makes the plan replace the server instead (``-replace``,
+  destroyed first, then created on its port with the current user data).
 - ``Server(ipv4=PrimaryIp(...))`` → ``openstack_networking_port_v2`` on the
   public network, holding the public IPv4 (and the IPv6 the network gives):
   the port asks for no address, so Neutron gives it one from an IPv4 subnet
@@ -666,6 +669,9 @@ class OpenStack(Provider):
 
     def server_id(self, server: Resource) -> str:
         return server.ref("id")
+
+    #: A new ``image_id`` (or ``image_name``) is an in-place Nova rebuild.
+    server_image_keys = ("image_id", "image_name")
 
     # ------------------------------------------------------------ state
     def labels_of(self, values: Mapping[str, Any]) -> Mapping[str, str]:

@@ -102,6 +102,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli infra install`](#cli-infra-install) | Run the server's install hook (its rendered command, approved by digest). | none | yes |
 | [`piceli infra plan`](#cli-infra-plan) | Plan the declared machines with OpenTofu; print the changes, estimate and plan hash. | none | no |
 | [`piceli infra register`](#cli-infra-register) | Wait for the server's k3s and register it as its Cluster, or pin its SSH host keys (approved by digest). | reads | yes |
+| [`piceli infra replace`](#cli-infra-replace) | Replace a server: destroyed, then created on its port with its current user data. | none | yes |
 | [`piceli infra status`](#cli-infra-status) | Servers, addresses, installs, cluster registrations and cost (read-only). | none | no |
 | [`piceli inputs record`](#cli-inputs-record) | Capture each declared source (or the ``--only`` ones) and write a lock. | none | no |
 | [`piceli inputs verify`](#cli-inputs-verify) | Recapture the sources and compare them with the lock (exit 1 on drift). | none | no |
@@ -2316,6 +2317,30 @@ Wait for the server's k3s and register it as its Cluster, or pin its SSH host ke
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
 - **Notes:** Without --approve prints the cluster, profile and the SSH host-key fingerprints with a digest (exit 3); approving pins those keys (StrictHostKeyChecking against them only). The kubeconfig's server is set to Cluster(api=); it is never printed or put in Git. Exit 1 (infra-k3s-not-ready) when k3s does not answer with a Ready node within --wait.
+
+(cli-infra-replace)=
+### `piceli infra replace`
+
+Replace a server: destroyed, then created on its port with its current user data.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `REF` | text | required |  |
+| `SERVER` | text | required |  |
+| `--approve` | text |  | The plan hash (or digest) to execute |
+| `--tofu` | text |  | The tofu binary (default: $PICELI_TOFU, else tofu on PATH) |
+| `--verbose` | boolean | `False` | When OpenTofu fails, print its whole output (redacted) on stderr |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Infrastructure), tofu binary, credentials (provider token, state passphrase, the server's user data)
+- **Writes:** resources at the provider (the server destroyed and created; any other declared change), encrypted OpenTofu state, state directory records (inventory.json)
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Without --approve it plans (exit 3) with replaced and approve_command (piceli infra replace ... SERVER --approve HASH); the hash covers the replacement, so an infra apply approval never runs it. The server is destroyed first (its disk is gone), then created on its PrimaryIp port (same addresses) with its current UserData, which must be stored (infra-user-data-missing). An undeclared server is infra-server-unknown. Failures and partial applies as for infra apply.
 
 (cli-infra-status)=
 ### `piceli infra status`

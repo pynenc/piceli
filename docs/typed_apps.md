@@ -747,7 +747,7 @@ piceli render [TARGET] [--spec release.toml] [--namespace NS] [--format yaml|jso
 | `--format` | `yaml` (default, multi-document) or `json` (one object). |
 | `--env` | Renders one environment of the App (new in 0.7.0, see {doc}`environments`); a `Pipeline` also uses its target for it. JSON output adds `"environment"`. |
 | `--diff-env` | With `--env`: prints the typed difference between the two environments instead of manifests (text, or one `{"state": "diffed", …}` object with `--format json`). |
-| `--out DIR` | Writes one YAML file per object into `DIR` instead of printing, and prints one `{"state": "written", …}` object (new in the next release, see {doc}`gitops`). |
+| `--out DIR` | Writes one YAML file per object into `DIR` instead of printing, and prints one `{"state": "written", …}` object (see {doc}`gitops`). |
 | `--secrets` | With `--out`: `refuse` (default) a Secret object, or `external` to leave Secrets out because they are provided outside the files. |
 | Side effects | Imports the target module and reads the spec and the receipts it names. It never contacts a cluster or reads a kubeconfig, never reads or generates secret values and writes files only with `--out DIR` (one YAML file per object for a Git directory; see {doc}`gitops`). |
 | Retry | Always safe. |

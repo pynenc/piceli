@@ -6,17 +6,46 @@
 Defining objects with templates, `kubernetes` client models or YAML/JSON is stable: existing definitions keep loading within a major version. See the {doc}`../roadmap` for every feature's status.
 ```
 
-The Kubernetes model in Piceli offers a flexible and powerful way to define and manage your Kubernetes objects. Piceli supports several methods for defining Kubernetes objects, catering to different preferences and project requirements. These include using Piceli templates, the official Kubernetes Python library, and YAML or JSON files.
+Piceli plans and applies Kubernetes objects defined in any of three ways, and
+they can be mixed in one composition. For whole applications, start with the
+typed `App` ({doc}`../typed_apps`), which builds on the same model.
 
-## Defining Kubernetes Objects
+## Piceli templates
 
-Piceli provides various avenues for defining Kubernetes objects:
+Python classes for the common kinds (Deployment, Service, ConfigMap, Job,
+CronJob, RBAC and more), with defaults and validation. See
+{doc}`piceli_templates/index`.
 
-- **Piceli Templates**: Utilize Python classes to define Kubernetes objects in a programmatic and expressive manner. For whole applications, the typed `App` (see {doc}`../typed_apps`) builds on the same model and is the recommended starting point.
+## Kubernetes client models
 
-- **Kubernetes Python Library**: Leverage the official Kubernetes Python client library for defining objects. This approach offers direct access to the Kubernetes API through Python.
+Objects of the official
+[Kubernetes Python client](https://github.com/kubernetes-client/python)
+(`kubernetes.client.V1Service` and the rest) are accepted as they are:
 
-- **YAML and JSON Files**: Define your Kubernetes objects in YAML or JSON format. Piceli can load and manage these objects directly, making it a versatile option for projects that prefer configuration files.
+```python
+from kubernetes import client
+
+service = client.V1Service(
+    api_version="v1",
+    kind="Service",
+    metadata=client.V1ObjectMeta(name="api", labels={"app": "api"}),
+    spec=client.V1ServiceSpec(
+        ports=[client.V1ServicePort(port=80, target_port=8080)],
+        selector={"app": "api"},
+    ),
+)
+```
+
+## YAML and JSON files
+
+Load a folder of manifests with `piceli.k8s.ops.load_all` and put the objects
+into a composition with `component_from_objects`; {ref}`faq-existing-yaml`
+shows the whole module. `load_all` also takes `module_name` (a dotted import
+path) and `module_path` (a file or folder of Python modules), and loads every
+Piceli template and `kubernetes.client` object they define;
+`sub_elements=False` skips sub-folders and sub-modules. To turn manifests
+into a typed `App` module instead, use `piceli import yaml`
+({doc}`../migrate_from_kubectl`).
 
 ```{toctree}
 :hidden:
@@ -24,6 +53,4 @@ Piceli provides various avenues for defining Kubernetes objects:
 :caption: Kubernetes Model Sections
 
 piceli_templates/index
-kubernetes_python_library
-yaml_json_definitions
 ```

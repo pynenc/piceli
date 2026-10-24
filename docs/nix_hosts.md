@@ -233,9 +233,22 @@ Nix's fetcher cache lives in the temporary directory too, so no clone of
 the private repository stays on the host. On a native build host each
 fetched tree gets an indirect GC root in a temporary directory, held until
 the build ended, so a garbage collection in between cannot take it. A docker
-host's fetch step has no directory of that host to keep a root in: there a
-collection between the fetch and the build (seconds) makes the build fail
-on the input, and a retry fetches it again. On a docker host the run image
+host's steps see the host's `/nix` read-only; give it a directory for roots
+(0.26.2), and they keep the same roots there:
+
+```python
+BuildHost.docker("nix-builder", context="ssh://builder@builder-1.example.org",
+                 runs=False, roots_dir="/var/lib/piceli/gcroots")
+```
+
+`roots_dir` is an absolute directory of the host, writable by uid 65532
+(on NixOS: `systemd.tmpfiles.rules = [ "d /var/lib/piceli/gcroots 0700
+65532 65532 -" ]`). The fetch step bind-mounts it at the same path,
+read-write (nothing else of the host), so the links it makes there are
+roots the host's daemon honours; a short step removes the build's
+directory when the build ended, on failure too. Without it a collection
+between the fetch and the build (seconds) makes the build fail on the
+input, and a retry fetches it again. On a docker host the run image
 needs `git` (and `python3`). An input that cannot be fetched fails the
 release before any build, naming the input, its URL (never a credential)
 and the credential tried, and, when the step ended before Git ran, what
@@ -360,14 +373,43 @@ these stages:
    `max-jobs = 0`, `substituters = ""`, `require-sigs = true` and only the
    cache's key in `trusted-public-keys`. The host cannot build, and it
    trusts no other key. Then it checks the realised path's NarHash.
-4. **switch**: `nix-env -p /nix/var/nix/profiles/system --set PATH`, then
-   `PATH/bin/switch-to-configuration switch`. The switch never restarts the
-   agent itself.
-5. **checks**: in order. The first failure stops them.
-6. **rollback**: after a failed switch or check, the agent switches back to
-   the previous system and marks the build bad. A bad build is not tried
+4. **activate**: the agent records the attempt as `pending` in its state,
+   then runs `PATH/bin/switch-to-configuration test`: the new system runs,
+   but the system profile and the boot entry stay on the previous one. The
+   switch never restarts the agent itself.
+5. **checks**: in order, each with its timeout. A check that hangs fails.
+   The first failure stops them.
+6. **boot**: only after every check passed, `nix-env -p
+   /nix/var/nix/profiles/system --set PATH` and `PATH/bin/switch-to-configuration
+   boot` make the new system the profile and the boot default, and the
+   pending mark goes.
+7. **rollback**: after a failed activation, check or boot step, the agent
+   activates the previous system again with `switch-to-configuration test`
+   (and, when the boot step had started, makes it the profile and boot
+   default again), and marks the build bad. A bad build is not tried
    again until a newer pointer for it (publish the same commit again to
    retry it). A failed fetch is not a bad build: the next poll tries again.
+
+Activating an untested system can break the agent's own run: across a NixOS
+release its Python or its unit may change, or a check may hang it, or the
+host may reboot. Two things cover that:
+
+- **The boot default moves last.** Until the checks pass, the boot entry is
+  the previous system, so a reboot always comes up on it.
+- **A pending attempt is recovered first.** When the agent starts (a poll, or
+  a `pin`, `unpin` or `rollback` command) and finds an attempt still
+  `pending` in its state, it rolls it back before anything else: when the
+  new system still runs, it activates the previous one with `test` (and its
+  boot entry, when the boot step had started); after a reboot the previous
+  one already runs. The attempt is recorded as `rolled-back` with
+  `host-deploy-interrupted`, its unfinished stages `interrupted`, and the
+  build is marked bad.
+
+Before 0.26.2 the agent ran `nix-env --set` and `switch-to-configuration
+switch` first, so the boot default moved before any check, and a run that
+died after the switch left the new system active with no record. Render the
+module again (`piceli host module`) and switch once to get the new agent:
+the switch to it still runs the old agent's sequence.
 
 A system the agent did not switch to (the first install, a manual
 `nixos-rebuild`) becomes its current one. When it is a published build, the
@@ -490,6 +532,20 @@ attempt was refused or failed (`host-deploy-failed`), rolled back
 (`host-rolled-back`), or after `--timeout` (`host-wait-timeout`). Its JSON
 carries the attempt with its stage times.
 
+Neither command hangs on SSH: each read connects within 10 s, closes a
+session silent for 10 s (`ServerAliveInterval=5`, `ServerAliveCountMax=2`)
+and gives up after 30 s. A failure has a code and SSH's own message:
+`host-unreachable` when no session started (no route, refused, unresolved,
+the host key, the login), `host-ssh-failed` when the session broke after
+login (it closed with no exit status, the host closed it, or it did not
+finish in time; a switch that broke the login shell, PAM or sshd looks like
+this). `status` exits 2 with it. `wait` says each new failure once on
+stderr and keeps reading until `--timeout`; its `host-wait-timeout` names
+the last one (`last_error`). When the host declares a `HostReport`, the
+message names its endpoint (and the JSON its `report`): the agent reports
+every stage, check and rollback there, so its state is readable while SSH
+is not.
+
 Only the newest publication of the rev counts. Publishing the same commit
 again retries it, so an earlier failure stays pending once the host has
 seen a newer pointer (in its last poll or an attempt in progress), until
@@ -571,11 +627,11 @@ to 500 records in `otlp-queue.json` and sends them at the next run.
 | Code | Meaning |
 | --- | --- |
 | `host-invalid`, `host-check-invalid` | The declaration was refused |
-| `host-not-found`, `host-address-unknown`, `host-unreachable`, `host-status-missing` | `piceli host` cannot load the host or read its status |
+| `host-not-found`, `host-address-unknown`, `host-unreachable`, `host-ssh-failed`, `host-status-missing` | `piceli host` cannot load the host or read its status |
 | `host-wait-timeout`, `host-deploy-failed`, `host-rolled-back` | Outcomes of `piceli host wait` (exit 1) |
 | `host-signature-invalid`, `host-pointer-replayed`, `host-manifest-mismatch`, `host-narinfo-mismatch`, `host-system-mismatch` | The agent refused a build; nothing was realised |
 | `host-cache-unreachable`, `host-realise-failed`, `host-credentials-missing`, `host-credentials-exposed` | The agent could not read or fetch; it tries again at the next poll |
-| `host-switch-failed`, `host-check-failed`, `host-rollback-failed`, `host-build-bad`, `host-report-failed` | A switch or check failed (rolled back), or the report was not delivered |
+| `host-switch-failed`, `host-check-failed`, `host-rollback-failed`, `host-deploy-interrupted`, `host-build-bad`, `host-report-failed` | An activation, check or boot step failed, or a run died with an attempt pending (rolled back), or the report was not delivered |
 | `host-pinned`, `host-pin-not-found`, `host-rollback-unavailable`, `host-busy`, `host-control-unsupported` | `pin`, `unpin`, `rollback`, and `wait` on a held host |
 | `host-secret-undeclared`, `host-secret-exists`, `host-secret-plan-changed`, `host-secret-write-failed`, `host-secret-activation-failed` | `piceli host secrets` |
 

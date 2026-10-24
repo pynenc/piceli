@@ -123,6 +123,9 @@ class FakeProvider(Provider):
             body["firewall"] = firewall.ref("id")
         return Resource("terraform_data", f"server-{server.name}", {"input": body})
 
+    #: The image is in ``input``: a new one updates it in place, as a rebuild.
+    server_image_keys = ("input.image",)
+
     def render_user_data(self, server: Resource, reference: str) -> Resource:
         # Kept out of ``input``: ignoring it after creation leaves the rest live.
         body = {

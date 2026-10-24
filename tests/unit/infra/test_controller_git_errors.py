@@ -241,12 +241,12 @@ def test_gitops_cache_clear_runs_between_steps_and_is_recorded(
         return {"state": "passed", "job": "piceli-build-cache-clear-x"}
 
     controller.ports.builder.clear_cache = clear
-    channel.add_request(*cache_clear_request(["canvas", "serde_derive"]))
+    channel.add_request(*cache_clear_request(["geometry", "serde_derive"]))
     status = controller.poll_once()
-    assert cleared == [["canvas", "serde_derive"]]
+    assert cleared == [["geometry", "serde_derive"]]
     record = status["controller"]["cache_clear"]
     assert (
-        record["crates"] == ["canvas", "serde_derive"] and record["state"] == "passed"
+        record["crates"] == ["geometry", "serde_derive"] and record["state"] == "passed"
     )
     with pytest.raises(GitOpsError):
         cache_clear_request(["../etc"])
@@ -265,7 +265,7 @@ def test_the_build_cache_clear_job_empties_only_targets(tmp_path: Path) -> None:
         registry_url="oci://registry:5000/x",
         node_registry="registry:5000",
     )
-    job = cache_clear_job(settings, ["canvas"], "abcd")
+    job = cache_clear_job(settings, ["geometry"], "abcd")
     pod = job["spec"]["template"]["spec"]
     assert pod["automountServiceAccountToken"] is False
     assert pod["volumes"] == [
@@ -278,7 +278,7 @@ def test_the_build_cache_clear_job_empties_only_targets(tmp_path: Path) -> None:
     assert "env" not in container  # no Git or registry Secret
     cache = tmp_path / "cache"
     for name in (
-        "amd64-4096/release/deps/libcanvas-1.rlib",
+        "amd64-4096/release/deps/libgeometry-1.rlib",
         "amd64-4096/release/deps/libapp-1.rlib",
     ):
         (cache / "target" / name).parent.mkdir(parents=True, exist_ok=True)
@@ -287,7 +287,7 @@ def test_the_build_cache_clear_job_empties_only_targets(tmp_path: Path) -> None:
     script = container["command"][3]
     env = {**os.environ, "PICELI_CACHE": str(cache)}
     run = subprocess.run(
-        [sys.executable, "-c", script, "canvas"],
+        [sys.executable, "-c", script, "geometry"],
         env=env,
         capture_output=True,
         text=True,

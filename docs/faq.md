@@ -32,7 +32,7 @@ def build(ctx):
 ```
 
 `piceli render infra.py:build` shows what was loaded, and `piceli release`
-applies it. See {doc}`kubernetes_model/yaml_json_definitions`.
+applies it. See {doc}`kubernetes_model/index`.
 
 ## Does Piceli patch my resources or recreate them?
 

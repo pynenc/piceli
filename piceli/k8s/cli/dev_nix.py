@@ -366,8 +366,9 @@ def build(
     plan: dict[str, Any] | None = None
     # 0.26.0: the private inputs fetched on the build host before the build.
     private = _private_inputs(
-        inputs or [], publish, composition, cache, target, root_dir, rev
-    )
+        inputs or [], publish, composition, cache, target, root_dir, rev,
+        dev_ref=cluster,
+    )  # fmt: skip
     if release is not None and cache is None:
         reject("dev-nix-invalid", "--release gates a --publish")
     if cache is not None:
@@ -470,14 +471,13 @@ def build(
         )
     import contextlib
 
-    from piceli.tempfiles import temporary_directory
-
     held = contextlib.ExitStack()  # 0.26.0: the inputs' GC roots, until built
     if private:
-        roots = Path(held.enter_context(temporary_directory("nix-input-roots")))
+        fetcher = _fetcher(chosen, chosen_profile)
+        roots = held.enter_context(fetcher.roots())  # 0.26.2: docker roots_dir
         try:
-            _fetch_private(private, chosen, chosen_profile, root_dir, rev, roots)
-        except BaseException:  # a refusal exits: the directory still goes
+            _fetch_private(private, fetcher, root_dir, rev, roots)
+        except BaseException:  # a refusal exits: the roots still go
             held.close()
             raise
     request = RunRequest(
@@ -538,6 +538,7 @@ def build(
                            rev, target,
                            built_on=_built_on(chosen, chosen_profile))
         )  # fmt: skip
+        _keep_image(chosen, chosen_profile, label or "image", store_path)
         say(f"image {found_image['file']} (sha256 {found_image['sha256']})")
         say(f"  Image.from_build(NAME, {found_image['build']!r}) reads it")
     if cache is not None and plan is not None:
@@ -559,22 +560,34 @@ def _private_inputs(
     target: str,
     root: Path,
     rev: str | None,
+    *,
+    dev_ref: str | None = None,
 ) -> list[dict[str, str]]:
     """The private inputs of this build (0.26.0,
     :func:`piceli.dev.nix_inputs.covered`): ``--input`` and, when the
-    composition (``--composition``, else the ``--publish`` module) has a
-    NixRelease of this output (and cache), its gate's input, its declared
-    inputs and the inputs whose repository is a Source of it."""
-    from piceli.dev.nix_inputs import check_declared, covered, lock_nodes
+    composition (``--composition``, else the ``--publish`` module, else
+    0.26.2 the ``--dev`` module) has a NixRelease of this output (and cache),
+    its gate's input, its declared inputs and the inputs whose repository is
+    a Source of it. 0.26.2: without ``--publish``, a build of another output
+    of the same flake (an ``--image``) covers what every NixRelease there
+    covers, so it fetches its inputs as the release path does."""
+    from piceli.dev.nix_inputs import (
+        DEFAULT_CREDENTIAL,
+        check_declared,
+        covered,
+        lock_nodes,
+    )
 
     declared: dict[str, str] = {}
-    gate: str | None = None
+    gates: list[str] = []
     sources: list[tuple[str, str]] = []
-    release = _release_of(publish, composition, cache, target)
+    release = _release_of(publish, composition, cache, target, dev_ref=dev_ref)
     if release is not None:
         found, sources = release
-        declared = dict(found.inputs)
-        gate = found.gate.input if found.gate is not None else None
+        for item in found:
+            declared = dict(item.inputs) | declared
+            if item.gate is not None:
+                gates.append(item.gate.input)
     try:
         flagged = check_declared(
             {
@@ -595,7 +608,11 @@ def _private_inputs(
                 + (f"at {rev[:12]} " if rev else "")
                 + "locks no such input",
             )
-    return covered(lock, gate=gate, sources=sources, declared=declared | flagged)
+    gate = gates[0] if gates else None
+    extra = {name: DEFAULT_CREDENTIAL for name in gates[1:] if name not in declared}
+    return covered(
+        lock, gate=gate, sources=sources, declared=extra | declared | flagged
+    )
 
 
 def _lock_of(root: Path, rev: str | None) -> bytes | None:
@@ -614,17 +631,24 @@ def _lock_of(root: Path, rev: str | None) -> bytes | None:
 
 
 def _release_of(
-    publish: str | None, composition: Path | None, cache: Any, target: str
-) -> tuple[Any, list[tuple[str, str]]] | None:
-    """The NixRelease of ``target`` (and ``cache``) in the composition, and
-    the composition's sources ``(key, url)``; ``None``: none is declared."""
+    publish: str | None,
+    composition: Path | None,
+    cache: Any,
+    target: str,
+    *,
+    dev_ref: str | None = None,
+) -> tuple[list[Any], list[tuple[str, str]]] | None:
+    """The NixReleases of ``target`` (and ``cache``) in the composition (one,
+    the first; 0.26.2: without a cache and none of ``target``, every one
+    there), and the composition's sources ``(key, url)``; ``None``: none."""
     from piceli.cli_contract import describe_user_error
     from piceli.infra.composition import _import, composition_from
     from piceli.infra.nix_releases import NixRelease
 
-    if composition is None and publish is None:
+    ref = publish if publish is not None else dev_ref
+    if composition is None and ref is None:
         return None
-    path = composition or Path(str(publish).rsplit(":", 1)[0])
+    path = composition or Path(str(ref).rsplit(":", 1)[0])
     if composition is None and (path.suffix != ".py" or not path.is_file()):
         return None
     try:
@@ -634,11 +658,11 @@ def _release_of(
             "composition-invalid",
             f"importing {path} failed: {describe_user_error(error)}",
         )
+    every = [value for value in vars(module).values() if isinstance(value, NixRelease)]
     releases = [
         value
-        for value in vars(module).values()
-        if isinstance(value, NixRelease)
-        and value.host.attribute == target
+        for value in every
+        if value.host.attribute == target
         and (
             cache is None
             or (
@@ -646,33 +670,45 @@ def _release_of(
                 and value.host.cache.public_key == cache.public_key
             )
         )
-    ]
+    ][:1]
+    if not releases and cache is None:
+        releases = every
     if not releases:
         return None
     try:
         sources = list(composition_from(module, default_name=path.stem).sources)
     except Exception:  # not a whole composition: the releases' own sources
         sources = [item.source for item in releases]
-    return releases[0], [(source.key, source.url) for source in sources]
+    return releases, [(source.key, source.url) for source in sources]
 
 
 def _fetch_private(
     private: list[dict[str, str]],
-    host: Any,
-    profile: Any,
+    fetcher: Any,
     root: Path,
     rev: str | None,
-    roots: Path | None = None,
+    roots: Any = None,
 ) -> None:
     """Fetch the private inputs on the build host with this machine's
     credentials, before the build (else ``infra-nix-input-unreachable``)."""
     from piceli.dev.model import DevError
-    from piceli.dev.nix_inputs import fetch_inputs, resolve
-    from piceli.dev.nix_step import step_image
+    from piceli.dev.nix_inputs import resolve
 
     try:
         pairs = resolve(private, _lock_of(root, rev))
-        fetch_inputs(host, step_image(host, profile))(pairs, say, roots=roots)
+        fetcher(pairs, say, roots=roots)
+    except DevError as error:
+        reject(error.code, str(error))
+
+
+def _fetcher(host: Any, profile: Any) -> Any:
+    """The private inputs' fetch on ``host`` (else ``dev-nix-invalid``)."""
+    from piceli.dev.model import DevError
+    from piceli.dev.nix_inputs import fetch_inputs
+    from piceli.dev.nix_step import step_image
+
+    try:
+        return fetch_inputs(host, step_image(host, profile))
     except DevError as error:
         reject(error.code, str(error))
 
@@ -751,6 +787,17 @@ def _gate(covering: Any, root: Path, rev: str, **reach: Any) -> dict[str, Any]:
         return verify(gate, locked_rev(lock, gate.input), history, host=name)
     except PromotionError as error:
         reject(error.code, str(error), **error.detail)
+
+
+def _keep_image(host: Any, profile: Any, name: str, store_path: str) -> None:
+    """0.26.2: on a docker host with ``roots_dir``, a GC root of the image's
+    build there until the next one of ``name``, for ``infra apply``'s upload."""
+    from piceli.dev.nix_inputs import hold_root
+    from piceli.dev.nix_step import step_image
+
+    link = hold_root(host, step_image(host, profile), name, store_path, say)
+    if link is not None:
+        say(f"  kept on {host.name} by the GC root {link}")
 
 
 def _built_on(host: Any, profile: Any) -> dict[str, Any] | None:

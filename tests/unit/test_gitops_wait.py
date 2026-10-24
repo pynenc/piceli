@@ -222,10 +222,18 @@ def test_gitops_cache_clear_records_a_request(tmp_path: Path) -> None:
 
     result = CliRunner().invoke(
         cli,
-        ["gitops", "cache", "clear", "--crate", "canvas", "--state-dir", str(tmp_path)],
+        [
+            "gitops",
+            "cache",
+            "clear",
+            "--crate",
+            "geometry",
+            "--state-dir",
+            str(tmp_path),
+        ],
     )
     assert result.exit_code == 0, result.stdout + result.stderr
     body = json.loads(result.stdout)
-    assert body["state"] == "requested" and body["crates"] == ["canvas"]
+    assert body["state"] == "requested" and body["crates"] == ["geometry"]
     pending = DirectoryChannel(tmp_path).requests()
     assert [item["kind"] for item in pending.values()] == ["cache-clear"]

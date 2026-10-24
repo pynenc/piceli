@@ -41,6 +41,16 @@ again a pair the state holds and the store does not
 (:mod:`piceli.infra.machines.keys`); their ids (access key ids) are never
 reported.
 
+A server whose image changes (0.26.2): with ``Server(on_image_change=
+"replace")`` the plan replaces it (``-replace=ADDRESS``, planned again),
+destroyed first, then created on its persistent port with the current user
+data. With the default ``"rebuild"`` the provider updates the image in
+place; for a server with user data the plan carries a warning (the rebuilt
+server boots with its original user data), which never blocks it.
+``plan(ws, replace=[SERVER])`` (``piceli infra replace``) replaces a server
+on request. The servers replaced either way are the plan's ``replaced``,
+which the plan hash covers.
+
 Partial applies: ``tofu apply -json`` prints an ``apply_complete`` line per
 finished change. When the apply fails after one of them, the error carries
 ``partially_applied``, what was applied (address, action, the provider's id)
@@ -56,7 +66,8 @@ import json
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
+from dataclasses import replace as with_fields
 from pathlib import Path
 from typing import Any
 
@@ -314,6 +325,13 @@ class InfraPlan:
     images: tuple[dict[str, Any], ...] = ()
     #: Uploads an earlier run left at the cloud, deleted by the apply (not hashed).
     stale_images: tuple[dict[str, Any], ...] = ()
+    #: Servers replaced on request or for a new image: server, why (0.26.2).
+    replaced: tuple[dict[str, str], ...] = ()
+    #: What the owner should know and that does not block the plan (not hashed).
+    warnings: tuple[dict[str, str], ...] = ()
+    #: The ``tofu show -json`` of a kept ``file`` (0.26.2; apply reads it
+    #: once, never shown).
+    document: dict[str, Any] | None = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
         body = {
@@ -336,6 +354,10 @@ class InfraPlan:
             body["images"] = [dict(item) for item in self.images]
         if self.stale_images:
             body["stale_images"] = [dict(item) for item in self.stale_images]
+        if self.replaced:
+            body["replaced"] = [dict(item) for item in self.replaced]
+        if self.warnings:
+            body["warnings"] = [dict(item) for item in self.warnings]
         return body
 
 
@@ -352,6 +374,7 @@ def plan_hash(
     document: Mapping[str, Any],
     user_data: Sequence[Mapping[str, str]] = (),
     images: Sequence[Mapping[str, Any]] = (),
+    replaced: Sequence[Mapping[str, str]] = (),
 ) -> str:
     """The approval hash: configuration, operation, plan JSON (no timestamp),
     the digests of the user data it passes and the image uploads (0.25.3:
@@ -372,6 +395,8 @@ def plan_hash(
         hashed["user_data"] = [dict(item) for item in user_data]
     if images:
         hashed["images"] = [dict(item) for item in images]
+    if replaced:
+        hashed["replaced"] = [dict(item) for item in replaced]
     body = json.dumps(
         hashed,
         sort_keys=True,
@@ -504,6 +529,50 @@ def _creates_with_user_data(ws: Workspace, document: Mapping[str, Any]) -> list[
     return sorted(found)
 
 
+#: The warning of a server rebuilt in place with its original user data.
+REBUILD_WARNING = (
+    "server {server} is rebuilt in place with its original user data (a spent "
+    'bootstrap key?): use Server(on_image_change="replace") or piceli infra replace'
+)
+
+
+def _server_addresses(ws: Workspace) -> dict[str, str]:
+    """Server name -> its OpenTofu address."""
+    return {
+        name: address
+        for address, (_, kind, name) in ws.rendered.resources.items()
+        if kind == "server"
+    }
+
+
+def _image_updates(ws: Workspace, document: Mapping[str, Any]) -> list[str]:
+    """Servers the plan updates in place with another image (a rebuild)."""
+    by_address = {v: k for k, v in _server_addresses(ws).items()}
+    servers = {server.name: server for server in ws.infra.servers}
+    found: list[str] = []
+    for item in document.get("resource_changes") or ():
+        if not isinstance(item, dict) or item.get("mode") != "managed":
+            continue
+        name = by_address.get(str(item.get("address")))
+        change = item.get("change") or {}
+        if name is None or tuple(change.get("actions") or ()) != ("update",):
+            continue
+        if servers[name].provider.server_image_changed(change):
+            found.append(name)
+    return sorted(found)
+
+
+def _replace_args(ws: Workspace, names: Sequence[str]) -> list[str]:
+    addresses = _server_addresses(ws)
+    unknown = sorted(set(names) - set(addresses))
+    if unknown:
+        raise InfraError(
+            "infra-server-unknown",
+            f"{ws.infra.name} declares no server {', '.join(unknown)}",
+        )
+    return [f"-replace={addresses[name]}" for name in sorted(set(names))]
+
+
 def _load_user_data(ws: Workspace, addresses: list[str]) -> bool:
     """Put each server's user data into OpenTofu's environment (``True``: new ones)."""
     from piceli.infra.machines.credentials import credential_present, load_credential
@@ -553,9 +622,15 @@ def plan(
     destroy: bool = False,
     keep: Path | None = None,
     prices: bool = True,
+    replace: Sequence[str] = (),
 ) -> InfraPlan:
-    """Run ``tofu plan`` and return the reviewed plan (its file under ``keep``)."""
+    """Run ``tofu plan`` and return the reviewed plan (its file under ``keep``).
+
+    ``replace`` names servers to replace on request (``-replace``)."""
     operation = "destroy" if destroy else "apply"
+    if destroy and replace:
+        raise InfraError("infra-invalid", "a destroy plan replaces nothing")
+    requested = _replace_args(ws, replace)
     from piceli import tempfiles
 
     with tempfiles.temporary_directory(
@@ -565,6 +640,7 @@ def plan(
         args = ["plan", "-input=false", "-json", "-out=" + str(file)]
         if destroy:
             args.append("-destroy")
+        args += requested
         document = _plan_document(ws, args, file)
         from piceli.infra.machines import image_upload
 
@@ -574,6 +650,23 @@ def plan(
             if again:
                 args += [f"-replace={address}" for address in again]
                 document = _plan_document(ws, args, file)
+        replaced = [
+            {"server": name, "why": "requested"} for name in sorted(set(replace))
+        ]
+        if not destroy:
+            # A new image of a server declared on_image_change="replace":
+            # replaced (destroyed first) rather than rebuilt in place.
+            swap = [
+                name
+                for name in _image_updates(ws, document)
+                if next(s for s in ws.infra.servers if s.name == name).on_image_change
+                == "replace"
+            ]
+            if swap:
+                args += _replace_args(ws, swap)
+                document = _plan_document(ws, args, file)
+                replaced += [{"server": n, "why": "its image changed"} for n in swap]
+        replaced.sort(key=lambda item: item["server"])
         creates: list[str] = []
         if not destroy and ws.rendered.user_data:
             # Without the user data first: only a plan that creates the
@@ -613,6 +706,15 @@ def plan(
                 document, ws.tokens.get(provider.name), ledger=ledger
             )
             checks += [found] if isinstance(found, dict) else list(found or ())
+        warnings = [
+            {
+                "server": name,
+                "kind": "rebuild-reuses-user-data",
+                "message": REBUILD_WARNING.format(server=name),
+            }
+            for name in _image_updates(ws, document)
+            if any(s.name == name and s.user_data for s in ws.infra.servers)
+        ]
         stale: list[dict[str, Any]] = []
         if images:
             check, stale = image_upload.stale_images(ws, document, images)
@@ -620,7 +722,7 @@ def plan(
         result = InfraPlan(
             ws.infra.name,
             operation,
-            plan_hash(operation, ws.rendered, document, user_data, images),
+            plan_hash(operation, ws.rendered, document, user_data, images, replaced),
             ws.rendered.digest,
             changes,
             foreign,
@@ -631,11 +733,13 @@ def plan(
             s3_keys=s3_keys,
             images=images,
             stale_images=tuple(stale),
+            replaced=tuple(replaced),
+            warnings=tuple(warnings),
         )
         if keep is not None:
             target = keep / "plan.tfplan"
             file.replace(target)
-            return replace(result, file=target)
+            return with_fields(result, file=target, document=document)
         return result
 
 
@@ -646,6 +750,7 @@ def apply(
     destroy: bool = False,
     say: Callable[[str], None] = lambda _: None,
     progress: Callable[[Mapping[str, Any]], None] = lambda _: None,
+    replace: Sequence[str] = (),
 ) -> tuple[InfraPlan, dict[str, Any]]:
     """Plan again; apply that plan only if its hash is ``approved``.
 
@@ -659,7 +764,7 @@ def apply(
     with tempfiles.temporary_directory(
         "infra-apply", dir=ws.directory, hidden=True
     ) as work:
-        fresh = plan(ws, destroy=destroy, keep=work)
+        fresh = plan(ws, destroy=destroy, keep=work, replace=replace)
         if fresh.plan_hash != approved:
             raise InfraError(
                 "infra-plan-changed",
@@ -681,13 +786,10 @@ def apply(
         file = fresh.file
         uploaded: list[dict[str, Any]] = []
         if fresh.images:
-            shown = _check(
-                ws.run("show", "-json", str(fresh.file)),
-                "infra-tofu-failed", "show", ws, known=False,
-            )  # fmt: skip
+            assert fresh.document is not None
             try:
                 image_upload.upload_images(
-                    ws, json.loads(shown.stdout), fresh.images, say=say,
+                    ws, fresh.document, fresh.images, say=say,
                     progress=progress, done=uploaded,
                 )  # fmt: skip
             except InfraError as error:
@@ -698,7 +800,7 @@ def apply(
                 unstage_images(ws.directory)
             later = work / "after-upload"
             later.mkdir()
-            second = plan(ws, keep=later, prices=False)
+            second = plan(ws, keep=later, prices=False, replace=replace)
             image_upload.check_unchanged(
                 fresh.changes,
                 {item["address"] for item in fresh.images},
@@ -714,25 +816,22 @@ def apply(
             file = second.file
         say(f"applying {len(fresh.changes)} change(s) with tofu {ws.tofu.version_text}")
         result = ws.run("apply", "-input=false", "-json", str(file), timeout=3600)
-        from piceli.infra.machines.keys import store_keys
-
+        # 0.26.2: one read of the state for the S3 keys, the inventory and
+        # the images in use (each read derives the state key: about 1 s).
+        state, fresh_values, failed = _read_state(ws)
         if result.code == 0:
             (ws.directory / TOFU_LOG.format("apply")).unlink(missing_ok=True)
-            store_keys(ws)
-            inventory = refresh_inventory(ws, prices=fresh.estimate)
+            if failed is not None:
+                raise failed
+            inventory = refresh_inventory(ws, prices=fresh.estimate, shown=state)
             if uploaded or image_upload.retired(ws):
-                shown = _state_document(ws)
                 for image_id in image_upload.delete_retired(
-                    ws, image_upload.in_use(shown)
+                    ws, image_upload.in_use(_document_of(state))
                 ):
                     say(f"deleted the replaced image {image_id}")
             if uploaded:
                 inventory = {**inventory, "uploaded_images": uploaded}
             return fresh, inventory
-        try:
-            fresh_values = store_keys(ws)
-        except InfraError:
-            fresh_values = []
         error = tofu_failure(
             result, "infra-apply-failed", "apply", ws, secrets=fresh_values
         )
@@ -745,7 +844,7 @@ def apply(
                 partial = adopted
         error.fields.update(partial)
         try:
-            refresh_inventory(ws, prices=fresh.estimate)
+            refresh_inventory(ws, prices=fresh.estimate, shown=state)
         except InfraError:
             if not partial:
                 raise
@@ -771,8 +870,33 @@ def _adopted(
     }
 
 
-def _state_document(ws: Workspace) -> dict[str, Any]:
-    shown = ws.run("show", "-json")
+def _read_state(ws: Workspace) -> tuple[TofuResult, list[str], InfraError | None]:
+    """One ``tofu show -json`` of the state after an apply (0.26.2): the S3
+    key pairs are stored from it unredacted, in memory only
+    (:func:`~piceli.infra.machines.keys.store_keys`); the result, redacted
+    as every other read (the new pairs too), serves the inventory and the
+    images in use. Also the new values (for redaction) and the error the
+    keys raised."""
+    from piceli.infra.machines.keys import reads_keys, store_keys
+    from piceli.infra.machines.tofu import redact
+
+    if not reads_keys(ws):
+        return ws.run("show", "-json"), [], None
+    raw = ws.run("show", "-json", redacted=False)
+    fresh: list[str] = []
+    failed: InfraError | None = None
+    try:
+        fresh = store_keys(ws, shown=raw)
+    except InfraError as error:
+        failed = error
+    shown = TofuResult(
+        raw.code, redact(raw.stdout, ws.tofu.redaction(ws.env)), raw.stderr, raw.args
+    )
+    del raw
+    return shown, fresh, failed
+
+
+def _document_of(shown: TofuResult) -> dict[str, Any]:
     try:
         document = json.loads(shown.stdout) if shown.code == 0 else {}
     except ValueError:
@@ -849,12 +973,17 @@ def _finished(actions: list[str]) -> str:
 
 
 def refresh_inventory(
-    ws: Workspace, *, prices: dict[str, Any] | None = None
+    ws: Workspace,
+    *,
+    prices: dict[str, Any] | None = None,
+    shown: TofuResult | None = None,
 ) -> dict[str, Any]:
-    """Rewrite ``inventory.json`` from the state (``tofu show -json``)."""
+    """Rewrite ``inventory.json`` from the state (``tofu show -json``;
+    ``shown``: 0.26.2, the caller's redacted read of it)."""
     shown = _check(
-        ws.run("show", "-json"), "infra-tofu-failed", "show", ws, known=False
-    )
+        shown if shown is not None else ws.run("show", "-json"),
+        "infra-tofu-failed", "show", ws, known=False,
+    )  # fmt: skip
     try:
         document = json.loads(shown.stdout) if shown.stdout.strip() else {}
     except ValueError:

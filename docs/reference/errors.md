@@ -343,6 +343,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`host-credentials-exposed`](#error-host-credentials-exposed) | hosts | yes |
 | [`host-credentials-missing`](#error-host-credentials-missing) | hosts | yes |
 | [`host-deploy-failed`](#error-host-deploy-failed) | hosts | no |
+| [`host-deploy-interrupted`](#error-host-deploy-interrupted) | hosts | no |
 | [`host-invalid`](#error-host-invalid) | hosts | no |
 | [`host-manifest-mismatch`](#error-host-manifest-mismatch) | hosts | no |
 | [`host-narinfo-mismatch`](#error-host-narinfo-mismatch) | hosts | no |
@@ -364,6 +365,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`host-secret-undeclared`](#error-host-secret-undeclared) | hosts | no |
 | [`host-secret-write-failed`](#error-host-secret-write-failed) | hosts | yes |
 | [`host-signature-invalid`](#error-host-signature-invalid) | hosts | no |
+| [`host-ssh-failed`](#error-host-ssh-failed) | hosts | yes |
 | [`host-status-missing`](#error-host-status-missing) | hosts | yes |
 | [`host-switch-failed`](#error-host-switch-failed) | hosts | no |
 | [`host-system-mismatch`](#error-host-system-mismatch) | hosts | no |
@@ -6948,6 +6950,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Read the attempt's stages and reason with `piceli host status --json` and `piceli explain` of that reason.
 - **Retry-safe:** no
 
+(error-host-deploy-interrupted)=
+### `host-deploy-interrupted`
+
+**Deploy interrupted.** The agent's run died with an attempt pending, after activating the new system and before its checks passed: its own switch stopped it, a check hung the process, or the host rebooted. Its next run rolled back (or found the previous system running after a reboot) and marked the build bad.
+
+- **Fix:** Read `piceli host status --json` (the attempt's stages) and the host's journal (`journalctl -u piceli-host-agent`); fix the configuration and publish a new build, or publish the same commit again to retry it.
+- **Retry-safe:** no
+
 (error-host-invalid)=
 ### `host-invalid`
 
@@ -7041,7 +7051,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 **Rollback failed.** Switching back to the previous system failed after a failed switch or check; the host may run a mix of both.
 
-- **Fix:** Log in, run `/nix/var/nix/profiles/system/bin/switch-to-configuration switch` or boot the previous generation.
+- **Fix:** Log in, run `/nix/var/nix/profiles/system/bin/switch-to-configuration switch` (0.26.2: the profile is still the previous system unless the boot step had started) or reboot.
 - **Retry-safe:** no
 
 (error-host-rollback-unavailable)=
@@ -7108,6 +7118,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Publish with the key whose public key the `NixCache` declares; if nobody did, someone wrote to the cache: rotate its write keys.
 - **Retry-safe:** no
 
+(error-host-ssh-failed)=
+### `host-ssh-failed`
+
+**Host SSH session failed.** `ssh` connected and logged in, then the session broke: it closed with no exit status, was closed by the host, or did not finish in time (0.26.2: a status read gives up after 30 s). A host whose switch broke its login shell, PAM or sshd looks like this.
+
+- **Fix:** Read the agent's own reports at the host's `HostReport` endpoint when it declares one, or the console; a broken switch is rolled back by the agent, and a reboot comes up on the previous system. Then run the command again.
+- **Retry-safe:** yes
+
 (error-host-status-missing)=
 ### `host-status-missing`
 
@@ -7119,7 +7137,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-host-switch-failed)=
 ### `host-switch-failed`
 
-**Switch failed.** `nix-env --set` or `switch-to-configuration switch` of the new system failed; the agent switched back.
+**Switch failed.** `switch-to-configuration test` of the new system failed or hung, or, after its checks passed, `nix-env --set` or `switch-to-configuration boot`; the agent activated the previous system again (0.26.2: the boot default moves only after the checks).
 
 - **Fix:** Read the host's journal (`journalctl -u piceli-host-agent`), fix the configuration and publish a new build.
 - **Retry-safe:** no

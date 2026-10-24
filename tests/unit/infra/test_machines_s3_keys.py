@@ -163,17 +163,27 @@ def test_needed_secrets_lists_who_creates_each() -> None:
 
 
 @needs_tofu
-# A hang guard sized for its work, not a speed check: 47 real tofu runs in
-# sequence (7 plans, 4 applies, their shows), each deriving the state key
-# with pbkdf2, about 45 s of CPU on an idle machine. Beside a parallel suite
-# it took over the default 120 s.
-@pytest.mark.timeout(600)
+# A hang guard sized for its work, not a speed check: 43 real tofu runs in
+# sequence (7 plans, 4 applies, one state read each), each deriving the
+# state key with pbkdf2: about 35 s alone, 58 s beside the parallel suite
+# (0.26.2). Over the default 120 s once, with 47 runs on a busier machine.
+@pytest.mark.timeout(300)
 def test_apply_stores_the_pairs_reapply_is_a_noop_removal_deletes(
-    homes: Path, capsys: pytest.CaptureFixture[str]
+    homes: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from typer.testing import CliRunner
 
+    from piceli.infra.machines.tofu import Tofu
     from piceli.k8s.cli import app
+
+    ran: list[tuple[str, ...]] = []
+    real_run = Tofu.run
+
+    def counted(self: Tofu, args: Any, **kwargs: Any) -> TofuResult:
+        ran.append(tuple(args))
+        return real_run(self, args, **kwargs)
+
+    monkeypatch.setattr(Tofu, "run", counted)
 
     credentials.save_credential("web-state", "state-key", PASSPHRASE)
     infra = _infra(homes, KEYS)
@@ -196,10 +206,14 @@ def test_apply_stores_the_pairs_reapply_is_a_noop_removal_deletes(
         "read_only_enforced": True, "how": "fake",
     }  # fmt: skip
     assert "s3 key cache-read: read on bucket nix-cache, create" in planned.stderr
+    ran.clear()
     done = CliRunner().invoke(
         app, ["infra", "apply", ref, "--approve", first["plan_hash"]]
     )
     assert done.exit_code == 0, done.output
+    # 0.26.2: the state is read once after the apply, for the pairs and the
+    # inventory (each read derives the state key with pbkdf2).
+    assert ran.count(("show", "-json")) == 1, ran
     write, read = _stored("cache-write"), _stored("cache-read")
     assert write["kind"] == read["kind"] == "s3-keys"
     # Stored by part, as `piceli secrets s3` stores them: reported complete.

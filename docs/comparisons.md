@@ -147,8 +147,7 @@ Piceli is the youngest tool here. These are its current limits:
 
 - **No package format.** Most vendors ship a Helm chart, and
   [Artifact Hub](https://artifacthub.io/) lists thousands of them. Piceli has
-  no package format yet (the {doc}`roadmap` lists reusable packages as not
-  started); to run a vendor's chart with Piceli you render it with
+  no package format yet; to run a vendor's chart with Piceli you render it with
   `helm template` and load the YAML ({ref}`faq-existing-yaml`), which loses
   `helm upgrade` for that chart.
 - **Maturity.** [Helm](https://www.cncf.io/projects/helm/) is a graduated

@@ -14,11 +14,19 @@ JSON, and runs it as a systemd oneshot on a timer. Each run:
    path's ``.narinfo``: its signature and its ``NarHash``;
 3. **realise**: ``nix copy --from`` the cache, with ``builders`` empty and
    ``max-jobs 0`` (the host never builds), trusting only the cache's key;
-4. **switch**: ``nix-env -p /nix/var/nix/profiles/system --set``, then
-   ``switch-to-configuration switch``;
-5. **checks**: each until it passes or its timeout;
-6. on a failed switch or check, **rollback** to the previous system, and
-   mark the build bad: it is not tried again until a newer pointer;
+4. **activate** (0.26.2): record the attempt as ``pending`` in the state,
+   then ``switch-to-configuration test``: the new system runs, the profile
+   and the boot entry stay on the previous one;
+5. **checks**: each until it passes or its timeout (a hung check fails);
+6. **boot**: only then ``nix-env -p /nix/var/nix/profiles/system --set``
+   and ``switch-to-configuration boot``, and the pending mark goes;
+   on a failed activation, check or boot step, **rollback**: the previous
+   system with ``test`` (and its profile and boot entry, when the boot step
+   had started), and mark the build bad: it is not tried again until a
+   newer pointer. A run that died with an attempt pending (its own switch
+   stopped it, a hang, a reboot) is rolled back by the next run before
+   anything else (``host-deploy-interrupted``); a reboot comes up on the
+   previous system, since the boot default had not moved;
 7. after a deploy that passed its checks, **prune**: delete the system
    profile's generations beyond ``generations`` (``nix-env
    --delete-generations``; never the current, the previous or a held
@@ -725,21 +733,25 @@ class Agent:
         ) != manifest.get("nar_hash"):
             raise Failure("host-narinfo-mismatch", "the realised path's NarHash")
 
-    def switch(self, store_path: str) -> None:
-        if (
-            self._run(
-                [self.tools["nix_env"], "-p", self.profile, "--set", store_path], 600
-            )
-            != 0
-        ):
+    def _configure(self, store_path: str, verb: str) -> None:
+        argv = [f"{store_path}/bin/switch-to-configuration", verb]
+        if self._run(argv, SWITCH_SECONDS) != 0:  # a hang is 124: failed
+            raise Failure("host-switch-failed", f"switch-to-configuration {verb}")
+
+    def activate(self, store_path: str) -> None:
+        """Run ``store_path`` now (``switch-to-configuration test``): the
+        profile and the boot entry stay, so a reboot comes up on the system
+        the host booted before (0.26.2)."""
+        self._configure(store_path, "test")
+
+    def make_default(self, store_path: str) -> None:
+        """Make ``store_path`` the system profile and the boot default
+        (``nix-env --set``, ``switch-to-configuration boot``): only after its
+        checks passed (0.26.2)."""
+        argv = [self.tools["nix_env"], "-p", self.profile, "--set", store_path]
+        if self._run(argv, 600) != 0:
             raise Failure("host-switch-failed", "nix-env --set failed")
-        if (
-            self._run(
-                [f"{store_path}/bin/switch-to-configuration", "switch"], SWITCH_SECONDS
-            )
-            != 0
-        ):
-            raise Failure("host-switch-failed", "switch-to-configuration failed")
+        self._configure(store_path, "boot")
 
     # ---------------------------------------------------------- checks
 
@@ -747,7 +759,7 @@ class Agent:
         kind, target = check["kind"], list(check["target"])
         if kind == "unit":
             argv = [self.tools["systemctl"], "is-active", "--quiet", target[0]]
-            return self._run(argv, min(left, 30)) == 0
+            return self._run(argv, max(1.0, min(left, 30))) == 0
         if kind == "http":
             try:
                 with self.opener(
@@ -831,6 +843,10 @@ class Agent:
         )  # fmt: skip
         self.status.setdefault("history", [])
         self.status.pop("in_progress", None)
+        self.status.pop("pending", None)
+        pending = self.state.get("pending")
+        if isinstance(pending, dict):
+            self._recover(pending)
         running = self.running()
         current = self.state.get("current") or {}
         if current.get("store_path") != running:
@@ -1041,7 +1057,7 @@ class Agent:
                       "piceli.ref": pointer.get("ref"), "piceli.trigger": trigger,
                       "piceli.store_path": pointer["store_path"]},
         )  # fmt: skip
-        switched = False
+        switched = booting = False
         try:
             if not local:
                 assert cache is not None
@@ -1050,9 +1066,14 @@ class Agent:
                 )
                 attempt["pinned"] = _pinned(manifest.get("pinned"))
                 self._stage(attempt, "realise", lambda: self.realise(manifest))
+            # 0.26.2: the pending attempt is on disk before the activation:
+            # if this process dies (its own switch, a hang, a reboot), the
+            # next run rolls it back before anything else.
+            attempt["phase"] = "activate"
+            self.state["pending"] = self.status["pending"] = attempt
             switched = True
             self._stage(
-                attempt, "switch", lambda: self.switch(str(pointer["store_path"]))
+                attempt, "activate", lambda: self.activate(str(pointer["store_path"]))
             )
 
             def run_checks() -> None:
@@ -1070,13 +1091,18 @@ class Agent:
                     raise Failure("host-check-failed", "a check did not pass")
 
             self._stage(attempt, "checks", run_checks)
+            booting = True
+            attempt["phase"] = "boot"
+            self._stage(
+                attempt, "boot", lambda: self.make_default(str(pointer["store_path"]))
+            )
         except Failure as failed:
             attempt.update(state="failed", reason=failed.code)
             if _refusal(failed.code):
                 attempt["state"] = "rejected"
             if switched and current.get("store_path"):
                 attempt["rollback"] = self._rollback(
-                    attempt, str(current["store_path"])
+                    attempt, str(current["store_path"]), profile=booting
                 )
                 attempt["state"] = "rolled-back"
             if not local and (
@@ -1095,6 +1121,9 @@ class Agent:
                 "published_at": pointer.get("published_at"),
                 "since": now_text(self.clock()), "pinned": attempt["pinned"],
             }  # fmt: skip
+        attempt.pop("phase", None)
+        self.state.pop("pending", None)
+        self.status.pop("pending", None)
         attempt["ended_at"] = now_text(self.clock())
         attempt["seconds"] = round(self.monotonic() - started, 3)
         self.reporter.event(
@@ -1108,10 +1137,7 @@ class Agent:
         )  # fmt: skip
         if attempt["state"] == "deployed":
             attempt["prune"] = self.status["prune"] = self.prune(trace)
-        self.status["previous"] = self.state.get("previous")
-        self.status["last_attempt"] = attempt
-        history = [attempt, *self.status.get("history", [])]
-        self.status["history"] = history[: int(self.config.get("history") or 20)]
+        self._record(attempt)
         return attempt
 
     # ---------------------------------------------------------- prune
@@ -1229,10 +1255,61 @@ class Agent:
         )  # fmt: skip
         return record
 
-    def _rollback(self, attempt: dict[str, Any], previous: str) -> dict[str, Any]:
+    def _record(self, attempt: dict[str, Any]) -> None:
+        self.status["previous"] = self.state.get("previous")
+        self.status["last_attempt"] = attempt
+        history = [attempt, *self.status.get("history", [])]
+        self.status["history"] = history[: int(self.config.get("history") or 20)]
+
+    def _recover(self, pending: dict[str, Any]) -> None:
+        """Roll back an attempt a previous run left pending (0.26.2).
+
+        The run died between the activation and the boot step: its own
+        switch stopped it, it hung, or the host rebooted. While the new
+        system still runs, activate the previous one again (and its boot
+        entry, when the boot step had started); after a reboot it already
+        runs. The build is marked bad (``host-deploy-interrupted``)."""
+        attempt = dict(pending)
+        phase = attempt.pop("phase", None)
+        back, new = str(attempt.get("from") or ""), str(attempt.get("store_path"))
+        if self.running() == new and _STORE_PATH.fullmatch(back):
+            record = self._rollback(attempt, back, profile=phase == "boot")
+        else:
+            record = {"to": back or None, "state": "not-needed", "seconds": 0.0,
+                      "reason": None}  # fmt: skip
+        for stage in attempt.get("stages") or ():
+            if isinstance(stage, dict) and stage.get("state") == "running":
+                stage["state"] = "interrupted"
+        attempt.update(
+            state="rolled-back", reason="host-deploy-interrupted", rollback=record,
+            ended_at=now_text(self.clock()),
+        )  # fmt: skip
+        if attempt.get("trigger") != "rollback" and attempt.get("commit"):
+            self.state.setdefault("bad", {})[str(attempt["commit"])] = {
+                "published_at": attempt.get("published_at"),
+                "reason": "host-deploy-interrupted",
+            }  # fmt: skip
+        self.reporter.event(
+            "piceli.host.deploy.result", "interrupted", str(attempt.get("trace_id")),
+            error=True, **{"piceli.commit": attempt.get("commit"),
+                           "piceli.state": "rolled-back",
+                           "piceli.reason": "host-deploy-interrupted",
+                           "piceli.rollback": record["state"]},
+        )  # fmt: skip
+        self.state.pop("pending", None)
+        self._record(attempt)
+        self._save()
+
+    def _rollback(
+        self, attempt: dict[str, Any], previous: str, *, profile: bool = False
+    ) -> dict[str, Any]:
+        """Activate ``previous`` again (``test``); with ``profile`` (the
+        boot step had started), make it the profile and boot default too."""
         started = self.monotonic()
         try:
-            self.switch(previous)
+            self.activate(previous)
+            if profile:
+                self.make_default(previous)
             state = "done"
         except Failure:
             state = "failed"
