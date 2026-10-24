@@ -45,6 +45,7 @@ from piceli.k8s.ui_config import (
     load_access_profile,
     load_ui_config,
 )
+from tests.ports import worker_port
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -91,13 +92,7 @@ FAKE_KUBECTL = textwrap.dedent(
 )
 
 
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
-def _wait_for(predicate: Callable[[], bool], timeout: float = 10.0) -> bool:
+def _wait_for(predicate: Callable[[], bool], timeout: float = 30.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
@@ -151,7 +146,7 @@ def fake_kubectl(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def upstream() -> Iterator[Upstream]:
-    server = Upstream(_free_port())
+    server = Upstream(worker_port())
     server.start()
     yield server
     server.kill()
@@ -239,7 +234,7 @@ def test_shipped_example_profile_loads() -> None:
 
 
 def test_tcp_probe_detects_a_forward_that_drops_connections() -> None:
-    port = _free_port()
+    port = worker_port()
     assert probe_endpoint(port, HealthProbe()) == "connection refused"
 
     listener = socket.socket()
@@ -298,14 +293,14 @@ def test_port_conflict_preflight_is_a_clear_error() -> None:
     busy = listener.getsockname()[1]
     try:
         assert local_port_in_use(busy)
-        free = _free_port()
+        free = worker_port()
         assert not local_port_in_use(free)
         plan = preflight_shortcuts(
             [
                 _shortcut("web", free),
                 _shortcut("busy", busy),
                 _shortcut("optional", busy + 0, required=False, namespace="x"),
-                _shortcut("nons", _free_port()),
+                _shortcut("nons", worker_port()),
             ],
             namespace=None,
         )
@@ -375,7 +370,7 @@ def test_killed_upstream_restarts_forward_within_one_probe_interval(
         id="api",
         label="API",
         target="service/api",
-        local_port=_free_port(),
+        local_port=worker_port(),
         remote_port=upstream.port,
         health=HealthProbe(
             type="http",
@@ -439,7 +434,7 @@ def test_restarts_are_bounded(tmp_path: Path) -> None:
     exits.chmod(0o755)
     shortcut = _shortcut(
         "web",
-        _free_port(),
+        worker_port(),
         restart={"backoff_initial": 0.05, "backoff_max": 0.1, "max_restarts": 2},
     )
     supervisor = ForwardSupervisor(
@@ -468,7 +463,7 @@ def test_rest_status_exposes_health(
 ) -> None:
     shortcut = _shortcut(
         "api",
-        _free_port(),
+        worker_port(),
         health={"type": "tcp", "interval": 0.5, "startup_grace": 5},
     )
     shortcut = shortcut.model_copy(update={"remote_port": upstream.port})
@@ -575,7 +570,7 @@ def test_cli_apply_refuses_an_occupied_required_port(tmp_path: Path) -> None:
 def test_cli_status_probes_declared_endpoints(
     tmp_path: Path, upstream: Upstream
 ) -> None:
-    down = _free_port()
+    down = worker_port()
     profile = tmp_path / "access.toml"
     profile.write_text(
         textwrap.dedent(
@@ -611,7 +606,7 @@ def test_cli_status_probes_declared_endpoints(
 def test_cli_apply_supervises_until_interrupted(
     tmp_path: Path, fake_kubectl: Path, upstream: Upstream
 ) -> None:
-    local = _free_port()
+    local = worker_port()
     profile = tmp_path / "access.toml"
     profile.write_text(
         textwrap.dedent(

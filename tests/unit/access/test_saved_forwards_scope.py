@@ -27,6 +27,7 @@ from piceli.k8s.observe import (
     forward_scope,
 )
 from piceli.k8s.observe_server import LocalObserveServer
+from tests.ports import worker_port
 from tests.unit.access.test_access_status import write_spec
 
 runner = CliRunner()
@@ -40,12 +41,6 @@ def _kubeconfig(path: Path, server: str = "https://127.0.0.1:6443") -> Path:
         "contexts: [{name: lab, context: {cluster: c, user: u}}]\n"
     )
     return path
-
-
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
 
 
 @pytest.fixture
@@ -92,7 +87,7 @@ def test_restore_starts_only_forwards_saved_for_this_cluster(tmp_path: Path) -> 
     scope = ForwardScope("lab", "sha256:" + "a" * 16)
     elsewhere = ForwardScope("lab", "sha256:" + "b" * 16)
     store = PreferenceStore(tmp_path / "observe.json")
-    ports = [_free_port() for _ in range(4)]
+    ports = [worker_port() for _ in range(4)]
     store.replace_user(
         UserPreferences(
             "jose",
@@ -189,11 +184,11 @@ def _save_forwards(store_path: Path, kubeconfig: Path, namespace: str) -> None:
             "tester",
             (
                 PortForward(
-                    "here", namespace, "service/web", _free_port(), 80, scope=scope
+                    "here", namespace, "service/web", worker_port(), 80, scope=scope
                 ),
-                PortForward("legacy", namespace, "service/api", _free_port(), 80),
+                PortForward("legacy", namespace, "service/api", worker_port(), 80),
                 PortForward(
-                    "prod", "prod", "service/db", _free_port(), 5432, scope=elsewhere
+                    "prod", "prod", "service/db", worker_port(), 5432, scope=elsewhere
                 ),
             ),
         )
@@ -221,7 +216,7 @@ def test_operator_serve_never_starts_saved_forwards_implicitly(
         "--namespace",
         "demo",
         "--port",
-        str(_free_port()),
+        str(worker_port()),
         *extra,
     ]
     result, (server,), spawn = _serve(operator_app, args)
@@ -259,7 +254,7 @@ def test_observe_serve_restores_only_with_the_flag(tmp_path: Path, home: Path) -
         "--user",
         "tester",
         "--port",
-        str(_free_port()),
+        str(worker_port()),
     ]
     result, (server,), spawn = _serve(observe_app, args)
     assert result.exit_code == 0, result.output
@@ -306,7 +301,7 @@ def test_forward_save_scopes_with_kubeconfig_and_context(tmp_path: Path) -> None
 
 
 def test_operator_serve_access_starts_the_declared_forwards(tmp_path: Path) -> None:
-    spec = write_spec(tmp_path, local=_free_port(), upstream=80)
+    spec = write_spec(tmp_path, local=worker_port(), upstream=80)
     args = [
         "serve",
         "--kubeconfig",
@@ -318,7 +313,7 @@ def test_operator_serve_access_starts_the_declared_forwards(tmp_path: Path) -> N
         "--preferences",
         str(tmp_path / "prefs.json"),
         "--port",
-        str(_free_port()),
+        str(worker_port()),
         "--access",
         str(spec),
     ]
@@ -353,7 +348,7 @@ def test_operator_serve_access_refuses_a_taken_required_port(tmp_path: Path) -> 
                 "--preferences",
                 str(tmp_path / "prefs.json"),
                 "--port",
-                str(_free_port()),
+                str(worker_port()),
                 "--access",
                 str(spec),
             ],

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import socket
 import threading
 import time
 from pathlib import Path
@@ -20,6 +19,7 @@ from piceli.server.security import (
     uvicorn_log_config,
 )
 from piceli.services.query import QueryService
+from tests.ports import worker_port
 
 ORIGIN = "http://127.0.0.1:8000"
 
@@ -131,19 +131,13 @@ def test_local_security_rejects_a_weak_token_and_hides_it() -> None:
     )
 
 
-def _free_port() -> int:
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        return int(listener.getsockname()[1])
-
-
 def test_the_launch_token_is_not_logged(
     tmp_path: Path, capfd: pytest.CaptureFixture[str]
 ) -> None:
     import uvicorn
 
     (tmp_path / "index.html").write_text("<!doctype html><title>Piceli</title>")
-    port = _free_port()
+    port = worker_port()
     origin = f"http://127.0.0.1:{port}"
     app = create_app(QueryService([]), origin=origin, static_dir=tmp_path)
     token = app.state.security.launch_token

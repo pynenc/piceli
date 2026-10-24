@@ -27,6 +27,7 @@ from piceli.k8s.observe import (
 from piceli.k8s.observe_server import LocalObserveServer
 from piceli.k8s.port_owner import PortOwner
 from piceli.k8s.ui_config import UiConfig
+from tests.ports import worker_port
 
 SCOPE = ForwardScope(context="lab", cluster="sha256:" + "0" * 16)
 
@@ -134,11 +135,7 @@ def test_forward_health_path_is_private_preference_metadata(tmp_path: Path) -> N
 def test_forward_supervisor_probe_distinguishes_open_loopback_from_missing_port(
     tmp_path: Path,
 ) -> None:
-    unused_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    unused_listener.bind(("127.0.0.1", 0))
-    unused_port = unused_listener.getsockname()[1]
-    unused_listener.close()
-    forward = PortForward("api", "demo", "service/api", unused_port, 80)
+    forward = PortForward("api", "demo", "service/api", worker_port(), 80)
     assert not ForwardSupervisor._probe(forward)
 
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -160,18 +157,16 @@ def test_port_forward_runner_rejects_non_loopback_commands() -> None:
         )
 
 
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
 def test_forward_supervisor_owns_only_saved_loopback_processes(tmp_path: Path) -> None:
     store = PreferenceStore(tmp_path / "observe.json")
     store.replace_user(
         UserPreferences(
             "jose",
-            (PortForward("api", "demo", "service/api", _free_port(), 80, scope=SCOPE),),
+            (
+                PortForward(
+                    "api", "demo", "service/api", worker_port(), 80, scope=SCOPE
+                ),
+            ),
         )
     )
     supervisor = ForwardSupervisor(

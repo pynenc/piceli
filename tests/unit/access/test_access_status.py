@@ -42,6 +42,7 @@ from piceli.k8s.cli import access as cli_access
 from piceli.k8s.cli import app
 from piceli.k8s.port_owner import PortOwner, ProcessInfo, is_piceli_forward
 from piceli.k8s.ui_config import UiConfig, UiShortcut
+from tests.ports import worker_port
 
 REPO = Path(__file__).resolve().parents[3]
 SCHEMA = json.loads(
@@ -135,12 +136,6 @@ KUBECONFIG = textwrap.dedent(
 )
 
 
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
 class _Healthz(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         self.send_response(200)
@@ -203,7 +198,7 @@ def write_spec(
             [values]
             local = {local}
             upstream = {upstream}
-            spare = {spare or _free_port()}
+            spare = {spare or worker_port()}
             """
         )
     )
@@ -518,7 +513,7 @@ def test_forward_status_up_down_unhealthy(upstream: int) -> None:
     )
     assert up["forward"] == "up" and up["error"] is None
     assert up["owner"]["pid"] == 4242
-    down = forward_status(_shortcut(_free_port()), context="kind-shop")
+    down = forward_status(_shortcut(worker_port()), context="kind-shop")
     assert down["forward"] == "down" and down["owner"] is None
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -669,7 +664,7 @@ def test_collect_status_document(
 
 
 def test_collect_status_degraded_down_and_unreadable(tmp_path: Path) -> None:
-    target = resolve_target(str(write_spec(tmp_path, local=_free_port(), upstream=80)))
+    target = resolve_target(str(write_spec(tmp_path, local=worker_port(), upstream=80)))
     reader = healthy_reader()
     reader.objects[("Deployment", "web")] = deployment("web", ready=0)
     assert collect_status(target, reader)["state"] == "degraded"
@@ -693,7 +688,7 @@ def test_collect_status_degraded_down_and_unreadable(tmp_path: Path) -> None:
 
 
 def test_release_state_and_checks_come_from_the_state_dir(tmp_path: Path) -> None:
-    target = resolve_target(str(write_spec(tmp_path, local=_free_port(), upstream=80)))
+    target = resolve_target(str(write_spec(tmp_path, local=worker_port(), upstream=80)))
     state = tmp_path / "state"
     state.mkdir(mode=0o700)
     (state / "history.json").write_text(
@@ -804,7 +799,7 @@ def test_cli_status_json_is_the_schema_and_exit_code_follows_state(
 
 
 def test_cli_status_with_an_unusable_kubeconfig(tmp_path: Path) -> None:
-    spec = write_spec(tmp_path, local=_free_port(), upstream=80)
+    spec = write_spec(tmp_path, local=worker_port(), upstream=80)
     (tmp_path / "kubeconfig").unlink()
     result = runner.invoke(app, ["status", str(spec), "--json"])
     assert result.exit_code == 1
@@ -829,7 +824,7 @@ def _access(*args: str) -> Any:
 
 
 def test_cli_access_rejections(tmp_path: Path, fake_kubectl: Path) -> None:
-    spec = write_spec(tmp_path, local=_free_port(), upstream=80)
+    spec = write_spec(tmp_path, local=worker_port(), upstream=80)
     kubectl = ("--kubectl", str(fake_kubectl))
     result = _access(str(spec), "--only", "nope", *kubectl)
     assert result.exit_code == 2
@@ -897,7 +892,7 @@ def _get(url: str, token: str | None = None) -> Any:
 def test_cli_access_supervises_declared_forwards_and_serves_the_dashboard(
     tmp_path: Path, fake_kubectl: Path, upstream: int
 ) -> None:
-    local, dashboard = _free_port(), _free_port()
+    local, dashboard = worker_port(), worker_port()
     spec = write_spec(tmp_path, local=local, upstream=upstream)
     process = subprocess.Popen(
         [

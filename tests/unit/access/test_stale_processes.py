@@ -36,10 +36,10 @@ from piceli.k8s.port_owner import (
     ProcessInfo,
     recognise,
 )
+from tests.ports import worker_port
 from tests.unit.access import test_access_status as base
 from tests.unit.access.test_access_status import (
     REPO,
-    _free_port,
     _read_events,
     write_spec,
 )
@@ -244,7 +244,7 @@ def test_terminate_refuses_what_is_not_a_real_process(pid: object) -> None:
 
 
 def test_cli_access_stop_needs_stale(tmp_path: Path) -> None:
-    spec = write_spec(tmp_path, local=_free_port(), upstream=80)
+    spec = write_spec(tmp_path, local=worker_port(), upstream=80)
     result = CliRunner().invoke(app, ["access", "stop", str(spec)])
     assert result.exit_code == 2
     assert json.loads(result.stdout)["reason"] == "access-stop-needs-stale"
@@ -253,7 +253,7 @@ def test_cli_access_stop_needs_stale(tmp_path: Path) -> None:
 def test_cli_access_conflict_offers_stop_stale(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_kubectl: Path
 ) -> None:
-    local = _free_port()
+    local = worker_port()
     spec = write_spec(tmp_path, local=local, upstream=80)
     target = resolve_target(str(spec))
     argv = (
@@ -284,7 +284,7 @@ def test_cli_access_conflict_offers_stop_stale(
 
 
 def test_holder_check_uses_the_target_forwards(tmp_path: Path) -> None:
-    local = _free_port()
+    local = worker_port()
     target = resolve_target(str(write_spec(tmp_path, local=local, upstream=80)))
     check = holder_check(target)
     argv = (
@@ -317,7 +317,7 @@ def test_cli_access_stop_stale_stops_a_leftover_piceli_access(
     tmp_path: Path, fake_kubectl: Path, upstream: int
 ) -> None:
     try:
-        local, dashboard = _free_port(), _free_port()
+        local, dashboard = worker_port(), worker_port()
         spec = write_spec(tmp_path, local=local, upstream=upstream)
         process = subprocess.Popen(
             [
@@ -406,7 +406,7 @@ def test_status_counts_a_running_access_relay_as_piceli_forward(
     """0.19: `piceli access` holds the declared port in its relay (kubectl
     sits behind it); `piceli status` reports that forward `up`, not
     `occupied` (found by the kind suite)."""
-    local = _free_port()
+    local = worker_port()
     spec = write_spec(tmp_path, local=local, upstream=upstream)
     process = subprocess.Popen(
         [
