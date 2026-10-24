@@ -1093,14 +1093,24 @@ def test_an_image_build_fetches_the_inputs_the_composition_releases_cover(
     assert item["locked"]["narHash"] == "sha256-AAAA"
 
 
-def test_every_path_fetches_a_git_input_with_its_whole_history() -> None:
+def test_every_path_fetches_a_git_input_as_the_lock_pins_it() -> None:
+    """0.26.3: ``shallow`` as locked (0.26.2 forced ``false``; the tree and
+    its ``narHash`` are the same either way, Nix 2.28 and 2.35)."""
     from piceli.dev import nix_fetch
 
     locked = {"type": "git", "url": "ssh://git@github.com/org/app",
               "rev": "c" * 40, "revCount": 7, "narHash": "sha256-AAAA",
               "shallow": True}  # fmt: skip
     attrs = nix_fetch.fetch_attrs(locked)
-    assert attrs == {**locked, "shallow": False}
-    assert '\\"shallow\\":false' in nix_fetch.fetch_expr(locked).replace(" ", "")
+    assert attrs == locked
+    assert '\\"shallow\\":true' in nix_fetch.fetch_expr(locked).replace(" ", "")
     forge = {"type": "github", "owner": "org", "repo": "app", "rev": "c" * 40}
     assert nix_fetch.fetch_attrs(forge) == forge
+
+
+def test_the_build_reads_the_reference_lock_when_given() -> None:
+    """0.26.3: the fetched inputs' trees, pinned; the checkout's lock stays."""
+    lock = f"/nix/store/{'l' * 32}-flake.lock"
+    argv = nix.build_argv(".#web", lock)
+    assert argv[-4:] == ["--reference-lock-file", lock, "--no-write-lock-file", ".#web"]
+    assert "--reference-lock-file" not in nix.build_argv(".#web")

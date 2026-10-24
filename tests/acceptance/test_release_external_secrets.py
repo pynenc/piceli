@@ -316,6 +316,8 @@ def test_changed_value_under_the_same_secret_name_writes_nothing(external_env):
     vault.put("shop/api", {"token": API_TOKEN_2})
     _aws(stubber)
     code, result, _ = _run(tmp_path, "apply", "--auto-approve")
-    assert code == 1, result
-    assert result["reason"] == "retained-content-precondition-failed"
+    # 0.26.3: the plan refuses it (apply would) and names the Secret.
+    assert code == 2, result
+    assert result["reason"] == "retained-content-differs"
+    assert "Secret" in result["message"] and "/data/" in result["message"]
     assert _data(api, "api") == API_TOKEN

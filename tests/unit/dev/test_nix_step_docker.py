@@ -62,7 +62,9 @@ BUILDER = (
     "ghcr.io/pynenc/piceli-builder@sha256:"
     "c899c074bbf7cd7b49e325f603da04fcbd6d7d8c40187a3ade58cfc8a54c595a"
 )
-NIXOS = "docker.io/nixos/nix:latest"
+#: The build host's Nix (its store, daemon and ``nix``);
+#: ``PICELI_TEST_NIX_STEP_NIXOS`` picks a version (``docker.io/nixos/nix:2.28.3``).
+NIXOS = ENV.get("PICELI_TEST_NIX_STEP_NIXOS") or "docker.io/nixos/nix:latest"
 ALPINE = "docker.io/library/alpine:3.20"
 pytestmark = [
     pytest.mark.skipif(
@@ -122,6 +124,14 @@ IMAGE_FLAKE = """{
     packages.aarch64-linux.image = image "aarch64-linux";
   };
 }
+"""
+#: The output path of the same flake when Nix fetches the input itself
+#: (with the key; nothing built, only evaluated).
+OWN_BUILD = r"""set -e
+printf '%s' "$KEY" > /tmp/k && chmod 600 /tmp/k
+export GIT_SSH_COMMAND="ssh -i /tmp/k -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+mkdir /f && cd /f && printf '%s' "$FLAKE" > flake.nix && printf '%s' "$LOCK" > flake.lock
+nix --extra-experimental-features 'nix-command flakes' eval --raw "path:/f#$ATTR.outPath"
 """
 ROOTS = "/piceli-test-gcroots"
 #: The composition of the image build: the release declares the input.
@@ -361,6 +371,114 @@ def test_dev_nix_build_image_with_a_private_input_on_a_docker_host(
     assert held.returncode != 0, held.stderr.decode()[-2000:]
     live.docker.run("exec", live.nixd, "rm", f"{ROOTS}/images/web-1-image")
     assert live.delete(body["store_path"]).returncode == 0
+
+
+def _shallow(lock: str) -> str:
+    """``lock`` with its ``app`` node locked ``"shallow": true``, as Nix 2.35
+    writes it (and the production lock of 0.26.3's report)."""
+    parsed = json.loads(lock)
+    parsed["nodes"]["app"]["locked"]["shallow"] = True
+    return json.dumps(parsed, indent=2)
+
+
+def test_a_shallow_locked_private_input_builds_from_the_fetched_tree(
+    engine: tuple[BuildHost, Engine],
+    live: Live,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """0.26.3: a lock entry ``"shallow": true`` (with ``revCount``). The
+    build never resolves the Git input itself: it gets the fetched tree's
+    store path in a reference lock (the build container holds no key and
+    the repository is stopped before the build), and builds the same
+    output as when Nix fetched the input itself."""
+    from typer.testing import CliRunner
+
+    import piceli.dev.nix as nix
+    import piceli.k8s.cli.dev_nix as dev_nix
+    from piceli.dev.hosts import ContainerCli
+    from piceli.k8s.cli import app
+    from tests.unit.dev.test_pack import commit, repo
+
+    host = _rooted_host(engine)
+    image = ENV.get("PICELI_TEST_NIX_STEP_IMAGE") or BUILDER
+    flake = IMAGE_FLAKE.replace("URL", live.url)
+    lock = _shallow(live.lock(flake))
+    assert '"revCount"' in lock and '"shallow": true' in lock
+    source = repo(tmp_path / "hosts", {"flake.nix": flake})
+    commit(source, {"flake.lock": lock, "machines.py": MACHINES})
+    monkeypatch.chdir(source)
+    dev = DevBuilds(node=None, image=image, hosts=[host],
+                    profiles=[DevProfile.for_nix(timeout="2h")])  # fmt: skip
+    monkeypatch.setattr(dev_nix, "load_dev", lambda _ref: dev)
+    arch = ContainerCli(host).platform().split("/")[-1]
+    system = {"amd64": "x86_64-linux", "arm64": "aarch64-linux"}[arch]
+    # The output when Nix fetches the input itself (with the key; no
+    # reference lock), before the repository goes away.
+    own = live.docker.run(
+        "run", "--rm", "-e", f"KEY={live.private}", "-e", f"FLAKE={flake}",
+        "-e", f"LOCK={lock}", "-e", f"ATTR=packages.{system}.image",
+        "--entrypoint", "sh", NIXOS, "-c", OWN_BUILD,
+    ).strip()  # fmt: skip
+    said: list[str] = []
+    real_build_argv = nix.build_argv
+
+    def build_argv(target: str, *args: Any, **kwargs: Any) -> list[str]:
+        # The fetch step ran: from here on the repository is gone, so a
+        # build that resolved the input itself would fail.
+        live.docker.run("stop", "-t", "1", f"piceli-test-sshd-{live.tag}")
+        argv = real_build_argv(target, *args, **kwargs)
+        said.append(" ".join(argv))
+        return argv
+
+    monkeypatch.setattr(nix, "build_argv", build_argv)
+    done = CliRunner().invoke(app, [
+        "dev", "nix", "build", f"packages.{system}.image",
+        "--name", "web-1", "--dev", "machines.py:builds", "--host",
+        "nix-host", "--json",
+    ])  # fmt: skip
+    assert done.exit_code == 0, done.stdout + done.stderr
+    body = json.loads(done.stdout)
+    assert body["state"] == "built", body
+    assert "--reference-lock-file" in said[0], said
+    assert own == body["store_path"], (own, body["store_path"])
+    assert done.stderr.count("the build reads the fetched inputs from") == 1
+
+
+def test_a_release_build_of_a_shallow_locked_input_uses_the_fetched_tree(
+    engine: tuple[BuildHost, Engine], live: Live, tmp_path: Path
+) -> None:
+    """0.26.3, ``builder serve --publish``'s path: fetch (checked against the
+    lock), then the build with the reference lock, the repository gone."""
+    from piceli.dev import nix_inputs
+    from piceli.dev.hosts import ContainerCli
+    from piceli.k8s.cli import builder
+    from tests.unit.dev.test_pack import commit, repo
+
+    host = _rooted_host(engine)
+    image = ENV.get("PICELI_TEST_NIX_STEP_IMAGE") or BUILDER
+    flake = IMAGE_FLAKE.replace("URL", live.url)
+    lock = _shallow(live.lock(flake))
+    checkout = repo(tmp_path / "checkout", {"flake.nix": flake})
+    commit(checkout, {"flake.lock": lock})
+    dev = DevBuilds(node=None, image=image, hosts=[host],
+                    profiles=[DevProfile.for_nix(timeout="2h")])  # fmt: skip
+    publisher = builder._publisher([], dev, host)
+    arch = ContainerCli(host).platform().split("/")[-1]
+    system = {"amd64": "x86_64-linux", "arm64": "aarch64-linux"}[arch]
+    plan = {"inputs": nix_inputs.covered(lock, declared={"app": "app-read"})}
+    said: list[str] = []
+    with publisher.fetch.roots() as roots:
+        reference = publisher.fetch_inputs(
+            plan, checkout, said.append, lambda _stage: contextlib.nullcontext(),
+            roots=roots,
+        )  # fmt: skip
+        assert reference is not None and reference.endswith("-flake.lock"), said
+        live.docker.run("stop", "-t", "1", f"piceli-test-sshd-{live.tag}")
+        built = publisher.build(
+            checkout, f".#packages.{system}.image", said.append, lock=reference
+        )
+    assert built.startswith("/nix/store/"), said
 
 
 def test_builder_serve_fetches_a_private_input_with_the_builder_image(

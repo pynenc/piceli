@@ -240,9 +240,10 @@ def _unquote(expr: str) -> str:
 
 
 def test_the_fetch_expression_quotes_any_attribute() -> None:
-    locked = {"type": "git", "url": 'https://h/a"b\\c${x}', "rev": REV}
-    expected = {**locked, "shallow": False}  # 0.26.2: the whole history
-    assert json.loads(_unquote(nix_fetch.fetch_expr(locked))) == expected
+    locked = {"type": "git", "url": 'https://h/a"b\\c${x}', "rev": REV,
+              "shallow": True}  # fmt: skip
+    # 0.26.3: exactly as locked (0.26.2 forced shallow = false).
+    assert json.loads(_unquote(nix_fetch.fetch_expr(locked))) == locked
 
 
 class FakeNix:
@@ -252,12 +253,24 @@ class FakeNix:
         self.calls: list[dict[str, Any]] = []
         self.roots: list[list[str]] = []
         self.fail = fail or set()
+        #: ``{locked narHash: what the fetched tree hashes to}``.
+        self.hashes: dict[str, str] = {}
+        self.lock = ""
 
     def __call__(self, argv: list[str], **kwargs: Any) -> Any:
         env = kwargs["env"]
         if "--out-link" in argv:  # a GC root of a fetched tree
             self.roots.append(argv[argv.index("--out-link") + 1 :])
             return subprocess.CompletedProcess(argv, 0, b"", b"")
+        if argv[-3:-1] == ["hash", "path"]:  # 0.26.3: the tree, as locked
+            wanted = self.hashes.get(self.calls[-1]["locked"]["narHash"])
+            found = wanted or self.calls[-1]["locked"]["narHash"]
+            return subprocess.CompletedProcess(argv, 0, f"{found}\n".encode(), b"")
+        if "--impure" in argv:  # 0.26.3: the reference lock, stored
+            file = argv[-1].split("builtins.readFile ")[1].strip('()"')
+            self.lock = Path(file).read_text()
+            name = f"/nix/store/{'l' * 32}-flake.lock"
+            return subprocess.CompletedProcess(argv, 0, name.encode(), b"")
         locked = json.loads(_unquote(argv[-1]))
         seen = {"argv": argv, "env": dict(env), "locked": locked}
         if env.get("GIT_ASKPASS"):
@@ -535,3 +548,99 @@ def test_needed_secrets_list_each_releases_input_credentials(
     rows = {r["name"]: r for r in report("infra.py", {"s": sealed})["secrets"]}
     assert rows["piceli-build-git"]["state"] == "pending"
     assert "piceli cluster status" in rows["piceli-build-git"]["detail"]
+
+
+# ------------------------------------------------- 0.26.3: verified, pinned
+
+
+def test_a_fetched_tree_that_is_not_the_locked_one_is_refused(tmp_path: Path) -> None:
+    request, tried = _request()
+    fake = FakeNix()
+    fake.hashes[APP_SSH["narHash"]] = "sha256-orZ8"
+    (tmp_path / "nix").write_text("#!/bin/sh\n")
+    (tmp_path / "nix").chmod(0o755)
+    outcome = nix_fetch.fetch(request, runner=fake, environ={"PATH": str(tmp_path)})
+    assert outcome["state"] == "failed" and outcome["failure"] == "mismatch"
+    assert (outcome["expected"], outcome["actual"]) == ("sha256-AAAA", "sha256-orZ8")
+    assert "expected sha256-AAAA" in outcome["detail"]
+    assert "got sha256-orZ8" in outcome["detail"]
+    marker = nix_fetch.RESULT_MARKER + json.dumps(outcome)
+
+    def runner(_argv: list[str], **_kwargs: Any) -> Any:
+        return subprocess.CompletedProcess(_argv, 1, marker.encode(), b"")
+
+    with pytest.raises(DevError) as raised:
+        nix_inputs.run_fetcher(["fetcher"], request, tried, runner=runner)
+    assert raised.value.code == "infra-nix-input-unreachable"
+    assert "expected sha256-AAAA, got sha256-orZ8" in str(raised.value)
+
+
+def test_the_fetch_hashes_the_tree_with_the_lock_attributes(tmp_path: Path) -> None:
+    request, _ = _request()
+    fake = FakeNix()
+    (tmp_path / "nix").write_text("#!/bin/sh\n")
+    (tmp_path / "nix").chmod(0o755)
+    outcome = nix_fetch.fetch(request, runner=fake, environ={"PATH": str(tmp_path)})
+    assert outcome["state"] == "fetched" and "lock" not in outcome
+    assert [item["nar_hash"] for item in outcome["inputs"]] == [
+        nix_fetch.sri(APP_SSH["narHash"]),
+        "sha256-BBBB",
+    ]
+
+
+def test_the_build_gets_a_reference_lock_of_the_fetched_trees(tmp_path: Path) -> None:
+    request, _ = _request()
+    fake = FakeNix()
+    (tmp_path / "nix").write_text("#!/bin/sh\n")
+    (tmp_path / "nix").chmod(0o755)
+    roots = tmp_path / "roots"
+    outcome = nix_fetch.fetch(
+        {**request, "lock": LOCK, "roots": str(roots)}, runner=fake,
+        environ={"PATH": str(tmp_path)},
+    )  # fmt: skip
+    stored = f"/nix/store/{'l' * 32}-flake.lock"
+    assert outcome["lock"] == stored and outcome["lock_rooted"] is True
+    assert [str(roots / "lock"), stored] in fake.roots
+    assert nix_inputs.reference_lock_of(outcome) == stored
+    pinned = json.loads(fake.lock)["nodes"]
+    tree = f"/nix/store/{'b' * 32}-source"
+    assert pinned["app"]["locked"] == {
+        "type": "path", "path": tree, "narHash": APP_SSH["narHash"],
+        "lastModified": APP_SSH["lastModified"], "rev": APP_SSH["rev"],
+        "revCount": APP_SSH["revCount"],
+    }  # fmt: skip
+    original = json.loads(LOCK)["nodes"]
+    assert pinned["app"]["inputs"] == original["app"]["inputs"]
+    untouched = set(original) - {"app", "lib"}
+    assert {key: pinned[key] for key in untouched} == {
+        key: original[key] for key in untouched
+    }
+
+
+def test_a_reference_lock_keeps_every_other_node_and_the_inputs() -> None:
+    lock = json.dumps({"version": 7, "root": "root", "nodes": {
+        "root": {"inputs": {"app": "app", "nixpkgs": "nixpkgs"}},
+        "app": {"inputs": {"nixpkgs": ["nixpkgs"]}, "locked": {
+            "type": "git", "url": "ssh://git@github.com/org/app", "ref": "main",
+            "rev": REV, "revCount": 3, "shallow": True, "lastModified": 1,
+            "narHash": "sha256-AAAA"}, "original": {"type": "git", "url": "x"}},
+        "nixpkgs": {"locked": {"type": "github", "owner": "o", "repo": "r"}},
+    }})  # fmt: skip
+    pinned = json.loads(nix_fetch.reference_lock(lock, {"app": "/nix/store/x-source"}))
+    assert pinned["nodes"]["app"]["locked"] == {
+        "type": "path", "path": "/nix/store/x-source", "narHash": "sha256-AAAA",
+        "lastModified": 1, "rev": REV, "revCount": 3,
+    }  # fmt: skip
+    assert pinned["nodes"]["app"]["inputs"] == {"nixpkgs": ["nixpkgs"]}
+    assert pinned["nodes"]["nixpkgs"] == json.loads(lock)["nodes"]["nixpkgs"]
+    with pytest.raises(ValueError, match="does not lock lib"):
+        nix_fetch.reference_lock(lock, {"lib": "/nix/store/y-source"})
+
+
+def test_only_a_store_flake_lock_is_a_reference_lock() -> None:
+    good = f"/nix/store/{'l' * 32}-flake.lock"
+    assert nix_inputs.reference_lock_of({"lock": good}) == good
+    for bad in (None, "", "/tmp/flake.lock", "/nix/store/a/b-flake.lock",
+                f"/nix/store/{'l' * 32}-source", f"{good} --impure"):  # fmt: skip
+        assert nix_inputs.reference_lock_of({"lock": bad}) is None
+    assert nix_inputs.reference_lock_of(None) is None

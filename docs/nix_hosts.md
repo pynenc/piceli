@@ -132,9 +132,13 @@ releases).
 A flake whose `flake.lock` pins a private input (`app =
 git+ssh://git@github.com/org/app`) builds on a build host whose build run
 holds no Git credential (0.26.0). Before the build, a short fetch step on
-the build host fetches each private input into the host's Nix store; the
-build then finds every one of them there by its `narHash` and fetches
-nothing. The credential reaches only that fetch step: never the build run,
+the build host fetches each private input into the host's Nix store, with
+the attributes `flake.lock` pins, and checks that the tree's `narHash` is
+the locked one (else `infra-nix-input-unreachable`, naming both hashes).
+It then stores a copy of `flake.lock` in which each fetched input points at
+its tree in the store, and the build reads that copy (`nix build
+--reference-lock-file`, 0.26.3): it never resolves a private input itself,
+and builds the same store path. The credential reaches only that fetch step: never the build run,
 the image, an argument, the build log, the cache, the receipt, the manifest
 or the published closure.
 

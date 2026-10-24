@@ -5,8 +5,9 @@ git+ssh://git@github.com/org/app``) cannot be built where nothing gives Nix
 a Git credential: the build run on a build host holds none, by design. So
 before the build, the build host fetches those inputs itself, into its own
 Nix store, with a Git credential it holds in its own Piceli secrets; the
-build then finds each one in the store by its ``narHash`` and fetches
-nothing. The credential never reaches the build run, the image, the build
+build then reads them from a reference lock pinning their trees in the
+store (0.26.3, :mod:`piceli.dev.nix_fetch`) and fetches nothing. The
+credential never reaches the build run, the image, the build
 log, the cache or the published closure.
 
 **Which inputs** (:func:`covered`): the input of the release's promotion
@@ -676,15 +677,36 @@ class InputFetch:
         say: Callable[[str], None],
         controller: Mapping[str, Any] | None = None,
         roots: Any = None,
+        lock: bytes | str | None = None,
     ) -> dict[str, Any]:
+        """0.26.3: with ``lock`` (the commit's ``flake.lock``), the outcome's
+        ``lock`` is a reference lock in the host's store pinning each
+        fetched tree (:func:`reference_lock_of`)."""
         request, tried = plan_fetch(pairs, controller=controller)
         if roots is not None:
             request["roots"] = str(roots)
+        if lock is not None:
+            request["lock"] = lock.decode() if isinstance(lock, bytes) else str(lock)
         for item in tried:
             say(f"input {item['input']} {item['url']} ({item['tried']})")
         outcome = run_fetcher(self.argv, request, tried, say=say, runner=self.runner)
         del request
         return outcome
+
+
+def reference_lock_of(outcome: Mapping[str, Any] | None) -> str | None:
+    """The reference lock of a fetch's outcome (0.26.3): the store path the
+    build reads with ``--reference-lock-file``, or ``None``."""
+    found = (outcome or {}).get("lock")
+    if (
+        isinstance(found, str)
+        and found.startswith("/nix/store/")
+        and found.endswith("-flake.lock")
+        and "/" not in found[len("/nix/store/") :]
+        and not any(char.isspace() for char in found)
+    ):
+        return found
+    return None
 
 
 def fetch_inputs(

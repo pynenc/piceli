@@ -12,7 +12,7 @@ import hashlib
 import hmac
 import json
 import secrets
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
@@ -33,6 +33,7 @@ from piceli.k8s.ops.secret_versions import (
     PRIVATE_VALUE,
     SecretBinding,
     SecretVersionRef,
+    pointer_parts,
     replace_pointer,
 )
 
@@ -1259,6 +1260,13 @@ class PrivateEvidence:
     """
 
     matching: frozenset[ResourceRef] = frozenset()
+    #: 0.26.3: retained objects whose live content lacks a resolved
+    #: secret-bound value, with the JSON pointers of those bindings (never a
+    #: value). The executor would refuse them (``retained-content-
+    #: precondition-failed``), so the plan does.
+    retained_differs: Mapping[ResourceRef, tuple[str, ...]] = field(
+        default_factory=dict
+    )
 
 
 def private_evidence(
@@ -1282,13 +1290,13 @@ def private_evidence(
         return hmac.new(key, _canonical_json(value).encode(), hashlib.sha256).digest()
 
     matching: set[ResourceRef] = set()
+    differs: dict[ResourceRef, tuple[str, ...]] = {}
     for component in composition.components:
         for resource in component.resources:
             current = observed.get(resource.ref)
             if (
                 not resource.secret_bindings
                 or current is None
-                or current.ownership is not Ownership.MANAGED
                 or resource.ref in snapshot.incomplete_content
             ):
                 continue
@@ -1300,6 +1308,14 @@ def private_evidence(
                     )
                 desired = private_comparable(manifest)
             except (ValueError, KeyError, TypeError):
+                continue
+            if current.retained:
+                missing = _private_not_contained(
+                    resource, desired, current.intent.manifest, keyed
+                )
+                if missing:
+                    differs[resource.ref] = missing
+            if current.ownership is not Ownership.MANAGED:
                 continue
             live = current.intent.manifest
             if (
@@ -1315,7 +1331,63 @@ def private_evidence(
                     _remove_json_pointer(live, defaulted_field.json_pointer)
             if hmac.compare_digest(keyed(desired), keyed(live)):
                 matching.add(resource.ref)
-    return PrivateEvidence(frozenset(matching))
+    return PrivateEvidence(frozenset(matching), differs)
+
+
+def _keyed_leaves(value: Any, keyed: Callable[[Any], bytes]) -> Any:
+    """``value`` with every scalar replaced by its keyed digest."""
+    if isinstance(value, dict):
+        return {key: _keyed_leaves(item, keyed) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_keyed_leaves(item, keyed) for item in value]
+    return keyed(value)
+
+
+def _private_not_contained(
+    resource: ResourceIntent,
+    desired: Mapping[str, Any],
+    live: Mapping[str, Any],
+    keyed: Callable[[Any], bytes],
+) -> tuple[str, ...]:
+    """The secret-bound pointers of a retained object the live one lacks.
+
+    Compared like the executor's retained check (containment, labels and
+    annotations aside), on keyed digests only. A Secret's ``stringData``
+    binding is looked up under ``data``, where the API server keeps it.
+    """
+    wanted = _keyed_leaves(without_metadata_maps(desired), keyed)
+    actual = _keyed_leaves(without_metadata_maps(live), keyed)
+    if manifest_contains(actual, wanted):
+        return ()
+    missing = []
+    for binding in resource.secret_bindings:
+        pointer = binding.json_pointer
+        if pointer.startswith("/stringData/"):
+            pointer = "/data/" + pointer.removeprefix("/stringData/")
+        parts = pointer_parts(pointer)
+        expected = _at(wanted, parts)
+        found = _at(actual, parts)
+        if (
+            expected is _ABSENT
+            or found is _ABSENT
+            or not manifest_contains(found, expected)
+        ):
+            missing.append(binding.json_pointer)
+    return tuple(sorted(set(missing))) or ("/",)
+
+
+_ABSENT = object()
+
+
+def _at(value: Any, parts: Sequence[str]) -> Any:
+    for part in parts:
+        if isinstance(value, dict) and part in value:
+            value = value[part]
+        elif isinstance(value, list) and part.isdigit() and int(part) < len(value):
+            value = value[int(part)]
+        else:
+            return _ABSENT
+    return value
 
 
 def _removal_parts(pointer: str) -> list[str]:
@@ -1812,6 +1884,31 @@ def metadata_patch(
     return patch
 
 
+def _refuse_private_change(ref: ResourceRef, private: PrivateEvidence | None) -> None:
+    """0.26.3: a retained object whose secret-bound value would change.
+
+    Piceli never rewrites a retained object, so apply would refuse it with
+    ``retained-content-precondition-failed``; the plan refuses it first and
+    names the object and the keys (never a value).
+    """
+    pointers = None if private is None else private.retained_differs.get(ref)
+    if not pointers:
+        return
+    where = f"{ref.namespace}/{ref.name}" if ref.namespace else ref.name
+    raise RetainedContentDiffers(
+        f"retained {ref.kind} {where}: the value of {', '.join(pointers)} would "
+        "change, and Piceli never rewrites a retained object; keep the old "
+        f"value, or put the new one in a {ref.kind} with a new name (for "
+        f"example {ref.name}-2) and point the workloads at it"
+    )
+
+
+class RetainedContentDiffers(ValueError):
+    """A plan refusal: a retained object's secret-bound value would change."""
+
+    code = "retained-content-differs"
+
+
 def retained_content_contained(
     desired: ResourceIntent, current: ObservedResource
 ) -> bool:
@@ -2129,6 +2226,8 @@ def build_plan(
                     adoption = adoption_for(
                         desired[ref], current, authorization.field_manager
                     )
+                    if current.retained:
+                        _refuse_private_change(ref, private)
                 elif current.ownership is Ownership.UNMANAGED:
                     raise ValueError(f"resource requires explicit adoption: {ref}")
                 elif not (
@@ -2170,6 +2269,7 @@ def build_plan(
                                 "object; only metadata labels and annotations can "
                                 f"change on a retained object: {ref}"
                             )
+                        _refuse_private_change(ref, private)
                         changes = _public_metadata_changes(desired[ref], current)
             actions.append(
                 PlanAction(

@@ -40,8 +40,17 @@ links; ``{"release": DIR}`` removes it after the build, and ``{"hold":
 build). Nix's fetcher cache (``XDG_CACHE_HOME``) is in the temporary directory
 too, so no clone of a private repository stays on the host; the directory is
 removed on every exit. The fetched trees land in the host's store (through
-its daemon), where the build finds them by their ``narHash`` without
-fetching. Output lines are masked; the one result line
+its daemon).
+
+0.26.3: each tree is fetched with exactly the lock's attributes (``shallow``
+included) and its ``narHash`` is recomputed (``nix hash path``) and checked
+against the lock's; a different tree stops the fetch (``mismatch``, naming
+both hashes). With ``lock`` (the commit's ``flake.lock``), the step then
+stores a *reference lock*: the same lock with each fetched node locked as a
+``path`` input of its tree (``narHash``, ``rev``, ``revCount``,
+``lastModified`` kept), rooted like the trees. The build reads it with
+``nix build --reference-lock-file``, so it never resolves a private input
+itself; its result is the same, as the trees are. Output lines are masked; the one result line
 (``PICELI-NIX-INPUTS {json}``) carries names and store paths, never a
 secret. It stops at the first input it cannot fetch.
 
@@ -61,6 +70,8 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 RESULT_MARKER = "PICELI-NIX-INPUTS "
+#: The store name of the reference lock (0.26.3).
+LOCK_NAME = "flake.lock"
 #: Where ``nix`` is on a multi-user install and on NixOS (also with only
 #: ``/nix`` mounted into a container).
 NIX_PATHS = (
@@ -92,15 +103,51 @@ def nix_string(text: str) -> str:
 
 
 def fetch_attrs(locked: Mapping[str, Any]) -> dict[str, Any]:
-    """The ``fetchTree`` attributes of a locked node, for every path that
-    fetches one (0.26.2): as ``flake.lock`` locks it, except that a ``git``
-    input is always fetched with its whole history (``shallow = false``,
-    whatever the lock or Nix's default), as ``nix flake lock`` fetched it, so
-    its ``revCount`` is checked too."""
-    attrs = dict(locked)
-    if attrs.get("type") == "git":
-        attrs["shallow"] = False
-    return attrs
+    """The ``fetchTree`` attributes of a locked node: exactly as
+    ``flake.lock`` locks it, ``shallow`` included (0.26.3; 0.26.2 forced
+    ``shallow = false``). The tree, and so its ``narHash``, is the same
+    either way; the lock's own attributes are what the build would use."""
+    return dict(locked)
+
+
+#: The attributes a locked node keeps when the build gets its fetched tree
+#: as a ``path`` input (0.26.3): what the flake can read of an input
+#: (``rev``, ``shortRev``, ``revCount``, ``lastModified``, ``narHash``).
+PATH_KEEPS = ("narHash", "lastModified", "rev", "revCount")
+
+
+def sri(text: str) -> str:
+    """A ``sha256-…`` hash with its base-64 padding (old locks lack it)."""
+    text = text.strip()
+    if text.startswith("sha256-"):
+        body = text[len("sha256-") :]
+        return "sha256-" + body + "=" * (-len(body) % 4)
+    return text
+
+
+def reference_lock(lock: str, fetched: Mapping[str, str]) -> str:
+    """``lock`` with each fetched node (``{node key: store path}``) locked
+    as a ``path`` input of its tree in the store (0.26.3): the build reads
+    it with ``--reference-lock-file`` and never resolves the input itself.
+    The node's ``original``, its inputs and every other node stay as they
+    are, so nothing is relocked and the build's result is the same.
+
+    :raises ValueError: ``lock`` is not a lock, or lacks a fetched node."""
+    parsed = json.loads(lock)
+    nodes = parsed.get("nodes") if isinstance(parsed, dict) else None
+    if not isinstance(nodes, dict):
+        raise ValueError("flake.lock has no nodes")
+    for key, path in fetched.items():
+        node = nodes.get(key)
+        if not isinstance(node, dict) or not isinstance(node.get("locked"), dict):
+            raise ValueError(f"flake.lock does not lock {key}")
+        locked = node["locked"]
+        node["locked"] = {
+            "type": "path",
+            "path": path,
+            **{name: locked[name] for name in PATH_KEEPS if name in locked},
+        }
+    return json.dumps(parsed, indent=2, sort_keys=True) + "\n"
 
 
 def fetch_expr(locked: Mapping[str, Any]) -> str:
@@ -111,6 +158,17 @@ def fetch_expr(locked: Mapping[str, Any]) -> str:
 
 def eval_argv(nix: str, locked: Mapping[str, Any]) -> list[str]:
     return [nix, *FEATURES, "eval", "--raw", "--expr", fetch_expr(locked)]
+
+
+def hash_argv(nix: str, path: str) -> list[str]:
+    """The ``narHash`` of the tree at ``path``, recomputed from its files."""
+    return [nix, *FEATURES, "hash", "path", path]
+
+
+def lock_argv(nix: str, file: str) -> list[str]:
+    """Adds ``file`` (the reference lock) to the store as ``…-flake.lock``."""
+    expr = f"builtins.toFile {nix_string(LOCK_NAME)} (builtins.readFile {nix_string(file)})"
+    return [nix, *FEATURES, "eval", "--impure", "--raw", "--expr", expr]
 
 
 def root_argv(nix: str, link: str, path: str) -> list[str]:
@@ -264,21 +322,79 @@ def fetch(
             if result.returncode != 0 or not path.startswith("/nix/store/"):
                 return {"state": "failed", "input": name, "failure": "unreachable",
                         "detail": reason(lines), "inputs": done}  # fmt: skip
-            entry: dict[str, Any] = {"name": name, "store_path": path}
-            roots = request.get("roots")
-            if isinstance(roots, str) and roots:
-                # Held until the client removes ``roots`` after the build: a
-                # garbage collection in between cannot take the tree.
-                link = os.path.join(roots, f"{index}-{name or 'input'}")
-                os.makedirs(roots, mode=0o700, exist_ok=True)
-                rooted = runner(root_argv(nix, link, path), env=env,
-                                capture_output=True, timeout=600)  # fmt: skip
-                entry["rooted"] = rooted.returncode == 0
-                if not entry["rooted"]:
+            # 0.26.3: the tree is the lock's, checked here by its own files.
+            expected = sri(str(locked.get("narHash") or ""))
+            hashed = runner(hash_argv(nix, path), env=env, capture_output=True,
+                            timeout=FETCH_SECONDS)  # fmt: skip
+            actual = sri((hashed.stdout or b"").decode("utf-8", "replace"))
+            if hashed.returncode != 0 or not actual.startswith("sha256-"):
+                return {"state": "failed", "input": name, "failure": "unreachable",
+                        "detail": "nix could not hash the fetched tree: " + reason(
+                            (hashed.stderr or b"").decode("utf-8", "replace").splitlines()
+                        ), "inputs": done}  # fmt: skip
+            if actual != expected:
+                return {"state": "failed", "input": name, "failure": "mismatch",
+                        "detail": f"the fetched tree is not the one flake.lock "
+                        f"locks: narHash expected {expected or 'none'}, got {actual}",
+                        "expected": expected, "actual": actual, "inputs": done}  # fmt: skip
+            entry: dict[str, Any] = {"name": name, "store_path": path,
+                                     "nar_hash": actual}  # fmt: skip
+            rooted = _root(
+                runner,
+                nix,
+                request.get("roots"),
+                f"{index}-{name or 'input'}",
+                path,
+                env,
+            )
+            if rooted is not None:
+                entry["rooted"] = rooted
+                if not rooted:
                     emit(f"warning: no GC root for input {name}; a garbage "
-                         "collection before the build would refetch it")  # fmt: skip
+                         "collection before the build would take it")  # fmt: skip
             done.append(entry)
-    return {"state": "fetched", "inputs": done}
+        lock = request.get("lock")
+        if not isinstance(lock, str) or not lock.strip():
+            return {"state": "fetched", "inputs": done}
+        # 0.26.3: the build gets the fetched trees in a reference lock in the
+        # store, so it never resolves (or refetches) the inputs itself.
+        try:
+            text = reference_lock(lock, {e["name"]: e["store_path"] for e in done})
+        except (ValueError, TypeError) as error:
+            return {"state": "failed", "input": done[0]["name"] if done else "",
+                    "failure": "invalid", "detail": f"no reference lock: {error}",
+                    "inputs": done}  # fmt: skip
+        file = os.path.join(scratch, LOCK_NAME)
+        _private_file(file, text)
+        added = runner(lock_argv(nix, file), env=dict(environ), capture_output=True,
+                       timeout=600)  # fmt: skip
+        stored = (added.stdout or b"").decode("utf-8", "replace").strip()
+        if added.returncode != 0 or not stored.startswith("/nix/store/"):
+            return {"state": "failed", "input": done[0]["name"] if done else "",
+                    "failure": "invalid", "detail": "nix did not store the reference "
+                    "lock: " + reason((added.stderr or b"").decode(
+                        "utf-8", "replace").splitlines()),
+                    "inputs": done}  # fmt: skip
+        outcome: dict[str, Any] = {"state": "fetched", "inputs": done, "lock": stored}
+        rooted = _root(runner, nix, request.get("roots"), "lock", stored, dict(environ))
+        if rooted is not None:
+            outcome["lock_rooted"] = rooted
+    return outcome
+
+
+def _root(
+    runner: Runner, nix: str, roots: Any, name: str, path: str,
+    env: Mapping[str, str],
+) -> bool | None:  # fmt: skip
+    """An indirect GC root ``ROOTS/NAME`` of ``path``, held until the client
+    removes ``roots`` after the build: ``None`` without ``roots``."""
+    if not isinstance(roots, str) or not roots:
+        return None
+    link = os.path.join(roots, name)
+    os.makedirs(roots, mode=0o700, exist_ok=True)
+    rooted = runner(root_argv(nix, link, path), env=dict(env), capture_output=True,
+                    timeout=600)  # fmt: skip
+    return rooted.returncode == 0
 
 
 def run(

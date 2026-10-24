@@ -149,13 +149,13 @@ def test_a_secret_written_by_another_field_manager_is_not_adopted(release_env):
         owned=True,
         managers=[("another-environment", "Apply", {"data": {"password": "x"}})],
     )
-    code, planned, result = _run(tmp_path, "plan")
-    assert code == 0, result.output
-    assert planned["secrets"] == {"password": "generated"}
-    assert planned["secret_adoptions"] == []
-    code, failed, result = _run(tmp_path, "apply", "--approve", planned["plan_hash"])
-    assert code != 0
-    assert failed["reason"] == "retained-content-precondition-failed"
+    code, refused, result = _run(tmp_path, "plan")
+    # 0.26.3: the plan refuses what apply would (the new value under the
+    # same name), naming the Secret and the key.
+    assert code == 2, result.output
+    assert refused["reason"] == "retained-content-differs"
+    assert "Secret piceli-test/credential" in refused["message"]
+    assert "/data/password" in refused["message"]
     assert base64.b64decode(_password(api)).decode() == live
 
 
@@ -186,10 +186,12 @@ def test_a_value_the_generator_cannot_make_is_refused(release_env):
 def test_a_rotation_is_never_replaced_by_an_adoption(release_env):
     api, tmp_path = release_env
     _live_credential(api, secrets.token_urlsafe(24), owned=True)
-    code, planned, result = _run(tmp_path, "plan", "--rotate", "password")
-    assert code == 0, result.output
-    assert planned["secrets"] == {"password": "rotated"}
-    assert planned["secret_adoptions"] == []
+    code, refused, result = _run(tmp_path, "plan", "--rotate", "password")
+    # Rotated, never adopted; the rotated value under the same Secret name is
+    # refused by the plan (0.26.3; apply refused it before).
+    assert code == 2, result.output
+    assert refused["reason"] == "retained-content-differs"
+    assert "/data/password" in refused["message"]
 
 
 TLS_COMPOSITION = """

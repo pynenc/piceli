@@ -827,13 +827,18 @@ def test_the_plan_names_the_private_inputs_and_the_host_fetches_them_first(
     }
     order: list[str] = []
 
-    def fetch(pairs: Any, say: Any, **_kw: Any) -> dict[str, Any]:
+    reference = f"/nix/store/{'l' * 32}-flake.lock"
+
+    def fetch(pairs: Any, say: Any, **kw: Any) -> dict[str, Any]:
         ((entry, locked),) = pairs
         order.append("fetch")
         assert entry["credential"] == "app-token" and locked["url"] == APP
-        return {"state": "fetched", "inputs": [{"name": "app"}]}
+        assert b'"nodes"' in kw["lock"]  # 0.26.3: the checkout's flake.lock
+        return {"state": "fetched", "inputs": [{"name": "app"}], "lock": reference}
 
-    def build(checkout: Path, attribute: str, say: Any) -> str:
+    def build(checkout: Path, attribute: str, say: Any, lock: str) -> str:
+        # 0.26.3: the build reads the fetched trees from the reference lock.
+        assert lock == reference
         order.append("build")
         return STORE
 

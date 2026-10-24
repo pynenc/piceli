@@ -23,6 +23,7 @@ from piceli.k8s.ops.plan import (
     PrivateEvidence,
     ResourceIntent,
     ResourcePrecondition,
+    RetainedContentDiffers,
     build_plan,
     declared_union,
     private_comparable,
@@ -144,6 +145,21 @@ def test_changed_or_unresolvable_secret_plans_apply(stored):
     snapshot = snapshot_of(live_secret())
     private = private_evidence(composition(desired), snapshot, resolve(stored))
     assert private.matching == frozenset()
+    if stored:
+        # 0.26.3: a Secret is retained, so a changed value under its name is
+        # refused by the plan (apply would refuse it), naming the key only.
+        assert private.retained_differs == {desired.ref: ("/data/token",)}
+        with pytest.raises(RetainedContentDiffers) as refused:
+            build_plan(
+                composition(desired),
+                snapshot,
+                PlanAuthorization(TARGET),
+                private=private,
+            )
+        assert "Secret app/token" in str(refused.value)
+        assert "/data/token" in str(refused.value)
+        assert stored[REF] not in str(refused.value)
+        return
     plan = build_plan(
         composition(desired), snapshot, PlanAuthorization(TARGET), private=private
     )

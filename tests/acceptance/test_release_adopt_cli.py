@@ -261,13 +261,12 @@ def test_secret_with_another_value_is_refused_before_any_write(release_env):
         "--adopt",
         "Secret/credential",
     )
-    assert code == 0, result.output
-    secret = next(item for item in planned["actions"] if item["kind"] == "Secret")
-    assert secret["adoption"]["mode"] == "metadata-only"
-    code, refused, _ = _run(tmp_path, "apply", "--approve", planned["plan_hash"])
-    assert code == 2
-    assert "contain the desired manifest" in refused["message"]
-    assert "a3ViZWN0bA" not in refused["message"]
+    # 0.26.3: refused by the plan already (before, by apply), naming the
+    # Secret and the key, never the value.
+    assert code == 2, result.output
+    assert planned["reason"] == "retained-content-differs"
+    assert "Secret piceli-test/credential" in planned["message"]
+    assert "a3ViZWN0bA" not in planned["message"]
     assert mutations(api) == []
 
 
@@ -357,14 +356,11 @@ def test_adopt_all_desired_keeps_retained_objects_metadata_only(release_env):
     api, tmp_path = release_env
     kubectl_objects(api)
     api.put(manifest("Secret", "credential", value="a3ViZWN0bA=="))
-    code, planned, result = _run(tmp_path, "plan", "--adopt-all-desired")
-    assert code == 0, result.output
-    secret = next(item for item in planned["actions"] if item["kind"] == "Secret")
-    assert secret["operation"] == "adopt"
-    assert secret["adoption"]["mode"] == "metadata-only"
-    # The generated value differs from the live one: refused before writes.
-    code, refused, _ = _run(tmp_path, "apply", "--approve", planned["plan_hash"])
-    assert code == 2 and "contain the desired manifest" in refused["message"]
+    code, refused, result = _run(tmp_path, "plan", "--adopt-all-desired")
+    # The generated value differs from the live one: refused before writes,
+    # by the plan since 0.26.3.
+    assert code == 2, result.output
+    assert refused["reason"] == "retained-content-differs"
     assert mutations(api) == []
 
 

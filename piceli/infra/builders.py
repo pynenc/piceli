@@ -302,9 +302,12 @@ class LocalBuilder:
                             grant, directory, progress=self.say
                         ).to_dict()
                     except BuildSpecError as error:
+                        detail = (
+                            f": {error}" if error.code.startswith("context-") else ""
+                        )
                         raise build_failed(
                             f"component {item.component!r}: host build failed "
-                            f"({error.code})",
+                            f"({error.code}){detail}",
                             error,
                         ) from None
                     entry = receipt["outputs"]["images"][item.component]
@@ -782,7 +785,7 @@ def job_run_components(
         name, source = str(item["component"]), str(item["source"])
         if not re.fullmatch(r"[a-z0-9][-a-z0-9]{0,62}", source):
             raise CompositionError("composition-invalid", "invalid source name")
-        root = sources / source
+        root = _real_source(sources, source)  # 0.26.3: the checkout, not its link
         contract = parse_contracts((root / CONTRACT_FILE).read_bytes()).get(name)
         if contract is None:
             raise CompositionError(
@@ -883,6 +886,17 @@ def spec_job(
     return job
 
 
+def _real_source(sources: Path, name: str) -> Path:
+    """``sources/<name>``, or the checkout it links to (resolved once)."""
+    path = sources / name
+    if not path.is_symlink():
+        return path
+    try:
+        return path.resolve(strict=True)
+    except OSError:
+        return path  # the scan names it: context-missing with its path
+
+
 def job_run_spec(
     *,
     sources: Path,
@@ -919,7 +933,9 @@ def job_run_spec(
     elif deliver is None:
         deliver = RegistryDelivery().deliver
     repo, _, path = spec.partition("/")
-    names = sorted(item.name for item in sources.iterdir() if item.is_dir())
+    names = sorted(
+        item.name for item in sources.iterdir() if item.is_dir() or item.is_symlink()
+    )
     for name in [repo, *names]:
         if not re.fullmatch(r"[a-z0-9][-a-z0-9]{0,62}", name):
             raise CompositionError("composition-invalid", "invalid source name")
@@ -952,9 +968,14 @@ def job_run_spec(
             RegistryTarget.parse(f"{prefix}/{repository}"), digests
         )
 
+    # The Job's script links each source to its checkout on the cache claim
+    # (/work/src/<name> -> /cache/sources/<name>, 0.23.0). A context root must
+    # be a real directory, so the build reads the checkouts themselves
+    # (0.26.3: a context at a source's top, ``path = "."``, failed
+    # context-missing in every Job).
     receipt = run_spec_build(
         request,
-        {name: sources / name for name in names},
+        {name: _real_source(sources, name) for name in names},
         platforms=platforms,
         cache=cache,
         out=out,

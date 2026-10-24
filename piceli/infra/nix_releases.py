@@ -1313,7 +1313,9 @@ class Publisher:
 
     :param caches: The :class:`~piceli.infra.NixCache` s it publishes to.
     :param build: ``(checkout, attribute, say) -> store path``: builds the
-        attribute of the checked-out flake (:func:`dev_build`).
+        attribute of the checked-out flake (:func:`dev_build`); 0.26.3:
+        called with ``lock=`` too, the reference lock of the fetched
+        private inputs, when there are any.
     :param push: ``(request, say) -> outcome``: signs and pushes the
         closure on this host (:func:`dev_push`), the request with the keys
         on the publisher's stdin only; the outcome of
@@ -1394,12 +1396,14 @@ class Publisher:
         # (0.26.2: on a docker host, under its roots_dir).
         held = getattr(self.fetch, "roots", None)
         with held() if held else temporary_directory("nix-input-roots") as roots:
-            self.fetch_inputs(
+            reference = self.fetch_inputs(
                 plan, checkout, say, stage, controller=controller,
                 roots=roots if held else Path(roots),
             )  # fmt: skip
             with stage("build"):
-                store_path = self.build(checkout, plan["attribute"], say)
+                # 0.26.3: the fetched trees, pinned in a reference lock.
+                pinned = {"lock": reference} if reference else {}
+                store_path = self.build(checkout, plan["attribute"], say, **pinned)
         with stage("publish"):
             secret, s3_keys = cache_keys(cache)
             done = publish_closure(
@@ -1418,20 +1422,28 @@ class Publisher:
         *,
         controller: Mapping[str, Any] | None = None,
         roots: Any = None,
-    ) -> None:
+    ) -> str | None:
         """Fetch the plan's private inputs on this host, before any build
-        (0.26.0): each one as ``flake.lock`` of the checkout locks it.
+        (0.26.0): each one as ``flake.lock`` of the checkout locks it, its
+        tree checked against the lock's ``narHash``. The reference lock
+        pinning the fetched trees (0.26.3), for the build, or ``None``.
 
         :raises DevError: ``infra-nix-input-unreachable``."""
         from piceli.dev.model import DevError
-        from piceli.dev.nix_inputs import LOCK_FILE, check_entries, resolve
+        from piceli.dev.nix_inputs import (
+            LOCK_FILE,
+            check_entries,
+            reference_lock_of,
+            resolve,
+        )
 
         entries = check_entries(plan.get("inputs"))
         if not entries:
-            return
+            return None
         with stage("inputs"):
-            lock = checkout / LOCK_FILE
-            pairs = resolve(entries, lock.read_bytes() if lock.is_file() else None)
+            file = checkout / LOCK_FILE
+            lock = file.read_bytes() if file.is_file() else None
+            pairs = resolve(entries, lock)
             if self.fetch is None:
                 first = entries[0]
                 raise DevError(
@@ -1442,7 +1454,12 @@ class Publisher:
             options: dict[str, Any] = {"controller": controller} if controller else {}
             if roots is not None:
                 options["roots"] = roots
-            self.fetch(pairs, say, **options)
+            options["lock"] = lock
+            outcome = self.fetch(pairs, say, **options)
+        reference = reference_lock_of(outcome if isinstance(outcome, Mapping) else None)
+        if reference is not None:
+            say(f"  the build reads the fetched inputs from {reference}")
+        return reference
 
 
 def cache_keys(cache: Any) -> tuple[str, tuple[str, str] | None]:
@@ -1506,7 +1523,13 @@ def dev_build(dev: Any, host: Any, profile: Any) -> Callable[..., str]:
     """``Publisher(build=)`` through a development run on ``host`` (docker
     or native, ``profile`` with ``nix=True``), as ``piceli dev nix build``."""
 
-    def build(checkout: Path, attribute: str, say: Callable[[str], None]) -> str:
+    def build(
+        checkout: Path,
+        attribute: str,
+        say: Callable[[str], None],
+        lock: str | None = None,
+    ) -> str:
+        """``lock`` (0.26.3): the reference lock of the fetched inputs."""
         from piceli.dev.client import RunRequest
         from piceli.dev.client import run as run_on
         from piceli.dev.hosts import DockerPort, NativePort
@@ -1528,7 +1551,7 @@ def dev_build(dev: Any, host: Any, profile: Any) -> Callable[..., str]:
         with temporary_directory("nix-release") as scratch:
             request = RunRequest(
                 root=SourceRequest(repository_name(checkout), checkout, rev),
-                command=build_argv(attribute),
+                command=build_argv(attribute, lock),
                 cwd=".",
                 profile=profile.name,
                 requester="builder-serve",

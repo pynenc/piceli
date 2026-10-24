@@ -384,7 +384,10 @@ never rewrites an existing Secret, so put the rotated value into a Secret with
 a new name (for example bump `cache-auth-1` to `cache-auth-2` through
 `[values]`) and point the workloads at it. See the rotation notes in
 {doc}`release_cli`. Templates and static values are not rotated themselves:
-rotate what they use, or edit the spec.
+rotate what they use, or edit the spec. Editing a template changes the value
+of the Secrets that hold it, so it also needs a Secret with a new name: the
+plan refuses a new value under an existing name (`retained-content-differs`,
+naming the Secret and the keys).
 
 Workloads that read a Secret roll when its content changes, also when the
 Secret keeps its name (for example one you deleted so the release creates it
