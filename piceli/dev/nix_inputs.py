@@ -531,28 +531,16 @@ def fetcher_source() -> str:
     return Path(nix_fetch.__file__).read_text()
 
 
-def fetcher_argv(host: Any, image: str) -> list[str]:
+def fetcher_argv(host: Any, image: str | None) -> list[str]:
     """How the fetcher runs on ``host`` before the build: a native host's
-    Python, or a short container of the run image with the host's Nix
-    mounted as for the run (never on a cluster node)."""
-    import sys
+    Python, or a short container of the run image (``image``, unless the
+    host names its own) with the host's Nix mounted as for the run, as the
+    run's user (:mod:`piceli.dev.nix_step`; never on a cluster node).
 
-    source = fetcher_source()
-    if host.kind == "native":
-        return [sys.executable, "-I", "-c", source]
-    if host.kind == "docker":
-        from piceli.dev.hosts import NIX_MOUNT, ContainerCli
+    :raises DevError: ``dev-nix-invalid``, a docker host without an image."""
+    from piceli.dev.nix_step import step_argv
 
-        return ContainerCli(host).argv(
-            "run", "--rm", "-i", "--user", "65532:65532", "--cap-drop", "ALL",
-            "--security-opt", "no-new-privileges", *NIX_MOUNT, "-e", "HOME=/tmp",
-            "--entrypoint", "python3", host.image or image, "-I", "-c", source,
-        )  # fmt: skip
-    raise DevError(
-        "dev-nix-host-unsupported",
-        f"build host {host.name} is a cluster node; Nix builds run on docker "
-        "or native hosts",
-    )
+    return step_argv(host, image, fetcher_source())
 
 
 def run_fetcher(
@@ -571,6 +559,7 @@ def run_fetcher(
     import subprocess
 
     from piceli.dev.nix_fetch import FETCH_SECONDS, RESULT_MARKER, mask
+    from piceli.dev.nix_step import failure_tail
 
     items = list(request.get("inputs") or ())
     secrets = [str(item.get(k) or "") for item in items for k in ("token", "key")]
@@ -581,11 +570,16 @@ def run_fetcher(
             capture_output=True,
             timeout=FETCH_SECONDS * max(1, len(items)) + 600,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as error:
         first = tried[0] if tried else {}
+        why = (
+            "it timed out"
+            if isinstance(error, subprocess.TimeoutExpired)
+            else f"{type(error).__name__}: {mask(str(error), secrets)}"
+        )
         raise _refuse(
             f"{first.get('input')} {first.get('url')}: the fetcher could not run "
-            "on the build host"
+            f"on the build host ({why})"
         ) from None
     for line in (done.stderr or b"").decode("utf-8", "replace").splitlines()[-60:]:
         say(f"  | {mask(line, secrets)}")
@@ -604,20 +598,35 @@ def run_fetcher(
         tried[0] if tried else {"input": "?", "url": "?", "tried": "?"},
     )
     reason = outcome.get("reason")
-    detail = (
-        "no nix on the build host"
-        if reason == "dev-tool-missing"
-        else mask(str(outcome.get("detail") or "the fetch failed"), secrets)
-    )
+    if not outcome:
+        # 0.26.1: it never reported (docker refused the container, the step
+        # or Nix aborted): say what docker or Nix said.
+        detail = f"the fetch step ended without a result (exit {done.returncode}): " + (
+            failure_tail(done.stderr, secrets) or "it printed nothing"
+        )
+    elif reason == "dev-tool-missing":
+        detail = "no nix on the build host"
+    else:
+        detail = mask(
+            str(outcome.get("detail") or "")
+            or "the fetch step failed: "
+            + (failure_tail(done.stderr, secrets) or "it printed nothing"),
+            secrets,
+        )
     raise _refuse(f"{entry['input']} {entry['url']} ({entry['tried']}): {detail}")
 
 
-def fetch_inputs(host: Any, image: str) -> Callable[..., dict[str, Any]]:
+def fetch_inputs(host: Any, image: str | None) -> Callable[..., dict[str, Any]]:
     """``(pairs, say, controller=None, roots=None) -> outcome``: fetch the
     covered inputs (:func:`resolve`) on ``host`` with this machine's
     credentials (:func:`plan_fetch`); on a native host, with ``roots`` (a
     directory the caller removes when the build ended), each tree gets a GC
-    root there."""
+    root there. ``image``: the build run's
+    (:func:`piceli.dev.nix_step.step_image`).
+
+    :raises DevError: ``dev-nix-invalid``, now, for a docker host without
+        an image (not a docker error at run time)."""
+    argv = fetcher_argv(host, image)
 
     def run(
         pairs: Sequence[tuple[Mapping[str, str], Mapping[str, Any]]],
@@ -633,7 +642,7 @@ def fetch_inputs(host: Any, image: str) -> Callable[..., dict[str, Any]]:
             request["roots"] = str(roots)
         for item in tried:
             say(f"input {item['input']} {item['url']} ({item['tried']})")
-        outcome = run_fetcher(fetcher_argv(host, image), request, tried, say=say)
+        outcome = run_fetcher(argv, request, tried, say=say)
         del request
         return outcome
 

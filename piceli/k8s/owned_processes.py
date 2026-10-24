@@ -34,6 +34,9 @@ from pathlib import Path
 
 _MAX_ENTRIES = 4096
 _MAX_ENTRY_BYTES = 1024
+# How long :meth:`OwnedProcessRegistry.record` waits for a child that has just
+# been started to show a readable fingerprint (a hang guard: it ends at once).
+_READABLE_SECONDS = 5.0
 
 
 def process_identity(pid: int, *, proc: Path = Path("/proc")) -> str | None:
@@ -56,7 +59,9 @@ def process_identity(pid: int, *, proc: Path = Path("/proc")) -> str | None:
         if len(fields) < 20 or fields[0] in {"Z", "X"}:
             return None  # a zombie has exited: only its parent has not waited yet
         if not command:
-            return None  # exiting: it has released its memory, cmdline reads empty
+            # Exiting (it has released its memory) or just exec'd (the kernel
+            # has not set the new program's arguments yet): cmdline reads empty.
+            return None
         raw = fields[19].encode() + b"\0" + command
     else:
         ps = shutil.which("ps")
@@ -76,6 +81,25 @@ def process_identity(pid: int, *, proc: Path = Path("/proc")) -> str | None:
             return None
         raw = result.stdout.strip()
     return hashlib.sha256(raw).hexdigest()
+
+
+def _identity_once_readable(
+    pid: int, *, timeout: float = _READABLE_SECONDS
+) -> str | None:
+    """The fingerprint of a child that was just started, once it can be read.
+
+    ``subprocess.Popen`` returns as soon as the child's ``exec`` has begun,
+    but for a moment after that the new program's command line reads empty,
+    so :func:`process_identity` reads ``None`` for a child that runs (seen on
+    loaded runners). A ``None`` is final only when the pid no longer exists;
+    otherwise the fingerprint is read again until ``timeout``.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        identity = process_identity(pid)
+        if identity is not None or not _exists(pid) or time.monotonic() >= deadline:
+            return identity
+        time.sleep(0.01)
 
 
 def forward_label(
@@ -133,7 +157,7 @@ class OwnedProcessRegistry:
         ``label`` (:func:`forward_label`) names what the child serves.
         """
         try:
-            identity = process_identity(pid)
+            identity = _identity_once_readable(pid)
             if self._owner_identity is None:
                 self._owner_identity = process_identity(self._owner_pid)
             if identity is None or self._owner_identity is None:

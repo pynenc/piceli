@@ -16840,6 +16840,7 @@
   "piceli.dev.nix_fetch",
   "piceli.dev.nix_inputs",
   "piceli.dev.nix_publish",
+  "piceli.dev.nix_step",
   "piceli.dev.nix_verify",
   "piceli.dev.pack",
   "piceli.dev.pod",
@@ -17184,5 +17185,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.26.0"
+ "version": "0.26.1"
 }

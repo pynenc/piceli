@@ -4,6 +4,37 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.26.1
+
+- **Private flake inputs are fetched on a docker build host.** The fetch
+  and publish steps of a docker build host ran the image `None` when the
+  host and its `DevProfile.for_nix()` declared none, and Nix then aborted
+  ("cannot determine user's home directory") as uid 65532 without a home it
+  owns; SSH also refused to run without a passwd entry. Both steps now use
+  the image the build run uses (the host's, the profile's, else the
+  `DevBuilds` image; a missing one is refused when `builder serve --publish`
+  starts), and run as 65532 with an entry and a home of their own (the
+  container starts with only SETUID/SETGID to add it, then drops every
+  capability). `infra-nix-input-unreachable` and `dev-nix-publish-failed`
+  now name the docker or Nix error instead of "the fetch failed". The
+  0.26.0 builder image keeps working.
+- **The S3 key pair test has a hang guard sized for its 47 OpenTofu runs**
+  (it timed out under load, never with a wrong result).
+- **A forward that has just started is recorded for `access stop --stale`
+  also on a loaded machine.** For a moment after `exec` a new process's
+  command line reads empty, so its fingerprint read as unknown and the
+  owned-process registry silently skipped the record; `piceli access stop
+  --stale` then could not recognise that forward as Piceli's. The registry
+  now reads the fingerprint again while the child exists (up to 5 s).
+- **The stale `access ui` forward test is reliable under load.** Its fake
+  `kubectl` closed every connection, as a forward with a dead upstream
+  does, so the supervisor's health probe restarted it with a new pid about
+  13 s after the start; it now keeps them open, as a healthy forward does.
+  The foreign listener binds a port the kernel picks, and the forward's
+  port comes from the pytest worker's own slice below the ephemeral range,
+  so neither a connection nor a parallel run of the test can take it
+  before the fake binds it.
+
 ## Version 0.26.0
 
 0.26.0 brings a pre-merge train: `piceli train` merges candidate branches

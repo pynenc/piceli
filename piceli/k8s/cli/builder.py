@@ -339,10 +339,12 @@ def _no_container(*_args: Any) -> int:  # a native host builds no image
 def _publisher(refs: list[str], dev: Any, chosen: Any) -> Any:
     """The NixRelease publisher of ``--publish`` (0.25.0): every cache's keys
     are read now, so a missing or wrong key refuses before any claim."""
+    from piceli.dev import nix_inputs
     from piceli.dev.model import DevError
-    from piceli.dev.nix_inputs import fetch_inputs
+    from piceli.dev.nix_step import check_image, step_image
+    from piceli.infra import nix_releases
     from piceli.infra.machines.model import InfraError
-    from piceli.infra.nix_releases import Publisher, dev_build, dev_push
+    from piceli.infra.nix_releases import Publisher, dev_build
     from piceli.k8s.cli.dev_nix import load_cache
 
     caches = [load_cache(ref) for ref in refs]
@@ -352,20 +354,26 @@ def _publisher(refs: list[str], dev: Any, chosen: Any) -> Any:
                 "dev-nix-cache-invalid",
                 "an https:// cache is read-only; publish to its s3:// or file:// URL",
             )
-    profile = next((item for item in dev.profiles if item.nix), None)
-    if profile is None:
+    declared = next((item for item in dev.profiles if item.nix), None)
+    if declared is None:
         reject(
             "dev-nix-invalid",
             "publishing builds with the host's Nix: declare DevProfile.for_nix()",
         )
     try:
+        # 0.26.1: the profile with DevBuilds' defaults (its image), and the
+        # Nix steps in the image the build run uses, checked now.
+        profile = dev.profile(declared.name)
+        image = step_image(chosen, profile)
+        if chosen.kind == "docker":
+            check_image(chosen, image)
         return Publisher(
             caches,
             build=dev_build(dev, chosen, profile),
-            push=dev_push(chosen, str(profile.image)),
+            push=nix_releases.dev_push(chosen, image),
             host=chosen.name,
             # 0.26.0: private flake inputs, fetched on this host first.
-            fetch=fetch_inputs(chosen, str(profile.image)),
+            fetch=nix_inputs.fetch_inputs(chosen, image),
         )
     except (DevError, InfraError) as error:
         reject(error.code, str(error))

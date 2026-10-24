@@ -1549,7 +1549,7 @@ def dev_build(dev: Any, host: Any, profile: Any) -> Callable[..., str]:
     return build
 
 
-def dev_push(host: Any, image: str) -> Callable[..., Mapping[str, Any]]:
+def dev_push(host: Any, image: str | None) -> Callable[..., Mapping[str, Any]]:
     """``Publisher(push=)``: the publisher step on ``host``, as ``piceli dev
     nix build --publish`` runs it (the keys on its stdin only)."""
 

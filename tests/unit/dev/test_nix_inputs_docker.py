@@ -17,6 +17,10 @@ host, before the build, and the build run never sees it. Opt-in, it needs:
   git-token git --host github.com --prompt``);
 - a local ``nix`` to lock the flake.
 
+``test_nix_step_docker.py`` (0.26.1) needs no GitHub repository: a deploy
+key, an ``sshd`` container and the builder image, with no image declared on
+the host or the profile.
+
 The flake reads the input without referring to it (the number of files at
 its root), so the published closure holds no private source either.
 """

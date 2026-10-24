@@ -333,3 +333,44 @@ def test_an_exiting_process_has_no_fingerprint(tmp_path: Path) -> None:
     assert process_identity(77, proc=proc) is not None
     (proc / "77" / "cmdline").write_bytes(b"")
     assert process_identity(77, proc=proc) is None
+
+
+@pytest.mark.parametrize(
+    ("reads", "exists", "identity"),
+    [
+        (["child"], True, "child"),
+        # Just exec'd: its command line reads empty for a moment (0.26.1).
+        ([None, None, "child"], True, "child"),
+        ([None], False, None),  # it has already exited: nothing to record
+    ],
+)
+def test_a_just_started_child_is_read_once_its_fingerprint_is_readable(
+    monkeypatch: pytest.MonkeyPatch,
+    reads: list[str | None],
+    exists: bool,
+    identity: str | None,
+) -> None:
+    pending = list(reads)
+    monkeypatch.setattr(owned, "process_identity", lambda pid: pending.pop(0))
+    monkeypatch.setattr(owned, "_exists", lambda pid: exists)
+    monkeypatch.setattr(owned.time, "sleep", lambda seconds: None)
+    assert owned._identity_once_readable(4242) == identity
+    assert pending == []
+
+
+def test_a_child_unreadable_right_after_its_start_is_still_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = OwnedProcessRegistry(tmp_path / "forwards")
+    child = iter([None, "child", "child"])
+
+    def identity(pid: int) -> str | None:
+        return "owner" if pid == os.getpid() else next(child)
+
+    monkeypatch.setattr(owned, "process_identity", identity)
+    monkeypatch.setattr(owned, "_exists", lambda pid: True)
+    monkeypatch.setattr(owned.time, "sleep", lambda seconds: None)
+    registry.record(4242, label="sha256:forward")
+    recorded = registry.lookup(4242)
+    assert recorded is not None and recorded.owner_pid == os.getpid()
+    assert recorded.owner_alive and recorded.label == "sha256:forward"

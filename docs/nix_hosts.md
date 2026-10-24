@@ -57,8 +57,10 @@ web = NixHost(
         HostCheck.http("http://127.0.0.1/healthz", timeout=90),
         HostCheck.command("test", "-s", "/var/lib/app/ready"),
     ],
-    report=HostReport("https://collector.example.net:4318",
-                      headers_file="/run/secrets/piceli/otlp-headers"),
+    report=HostReport(
+        "https://collector.example.net:4318",
+        headers_file="/run/secrets/piceli/otlp-headers",
+    ),
     age_identity="web-1-age",  # its sops-nix key: piceli host secrets
 )
 ```
@@ -90,8 +92,8 @@ Give each host its own tag prefix, and release each one with its own
 tags:
 
 ```python
-web = NixHost("web-1", ..., follow=Tag("web-v*"))   # web-v1.2.3
-api = NixHost("api-1", ..., follow=Tag("api-v*"))   # api-v0.4.0
+web = NixHost("web-1", ..., follow=Tag("web-v*"))  # web-v1.2.3
+api = NixHost("api-1", ..., follow=Tag("api-v*"))  # api-v0.4.0
 ```
 
 A tag counts for a host when it matches the glob **and** what follows the
@@ -208,7 +210,13 @@ cluster. Its `nix_inputs` section gives each release's mode.
 How each input is fetched, by the fetch step (a native host's Python, or a
 `docker run --rm -i` of the run image with the host's `/nix`, as the
 publisher; the credential on its stdin only, written to `0600` files in a
-`0700` temporary directory removed on every exit):
+`0700` temporary directory removed on every exit). On a docker host both
+steps run the image the build run uses (the host's `image`, else the
+profile's, else the `DevBuilds` builder image; a host with none is refused
+at start, `dev-nix-invalid`) as the run's user, 65532: the container starts
+as root with only `SETUID` and `SETGID`, adds a `passwd` entry for 65532
+when the image has none (Nix and `ssh` look the user up), drops to it, and
+gives it a home it owns, before it reads the request (0.26.1).
 
 - `git+https`: Git asks a `GIT_ASKPASS` script reading those files;
   credential helpers are off for that fetch, so none stores the token;
@@ -230,10 +238,12 @@ collection between the fetch and the build (seconds) makes the build fail
 on the input, and a retry fetches it again. On a docker host the run image
 needs `git` (and `python3`). An input that cannot be fetched fails the
 release before any build, naming the input, its URL (never a credential)
-and the credential tried:
+and the credential tried, and, when the step ended before Git ran, what
+docker or Nix said:
 
 ```text
 infra-nix-input-unreachable: app git+ssh://git@github.com/org/app (credential git over HTTPS): fatal: Authentication failed for 'https://github.com/org/app/'
+infra-nix-input-unreachable: app git+ssh://git@github.com/org/app (credential app-read (a deploy key over SSH)): the fetch step ended without a result (exit 125): docker: invalid reference format: repository name must be lowercase.
 ```
 
 A hand-run publish (`piceli dev nix build --publish`) covers the same
