@@ -70,6 +70,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli env up`](#cli-env-up) | Deploy BRANCH into its namespace (created when absent), isolated. | writes | yes |
 | [`piceli envs`](#cli-envs) | List every environment: branch, namespace, commit, deploy state, health, age. | reads | no |
 | [`piceli explain`](#cli-explain) | Explain an error code: cause, fix and whether a retry can succeed. | none | no |
+| [`piceli gitops alarms`](#cli-gitops-alarms) | The controller's alarms: failed or waiting environments, failed Nix releases, a composition that does not import, a new version. With --follow, each new one also as a desktop notification. | reads | no |
 | [`piceli gitops approve`](#cli-gitops-approve) | Approve the pending plan of ENV; the controller applies it on its next poll. | writes | yes |
 | [`piceli gitops build`](#cli-gitops-build) | Ask the controller to build NAME now: a NixRelease plans --ref, an environment rebuilds its images; the same gate, plan and approval apply. | writes | no |
 | [`piceli gitops builds`](#cli-gitops-builds) | List every build the controller knows (NixRelease publishes, image builds, train handoffs): trigger, commit, host, stage, log tail, targets. | reads | no |
@@ -1508,6 +1509,36 @@ Explain an error code: cause, fix and whether a retry can succeed.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** `--run ID --spec SPEC` explains a past execution instead, from the local state (same as `piceli release status --spec SPEC --run ID`).
+
+(cli-gitops-alarms)=
+### `piceli gitops alarms`
+
+The controller's alarms: failed or waiting environments, failed Nix releases, a composition that does not import, a new version. With --follow, each new one also as a desktop notification.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--follow` | boolean | `False` | Keep reading the status and raise each new alarm as a desktop notification (Ctrl-C stops) |
+| `--interval` | float | `30.0` | Seconds between two status reads |
+| `--waiting-after` | text |  | How long a wait for a build host or an approval may last (default: the controller's Alarms(waiting_after=), else 10m) |
+| `--desktop`, `--no-desktop` | boolean | `True` | With --follow: raise desktop notifications |
+| `--polls` | integer | `0` | With --follow: stop after this many reads (0: never) |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir, the controller's status
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.28.0. Read-only. Each alarm is shown once per run of the command (a resolved one once more); --follow keeps reading every --interval seconds (--polls N stops after N reads). --json prints piceli.gitops-alarms.v1 with each alarm as piceli.alarm.v1. The controller itself sends to the ntfy and webhook targets of Controller(alarms=Alarms(...)).
 
 (cli-gitops-approve)=
 ### `piceli gitops approve`

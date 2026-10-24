@@ -296,6 +296,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`generation-precondition-failed`](#error-generation-precondition-failed) | execution | no |
 | [`git-timed-out`](#error-git-timed-out) | inputs | yes |
 | [`git-unavailable`](#error-git-unavailable) | inputs | no |
+| [`gitops-alarm-failed`](#error-gitops-alarm-failed) | gitops | yes |
 | [`gitops-approval-stale`](#error-gitops-approval-stale) | gitops | yes |
 | [`gitops-artifact-changed`](#error-gitops-artifact-changed) | gitops | no |
 | [`gitops-build-cancelled`](#error-gitops-build-cancelled) | gitops | yes |
@@ -4348,6 +4349,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Read the failed checks in the run (`piceli runs`, the deployment history), push a fix (a new revision) or run `piceli gitops sync ENV` to try the same revision again.
 - **Retry-safe:** no
+
+(error-gitops-alarm-failed)=
+### `gitops-alarm-failed`
+
+**Controller alarm not sent.** A target of `Controller(alarms=Alarms(...))` (ntfy or a webhook) refused the alarm, timed out, or its URL or token variable is unset (the key is missing from the `Alarms(secret=)` Secret). The poll and the deploys go on; the failure is listed under `controller.alarms.failures` in the status.
+
+- **Fix:** Check the target's URL, that the Secret named by `Alarms(secret=)` has a key for each variable the targets name, and that the controller can reach the target; `piceli gitops alarms` shows the failed sends.
+- **Retry-safe:** yes
 
 (error-gitops-approval-stale)=
 ### `gitops-approval-stale`

@@ -1044,6 +1044,93 @@ rollback on every poll).
 `Pipeline(prune=False)` turns pruning off; `piceli deploy` (outside an
 environment) prunes only with `Pipeline(prune=True)`.
 
+(gitops-alarms)=
+### Alarms (0.28.0)
+
+The controller can tell you when something needs you, instead of you
+finding out when you look. Declare where alarms go on the composition's
+`Controller`:
+
+```python
+from piceli.infra import Alarms, Controller, Notify
+
+controller = Controller(
+    on="node-1",
+    alarms=Alarms(
+        targets=[
+            Notify.ntfy("https://ntfy.example.org/deploys"),
+            Notify.webhook(url_env="ALARM_WEBHOOK_URL"),
+            Notify.desktop(),
+        ],
+        secret="piceli-alarms",  # holds ALARM_WEBHOOK_URL
+        waiting_after="10m",
+    ),
+)
+```
+
+The targets are the merge train's notifiers ({doc}`train`):
+`Notify.ntfy(url)` posts a short text to an [ntfy](https://ntfy.sh) topic,
+`Notify.webhook(url)` posts the alarm as JSON (`piceli.alarm.v1`), and
+`Notify.desktop()` is a desktop notification on your machine (below).
+`when="failure"` skips the "recovered" and "restarted" messages.
+
+After every poll the controller sends an alarm when:
+
+| Event | When | Next command in the message |
+| --- | --- | --- |
+| `env-failed` | an environment failed, failed two attempts in a row, or its checks fail on the running release | `piceli gitops status` |
+| `env-waiting` | an environment waits longer than `waiting_after` for a build host (`build-waiting`) or an approval (`approval-required`) | `piceli gitops builds`, or the `piceli gitops approve ENV HASH` line |
+| `nix-release-failed` | a `NixRelease` publish failed | `piceli gitops builds --state failed` |
+| `nix-release-waiting` | a `NixRelease` publish waits longer than `waiting_after` for a build host or an approval | `piceli gitops builds`, or its approve line |
+| `composition-failed` | the composition's own repository does not import at its commit, so nothing deploys | `piceli gitops status` |
+| `controller-restarted` | the controller runs a new Piceli version | `piceli gitops status` |
+
+Each message is short and names the environment or host, the reason code
+and the next command:
+
+```text
+piceli: staging failed
+staging failed in stage build (component-build-failed) at 3f2a91c07d4e: error: cargo build failed. Next: piceli gitops status
+```
+
+Each alarm is sent **once**: the controller keeps the alarms it sent in its
+state, so a later poll or a restart does not send it again. When the
+problem ends it sends one message (`staging recovered (was
+component-build-failed)`); a branch environment that is torn down sends
+nothing more.
+
+**Secrets.** A URL or token that is a secret is named by environment
+variable (`url_env=`, `token_env=` for ntfy, `headers_env=` for a webhook)
+and stored in the Kubernetes Secret named by `Alarms(secret=)`, in the
+controller's namespace, under a key of the same name:
+
+```sh
+kubectl -n piceli-system create secret generic piceli-alarms \
+  --from-literal=ALARM_WEBHOOK_URL='https://hooks.example.org/T0/abc'
+```
+
+The controller's pod gets each variable from that Secret. The value is
+never in the controller's arguments, logs, state or status; a target is
+shown by its host name or `$VARIABLE` only.
+
+**A failed send never stops the controller.** It is logged with
+`gitops-alarm-failed` and listed under `controller.alarms.failures` in
+`piceli gitops status --json`, next to the open alarms and how many were
+sent.
+
+**Desktop notifications** cannot come from the cluster. Run the follower on
+your machine; it reads the controller's status and raises the same alarms:
+
+```sh
+piceli gitops alarms --kubeconfig cluster.kubeconfig --context my-cluster
+# ALARM staging failed: staging failed in stage build (...). Next: piceli gitops status
+piceli gitops alarms --follow --kubeconfig cluster.kubeconfig --context my-cluster
+```
+
+Without `--follow` it prints the alarms as they stand (and the sends the
+controller could not make) and exits. `--follow` reads every `--interval`
+seconds (30 by default) and raises each new alarm once, until you stop it.
+
 ### Traces, events and metrics (OpenTelemetry)
 
 From 0.16 the controller sends OpenTelemetry when the composition's

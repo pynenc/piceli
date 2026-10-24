@@ -104,6 +104,10 @@ DYNAMIC = {
     "checks-failed-rolled-back",
     # gitops.recovery.INTERRUPTED: the reason of a run the controller died under
     "gitops-run-interrupted",
+    # train.notify.deliver_all(code=): a failed notifier of a train, or of the
+    # controller's alarms (gitops.alarms.FAILED_CODE)
+    "train-notify-failed",
+    "gitops-alarm-failed",
     # infra.nix_releases.FAILED: the reason of a NixRelease a build host failed
     "gitops-nix-release-failed",
     # infra.nix_releases.CANCELLED: the reason of a build gitops cancel dropped

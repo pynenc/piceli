@@ -10,7 +10,13 @@ Declare them on the train, ``Train(..., notify=[...])``:
   spec), with headers read from environment variables;
 - :meth:`Notify.desktop`: a desktop notification with the summary's
   headline (``osascript`` on macOS, ``notify-send`` elsewhere; nothing when
-  neither exists).
+  neither exists);
+- :meth:`Notify.ntfy` (0.28.0): the headline as an ntfy message (``POST``
+  of plain text to a topic URL, https://ntfy.sh or a server of your own).
+
+The same notifiers carry the GitOps controller's alarms (0.28.0,
+``Controller(alarms=Alarms(targets=[...]))``, :mod:`piceli.gitops.alarms`):
+:meth:`Notify.send_message` sends any message, a train summary or an alarm.
 
 ``when="failure"`` notifies only for a run that did not succeed.
 Notifications run once the run's result is written, one after the other,
@@ -113,14 +119,45 @@ class Notify:
         on macOS, ``notify-send`` elsewhere; skipped when neither exists."""
         return DesktopNotify(when=when, timeout=timeout)
 
+    @staticmethod
+    def ntfy(
+        url: str | None = None,
+        *,
+        url_env: str | None = None,
+        token_env: str | None = None,
+        when: Literal["always", "failure"] = "always",
+        timeout: float = DEFAULT_TIMEOUT,
+    ) -> NtfyNotify:
+        """An ntfy message (0.28.0): ``POST`` the headline as plain text to
+        the topic URL ``url`` (or the URL in the environment variable
+        ``url_env``), with its title in the ``Title`` header.
+        ``token_env`` names the environment variable holding an access token
+        (sent as ``Authorization: Bearer``). A 2xx response is success."""
+        return NtfyNotify(
+            url=url, url_env=url_env, token_env=token_env, when=when, timeout=timeout
+        )
+
     def wanted(self, summary: Mapping[str, Any]) -> bool:
         return self.when == "always" or summary.get("ok") is not True
 
     def label(self) -> str:
         return self.kind
 
+    def variables(self) -> tuple[str, ...]:
+        """The environment variables this notifier reads (names only)."""
+        return ()
+
     def send(self, summary: Mapping[str, Any]) -> str:
-        """Send; returns ``sent`` or ``skipped`` (raises on failure)."""
+        """Send a train summary; returns ``sent`` or ``skipped`` (raises on failure)."""
+        verdict = "succeeded" if summary.get("ok") else "needs attention"
+        return self.send_message(
+            summary, f"piceli train {summary.get('train')} {verdict}", headline(summary)
+        )
+
+    def send_message(self, payload: Mapping[str, Any], title: str, text: str) -> str:
+        """Send one message (0.28.0): ``payload`` is the JSON a command or a
+        webhook receives, ``title`` and ``text`` what a person reads (the
+        desktop, ntfy). Returns ``sent`` or ``skipped``; raises on failure."""
         raise NotImplementedError
 
     def _fields(self) -> dict[str, Any]:
@@ -156,10 +193,10 @@ class CommandNotify(Notify):
     def label(self) -> str:
         return f"command {os.path.basename(self.argv[0])}"
 
-    def send(self, summary: Mapping[str, Any]) -> str:
+    def send_message(self, payload: Mapping[str, Any], title: str, text: str) -> str:
         done = subprocess.run(
             list(self.argv),
-            input=json.dumps(summary, sort_keys=True).encode(),
+            input=json.dumps(payload, sort_keys=True).encode(),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=self.timeout,
@@ -174,10 +211,41 @@ class CommandNotify(Notify):
         return {"argv": list(self.argv)}
 
 
-def _check_url(url: str) -> None:
+def _check_url(url: str, what: str = "Notify.webhook") -> None:
     parts = urlsplit(url)
     if parts.scheme not in {"http", "https"} or not parts.hostname:
-        raise _invalid("Notify.webhook url must be an http:// or https:// URL")
+        raise _invalid(f"{what} url must be an http:// or https:// URL")
+
+
+def _resolve_url(url: str | None, url_env: str | None) -> str:
+    found = url or os.environ.get(url_env or "", "").strip()
+    if not found:
+        raise OSError("url unset")
+    parts = urlsplit(found)
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        raise OSError("url invalid")  # never the URL itself: it may hold a token
+    return found
+
+
+def _post(url: str, body: bytes, headers: Mapping[str, str], timeout: float) -> None:
+    """``POST`` once (no retry, no redirect); raises ``OSError`` on a non-2xx."""
+    from urllib3 import PoolManager, Timeout
+
+    pool = PoolManager()
+    try:
+        response = pool.request(
+            "POST",
+            url,
+            body=body,
+            headers=dict(headers),
+            timeout=Timeout(total=timeout),
+            retries=False,
+            redirect=False,
+        )
+    finally:
+        pool.clear()
+    if not 200 <= response.status < 300:
+        raise OSError(f"status {response.status}")
 
 
 @dataclass(frozen=True)
@@ -223,34 +291,27 @@ class WebhookNotify(Notify):
             return f"webhook ${self.url_env}"
         return f"webhook {urlsplit(self.url or '').hostname}"
 
-    def send(self, summary: Mapping[str, Any]) -> str:
-        from urllib3 import PoolManager, Timeout
+    def variables(self) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                [*([self.url_env] if self.url_env else [])]
+                + [variable for _, variable in self.headers_env]
+            )
+        )
 
-        url = self.url or os.environ.get(self.url_env or "", "").strip()
-        if not url:
-            raise OSError("url unset")
-        _check_url(url)
+    def send_message(self, payload: Mapping[str, Any], title: str, text: str) -> str:
         headers = {"Content-Type": "application/json"}
         for name, variable in self.headers_env:
             value = os.environ.get(variable)
             if value is None:
                 raise OSError("header unset")
             headers[name] = value
-        pool = PoolManager()
-        try:
-            response = pool.request(
-                "POST",
-                url,
-                body=json.dumps(summary, sort_keys=True).encode(),
-                headers=headers,
-                timeout=Timeout(total=self.timeout),
-                retries=False,
-                redirect=False,
-            )
-        finally:
-            pool.clear()
-        if not 200 <= response.status < 300:
-            raise OSError(f"status {response.status}")
+        _post(
+            _resolve_url(self.url, self.url_env),
+            json.dumps(payload, sort_keys=True).encode(),
+            headers,
+            self.timeout,
+        )
         return "sent"
 
     def _fields(self) -> dict[str, Any]:
@@ -295,11 +356,8 @@ class DesktopNotify(Notify):
 
     kind: ClassVar[str] = "desktop"
 
-    def send(self, summary: Mapping[str, Any]) -> str:
-        verdict = "succeeded" if summary.get("ok") else "needs attention"
-        argv = desktop_argv(
-            f"piceli train {summary.get('train')} {verdict}", headline(summary)
-        )
+    def send_message(self, payload: Mapping[str, Any], title: str, text: str) -> str:
+        argv = desktop_argv(title, text)
         if argv is None:
             return "skipped"
         done = subprocess.run(
@@ -315,10 +373,65 @@ class DesktopNotify(Notify):
         return "sent"
 
 
+@dataclass(frozen=True)
+class NtfyNotify(Notify):
+    """:meth:`Notify.ntfy` (0.28.0)."""
+
+    kind: ClassVar[str] = "ntfy"
+
+    url: str | None = None
+    url_env: str | None = None
+    token_env: str | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if (self.url is None) == (self.url_env is None):
+            raise _invalid("Notify.ntfy needs one of url or url_env")
+        if self.url is not None:
+            if not isinstance(self.url, str):
+                raise _invalid("Notify.ntfy url must be a string")
+            _check_url(self.url, "Notify.ntfy")
+        for name, value in (("url_env", self.url_env), ("token_env", self.token_env)):
+            if value is not None and not (
+                isinstance(value, str) and _ENV.fullmatch(value)
+            ):
+                raise _invalid(f"Notify.ntfy {name} must name an environment variable")
+
+    def label(self) -> str:
+        if self.url_env:
+            return f"ntfy ${self.url_env}"
+        return f"ntfy {urlsplit(self.url or '').hostname}"  # never the topic
+
+    def variables(self) -> tuple[str, ...]:
+        return tuple(item for item in (self.url_env, self.token_env) if item)
+
+    def send_message(self, payload: Mapping[str, Any], title: str, text: str) -> str:
+        headers = {
+            "Content-Type": "text/plain; charset=utf-8",
+            # HTTP headers are latin-1: keep the title ASCII.
+            "Title": title.encode("ascii", "replace").decode(),
+            "Tags": "white_check_mark" if payload.get("ok") else "warning",
+            "Priority": "default" if payload.get("ok") else "high",
+        }
+        if self.token_env:
+            token = os.environ.get(self.token_env)
+            if not token:
+                raise OSError("token unset")
+            headers["Authorization"] = f"Bearer {token}"
+        _post(
+            _resolve_url(self.url, self.url_env), text.encode(), headers, self.timeout
+        )
+        return "sent"
+
+    def _fields(self) -> dict[str, Any]:
+        return {"url": self.url, "url_env": self.url_env, "token_env": self.token_env}
+
+
 _KINDS: Mapping[str, type[Notify]] = {
     "command": CommandNotify,
     "webhook": WebhookNotify,
     "desktop": DesktopNotify,
+    "ntfy": NtfyNotify,
 }
 
 
@@ -340,6 +453,13 @@ def notify_from_dict(data: Mapping[str, Any]) -> Notify:
             headers_env=tuple(sorted((data.get("headers_env") or {}).items())),
             **common,
         )
+    if kind is NtfyNotify:
+        return NtfyNotify(
+            url=data.get("url"),
+            url_env=data.get("url_env"),
+            token_env=data.get("token_env"),
+            **common,
+        )
     return DesktopNotify(**common)
 
 
@@ -348,7 +468,24 @@ def send_all(
     summary: Mapping[str, Any],
     warn: Callable[[str], None],
 ) -> list[dict[str, Any]]:
-    """Send every wanted notification; one outcome per notifier. Never raises."""
+    """Send a train summary with every wanted notifier; one outcome per
+    notifier. Never raises."""
+    return deliver_all(notifiers, summary, warn)
+
+
+def deliver_all(
+    notifiers: Sequence[Notify],
+    payload: Mapping[str, Any],
+    warn: Callable[[str], None],
+    *,
+    message: tuple[str, str] | None = None,
+    code: str = "train-notify-failed",
+) -> list[dict[str, Any]]:
+    """Send ``payload`` with every wanted notifier (0.28.0): a train summary
+    when ``message`` is ``None``, else ``(title, text)`` with
+    :meth:`Notify.send_message`. A failure is one warning line with
+    ``code`` and the notifier's label (never a URL or a token). Never raises."""
+    summary = payload
     outcomes: list[dict[str, Any]] = []
     for index, notifier in enumerate(notifiers):
         label = notifier.label()
@@ -358,20 +495,25 @@ def send_all(
             )
             continue
         try:
-            state = notifier.send(summary)
+            state = (
+                notifier.send(summary)
+                if message is None
+                else notifier.send_message(summary, *message)
+            )
         except Exception as error:  # a notifier never changes the run's result
             why = (
                 "timeout"
                 if isinstance(error, subprocess.TimeoutExpired | TimeoutError)
                 else type(error).__name__
             )
-            warn(f"warning: notification {label} failed ({why}) [train-notify-failed]")
+            warn(f"warning: notification {label} failed ({why}) [{code}]")
             outcomes.append(
                 {
                     "notify": index,
                     "kind": notifier.kind,
                     "state": "failed",
-                    "reason": "train-notify-failed",
+                    "reason": code,
+                    "why": why,
                 }
             )
             continue

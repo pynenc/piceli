@@ -160,6 +160,9 @@ noted.
   (exit 1), or `approval-required` with `plan_hash` (exit 3: ask the owner).
   Controller retries are waited through. Read-only; end an integration
   round with it instead of polling `gitops status` yourself.
+- `piceli gitops alarms [--follow] [--json]` (0.28.0): the controller's
+  alarms (failed or waiting environments and NixReleases, a composition
+  that does not import, a new version) and its failed sends. Read-only.
 - `piceli gitops suspects --host NAME [--since ISO] [--json]` and `piceli
   gitops hosts [--json]` (0.22.0): the deployed images a build host (or the
   builder node) built, from the provenance the controller recorded, and the

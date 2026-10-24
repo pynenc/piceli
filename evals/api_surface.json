@@ -190,6 +190,31 @@
     "zfill": null
    }
   },
+  "Alarms": {
+   "attrs": [
+    "from_dict",
+    "secret",
+    "targets",
+    "to_dict",
+    "variables",
+    "waiting_after",
+    "waiting_seconds"
+   ],
+   "init": [
+    "secret",
+    "targets",
+    "waiting_after"
+   ],
+   "methods": {
+    "from_dict": [
+     "value"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "from_dict": "Alarms"
+   }
+  },
   "ApiDefaultedField": {
    "attr_types": {
     "resource": "ResourceIdentity"
@@ -2066,9 +2091,12 @@
     "desktop",
     "kind",
     "label",
+    "ntfy",
     "send",
+    "send_message",
     "timeout",
     "to_dict",
+    "variables",
     "wanted",
     "webhook",
     "when"
@@ -2089,10 +2117,23 @@
      "when"
     ],
     "label": [],
+    "ntfy": [
+     "timeout",
+     "token_env",
+     "url",
+     "url_env",
+     "when"
+    ],
     "send": [
      "summary"
     ],
+    "send_message": [
+     "payload",
+     "text",
+     "title"
+    ],
     "to_dict": [],
+    "variables": [],
     "wanted": [
      "summary"
     ],
@@ -2107,6 +2148,7 @@
    "returns": {
     "command": "CommandNotify",
     "desktop": "DesktopNotify",
+    "ntfy": "NtfyNotify",
     "webhook": "WebhookNotify"
    }
   },
@@ -2480,9 +2522,11 @@
   },
   "Controller": {
    "attr_types": {
+    "alarms": "Alarms",
     "telemetry": "Otlp"
    },
    "attrs": [
+    "alarms",
     "builds",
     "delete_volumes",
     "delivery",
@@ -2497,6 +2541,7 @@
     "telemetry"
    ],
    "init": [
+    "alarms",
     "builds",
     "delete_volumes",
     "delivery",
@@ -3094,9 +3139,12 @@
     "desktop",
     "kind",
     "label",
+    "ntfy",
     "send",
+    "send_message",
     "timeout",
     "to_dict",
+    "variables",
     "wanted",
     "webhook",
     "when"
@@ -3116,10 +3164,23 @@
      "when"
     ],
     "label": [],
+    "ntfy": [
+     "timeout",
+     "token_env",
+     "url",
+     "url_env",
+     "when"
+    ],
     "send": [
      "summary"
     ],
+    "send_message": [
+     "payload",
+     "text",
+     "title"
+    ],
     "to_dict": [],
+    "variables": [],
     "wanted": [
      "summary"
     ],
@@ -3134,6 +3195,7 @@
    "returns": {
     "command": "CommandNotify",
     "desktop": "DesktopNotify",
+    "ntfy": "NtfyNotify",
     "webhook": "WebhookNotify"
    }
   },
@@ -6915,9 +6977,12 @@
     "desktop",
     "kind",
     "label",
+    "ntfy",
     "send",
+    "send_message",
     "timeout",
     "to_dict",
+    "variables",
     "wanted",
     "webhook",
     "when"
@@ -6937,10 +7002,23 @@
      "when"
     ],
     "label": [],
+    "ntfy": [
+     "timeout",
+     "token_env",
+     "url",
+     "url_env",
+     "when"
+    ],
     "send": [
      "summary"
     ],
+    "send_message": [
+     "payload",
+     "text",
+     "title"
+    ],
     "to_dict": [],
+    "variables": [],
     "wanted": [
      "summary"
     ],
@@ -6955,6 +7033,79 @@
    "returns": {
     "command": "CommandNotify",
     "desktop": "DesktopNotify",
+    "ntfy": "NtfyNotify",
+    "webhook": "WebhookNotify"
+   }
+  },
+  "NtfyNotify": {
+   "attrs": [
+    "command",
+    "desktop",
+    "kind",
+    "label",
+    "ntfy",
+    "send",
+    "send_message",
+    "timeout",
+    "to_dict",
+    "token_env",
+    "url",
+    "url_env",
+    "variables",
+    "wanted",
+    "webhook",
+    "when"
+   ],
+   "init": [
+    "timeout",
+    "token_env",
+    "url",
+    "url_env",
+    "when"
+   ],
+   "methods": {
+    "command": [
+     "argv",
+     "timeout",
+     "when"
+    ],
+    "desktop": [
+     "timeout",
+     "when"
+    ],
+    "label": [],
+    "ntfy": [
+     "timeout",
+     "token_env",
+     "url",
+     "url_env",
+     "when"
+    ],
+    "send": [
+     "summary"
+    ],
+    "send_message": [
+     "payload",
+     "text",
+     "title"
+    ],
+    "to_dict": [],
+    "variables": [],
+    "wanted": [
+     "summary"
+    ],
+    "webhook": [
+     "headers_env",
+     "timeout",
+     "url",
+     "url_env",
+     "when"
+    ]
+   },
+   "returns": {
+    "command": "CommandNotify",
+    "desktop": "DesktopNotify",
+    "ntfy": "NtfyNotify",
     "webhook": "WebhookNotify"
    }
   },
@@ -11557,11 +11708,14 @@
     "headers_env",
     "kind",
     "label",
+    "ntfy",
     "send",
+    "send_message",
     "timeout",
     "to_dict",
     "url",
     "url_env",
+    "variables",
     "wanted",
     "webhook",
     "when"
@@ -11584,10 +11738,23 @@
      "when"
     ],
     "label": [],
+    "ntfy": [
+     "timeout",
+     "token_env",
+     "url",
+     "url_env",
+     "when"
+    ],
     "send": [
      "summary"
     ],
+    "send_message": [
+     "payload",
+     "text",
+     "title"
+    ],
     "to_dict": [],
+    "variables": [],
     "wanted": [
      "summary"
     ],
@@ -11602,6 +11769,7 @@
    "returns": {
     "command": "CommandNotify",
     "desktop": "DesktopNotify",
+    "ntfy": "NtfyNotify",
     "webhook": "WebhookNotify"
    }
   },
@@ -12581,6 +12749,7 @@
     "arguments": [],
     "flags": [],
     "subcommands": [
+     "alarms",
      "approve",
      "build",
      "builds",
@@ -12597,6 +12766,24 @@
      "sync",
      "wait"
     ]
+   },
+   "gitops alarms": {
+    "arguments": [],
+    "flags": [
+     "--context",
+     "--desktop",
+     "--follow",
+     "--interval",
+     "--json",
+     "--kubeconfig",
+     "--namespace",
+     "--no-desktop",
+     "--polls",
+     "--state-dir",
+     "--transport",
+     "--waiting-after"
+    ],
+    "subcommands": []
    },
    "gitops approve": {
     "arguments": [
@@ -14553,6 +14740,7 @@
    "generation-precondition-failed",
    "git-timed-out",
    "git-unavailable",
+   "gitops-alarm-failed",
    "gitops-approval-stale",
    "gitops-artifact-changed",
    "gitops-build-cancelled",
@@ -15918,6 +16106,9 @@
    }
   },
   "piceli.infra": {
+   "Alarms": {
+    "class": "Alarms"
+   },
    "Branch": {
     "class": "Branch"
    },
@@ -15992,6 +16183,9 @@
    },
    "Node": {
     "class": "Node"
+   },
+   "Notify": {
+    "class": "Notify"
    },
    "OpenStack": {
     "class": "OpenStack"
@@ -16902,6 +17096,7 @@
   "piceli.gcp.credentials",
   "piceli.gcp.gke",
   "piceli.gitops",
+  "piceli.gitops.alarms",
   "piceli.gitops.config",
   "piceli.gitops.controller",
   "piceli.gitops.heartbeat",
@@ -16989,6 +17184,7 @@
   "piceli.k8s.cli.env_push",
   "piceli.k8s.cli.env_stop",
   "piceli.k8s.cli.gitops",
+  "piceli.k8s.cli.gitops_watch",
   "piceli.k8s.cli.heavy",
   "piceli.k8s.cli.host",
   "piceli.k8s.cli.importing",

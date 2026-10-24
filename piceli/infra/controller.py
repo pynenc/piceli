@@ -85,6 +85,7 @@ from piceli.envs.model import (
     Tag,
 )
 from piceli.gitops import GitOpsError
+from piceli.gitops.alarms import status_view
 from piceli.gitops.config import (
     DEFAULT_NAMESPACE,
     MAX_POLL_SECONDS,
@@ -188,6 +189,9 @@ class CompositionConfig:
     :param telemetry: ``Otlp(...).to_dict()`` of ``Controller(telemetry=)``
         (0.16): where the controller sends OpenTelemetry
         (:mod:`piceli.gitops.otel`).
+    :param alarms: ``Alarms(...).to_dict()`` of ``Controller(alarms=)``
+        (0.28.0): where the controller sends its alarms
+        (:mod:`piceli.gitops.alarms`).
     """
 
     composition: Mapping[str, Any]
@@ -202,8 +206,16 @@ class CompositionConfig:
     build_storage: str = "20Gi"
     repo: Mapping[str, Any] | None = None
     telemetry: Mapping[str, Any] | None = None
+    alarms: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
+        if self.alarms is not None:
+            from piceli.gitops.alarms import Alarms
+
+            try:
+                Alarms.from_dict(self.alarms)
+            except ValueError as error:
+                raise GitOpsError("gitops-config-invalid", str(error)) from None
         if self.telemetry is not None:
             from piceli.infra import Otlp
 
@@ -309,6 +321,8 @@ class CompositionConfig:
                 if self.telemetry is not None
                 else {}
             ),
+            # 0.28.0, only when set: other configs and their hashes are unchanged.
+            **({"alarms": dict(self.alarms)} if self.alarms is not None else {}),
         }
 
     @classmethod
@@ -332,6 +346,7 @@ class CompositionConfig:
                 build_storage=build.get("storage") or "20Gi",
                 repo=value.get("repo"),
                 telemetry=value.get("telemetry"),
+                alarms=value.get("alarms"),
             )
         except (KeyError, TypeError, ValueError) as error:
             if isinstance(error, GitOpsError):
@@ -852,6 +867,14 @@ class CompositionController:
 
         self.token_expiry: Callable[[Path | None], datetime | None] = (
             github_token_expiry
+        )
+        # 0.28.0: Controller(alarms=Alarms(...)), sent after each poll.
+        from piceli.gitops.alarms import Alarms, AlarmSender
+
+        self.alarm_sender: AlarmSender | None = (
+            None
+            if config.alarms is None
+            else AlarmSender(Alarms.from_dict(config.alarms), log=log)
         )
         self.telemetry.attach(self)  # closes runs a crash interrupted
         # 0.25.0: the Nix host releases it publishes (piceli.infra.nix_releases).
@@ -3410,6 +3433,7 @@ class CompositionController:
             self.state["last_error_detail"] = None
             self.state["poll_failures"] = 0
         if self._composition is None:  # nothing to deploy before the first import
+            self._alarms()
             return self._publish()
         self._requests()
         self._desired()
@@ -3453,7 +3477,20 @@ class CompositionController:
         )
         if dropped:
             self.log(f"builds no longer wanted: {', '.join(sorted(dropped))}")
+        self._alarms()
         return self._publish()
+
+    def _alarms(self) -> None:
+        """Send this poll's alarms (0.28.0); never fails a poll."""
+        if self.alarm_sender is None:
+            return
+        memory = self.state.setdefault("alarms", {})
+        try:
+            self.alarm_sender.run(
+                memory, self.status(), self.clock(), _iso(self.clock())
+            )
+        except Exception as error:  # never fail a poll on it
+            self.log(f"alarms not evaluated ({type(error).__name__})")
 
     # ------------------------------------------------------------ reach, rollout
     def _contact(self, cluster: str, *, fresh: bool = False) -> dict[str, Any]:
@@ -3869,6 +3906,17 @@ class CompositionController:
                 **(
                     {"last_rebuild": self.state["last_rebuild"]}
                     if self.state.get("last_rebuild")
+                    else {}
+                ),
+                # Added in 0.28.0, only with Controller(alarms=): the open
+                # alarms, how many were sent and the failed sends.
+                **(
+                    {
+                        "alarms": status_view(
+                            self.alarm_sender.alarms, self.state.get("alarms") or {}
+                        )
+                    }
+                    if self.alarm_sender is not None
                     else {}
                 ),
                 "poll_failures": int(self.state.get("poll_failures") or 0),

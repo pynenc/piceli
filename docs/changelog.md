@@ -4,6 +4,25 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.28.0
+
+**Features**
+
+- **Alarms.** `Controller(alarms=Alarms(targets=[Notify.ntfy(url),
+  Notify.webhook(url_env=...), Notify.desktop()], secret="piceli-alarms",
+  waiting_after="10m"))` makes the GitOps controller send a short message
+  when an environment fails or waits too long for a build host or an
+  approval, a `NixRelease` fails or waits, the composition does not
+  import, or the controller restarts on a new version. Each alarm is sent
+  once (also across restarts), with one "recovered" message when it ends;
+  each names the environment or host, the reason code and the next command.
+  Secret URLs and tokens come from a Kubernetes Secret, never the config,
+  logs or status. A failed send is listed in the status
+  (`gitops-alarm-failed`) and never stops the controller. `piceli gitops
+  alarms --follow` raises the same alarms as desktop notifications on your
+  machine. The train's notifiers gain `Notify.ntfy`. See
+  {ref}`gitops-alarms`.
+
 ## Version 0.27.0
 
 **Features**

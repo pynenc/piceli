@@ -37,6 +37,7 @@ def _slug(text: str) -> str:
 
 
 __all__ = [
+    "Alarms",
     "Branch",
     "Bucket",
     "BuildHost",
@@ -62,6 +63,7 @@ __all__ = [
     "NixHost",
     "NixRelease",
     "Node",
+    "Notify",
     "OpenStack",
     "Otlp",
     "Porkbun",
@@ -214,6 +216,12 @@ class Controller:
     build claims, or builds nothing on the node, until ``piceli gitops
     release-host NAME``. ``None``: never quarantined.
 
+    ``alarms=Alarms(targets=[...])`` (0.28.0) sends an alarm when an
+    environment fails or waits too long for a build host or an approval,
+    a ``NixRelease`` fails, the composition does not import, or the
+    controller restarts on a new version: once per event, to ntfy and
+    webhook targets (:class:`~piceli.gitops.alarms.Alarms`).
+
     ``prebuilt`` (0.26.0) lets the controller take images built and pushed
     to its registry before it asks for them, by a merge train
     (``Step.images``, request ``prebuilt``): an offered image is used only
@@ -235,6 +243,7 @@ class Controller:
     quarantine_after: int | None = 2
     quarantine_window: str = "24h"
     prebuilt: bool = False
+    alarms: Alarms | None = None
 
     def __post_init__(self) -> None:
         from piceli.infra.cluster import check_controller
@@ -438,6 +447,8 @@ from piceli.infra.machines import (  # noqa: E402
 # Loaded on first use (piceli/_lazy.py): importing the facade stays cheap and
 # loads no Kubernetes client.
 _LAZY = {
+    "Alarms": "piceli.gitops.alarms",
+    "Notify": "piceli.train.notify",
     "register_cluster": "piceli.infra.multicluster",
     "NixRelease": "piceli.infra.nix_releases",
     "Promotion": "piceli.infra.promotion",
@@ -445,6 +456,8 @@ _LAZY = {
 __getattr__, __dir__ = lazy_exports(__name__, _LAZY, globals())
 
 if TYPE_CHECKING:
+    from piceli.gitops.alarms import Alarms
     from piceli.infra.multicluster import register_cluster
     from piceli.infra.nix_releases import NixRelease
     from piceli.infra.promotion import Promotion
+    from piceli.train.notify import Notify

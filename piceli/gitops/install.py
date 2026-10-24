@@ -480,6 +480,28 @@ def _render_workload(
                 {"name": volume, "secret": {"secretName": secret, "defaultMode": 0o440}}
             )
             mounts.append({"name": volume, "mountPath": path, "readOnly": True})
+    # 0.28.0 Controller(alarms=Alarms(secret=...)): each variable a target
+    # names comes from the Secret's key of that name (optional: a missing
+    # key fails that send, visible in the status, never the controller).
+    alarm_env: list[dict[str, Any]] = []
+    alarms = getattr(config, "alarms", None)
+    if alarms and alarms.get("secret"):
+        from piceli.gitops.alarms import Alarms
+
+        found = Alarms.from_dict(alarms)
+        alarm_env = [
+            {
+                "name": variable,
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": found.secret,
+                        "key": variable,
+                        "optional": True,
+                    }
+                },
+            }
+            for variable in found.variables
+        ]
     selector = {"app.kubernetes.io/name": NAME}
     config_json = json.dumps(config.to_dict(), sort_keys=True, indent=2)
     config_hash = "sha256:" + hashlib.sha256(config_json.encode()).hexdigest()
@@ -518,6 +540,7 @@ def _render_workload(
                                 {"name": "TMPDIR", "value": "/tmp"},
                                 # 0.15.1: verify the image's files at start.
                                 {"name": SELF_CHECK_ENV, "value": SELF_CHECK_MANIFEST},
+                                *alarm_env,
                             ],
                             # A crash's last log lines become the container's
                             # last message: `cluster status` shows them.

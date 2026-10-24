@@ -569,6 +569,13 @@ def _enable_composition(
                 and composition.cluster.controller.telemetry is not None
                 else None
             ),
+            alarms=(
+                composition.cluster.controller.alarms.to_dict()
+                if composition.cluster is not None
+                and composition.cluster.controller is not None
+                and composition.cluster.controller.alarms is not None
+                else None
+            ),
         )
         controller = (
             composition.cluster.controller if composition.cluster is not None else None
@@ -2352,5 +2359,7 @@ def _loop(
 
 def register(root: typer.Typer) -> None:
     """Add ``gitops`` and ``promote`` to the root application."""
+    import piceli.k8s.cli.gitops_watch  # noqa: F401 - adds `gitops alarms`
+
     root.add_typer(app, name="gitops")
     root.command("promote")(promote)

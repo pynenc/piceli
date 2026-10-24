@@ -4635,6 +4635,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "gitops",
     ),
     _E(
+        "gitops-alarm-failed",
+        "Controller alarm not sent",
+        "A target of `Controller(alarms=Alarms(...))` (ntfy or a webhook) refused the alarm, timed out, or its URL or token variable is unset (the key is missing from the `Alarms(secret=)` Secret). The poll and the deploys go on; the failure is listed under `controller.alarms.failures` in the status.",
+        "Check the target's URL, that the Secret named by `Alarms(secret=)` has a key for each variable the targets name, and that the controller can reach the target; `piceli gitops alarms` shows the failed sends.",
+        True,
+        "gitops",
+    ),
+    _E(
         "gitops-nix-release-failed",
         "NixRelease publish failed",
         "The build host that claimed a NixRelease's publish answered `build-failed`: the source could not be fetched at the commit, the tag points at another commit, the Nix build failed, or signing, pushing or uploading the manifest failed. The release stays `failed` with the host's reason and output tail in `piceli gitops status`.",

@@ -1705,6 +1705,23 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             exit_codes=(0, 2),
             notes="0.22.0. Read-only (controller.build_health in gitops status).",
         ),
+        "gitops alarms": _C(
+            "Show the GitOps controller's alarms (failed or waiting "
+            "environments, failed or waiting NixReleases, a composition that "
+            "does not import, a new controller version) and the alarms it "
+            "could not send; --follow raises each new one as a desktop "
+            "notification.",
+            reads=("kubeconfig or --state-dir", "the controller's status"),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.28.0. Read-only. Each alarm is shown once per run of the "
+            "command (a resolved one once more); --follow keeps reading every "
+            "--interval seconds (--polls N stops after N reads). --json prints "
+            "piceli.gitops-alarms.v1 with each alarm as piceli.alarm.v1. The "
+            "controller itself sends to the ntfy and webhook targets of "
+            "Controller(alarms=Alarms(...)).",
+        ),
         "gitops release-host": _C(
             "Ask the GitOps controller to forget a build host's or the builder "
             "node's health events, ending its quarantine.",
