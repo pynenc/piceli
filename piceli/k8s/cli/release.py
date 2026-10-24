@@ -317,6 +317,11 @@ def _describe_plan(
                 + ("  [cluster-scoped]" if action.get("cluster_scoped") else "")
             )
             _say_changes(diffs.get((action["kind"], action["name"])), MAX_CHANGE_LINES)
+    for item in report.get("versioned_secrets", ()):
+        if item["operation"] == "create":
+            _say(f"  secret {item['secret']} → {item['name']} ({item['why']})")
+        else:
+            _say(f"  delete {item['name']} ({item['why']})")
     for item in report["drift"]:
         resource = item["resource"]
         _say(

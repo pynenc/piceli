@@ -1983,6 +1983,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "release",
     ),
     _E(
+        "versioned-secret-generated",
+        "A versioned Secret holds a generated value",
+        "A Secret declared with `versioned=True` binds the output of a `random`, `tls-self-signed` or `tls-ca` generator directly. Those values must stay the same: when the state starts empty they are adopted back from the live Secret by its declared name, which a versioned Secret does not have, so a new value (and a new Secret) would be made silently. The plan refuses before anything is generated or written.",
+        "Keep generated passwords, keys and certificates in a plain `app.secret(...)` (rotate them with `--rotate` into a Secret with a new name). Use `versioned=True` for config files that carry a secret: a `template`, `import`, `static` or external source.",
+        False,
+        "release",
+    ),
+    _E(
         "invalid-adopt-entry",
         "Invalid adopt or replace entry",
         "An `--adopt`/`--replace` flag or a `[release] adopt`/`replace` entry is not `Kind/name` or `apiVersion/Kind/name`, or its name is not valid for the kind (a DNS subdomain; RBAC kinds also allow `:`).",

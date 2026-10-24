@@ -66,29 +66,14 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.26
+## What's new in 0.27
 
-- **A pre-merge train**: `piceli train` merges your branches onto the base,
-  runs the checks of the merged commit (only the tests the change reaches,
-  with a retry of only the failed ones), bisects out the branches that fail
-  and promotes what passed; steps can run on build hosts, with warm and
-  reused builds; see the
-  [guide](https://docs.pynenc.org/projects/piceli/en/latest/train.html).
-- **Watch and queue trains**: `piceli trains` (and the UI's Trains view)
-  shows the run in progress, recent runs, step trends and flaky tests;
-  runs queue per train, export an OpenTelemetry trace and notify you when
-  they end.
-- **Images straight to the controller**: a promoted train builds the
-  images from the tested commit and hands them to a GitOps controller
-  declared `Controller(prebuilt=True)`, which deploys without building
-  again.
-- **Private flake inputs**: a Nix build fetches the private inputs its
-  `flake.lock` pins with the build host's own Git credential or the
-  composition's, sealed per build by the controller.
-- **Builds you can see and start**: Nix releases follow a branch or a
-  schedule, `piceli gitops build` and `piceli gitops cancel` start and
-  stop a build, and the UI's Builds page shows every build with its stage
-  and live log.
+- **Versioned Secrets**: `app.secret("turn", {...}, versioned=True)` names
+  the Secret after a short keyed hash of its values. A changed value makes a
+  new Secret, the workloads that use it roll in the same apply, and old
+  versions are deleted once nothing mounts them. Use it for config files
+  that hold a secret; see the
+  [guide](https://docs.pynenc.org/projects/piceli/en/stable/secrets.html).
 
 ## Web UI
 

@@ -65,6 +65,7 @@ from piceli.k8s.ops.content_digest import (
     carry_live_secret_digests,
     content_digests,
     has_secret_digests,
+    has_versioned_secrets,
     strip_roll_markers,
     version_token,
 )
@@ -115,6 +116,7 @@ from piceli.k8s.ops.plan import (
     transferable_managers,
 )
 from piceli.k8s.ops.provider_factory import ProviderBinding, build_provider
+from piceli.k8s.ops.secret_names import versioned_logical
 from piceli.k8s.ops.secret_versions import (
     SecretVersionRef,
     SecretVersionStore,
@@ -861,6 +863,33 @@ def scoped_rollback(
     return dataclasses.replace(composition, components=tuple(components))
 
 
+def versioned_secrets(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The versioned Secrets a plan creates and deletes (0.27.0).
+
+    ``{"secret": <declared name>, "name": <versioned name>, "operation":
+    "create"|"delete", "why": "new value"|"no longer mounted"}``. Names only,
+    never values.
+    """
+    found = []
+    for action in plan["actions"]:
+        logical = versioned_logical(action.get("manifest") or {})
+        if logical is None or action["operation"] not in ("create", "delete"):
+            continue
+        found.append(
+            {
+                "secret": logical,
+                "name": action["resource"]["name"],
+                "operation": action["operation"],
+                "why": (
+                    "new value"
+                    if action["operation"] == "create"
+                    else "no longer mounted"
+                ),
+            }
+        )
+    return found
+
+
 def _compact_actions(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [
         {
@@ -1057,6 +1086,7 @@ class PlanResult:
             "dry_run_unavailable": self.dry_run_unavailable,
             "autoscaled": self.autoscaled,
             "kept_orphaned": kept_orphaned(self.plan),
+            "versioned_secrets": versioned_secrets(self.plan),
             **({"plan": self.plan} if full else {}),
         }
 
@@ -1271,12 +1301,49 @@ class ReleaseRunner:
                     code="invalid-composition",
                 )
             scoped = scoped_composition(composition, self.spec.model.target.namespace)
+            self._refuse_versioned_generated(scoped, refs)
             # Offline tokens (version ids); a plan replaces them with keyed
             # fingerprints of the stored values (see ``_plan_create``). The
             # opt-out markers are instructions, never applied.
             return strip_roll_markers(content_digests(scoped))
 
         return factory
+
+    def _refuse_versioned_generated(
+        self,
+        composition: DeploymentComposition,
+        refs: Mapping[str, SecretVersionRef],
+    ) -> None:
+        """Refuse a versioned Secret that binds a generated value directly.
+
+        ``random``, ``tls-self-signed`` and ``tls-ca`` values must stay the
+        same, and the adoption that recovers them for an empty state finds
+        live Secrets by their declared name, which a versioned Secret does
+        not keep (see ``versioned-secret-generated``).
+        """
+        generated = {
+            item.name
+            for generator, spec in self.spec.model.secrets.items()
+            if spec.type in {"random", "tls-self-signed", "tls-ca"}
+            for item in outputs(generator, spec)
+        }
+        by_ref = {ref: name for name, ref in refs.items()}
+        for component in composition.components:
+            for resource in component.resources:
+                if versioned_logical(resource.manifest) is None:
+                    continue
+                bound = sorted(
+                    name
+                    for binding in resource.secret_bindings
+                    if (name := by_ref.get(binding.reference)) in generated
+                )
+                if bound:
+                    raise ReleaseSpecError(
+                        f"versioned Secret {versioned_logical(resource.manifest)!r} "
+                        f"binds generated value(s) {bound}; keep generated "
+                        "values in a plain Secret (versioned=False)",
+                        code="versioned-secret-generated",
+                    )
 
     def _placeholders(self) -> dict[str, SecretVersionRef]:
         """Deterministic stand-in references for every exposed secret input."""
@@ -1829,7 +1896,7 @@ class ReleaseRunner:
                 # real secret versions, so bound objects can be compared.
                 composition = composition_from_archive(existing.archive)
             kinds = self._kinds(composition)
-            if settings.prune:
+            if settings.prune or has_versioned_secrets(composition):
                 kinds |= self._prune_kinds(records.values())
             if existing is None and has_secret_digests(composition):
                 composition = self._carry_secret_digests(
@@ -1908,7 +1975,7 @@ class ReleaseRunner:
             composition, _material = self._preview_composition(factory)
             records = sorted(record.name for record in catalog.records())
             kinds = self._kinds(composition)
-            if settings.prune:
+            if settings.prune or has_versioned_secrets(composition):
                 kinds |= self._prune_kinds(catalog.records())
             artifact = self._discover(binding, kinds, composition)
             composition = self._carry_secret_digests(composition, artifact)
@@ -2012,7 +2079,7 @@ class ReleaseRunner:
     ) -> PlanResult:
         settings = self.spec.model.release
         kinds = self._kinds(composition)
-        if settings.prune:
+        if settings.prune or has_versioned_secrets(composition):
             kinds |= self._prune_kinds(catalog.records())
         artifact, unavailable = self._observe(binding, composition, kinds)
         snapshot = ObservedSnapshot.from_discovery(artifact)
@@ -2236,7 +2303,7 @@ class ReleaseRunner:
         # declare and leaves the rest as it is.
         prune = settings.prune and scope is None
         kinds = self._kinds(composition)
-        if settings.prune:
+        if settings.prune or has_versioned_secrets(composition):
             # A scoped rollback discovers what a prune would (earlier
             # releases' kinds), so absent objects are known absent.
             kinds |= self._prune_kinds(catalog.records())

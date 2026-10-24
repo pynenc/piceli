@@ -63,6 +63,7 @@ from piceli.k8s.ops.plan import (
     DeploymentComposition,
     ResourceIntent,
 )
+from piceli.k8s.ops.secret_names import VERSIONED_SECRET_ANNOTATION
 
 if TYPE_CHECKING:
     from piceli.app.identity import ClusterIdentity
@@ -297,10 +298,26 @@ class App(BaseModel):
         *,
         type: str = "Opaque",
         component: str | None = None,
+        versioned: bool = False,
     ) -> Secret:
-        """Declare a Secret whose values are opaque versions from ``ctx.secret``."""
+        """Declare a Secret whose values are opaque versions from ``ctx.secret``.
+
+        With ``versioned=True`` the Secret is rendered as ``<name>-<hash>``,
+        where the hash is a short keyed digest of its values (never the
+        values): a changed value is a new, immutable Secret, every workload
+        that reads ``name`` is pointed at the new name in the same apply (so
+        it rolls), and an old version is deleted once nothing mounts it.
+        Use it for config files that carry a secret; see
+        :doc:`/secrets` ("Versioned Secrets").
+        """
         return self._declare(
-            Secret(name=name, data=dict(data), type=type, component=component)
+            Secret(
+                name=name,
+                data=dict(data),
+                type=type,
+                component=component,
+                versioned=versioned,
+            )
         )
 
     def _pod_fields(
@@ -1948,6 +1965,17 @@ class App(BaseModel):
                 "type": item.type,
                 "data": dict.fromkeys(item.data, "<private>"),
             }
+            if item.versioned:
+                # Renamed ``<name>-<hash>`` by ``content_digests``; a new
+                # value is always a new object, never a rewrite.
+                manifest["metadata"] = {
+                    **metadata,
+                    "annotations": {
+                        **(metadata.get("annotations") or {}),
+                        VERSIONED_SECRET_ANNOTATION: item.name,
+                    },
+                }
+                manifest["immutable"] = True
         elif isinstance(item, Workload):
             node_name = None
             if item.node is not None:

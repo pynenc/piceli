@@ -319,12 +319,17 @@ class Secret(_Model):
     :param data: Key to secret version.
     :param type: Secret type, such as ``kubernetes.io/tls``.
     :param component: Deployment component; defaults to ``name``.
+    :param versioned: Name the rendered Secret ``<name>-<hash>`` after its
+        values (0.27.0): a changed value is a new, immutable Secret, the
+        workloads that read it follow the new name in the same apply, and an
+        old version is deleted once nothing mounts it.
     """
 
     name: ObjectName
     data: dict[DataKey, InstanceOf[SecretVersionRef]] = Field(min_length=1)
     type: str = Field(default="Opaque", min_length=1)
     component: Name | None = None
+    versioned: bool = False
 
     @field_validator("data", mode="before")
     @classmethod

@@ -41,6 +41,7 @@ immutable.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 from collections.abc import Callable, Iterator, Mapping
@@ -51,6 +52,11 @@ from piceli.k8s.ops.plan import (
     DeploymentComposition,
     ResourceIntent,
     ResourceRef,
+)
+from piceli.k8s.ops.secret_names import (
+    rename_secret_refs,
+    secret_names,
+    versioned_logical,
 )
 from piceli.k8s.ops.secret_versions import SecretVersionRef
 
@@ -258,6 +264,152 @@ def _map(
     return DeploymentComposition(tuple(components)) if changed else composition
 
 
+#: Length of the content hash in a versioned Secret's name.
+VERSIONED_HASH_LENGTH = 10
+
+
+def versioned_name(resource: ResourceIntent, token: Token) -> str:
+    """``<declared name>-<hash>`` of a versioned Secret.
+
+    The hash is the first 10 hex characters of a SHA-256 over the Secret's
+    type, its manifest content (bound values are ``<private>``) and one
+    token per bound value: the keyed fingerprint of the stored value in a
+    release (see :mod:`piceli.k8s.ops.secret_versions`), the opaque version
+    id offline. The same values give the same name, a changed value a new
+    name, and the name says nothing about a value without the store's key.
+    """
+    logical = versioned_logical(resource.manifest)
+    if logical is None:  # pragma: no cover - callers pass versioned Secrets
+        raise ValueError(f"{resource.ref} is not a versioned Secret")
+    manifest = resource.manifest
+    content = {
+        **_secret_content(resource, token),
+        "data": manifest.get("data") or {},
+        "stringData": manifest.get("stringData") or {},
+    }
+    digest = hashlib.sha256(_canonical(content).encode()).hexdigest()
+    return f"{logical}-{digest[:VERSIONED_HASH_LENGTH]}"
+
+
+def _renamed(
+    composition: DeploymentComposition,
+    names: Mapping[tuple[str, str], str],
+) -> DeploymentComposition:
+    """Rename Secrets ``(namespace, old) -> new`` and every reference to them."""
+    if not names:
+        return composition
+
+    def change(resource: ResourceIntent) -> ResourceIntent:
+        namespace = resource.ref.namespace
+        local = {old: new for (ns, old), new in names.items() if ns == namespace}
+        manifest = resource.manifest
+        ref = resource.ref
+        changed = False
+        if (
+            ref.api_version == "v1"
+            and ref.kind == "Secret"
+            and (namespace, ref.name) in names
+        ):
+            manifest["metadata"]["name"] = names[(namespace, ref.name)]
+            ref = dataclasses.replace(ref, name=names[(namespace, ref.name)])
+            changed = True
+        changed = rename_secret_refs(manifest, local) or changed
+        dependencies = tuple(
+            dataclasses.replace(item, name=names[(item.namespace, item.name)])
+            if item.api_version == "v1"
+            and item.kind == "Secret"
+            and (item.namespace, item.name) in names
+            else item
+            for item in resource.dependencies
+        )
+        if not changed and dependencies == resource.dependencies:
+            return resource
+        if not changed:
+            return dataclasses.replace(
+                resource, dependencies=tuple(sorted(set(dependencies)))
+            )
+        built = ResourceIntent.from_manifest(manifest, dependencies)
+        return dataclasses.replace(
+            resource,
+            ref=ref,
+            _manifest_json=built._manifest_json,
+            dependencies=built.dependencies,
+        )
+
+    return _map(composition, change)
+
+
+def versioned_secret_names(
+    composition: DeploymentComposition, token: Token = version_token
+) -> DeploymentComposition:
+    """Name each versioned Secret after its content and point its readers at it.
+
+    A versioned Secret carries ``piceli.io/versioned-from: <declared
+    name>``. It is renamed ``<declared name>-<hash>`` (see
+    :func:`versioned_name`), and every reference to its current name in the
+    same namespace (pod volumes, projected volumes, ``env``, ``envFrom``,
+    ``imagePullSecrets``, Ingress TLS, dependencies) is rewritten. A changed
+    value is a new name, so the pod templates change and the workloads roll
+    in the same apply. Idempotent: an already named Secret keeps its name
+    while its content is the same, and a later call with keyed tokens moves
+    it (and its readers) to the keyed name.
+    """
+    names: dict[tuple[str, str], str] = {}
+    for component in composition.components:
+        for resource in component.resources:
+            if versioned_logical(resource.manifest) is None:
+                continue
+            name = versioned_name(resource, token)
+            if name != resource.ref.name:
+                names[(resource.ref.namespace, resource.ref.name)] = name
+    return _renamed(composition, names)
+
+
+def has_versioned_secrets(composition: DeploymentComposition) -> bool:
+    """Whether the composition declares any versioned Secret."""
+    return any(
+        versioned_logical(resource.manifest) is not None
+        for component in composition.components
+        for resource in component.resources
+    )
+
+
+def carry_live_versioned_names(
+    composition: DeploymentComposition, live: Mapping[ResourceRef, Mapping[str, Any]]
+) -> DeploymentComposition:
+    """Keep the live name of each versioned Secret where values are not known.
+
+    A preview without secret values (``diff``, a placeholder preview) names
+    a versioned Secret after stand-in references. Like
+    :func:`carry_live_secret_digests`, it is shown under the live name a
+    live object refers to instead, so an unchanged release previews as
+    unchanged; the plan of the release computes the real name.
+    """
+    mounted: set[tuple[str, str]] = set()
+    versions: dict[tuple[str, str], set[str]] = {}
+    for ref, manifest in live.items():
+        logical = versioned_logical(manifest)
+        if logical is not None:
+            versions.setdefault((ref.namespace, logical), set()).add(ref.name)
+        else:
+            mounted |= {(ref.namespace, name) for name in secret_names(manifest)}
+    names: dict[tuple[str, str], str] = {}
+    for component in composition.components:
+        for resource in component.resources:
+            logical = versioned_logical(resource.manifest)
+            if logical is None:
+                continue
+            namespace = resource.ref.namespace
+            used = sorted(
+                name
+                for name in versions.get((namespace, logical), ())
+                if (namespace, name) in mounted
+            )
+            if len(used) == 1 and used[0] != resource.ref.name:
+                names[(namespace, resource.ref.name)] = used[0]
+    return _renamed(composition, names)
+
+
 def content_digests(
     composition: DeploymentComposition,
     token: Token = version_token,
@@ -272,6 +424,7 @@ def content_digests(
     fingerprints of the stored values after the opt-out markers are gone
     (see :func:`strip_roll_markers`).
     """
+    composition = versioned_secret_names(composition, token)
     objects = {
         (resource.ref.kind, resource.ref.namespace, resource.ref.name): resource
         for component in composition.components
@@ -316,8 +469,10 @@ def carry_live_secret_digests(
     secret values, only stand-in references, so it cannot tell whether a
     Secret's content changes. Like the Secrets themselves, a consumer is then
     shown with its live secret digest; the plan of the release computes the
-    real one.
+    real one. Versioned Secrets keep their live name the same way (see
+    :func:`carry_live_versioned_names`).
     """
+    composition = carry_live_versioned_names(composition, live)
 
     def change(resource: ResourceIntent) -> ResourceIntent:
         current = live.get(resource.ref)

@@ -333,11 +333,64 @@ app.secret("external-1", {"db": secrets.ref("db_url")})
 
 A changed value is a new version in a new release. Secrets are retained
 objects, so bind it into a Secret with a **new name**, as for `--rotate`:
-bump the generation in `[values]` (`external-1` → `external-2`) and plan.
-Under the same name, `apply` stops with `retained-content-precondition-failed`
+bump the generation in `[values]` (`external-1` → `external-2`) and plan,
+or declare it with `versioned=True` (see {ref}`versioned-secrets`). Under
+the same name, `apply` stops with `retained-content-precondition-failed`
 and writes nothing. `--rotate` refuses an external source
 (`secret-rotation-refused`): rotate it at the source and plan again.
 `--rollback-to` re-applies the earlier release with its stored version.
+
+(versioned-secrets)=
+## Versioned Secrets
+
+Piceli never rewrites a Secret, so a new value needs a Secret with a new
+name. `versioned=True` does that for you, like the generated Secrets of
+kustomize:
+
+```python
+turn = app.secret("turn", {"turnserver.conf": ctx.secret("turn_conf")}, versioned=True)
+app.deployment("relay", image=ctx.image("relay"),
+               volumes={"/etc/turn": SecretVolume(turn)})
+```
+
+- The Secret is named `turn-<hash>`. The hash is 10 characters of a digest
+  over the keyed fingerprints of the values (the same HMAC (hash-based
+  message authentication code) as `piceli.io/secrets-digest`), so the same
+  values give the same name and the name tells nothing about a value.
+- Every reference to `turn` (volumes, projected volumes, `env`, `envFrom`,
+  `imagePullSecrets`, Ingress TLS) is rewritten to that name. A new value
+  is a new name, so the workloads roll in the same apply.
+- The Secret is `immutable: true` and carries `piceli.io/versioned-from:
+  turn`.
+- The plan shows the change, without values:
+
+  ```console
+    secret turn → turn-a1b2c3d4e5 (new value)
+    delete turn-0f9e8d7c6b (no longer mounted)
+  ```
+
+  The JSON output lists the same under `versioned_secrets`.
+
+**Old versions.** When a plan creates a new version, it deletes the older
+versions of the same Secret that this release's owner wrote and that no
+object refers to. The version the running release mounts is kept: it is the
+rollback target. So the previous version goes at the next change, and an
+unchanged release deletes nothing. A Secret that another tool or owner
+wrote is never deleted. `--rollback-to` re-creates a deleted version from
+the state if it needs one.
+
+**When to use it.** Config files that carry a secret (a server config with a
+shared secret, a connection string), built with a `template`, an `import`,
+a `static` value or an external source.
+
+**When not to.** Generated passwords, keys and certificates (`random`,
+`tls-self-signed`, `tls-ca`) keep their value until you rotate them, and an
+empty state adopts them back from the live Secret by its declared name. A
+versioned Secret that binds one directly is refused with
+`versioned-secret-generated`: keep those in a plain `app.secret(...)`. A
+template over a `random` is allowed; if the state starts empty and the
+`random` is bound nowhere else, it gets a new value, and with it a new
+Secret.
 
 ## Inspect a value
 

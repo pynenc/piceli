@@ -29,6 +29,11 @@ from piceli.k8s.ops.discovery import (
     ServerDryRun,
     public_manifest,
 )
+from piceli.k8s.ops.secret_names import (
+    pod_specs,
+    secret_names,
+    versioned_logical,
+)
 from piceli.k8s.ops.secret_versions import (
     PRIVATE_VALUE,
     SecretBinding,
@@ -2339,6 +2344,14 @@ def build_plan(
                 )
             )
 
+    stale = stale_versioned_secrets(desired, snapshot, authorization)
+    for current in stale:
+        actions.append(
+            PlanAction(PlanOperation.DELETE, current.intent, (), current.precondition)
+        )
+    gone = {current.intent.ref for current in stale}
+    protected = [ref for ref in protected if ref not in gone]
+
     return DeploymentPlan(
         snapshot.target,
         snapshot.snapshot_hash,
@@ -2348,6 +2361,77 @@ def build_plan(
         approval_policy=authorization.approval_policy,
         secret_adoptions=_secret_adoptions(authorization, observed),
     )
+
+
+def versioned_secret_deletable(
+    manifest: Mapping[str, Any], ownership: Ownership
+) -> bool:
+    """A versioned Secret this owner wrote: the one Secret a plan may delete.
+
+    Secrets are retained and never pruned, with one exception (0.27.0): an
+    old version of a versioned Secret (``piceli.io/versioned-from``,
+    ``app.secret(..., versioned=True)``) that this release's owner wrote.
+    Its values never change under its name, so deleting it loses nothing the
+    store does not keep: a rollback creates it again.
+    """
+    return ownership is Ownership.MANAGED and versioned_logical(manifest) is not None
+
+
+def stale_versioned_secrets(
+    desired: Mapping[ResourceRef, ResourceIntent],
+    snapshot: ObservedSnapshot,
+    authorization: PlanAuthorization,
+) -> list[ObservedResource]:
+    """Old versions of versioned Secrets that this plan deletes (0.27.0).
+
+    Only when the plan creates a new version of a declared name: then every
+    other live version of that name that this owner wrote is deleted, except
+    the ones an object refers to (a desired one, or any live one: the
+    workloads of the running release, which is the rollback target once this
+    plan is applied). So the current version and the previous one are kept,
+    an unchanged release deletes nothing, and a version is deleted at the
+    next change after nothing mounts it. Nothing is deleted unless discovery
+    covers Secrets and every kind of workload that this or an earlier
+    release declared.
+    """
+    coverage = snapshot.coverage
+    if not coverage.is_complete_for("v1", "Secret"):
+        return []
+    for intent in (*desired.values(), *authorization.previous):
+        if any(True for _ in pod_specs(intent.manifest)) and not (
+            coverage.is_complete_for(intent.ref.api_version, intent.ref.kind)
+        ):
+            return []
+    observed = {resource.intent.ref: resource for resource in snapshot.resources}
+    renewed = {
+        (ref.namespace, logical)
+        for ref, intent in desired.items()
+        if (logical := versioned_logical(intent.manifest)) is not None
+        and ref not in observed
+    }
+    if not renewed:
+        return []
+    mounted = {
+        (ref.namespace, name)
+        for ref, manifest in (
+            *((ref, intent.manifest) for ref, intent in desired.items()),
+            *((ref, item.intent.manifest) for ref, item in observed.items()),
+        )
+        if ref.kind != "Secret"
+        for name in secret_names(manifest)
+    }
+    return [
+        resource
+        for ref, resource in sorted(observed.items(), key=lambda item: item[0])
+        if ref not in desired
+        and (ref.namespace, versioned_logical(resource.intent.manifest)) in renewed
+        and versioned_secret_deletable(resource.intent.manifest, resource.ownership)
+        and (ref.namespace, ref.name) not in mounted
+        and not any(
+            resource.precondition.uid in child.owner_uids
+            for child in snapshot.resources
+        )
+    ]
 
 
 def _secret_adoptions(
