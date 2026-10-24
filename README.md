@@ -85,7 +85,7 @@ objects).
 - **Faster adoption and numbers**: `piceli train init --from SCRIPT` writes a
   starting train spec, `--compare` runs your old script beside the train, and
   `piceli cycle report` gives push-to-running times per target; see the
-  [guide](https://docs.pynenc.org/projects/piceli/en/stable/gitops.html).
+  [guide](https://docs.pynenc.org/projects/piceli/en/latest/gitops.html).
 
 ## Web UI
 

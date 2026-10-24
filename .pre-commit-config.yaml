@@ -50,3 +50,9 @@ repos:
         language: system
         files: ^(README\.md|examples/readme/.*)$
         pass_filenames: false
+      - id: public-links
+        name: public docs links name a published version
+        entry: uv run --frozen pytest -q -p no:cacheprovider tests/unit/test_public_links.py
+        language: system
+        files: ^(README\.md|docs/.*\.md|skills/.*\.md|tests/unit/test_public_links\.py)$
+        pass_filenames: false
