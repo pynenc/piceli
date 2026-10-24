@@ -4,6 +4,23 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.26.1
+
+- **A forward that has just started is recorded for `access stop --stale`
+  also on a loaded machine.** For a moment after `exec` a new process's
+  command line reads empty, so its fingerprint read as unknown and the
+  owned-process registry silently skipped the record; `piceli access stop
+  --stale` then could not recognise that forward as Piceli's. The registry
+  now reads the fingerprint again while the child exists (up to 5 s).
+- **The stale `access ui` forward test is reliable under load.** Its fake
+  `kubectl` closed every connection, as a forward with a dead upstream
+  does, so the supervisor's health probe restarted it with a new pid about
+  13 s after the start; it now keeps them open, as a healthy forward does.
+  The foreign listener binds a port the kernel picks, and the forward's
+  port comes from the pytest worker's own slice below the ephemeral range,
+  so neither a connection nor a parallel run of the test can take it
+  before the fake binds it.
+
 ## Version 0.26.0
 
 0.26.0 brings a pre-merge train: `piceli train` merges candidate branches

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import shutil
 import signal
 import socket
@@ -56,18 +57,23 @@ UI_ARGV = (
     "8790:8790 --address 127.0.0.1"
 )
 
+# A healthy forward: it keeps every connection open. One that closed them at
+# once would look like a forward whose upstream is gone, and the supervisor's
+# TCP probe would restart it (a new pid) about 13 s after the start, which a
+# loaded runner reaches before the test has looked the child up.
 _FAKE_KUBECTL = """import socket
 import sys
 
 args = sys.argv[1:]
 port = int(args[args.index("port-forward") + 2].split(":", 1)[0])
+held = []
 with socket.socket() as server:
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind(("127.0.0.1", port))
     server.listen(8)
     while True:
         connection, _ = server.accept()
-        connection.close()
+        held.append(connection)
 """
 
 # A stale `piceli access ui`: supervises the UI forward until SIGTERM.
@@ -124,23 +130,47 @@ finally:
     supervisor.close()
 """
 
+# Another program's listener: it binds a port the kernel picks and prints it.
 _LISTENER = """import socket
-import sys
 import time
 
 with socket.socket() as server:
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(("127.0.0.1", int(sys.argv[1])))
+    server.bind(("127.0.0.1", 0))
     server.listen(8)
-    print("ready", flush=True)
+    print(server.getsockname()[1], flush=True)
     time.sleep(120)
 """
 
 
-def _free_port() -> int:
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        return int(listener.getsockname()[1])
+_SLICE = 64  # ports per pytest-xdist worker
+
+
+def _ephemeral_ports() -> tuple[int, int]:
+    try:
+        low, high = Path("/proc/sys/net/ipv4/ip_local_port_range").read_text().split()
+        return int(low), int(high)
+    except (OSError, ValueError):
+        return 49152, 65535  # IANA's range: macOS and the BSDs
+
+
+def _forward_port() -> int:
+    """A free port for the fake forward: below the ephemeral range, in this worker's slice.
+
+    A free ephemeral port can be handed out again as the source port of any
+    connection before the fake kubectl starts and binds it, and a parallel
+    run of this test can pick the same free port in that time (its kubectl
+    then answers for this one). Below the range only an explicit bind takes
+    a port, and each pytest-xdist worker draws from a slice of its own.
+    """
+    low, _high = _ephemeral_ports()
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0").removeprefix("gw")
+    slices = (low - low // 2) // _SLICE
+    start = low // 2 + (int(worker) if worker.isdigit() else 0) % slices * _SLICE
+    for port in random.sample(range(start, start + _SLICE), _SLICE):
+        with socket.socket() as probe, suppress(OSError):
+            probe.bind(("127.0.0.1", port))
+            return port
+    raise AssertionError("no free port in this worker's slice")
 
 
 def _accepting(port: int) -> bool:
@@ -336,7 +366,7 @@ def test_a_stale_access_ui_forward_is_recognised_and_stopped(tmp_path: Path) -> 
     kubeconfig = tmp_path / "lab.kubeconfig"
     kubeconfig.write_text("apiVersion: v1\nkind: Config\n")
     registry = OwnedProcessRegistry(tmp_path / "state" / "forwards")
-    port, foreign_port = _free_port(), _free_port()
+    port = _forward_port()
     child = 0
     env = {
         "FAKE_UI_PORT": str(port),
@@ -349,11 +379,11 @@ def test_a_stale_access_ui_forward_is_recognised_and_stopped(tmp_path: Path) -> 
             _process(
                 [sys.executable, str(piceli), "access", "ui", "--profile", "lab"], env
             ) as owner,
-            _process([sys.executable, "-c", _LISTENER, str(foreign_port)]) as foreign,
+            _process([sys.executable, "-c", _LISTENER]) as foreign,
         ):
             assert owner.stdout is not None and foreign.stdout is not None
             child = int(owner.stdout.readline())
-            assert foreign.stdout.readline().strip() == "ready"
+            foreign_port = int(foreign.stdout.readline())
             assert _accepting(port)
             recorded = registry.lookup(child)
             assert recorded is not None and recorded.owner_pid == owner.pid
@@ -387,7 +417,7 @@ def test_a_stale_access_ui_forward_is_recognised_and_stopped(tmp_path: Path) -> 
             assert conflict.holder.stop == owner.pid
             assert "(not piceli)" not in conflict.describe()
 
-            result = stop_stale([port, foreign_port], check, wait_seconds=10)
+            result = stop_stale([port, foreign_port], check, wait_seconds=30)
             assert [(item["port"], item["pid"]) for item in result["stopped"]] == [
                 (port, owner.pid)
             ]
