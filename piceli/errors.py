@@ -4643,6 +4643,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "gitops",
     ),
     _E(
+        "gitops-wait-timeout",
+        "Wait ran out of time",
+        "`piceli gitops enable --wait` or `piceli promote HOST --from ENV --wait` saw neither every target running the expected revision with its checks passed nor a failure before `--timeout`: a build may be slow, waiting for a build host or an approval, or the controller has not polled yet. The command exits 2.",
+        "Read the last progress lines; check `piceli gitops status` (and `piceli host status` for a host); wait longer with a larger `--timeout`.",
+        True,
+        "gitops",
+    ),
+    _E(
         "gitops-nix-release-failed",
         "NixRelease publish failed",
         "The build host that claimed a NixRelease's publish answered `build-failed`: the source could not be fetched at the commit, the tag points at another commit, the Nix build failed, or signing, pushing or uploading the manifest failed. The release stays `failed` with the host's reason and output tail in `piceli gitops status`.",

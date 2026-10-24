@@ -328,6 +328,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`gitops-target-invalid`](#error-gitops-target-invalid) | gitops | no |
 | [`gitops-target-required`](#error-gitops-target-required) | gitops | no |
 | [`gitops-token-expiring`](#error-gitops-token-expiring) | gitops | no |
+| [`gitops-wait-timeout`](#error-gitops-wait-timeout) | gitops | yes |
 | [`grant-expired`](#error-grant-expired) | build-spec | yes |
 | [`grant-mismatch`](#error-grant-mismatch) | artifacts-input | yes |
 | [`heavy-command-empty`](#error-heavy-command-empty) | maintenance | no |
@@ -4605,6 +4606,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Create a new token and update the `password` of the credentials Secret (`--credentials-secret`, in the controller's namespace) before `expires_at`; the controller reads it on its next poll.
 - **Retry-safe:** no
+
+(error-gitops-wait-timeout)=
+### `gitops-wait-timeout`
+
+**Wait ran out of time.** `piceli gitops enable --wait` or `piceli promote HOST --from ENV --wait` saw neither every target running the expected revision with its checks passed nor a failure before `--timeout`: a build may be slow, waiting for a build host or an approval, or the controller has not polled yet. The command exits 2.
+
+- **Fix:** Read the last progress lines; check `piceli gitops status` (and `piceli host status` for a host); wait longer with a larger `--timeout`.
+- **Retry-safe:** yes
 
 (error-promote-dirty)=
 ### `promote-dirty`

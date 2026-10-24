@@ -1735,6 +1735,9 @@ Install the GitOps controller (plan first; --approve HASH installs).
 | `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
 | `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
 | `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--wait` | boolean | `False` | After the install, wait until every environment runs its revision with its checks passed (exit 0), or report the first failure (exit 1) or the timeout (exit 2) |
+| `--timeout` | text | `15m` | With --wait: give up after (15m, 1h) |
+| `--interval` | float | `10.0` | With --wait: seconds between reads |
 
 **Contract**
 
@@ -1743,9 +1746,9 @@ Install the GitOps controller (plan first; --approve HASH installs).
 - **Cluster:** writes
 - **Approval required:** yes
 - **Safe to retry:** yes
-- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Reads the pipeline's named environments and idle_stop from the working tree (--root, default .) into the controller config (gitops-pipeline-invalid when the file is there and does not load). Without --approve prints the install plan (Namespace, ServiceAccount, scoped Role/ClusterRole and bindings, state PersistentVolumeClaim, config ConfigMap, one-replica Deployment) and its hash, exit 3. --image must be pinned by digest (gitops-image-unpinned); --repo must carry no credentials (gitops-repo-invalid): they come from the Secret named by --credentials-secret, which is mounted and never read or printed. A changed plan is refused (gitops-plan-changed). Given a composition module (infra.py, no :ATTR) the controller config holds every source, component and environment of it instead (composition-invalid when it does not load); without --kubeconfig the composition's Cluster credentials profile is used. `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
+- **Notes:** Reads the pipeline's named environments and idle_stop from the working tree (--root, default .) into the controller config (gitops-pipeline-invalid when the file is there and does not load). Without --approve prints the install plan (Namespace, ServiceAccount, scoped Role/ClusterRole and bindings, state PersistentVolumeClaim, config ConfigMap, one-replica Deployment) and its hash, exit 3. --image must be pinned by digest (gitops-image-unpinned); --repo must carry no credentials (gitops-repo-invalid): they come from the Secret named by --credentials-secret, which is mounted and never read or printed. A changed plan is refused (gitops-plan-changed). Given a composition module (infra.py, no :ATTR) the controller config holds every source, component and environment of it instead (composition-invalid when it does not load); without --kubeconfig the composition's Cluster credentials profile is used. 0.28.0, --wait: after the install, waits until every environment runs its revision with its checks passed (exit 0), reports the first failure (environment, stage, reason code, log tail; a composition that does not import; exit 1) or the timeout (gitops-wait-timeout, exit 2); progress lines on stderr, the result under wait in the JSON. `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
 
 (cli-gitops-hosts)=
 ### `piceli gitops hosts`
@@ -2950,6 +2953,9 @@ Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV; w
 | `--repo` | path | `.` | With --from: the flake's working copy |
 | `--bump` | text | `patch` | With --from: major, minor or patch |
 | `--approve` | text |  | With --from: the promotion plan's digest |
+| `--wait` | boolean | `False` | With --from --approve: wait until the host runs the new tag with its checks passed (exit 0), or report the first failure (exit 1) or the timeout (exit 2) |
+| `--timeout` | text | `15m` | With --wait: give up after (15m, 1h) |
+| `--interval` | float | `10.0` | With --wait: seconds between reads |
 | `--json` | boolean | `False` | Print one JSON object on stdout |
 
 **Contract**
@@ -2961,7 +2967,7 @@ Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV; w
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Writes a request; the controller accepts only a commit it saw on that branch (gitops-promote-unknown otherwise), a named environment only when it follows Promote() (gitops-promote-not-allowed), and the environment then waits for gitops approve of its plan hash. 0.25.0, promote HOST --from ENV: without --approve it prints the plan (pinned, the lock change old rev -> new rev, the commit message, the tag, the remote and branch) with its digest and exits 3. A lock that already pins the commit exits 0 with state current: with a tag of the pattern at HEAD there is nothing to do; without one the plan only tags HEAD and --approve tags and pushes the tag. --approve recomputes the plan (promote-plan-changed when it differs), commits flake.lock alone, tags and pushes with git push --atomic (promote-push-failed exits 1; the commit and tag stay local). Refuses a dirty working copy (promote-dirty), one behind, ahead of or diverged from its upstream (promote-not-in-sync), an environment without a passed run (promotion-not-verified) and an unreadable history (promotion-history-unreachable).
+- **Notes:** Writes a request; the controller accepts only a commit it saw on that branch (gitops-promote-unknown otherwise), a named environment only when it follows Promote() (gitops-promote-not-allowed), and the environment then waits for gitops approve of its plan hash. 0.25.0, promote HOST --from ENV: without --approve it prints the plan (pinned, the lock change old rev -> new rev, the commit message, the tag, the remote and branch) with its digest and exits 3. A lock that already pins the commit exits 0 with state current: with a tag of the pattern at HEAD there is nothing to do; without one the plan only tags HEAD and --approve tags and pushes the tag. --approve recomputes the plan (promote-plan-changed when it differs), commits flake.lock alone, tags and pushes with git push --atomic (promote-push-failed exits 1; the commit and tag stay local). Refuses a dirty working copy (promote-dirty), one behind, ahead of or diverged from its upstream (promote-not-in-sync), an environment without a passed run (promotion-not-verified) and an unreadable history (promotion-history-unreachable). 0.28.0, --from --wait: after the push (or when the tag is current), waits until the host runs the tag with its checks passed (exit 0), reports the first failure (a failed publish of the tag in the controller's status, or the host's failed or rolled-back attempt over SSH; exit 1) or the timeout (gitops-wait-timeout, exit 2); progress lines on stderr, the result under wait in the JSON.
 
 (cli-publish)=
 ### `piceli publish`

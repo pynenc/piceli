@@ -12896,6 +12896,7 @@
      "--env",
      "--exec-sha256",
      "--image",
+     "--interval",
      "--kubeconfig",
      "--main-auto-approve",
      "--main-branch",
@@ -12908,7 +12909,9 @@
      "--storage",
      "--storage-class",
      "--tags",
-     "--transport"
+     "--timeout",
+     "--transport",
+     "--wait"
     ],
     "subcommands": []
    },
@@ -13594,12 +13597,15 @@
      "--context",
      "--from",
      "--infra",
+     "--interval",
      "--json",
      "--kubeconfig",
      "--namespace",
      "--repo",
      "--state-dir",
-     "--transport"
+     "--timeout",
+     "--transport",
+     "--wait"
     ],
     "subcommands": []
    },
@@ -14772,6 +14778,7 @@
    "gitops-target-invalid",
    "gitops-target-required",
    "gitops-token-expiring",
+   "gitops-wait-timeout",
    "grant-expired",
    "grant-mismatch",
    "heavy-command-empty",

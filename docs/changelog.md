@@ -22,6 +22,15 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   alarms --follow` raises the same alarms as desktop notifications on your
   machine. The train's notifiers gain `Notify.ntfy`. See
   {ref}`gitops-alarms`.
+- **`--wait` after an install or a promotion.** `piceli gitops enable
+  infra.py --approve HASH --wait [--timeout 15m]` waits until every
+  environment runs its revision with its checks passed, printing progress
+  lines (`staging: building (waiting for a build host) 3m`), or reports the
+  first failure with its environment, stage, reason code and log tail (a
+  composition that does not import included). `piceli promote HOST --from
+  ENV --approve DIGEST --wait` does the same for the Nix host. Exit 0: all
+  good; 1: a failure; 2: timeout (`gitops-wait-timeout`). See
+  {ref}`gitops-enable-wait`.
 
 ## Version 0.27.0
 

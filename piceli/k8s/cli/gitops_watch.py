@@ -3,6 +3,13 @@
 - ``piceli gitops alarms [--follow]``: the controller's alarms
   (:mod:`piceli.gitops.alarms`) as they stand, and with ``--follow`` each
   new one as a desktop notification while the command runs.
+- :func:`wait_rollout`: what ``piceli gitops enable --wait`` runs after the
+  install: progress lines until every environment runs its revision with
+  its checks passed, or the first failure.
+
+Exit codes of the waits, for scripts: :data:`EXIT_OK` (0) all good,
+:data:`EXIT_FAILED` (1) a failure, :data:`EXIT_TIMEOUT` (2) the time ran
+out.
 
 Importing this module is side-effect free.
 """
@@ -10,6 +17,7 @@ Importing this module is side-effect free.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from typing import Annotated, Any
 
 import typer
@@ -27,6 +35,8 @@ from piceli.k8s.cli.gitops import (
     app,
 )
 
+#: Exit codes of ``--wait`` (``gitops enable``, ``promote --from``).
+EXIT_OK, EXIT_FAILED, EXIT_TIMEOUT = 0, 1, 2
 ALARMS_SCHEMA = "piceli.gitops-alarms.v1"
 #: How long an environment may wait before it is an alarm, when the
 #: controller declares no ``Alarms`` (seconds).
@@ -34,14 +44,92 @@ DEFAULT_WAITING = 600
 
 
 def parse_timeout(text: str) -> int:
-    """A duration (``10m``) in seconds (refuses with ``gitops-request-invalid``)."""
+    """``--timeout 15m`` in seconds (refuses with ``gitops-request-invalid``)."""
     from piceli.gitops import GitOpsError
     from piceli.gitops.config import parse_duration
 
     try:
         return parse_duration(text)
     except (GitOpsError, TypeError):
-        reject("gitops-request-invalid", "a duration is like 900, 30s, 15m or 1h")
+        reject("gitops-request-invalid", "--timeout must be like 900, 30s, 15m or 1h")
+
+
+def say_failure(failure: dict[str, Any]) -> None:
+    """The first failure of a wait: where, the reason code, the stage, the
+    detail and the log tail."""
+    where = failure.get("env") or "the composition"
+    say(
+        f"{where}: failed"
+        + (f" in stage {failure['stage']}" if failure.get("stage") else "")
+        + f" ({failure.get('reason')})"
+        + (f" at {str(failure['commit'])[:12]}" if failure.get("commit") else "")
+    )
+    if failure.get("detail"):
+        say(f"  {failure['detail']}")
+    if failure.get("log_tail"):
+        say("  log tail:")
+        for line in str(failure["log_tail"]).splitlines():
+            say(f"    {line}")
+
+
+def wait_rollout(
+    channel: Any,
+    *,
+    timeout: int,
+    interval: float,
+    since_poll: str | None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> tuple[int, dict[str, Any]]:
+    """Wait until every environment runs its revision with its checks
+    passed; ``(exit code, body)`` (``piceli.gitops-rollout-wait.v1``)."""
+    from piceli.gitops import GitOpsError
+    from piceli.gitops.wait import ROLLOUT_SCHEMA, rollout
+
+    started = time.monotonic()
+    shown: dict[str, tuple[str, float]] = {}
+    state: str | None = None
+    body: dict[str, Any] = {}
+    unread: str | None = None
+    while True:
+        try:
+            document = channel.read_status()
+            unread = None
+        except GitOpsError as error:  # the controller may be restarting
+            if error.code != unread:
+                say(f"  cannot read the controller's status ({error.code}); retrying")
+            document, unread = None, error.code
+        state, body = rollout(document, since_poll=since_poll)
+        waited = time.monotonic() - started
+        for name, view in body["envs"].items():
+            last = shown.get(name)
+            # A line when the state changes, and once a minute while waiting.
+            if last is None or last[0] != view["base"] or waited - last[1] >= 60:
+                say(f"{name}: {view['text']}")
+                shown[name] = (view["base"], waited)
+        if state is not None or waited >= timeout:
+            break
+        sleep(min(interval, max(0.0, timeout - waited)))
+    result: dict[str, Any] = {
+        "schema": ROLLOUT_SCHEMA,
+        "state": state or "timed-out",
+        "envs": body.get("envs") or {},
+        "failure": body.get("failure"),
+        "waited_seconds": round(time.monotonic() - started, 1),
+    }
+    if state == "deployed":
+        say(f"all environments run their revision ({len(result['envs'])})")
+        return EXIT_OK, result
+    if state == "failed":
+        say_failure(result["failure"])
+        return EXIT_FAILED, result
+    waiting = [n for n, v in result["envs"].items() if v.get("state") != "done"]
+    say(
+        f"timed out after {timeout}s [gitops-wait-timeout]"
+        + (f"; still waiting: {', '.join(waiting)}" if waiting else "")
+        + ("" if body.get("fresh") else "; the controller has not polled since")
+    )
+    result["reason"] = "gitops-wait-timeout"
+    return EXIT_TIMEOUT, result
 
 
 def _waiting_seconds(document: dict[str, Any], given: str | None) -> float:

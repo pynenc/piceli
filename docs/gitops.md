@@ -113,6 +113,46 @@ piceli gitops wait main 3f2a91c --kubeconfig cluster.kubeconfig --context my-clu
 # main 3f2a91c: deployed
 ```
 
+(gitops-enable-wait)=
+### Wait for every environment after an install: `--wait` (0.28.0)
+
+`piceli gitops enable infra.py --approve sha256:… --wait` installs or
+upgrades the controller, then waits until every environment runs the
+revision it follows with its checks passed. While it waits it prints one
+line per environment when its state changes, and once a minute:
+
+```text
+waiting up to 900s for every environment to run its revision
+main: deploying, stage build 2m
+staging: building (waiting for a build host) 3m
+main: running 3f2a91c07d4e, checks passed
+staging: failed in stage checks (pipeline-checks-failed)
+staging: failed in stage checks (pipeline-checks-failed) at 8c1d2e3f4a5b
+  failing checks: home (status 503)
+  log tail:
+    ...
+```
+
+It stops at the first failure: an environment that failed (its reason
+code, stage and log tail), checks that fail on a running release, a
+composition that does not import at its commit (nothing can deploy), or
+Git unreadable for two polls. It only judges the status after the new
+controller's first poll, so an old status never ends the wait.
+`--timeout` (default `15m`) and `--interval` (seconds between reads,
+default 10) tune it.
+
+Exit codes, for scripts:
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | every environment runs its revision, checks passed |
+| 1 | a failure (the JSON's `wait.failure`: `env`, `reason`, `stage`, `commit`, `detail`, `log_tail`) |
+| 2 | the time ran out (`gitops-wait-timeout`); also a refused argument, before any wait |
+| 3 | no `--approve`: the plan was printed, nothing installed |
+
+`piceli promote HOST --from ENV --approve sha256:… --wait` does the same
+for a Nix host ({ref}`promote-wait`).
+
 Each deploy records the digest of the check set it verified (its
 `checks_hash`), so unchanged checks never run again on the next sync of an
 unchanged release, and a changed check set always does. On start, the
@@ -984,6 +1024,28 @@ branch without an upstream, or behind, ahead of or diverged from it
 `current` (exit 0): with a tag of the pattern at `HEAD` there is nothing to
 do; without one the plan only tags `HEAD`, and `--approve` tags and pushes
 the tag.
+
+(promote-wait)=
+##### Follow the release to the host: `--wait` (0.28.0)
+
+`--wait` follows the release to the host after the push:
+
+```sh
+piceli promote web-1 --from main --composition infra.py --repo ../hosts \
+    --approve sha256:<digest> --wait --timeout 15m
+# web-1: promoted web-v1.4.1 at 9b1e0c2d3f4a
+# web-1: publishing (waiting for a build host) 1m
+# web-1: publishing (build host builder-1) 2m
+# web-1: published; the host has not run it yet 6m
+# web-1: running web-v1.4.1, checks passed
+```
+
+It reads the controller's publish of the tag (a failed publish is the
+first failure, with the build host's log tail) and the host's own status
+over SSH, as `piceli host wait` does (a failed or rolled-back attempt is a
+failure). Exit 0: the host runs the tag with its checks passed; 1: a
+failure; 2: the time ran out (`gitops-wait-timeout`). The JSON carries the
+result under `wait`.
 
 ### Removed objects are deleted (pruning)
 

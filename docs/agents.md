@@ -160,6 +160,12 @@ noted.
   (exit 1), or `approval-required` with `plan_hash` (exit 3: ask the owner).
   Controller retries are waited through. Read-only; end an integration
   round with it instead of polling `gitops status` yourself.
+- `piceli gitops enable infra.py --approve HASH --wait [--timeout 15m]`
+  and `piceli promote HOST --from ENV --approve DIGEST --wait` (0.28.0):
+  after the install or the push, wait until every environment (or the
+  host) runs the expected revision with its checks passed. Exit 0: done;
+  1: the first failure (JSON `wait.failure`: `env`, `reason`, `stage`,
+  `detail`, `log_tail`); 2: timeout (`gitops-wait-timeout`).
 - `piceli gitops alarms [--follow] [--json]` (0.28.0): the controller's
   alarms (failed or waiting environments and NixReleases, a composition
   that does not import, a new version) and its failed sends. Read-only.

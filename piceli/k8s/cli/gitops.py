@@ -200,14 +200,18 @@ def _run_plan(
     approve: str | None,
     command: str,
     extra: dict[str, Any],
+    wait: dict[str, Any] | None = None,
 ) -> None:
+    """Show the plan; execute it when approved. ``wait`` (0.28.0, ``enable
+    --wait``): ``{"namespace", "timeout", "interval"}``, then wait until
+    every environment runs its revision (exit 1: a failure, 2: timeout)."""
     from piceli.gitops.install import execute
 
     _describe(plan)
     body = {**plan.to_dict(), **extra}
     if not plan.changes:
         say("nothing to change")
-        emit_json({**body, "state": "unchanged"})
+        _finish_enable(api, {**body, "state": "unchanged"}, wait, None)
         return
     if approve is None:
         say("approve with:")
@@ -226,15 +230,54 @@ def _run_plan(
             "the plan changed since it was approved (or the hash is wrong); "
             "review the new plan above",
         )
+    before = _last_poll(api, wait)
     with _guard():
         done = execute(api, plan, say)
-    emit_json(
+    _finish_enable(
+        api,
         {
             **body,
             "state": "enabled" if plan.action == "enable" else "disabled",
             "done": done,
-        }
+        },
+        wait,
+        before,
     )
+
+
+def _last_poll(api: Any, wait: dict[str, Any] | None) -> str | None:
+    """The controller's ``last_poll`` before an install (``None``: none yet)."""
+    if wait is None:
+        return None
+    from piceli.gitops import GitOpsError
+    from piceli.gitops.state import ConfigMapChannel
+
+    try:
+        document = ConfigMapChannel(api.client, wait["namespace"]).read_status()
+    except GitOpsError:
+        return None
+    return ((document or {}).get("controller") or {}).get("last_poll")
+
+
+def _finish_enable(
+    api: Any, body: dict[str, Any], wait: dict[str, Any] | None, before: str | None
+) -> None:
+    if wait is None:
+        emit_json(body)
+        return
+    from piceli.gitops.state import ConfigMapChannel
+    from piceli.k8s.cli.gitops_watch import wait_rollout
+
+    say(f"waiting up to {wait['timeout']}s for every environment to run its revision")
+    code, result = wait_rollout(
+        ConfigMapChannel(api.client, wait["namespace"]),
+        timeout=wait["timeout"],
+        interval=wait["interval"],
+        since_poll=before,
+    )
+    emit_json({**body, "wait": result})
+    if code:
+        raise typer.Exit(code)
 
 
 @app.command("enable")
@@ -396,6 +439,22 @@ def enable(
     allow_exec: AllowExecOption = False,
     exec_sha256: ExecSha256Option = None,
     transport: TransportOption = "https",
+    wait: Annotated[
+        bool,
+        typer.Option(
+            "--wait",
+            help="After the install, wait until every environment runs its "
+            "revision with its checks passed (exit 0), or report the first "
+            "failure (exit 1) or the timeout (exit 2)",
+        ),
+    ] = False,
+    timeout: Annotated[
+        str, typer.Option("--timeout", help="With --wait: give up after (15m, 1h)")
+    ] = "15m",
+    interval: Annotated[
+        float,
+        typer.Option("--interval", help="With --wait: seconds between reads", min=1),
+    ] = 10.0,
 ) -> None:
     """Install the GitOps controller (plan first; --approve HASH installs).
 
@@ -416,6 +475,15 @@ def enable(
     )
     from piceli.gitops.install import InstallSettings, plan_objects, render_controller
 
+    waiting: dict[str, Any] | None = None
+    if wait:
+        from piceli.k8s.cli.gitops_watch import parse_timeout
+
+        waiting = {
+            "namespace": namespace,
+            "timeout": parse_timeout(timeout),
+            "interval": interval,
+        }
     if ":" not in pipeline and pipeline.endswith(".py"):
         _enable_composition(
             pipeline, root=root, image=image, kubeconfig=kubeconfig, context=context,
@@ -425,7 +493,7 @@ def enable(
             build_git_secret=build_git_secret, builder_selector=builder_selector,
             build_storage=build_storage, approve=approve, allow_exec=allow_exec,
             exec_sha256=exec_sha256, transport=transport, repo=repo,
-            main_branch=main_branch,
+            main_branch=main_branch, wait=waiting,
         )  # fmt: skip
         return
     if repo is None:
@@ -496,7 +564,9 @@ def enable(
                 action="enable",
                 config={"controller": config.to_dict(), "install": settings.to_dict()},
             )
-        _run_plan(api, plan, approve, command, {"controller": config.to_dict()})
+        _run_plan(
+            api, plan, approve, command, {"controller": config.to_dict()}, waiting
+        )
 
 
 def _enable_composition(
@@ -524,6 +594,7 @@ def _enable_composition(
     transport: str,
     repo: str | None = None,
     main_branch: str = "main",
+    wait: dict[str, Any] | None = None,
 ) -> None:
     """``gitops enable infra.py``: the controller of a composition."""
     from piceli.gitops.config import parse_duration, parse_selector
@@ -651,7 +722,12 @@ def _enable_composition(
                 config={"controller": config.to_dict(), "install": settings.to_dict()},
             )
         _run_plan(
-            api, plan, approve, command, {"controller": config.to_dict(), "ui": ui}
+            api,
+            plan,
+            approve,
+            command,
+            {"controller": config.to_dict(), "ui": ui},
+            wait,
         )
 
 
@@ -1718,6 +1794,22 @@ def promote(
         str | None,
         typer.Option("--approve", help="With --from: the promotion plan's digest"),
     ] = None,
+    wait: Annotated[
+        bool,
+        typer.Option(
+            "--wait",
+            help="With --from --approve: wait until the host runs the new tag "
+            "with its checks passed (exit 0), or report the first failure "
+            "(exit 1) or the timeout (exit 2)",
+        ),
+    ] = False,
+    timeout: Annotated[
+        str, typer.Option("--timeout", help="With --wait: give up after (15m, 1h)")
+    ] = "15m",
+    interval: Annotated[
+        float,
+        typer.Option("--interval", help="With --wait: seconds between reads", min=1),
+    ] = 10.0,
     as_json: JsonOption = False,
 ) -> None:
     """Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV;
@@ -1734,12 +1826,20 @@ def promote(
 
         if source is not None:
             reject("promote-invalid", "--from takes the host alone, not BRANCH@SHA")
+        waiting = None
+        if wait:
+            from piceli.k8s.cli.gitops_watch import parse_timeout
+
+            waiting = {"timeout": parse_timeout(timeout), "interval": interval}
         promote_host(
             target, from_env, composition=composition, repo=repo, bump=bump,
             approve=approve, kubeconfig=kubeconfig, context=context,
             state_dir=state_dir, namespace=namespace, as_json=as_json,
+            wait=waiting,
         )  # fmt: skip
         return
+    if wait:
+        reject("promote-invalid", "--wait waits for a --from promotion")
     if approve is not None:
         reject("promote-invalid", "--approve approves a --from promotion plan")
     from piceli.gitops.state import promote_request

@@ -1570,7 +1570,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             cluster="writes",
             approval_required=True,
             contract="conforms",
-            exit_codes=(0, 2, 3),
+            exit_codes=(0, 1, 2, 3),
             notes="Reads the pipeline's named environments and idle_stop from "
             "the working tree (--root, default .) into the controller config "
             "(gitops-pipeline-invalid when the file is there and does not "
@@ -1585,7 +1585,12 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "composition module (infra.py, no :ATTR) the controller config holds "
             "every source, component and environment of it instead "
             "(composition-invalid when it does not load); without --kubeconfig "
-            "the composition's Cluster credentials profile is used. "
+            "the composition's Cluster credentials profile is used. 0.28.0, "
+            "--wait: after the install, waits until every environment runs its "
+            "revision with its checks passed (exit 0), reports the first failure "
+            "(environment, stage, reason code, log tail; a composition that does "
+            "not import; exit 1) or the timeout (gitops-wait-timeout, exit 2); "
+            "progress lines on stderr, the result under wait in the JSON. "
             + _EXPLICIT_CONTEXT,
         ),
         "gitops cache clear": _C(
@@ -2687,7 +2692,13 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(promote-dirty), one behind, ahead of or diverged from its upstream "
             "(promote-not-in-sync), an environment without a passed run "
             "(promotion-not-verified) and an unreadable history "
-            "(promotion-history-unreachable).",
+            "(promotion-history-unreachable). 0.28.0, --from --wait: after "
+            "the push (or when the tag is current), waits until the host runs "
+            "the tag with its checks passed (exit 0), reports the first failure "
+            "(a failed publish of the tag in the controller's status, or the "
+            "host's failed or rolled-back attempt over SSH; exit 1) or the "
+            "timeout (gitops-wait-timeout, exit 2); progress lines on stderr, "
+            "the result under wait in the JSON.",
         ),
         "doctor": _C(
             "Check free disk and memory against the next build's needs, and "
