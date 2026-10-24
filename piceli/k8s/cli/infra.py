@@ -1,4 +1,4 @@
-"""``piceli infra plan|apply|status|destroy|install|register`` and the infra secrets.
+"""``piceli infra plan|apply|replace|status|destroy|install|register`` and the infra secrets.
 
 - ``infra plan MODULE:ATTR`` renders the OpenTofu configuration of a
   :class:`~piceli.infra.Infrastructure`, runs ``tofu plan`` and prints the
@@ -7,6 +7,9 @@
   applies only that plan; ``infra destroy`` the same for a destroy plan,
   which never touches what Piceli did not create. An apply that fails after
   changing something exits 1 with ``partially_applied`` and what it applied.
+  ``infra replace MODULE:ATTR SERVER --approve HASH`` (0.26.2) is an apply
+  whose plan also replaces that server (``tofu plan -replace``): created
+  again on its persistent port with its current user data.
 - ``infra status MODULE:ATTR`` shows servers, addresses, installs, cluster
   registrations and cost from the state directory's records (read-only).
 - ``infra install MODULE:ATTR SERVER`` runs the server's install hook after
@@ -199,6 +202,10 @@ def _say_plan(result: InfraPlan) -> None:
             f"  image {item['name']}: {head} from {item['from']} "
             f"({shown}sha256 {item['sha256'][:12]}…)"
         )
+    for item in result.replaced:
+        say(f"  server {item['server']}: replaced ({item['why']}), destroyed first")
+    for item in result.warnings:
+        say(f"  warning: {item['message']}")
     for item in result.stale_images:
         say(
             f"  image {item['image']}: a failed upload left {item['id']} "
@@ -250,16 +257,22 @@ def _plan_or_apply(
     *,
     destroy: bool,
     verbose: bool = False,
+    replace: str | None = None,
 ) -> None:
     from piceli.infra.machines.model import InfraError
     from piceli.infra.machines.plan import apply, plan, workspace
 
     infra = load_infra(ref)
     head = "piceli infra destroy" if destroy else "piceli infra apply"
-    command = _command(head, ref, tofu)
+    replaced = [] if replace is None else [replace]
+    if replace is not None:
+        head = "piceli infra replace"
+        if replace not in {server.name for server in infra.servers}:
+            reject("infra-server-unknown", f"{ref} declares no server {replace}")
+    command = _command(head, " ".join([ref, *replaced]), tofu)
     with _guard(verbose), workspace(infra, tofu=tofu) as ws:
         if approve is None:
-            result = plan(ws, destroy=destroy)
+            result = plan(ws, destroy=destroy, replace=replaced)
             _say_plan(result)
             body = result.to_dict()
             if result.foreign:
@@ -285,8 +298,9 @@ def _plan_or_apply(
             from piceli.infra.machines.glance import stderr_progress
 
             done, inventory = apply(
-                ws, approve, destroy=destroy, say=say, progress=stderr_progress()
-            )
+                ws, approve, destroy=destroy, say=say, progress=stderr_progress(),
+                replace=replaced,
+            )  # fmt: skip
         except InfraError as error:
             if error.fields.get("partially_applied"):
                 _say_partial(error, command)
@@ -353,6 +367,21 @@ def apply_command(
 ) -> None:
     """Apply the plan whose hash is --approve (without it: plan, exit 3)."""
     _plan_or_apply(ref, approve, tofu, destroy=False, verbose=verbose)
+
+
+@app.command("replace")
+def replace_command(
+    ref: InfraArgument,
+    server: ServerArgument,
+    approve: ApproveOption = None,
+    tofu: TofuOption = None,
+    verbose: VerboseOption = False,
+) -> None:
+    """Replace a server: destroyed, then created on its port with its current user data.
+
+    Planned (exit 3) and applied with --approve like infra apply; the plan
+    also applies any other declared change."""
+    _plan_or_apply(ref, approve, tofu, destroy=False, verbose=verbose, replace=server)
 
 
 @app.command("destroy")

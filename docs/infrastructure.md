@@ -89,7 +89,7 @@ declaration fails at import, never halfway through a plan.
 
 | Class | What it is |
 | --- | --- |
-| `Server(name, provider=, type=, image=, location=, ipv4=, ipv6=, firewall=, ssh_keys=, install=, ssh=, cluster=, labels=)` | One machine. `ipv4`/`ipv6`: `True` (an address that goes with the server), `False`, or a `PrimaryIp`. `location` defaults to the provider's. `image` is an image name, or an `Image` where the provider uploads them. Without `cluster=` it is a plain host (`register` does not apply). |
+| `Server(name, provider=, type=, image=, location=, ipv4=, ipv6=, firewall=, ssh_keys=, install=, ssh=, cluster=, labels=, user_data=, on_image_change="rebuild")` | One machine. `ipv4`/`ipv6`: `True` (an address that goes with the server), `False`, or a `PrimaryIp`. `location` defaults to the provider's. `image` is an image name, or an `Image` where the provider uploads them. Without `cluster=` it is a plain host (`register` does not apply). `on_image_change` (0.26.2): what a new image does, `"rebuild"` in place or `"replace"` ({ref}`below <server-image-change>`). |
 | `PrimaryIp(name, kind="ipv4", protect=False)` | A fixed address, created in the server's location and assigned to it; it stays when the server is replaced. `protect=True` turns on delete protection (destroy then fails until it is off). |
 | `Firewall(name, rules=[...])`, `Rule.tcp(port, sources=, name=)`, `Rule.udp(...)`, `Rule.icmp(...)` | Inbound rules; a port or a range `(low, high)`; sources default to every address. Everything else is dropped. Outbound is not filtered. |
 | `DnsRecord(zone, name, type, value=… \| server=… \| servers=[…], ttl=, provider=)` | One record set (`A`, `AAAA`, `CNAME`, `TXT`; `@` is the apex) in a zone you already have at the provider (default: the first server's). Several servers give one record set with every address; the servers may be at another provider than the record. `ttl` defaults to the provider's (300 s; Porkbun 600 s). Piceli never creates or deletes the zone. |
@@ -172,7 +172,7 @@ infra = Infrastructure("web", servers=[host], buckets=[Bucket("my-cache", provid
 | `Image` | `openstack_images_image_v2`, private, tagged with its sha256 (`piceli.io:image-sha256=…`): Piceli uploads it itself and OpenTofu adopts it (0.25.3, {ref}`below <image-uploads>`) |
 | `Bucket` | `openstack_objectstorage_container_v1` (Swift) |
 | `S3Key` | `openstack_identity_ec2_credential_v3`: an EC2 credential of the application credential's user in its project (0.25.0) |
-| `user_data=UserData(NAME)` | `user_data` from the sensitive variable `user_data_<server>`, with `ignore_changes`: read at creation only |
+| `user_data=UserData(NAME)` | `user_data` from the sensitive variable `user_data_<server>`, with `ignore_changes`: read at creation only (a rebuild for a new image keeps the original; `on_image_change="replace"` passes the current one) |
 
 The credential is an application credential (Horizon: Identity →
 Application Credentials, or `openstack application credential create`),
@@ -205,6 +205,43 @@ value never replaces the server. A creating plan without it fails with
 the (encrypted) state. The instance's metadata service serves the user data
 to any process on it, so a key in it should be single-use and short-lived.
 {doc}`single_nixos_host` uses one to join a tailnet on first boot.
+
+(server-image-change)=
+**A new image: rebuilt or replaced** (0.26.2). By default
+(`on_image_change="rebuild"`) a server whose image changes (a new `Image`
+checksum, another image name) is updated in place: the OpenStack provider
+changes `image_id` with a Nova rebuild. The disk is rewritten, but the
+server keeps its id, its port and its *original* user data (`user_data` is
+ignored after creation), so a rebuilt host that bootstraps with a
+single-use key boots with a spent one. For a server with `user_data`, the
+plan then carries a warning, on stderr and in its JSON `warnings`, which
+never blocks it:
+
+```text
+  update   server web-1 (openstack_compute_instance_v2.server-web-1)
+  warning: server web-1 is rebuilt in place with its original user data (a spent bootstrap key?): use Server(on_image_change="replace") or piceli infra replace
+```
+
+With `Server(..., on_image_change="replace")` the plan replaces the server
+instead (`tofu plan -replace=ADDRESS`, planned again): it is destroyed
+first, then created on the same `PrimaryIp` port (the same IPv4 and IPv6;
+the port attaches to one server at a time) with the current `UserData`,
+which the plan then needs, as for a create (`infra-user-data-missing`). The
+plan lists it in `replaced` (server and why), which the plan hash covers:
+
+```text
+  replace  server web-1 (openstack_compute_instance_v2.server-web-1)
+  user data of web-1: secret web-1-boot (sha256:…), passed at creation only
+  server web-1: replaced (its image changed), destroyed first
+```
+
+Choose `"replace"` for a host that bootstraps with a one-time key (a
+pre-authorized tailnet key): store a fresh key (`piceli secrets user-data
+web-1-boot --file PATH`) before the plan. Whatever the server keeps on its
+own disk is gone either way. `piceli infra replace REF SERVER` replaces one
+server on request, image changed or not: the same plan, approval and hash
+as `infra apply`, with `-replace` for that server (`--approve HASH` to run
+it; an `infra apply` approval never runs it).
 
 (image-uploads)=
 **Image uploads** (0.25.3). OpenTofu's image resource uploads from the
@@ -484,7 +521,8 @@ plan`, `apply` and `destroy` prints it on stderr.
 only when its hash is the approved one (`infra-plan-changed` otherwise):
 what runs is what was reviewed, also when something changed at the provider
 in between. `piceli infra destroy` works the same with a destroy plan and
-its own hash.
+its own hash, and `piceli infra replace REF SERVER` (0.26.2) with a plan
+that also replaces that server ({ref}`above <server-image-change>`).
 
 Piceli changes or deletes only what it created. Before an apply, the
 addresses the plan creates go into the ownership ledger
@@ -770,6 +808,7 @@ the command line with their approvals.
 | --- | --- | --- |
 | `piceli infra plan REF` | Plan; print changes, estimate, hash | 3 changes, 0 none, 2 refused |
 | `piceli infra apply REF --approve HASH` | Re-plan, apply the approved plan | 0, 1 `infra-apply-failed` or partially applied, 2, 3 without `--approve` |
+| `piceli infra replace REF SERVER [--approve HASH]` | The same, replacing that server on its port with its current user data (0.26.2) | 0, 1, 2, 3 |
 | `piceli infra destroy REF [--approve HASH]` | The same for a destroy plan | 0, 1, 2, 3 |
 | `piceli infra status REF [--json]` | Read-only status | 0, 2 |
 | `piceli infra install REF SERVER [--approve DIGEST]` | Run the install hook | 0, 1 `infra-install-failed`, 2, 3 |

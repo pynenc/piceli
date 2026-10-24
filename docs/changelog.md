@@ -40,6 +40,18 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   busy-forward test restarts only after two failed probes in a row (one idle
   probe that timed out under load cut its download), and the forward health
   tests wait up to 30 s for a state instead of 10.
+- **A server whose image changes can be replaced instead of rebuilt.**
+  `Server(on_image_change="replace")` makes a new image (a new `Image`
+  checksum) replace the server (`tofu plan -replace`): destroyed first,
+  then created on the same persistent port (same IPv4 and IPv6) with the
+  current `UserData`, which the plan needs (`infra-user-data-missing`). The
+  default, `"rebuild"`, keeps the behaviour so far: the OpenStack provider
+  rebuilds the server in place with Nova, with its original user data. For a
+  server with user data such a plan now warns (stderr and JSON `warnings`;
+  it does not block): the rebuilt host would boot with a spent single-use
+  key. `piceli infra replace REF SERVER [--approve HASH]` replaces one
+  server on request through the same plan, approval and hash; the plan's
+  `replaced` lists the replaced servers and why.
 
 ## Version 0.26.1
 

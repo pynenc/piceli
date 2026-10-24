@@ -2196,6 +2196,34 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "before tofu apply; a failed upload deletes its image "
             "(infra-image-upload-failed, exit 1) and the log's path is printed.",
         ),
+        "infra replace": _C(
+            "Replace one server of a declared Infrastructure (0.26.2): plan it "
+            "destroyed and created again (tofu plan -replace) on its persistent "
+            "port with its current user data; apply with --approve.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Infrastructure)",
+                "tofu binary",
+                "credentials (provider token, state passphrase, the server's "
+                "user data)",
+            ),
+            writes=(
+                "resources at the provider (the server destroyed and created; "
+                "any other declared change)",
+                "encrypted OpenTofu state",
+                "state directory records (inventory.json)",
+            ),
+            approval_required=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="Without --approve it plans (exit 3) with replaced and "
+            "approve_command (piceli infra replace ... SERVER --approve HASH); the "
+            "hash covers the replacement, so an infra apply approval never runs it. "
+            "The server is destroyed first (its disk is gone), then created on its "
+            "PrimaryIp port (same addresses) with its current UserData, which must "
+            "be stored (infra-user-data-missing). An undeclared server is "
+            "infra-server-unknown. Failures and partial applies as for infra apply.",
+        ),
         "infra destroy": _C(
             "Destroy what Piceli created for a declared Infrastructure, with "
             "approval of the destroy plan's hash.",

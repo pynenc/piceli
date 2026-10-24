@@ -4648,6 +4648,8 @@
     "s3_keys_by_hand",
     "s3_keys_refused_because",
     "server_id",
+    "server_image_changed",
+    "server_image_keys",
     "server_status",
     "server_types",
     "supports_buckets",
@@ -4778,6 +4780,9 @@
     ],
     "server_id": [
      "server"
+    ],
+    "server_image_changed": [
+     "change"
     ],
     "server_status": [
      "server"
@@ -5441,6 +5446,8 @@
     "s3_keys_by_hand",
     "s3_keys_refused_because",
     "server_id",
+    "server_image_changed",
+    "server_image_keys",
     "server_status",
     "supports_buckets",
     "supports_dns",
@@ -5574,6 +5581,9 @@
     ],
     "server_id": [
      "server"
+    ],
+    "server_image_changed": [
+     "change"
     ],
     "server_status": [
      "server"
@@ -7117,6 +7127,8 @@
     "s3_keys_by_hand",
     "s3_keys_refused_because",
     "server_id",
+    "server_image_changed",
+    "server_image_keys",
     "server_status",
     "supports_buckets",
     "supports_dns",
@@ -7250,6 +7262,9 @@
     ],
     "server_id": [
      "server"
+    ],
+    "server_image_changed": [
+     "change"
     ],
     "server_status": [
      "server"
@@ -8012,6 +8027,8 @@
     "s3_keys_by_hand",
     "s3_keys_refused_because",
     "server_id",
+    "server_image_changed",
+    "server_image_keys",
     "server_status",
     "supports_buckets",
     "supports_dns",
@@ -8139,6 +8156,9 @@
     ],
     "server_id": [
      "server"
+    ],
+    "server_image_changed": [
+     "change"
     ],
     "server_status": [
      "server"
@@ -10165,6 +10185,7 @@
     "ipv4",
     "ipv6",
     "location",
+    "on_image_change",
     "primary_ips",
     "ssh_keys",
     "user_data"
@@ -10179,6 +10200,7 @@
     "labels",
     "location",
     "name",
+    "on_image_change",
     "provider",
     "ssh",
     "ssh_keys",
@@ -12977,6 +12999,7 @@
      "install",
      "plan",
      "register",
+     "replace",
      "status"
     ]
    },
@@ -13033,6 +13056,18 @@
      "--kubeconfig",
      "--transport",
      "--wait"
+    ],
+    "subcommands": []
+   },
+   "infra replace": {
+    "arguments": [
+     "ref",
+     "server"
+    ],
+    "flags": [
+     "--approve",
+     "--tofu",
+     "--verbose"
     ],
     "subcommands": []
    },
