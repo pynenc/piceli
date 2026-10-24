@@ -2116,9 +2116,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-retained-content-precondition-failed)=
 ### `retained-content-precondition-failed`
 
-**Retained object content differs.** A retained object's live content differs from the declared content, so it cannot be adopted metadata-only.
+**Retained object content differs.** A retained object's live content differs from the declared content, so it cannot be adopted metadata-only. Since 0.26.3 the execution's `diagnosis.precondition` names the object, the check and each differing field, with keyed digests of the expected and live values (never a value).
 
-- **Fix:** Make the declaration match the live object, then plan again.
+- **Fix:** Make the declaration match the live object, or put a new value in an object with a new name (for example `api-token-2`), then plan again.
 - **Retry-safe:** no
 
 (error-retained-resource)=
@@ -2875,9 +2875,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-retained-content-differs)=
 ### `retained-content-differs`
 
-**Retained object differs.** A retained object's spec or data differs from the composition; only its labels and annotations may change.
+**Retained object differs.** A retained object's spec or data differs from the composition; only its labels and annotations may change. Since 0.26.3 this includes a secret-bound value (a changed template, a rotated or regenerated value): the message names the object and the keys, never a value.
 
-- **Fix:** Change the composition to match the live object, then plan again.
+- **Fix:** Change the composition to match the live object, or put the new value in an object with a new name (for example `api-token-2`) and point the workloads at it, then plan again.
 - **Retry-safe:** no
 
 (error-rotate-not-valid-for-rollback)=

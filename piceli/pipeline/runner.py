@@ -2575,6 +2575,20 @@ class PipelineRunner:
                     failed=True,
                     details=details,
                 )
+            from piceli.k8s.ops.executor import precondition_text
+
+            found = diagnosis or outcome["execution"].get("diagnosis") or {}
+            refused = precondition_text(found.get("precondition"))
+            if refused:
+                # 0.26.3: refused before any write, so the live release (and
+                # its pods) is untouched: say what failed, not "not ready".
+                raise PipelineError(
+                    "pipeline-apply-not-ready",
+                    f"release {release} was not applied: a precondition failed "
+                    f"({category}): {refused}",
+                    failed=True,
+                    details=details,
+                )
             raise PipelineError(
                 "pipeline-apply-not-ready",
                 f"release {release} did not become ready ({category})",

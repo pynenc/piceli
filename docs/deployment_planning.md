@@ -301,7 +301,10 @@ recorded, and anything else blocks (`replace-recreated-by-another-writer`,
 backup is restored by an operator with `kubectl create -f`.
 
 **Rotating a retained Secret.** A retained Secret is never rewritten, so a new
-value under the same name fails with `retained-content-precondition-failed`.
+value under the same name (a rotated or regenerated value, or a changed
+template) is refused by the plan with `retained-content-differs`, naming the
+Secret and the keys (since 0.26.3; before, apply failed with
+`retained-content-precondition-failed`).
 Rotate into a new Secret instead: give the Secret a name with a generation
 suffix (for example `api-token-2`), point the workloads at it, and apply.
 The old Secret stays until you delete it.

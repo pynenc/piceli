@@ -23,6 +23,27 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   is held by a GC (garbage collection) root until the build ends, like the
   trees.
 
+- **The in-cluster build Job builds contexts at a source's top.** Since
+  0.23.0 the Job links each source to its checkout on the cache claim, and a
+  context with `path = "."` (or none) read that link and failed
+  `context-missing` in every Job. The Job now reads the checkout itself.
+  Build hosts were not affected.
+- **`context-missing` names the context and the path**, for example
+  `host build failed (context-missing): context 'site' (source 'web'):
+  context directory /work/src/web/site is unreadable (Permission denied)`.
+- **A new value in a retained Secret is refused by the plan.** A rotated or
+  regenerated value, or a changed template, under an existing Secret name
+  passed the plan and then failed every apply with
+  `retained-content-precondition-failed`. The plan now refuses it with
+  `retained-content-differs`, naming the Secret and the keys (never a
+  value). Put the new value in a Secret with a new name.
+- **`retained-content-precondition-failed` says what failed.** The
+  execution's `diagnosis.precondition` names the object, the check and each
+  differing field, with keyed digests of the expected and live values. A
+  pipeline reports it as `release X was not applied: a precondition failed
+  (...)`, not as "did not become ready": nothing was written and the live
+  release keeps running.
+
 ## Version 0.26.2
 
 **Upgrade notes**

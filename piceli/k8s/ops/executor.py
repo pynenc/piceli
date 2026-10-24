@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import secrets
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -69,6 +72,7 @@ from piceli.k8s.ops.secret_versions import (
     SecretBinding,
     SecretVersionRef,
     SecretVersionStore,
+    pointer_parts,
     replace_pointer,
 )
 from piceli.telemetry import NoopTelemetry
@@ -199,6 +203,117 @@ class ExecutionLimits:
             or self.concurrency != 1
         ):
             raise ValueError("this executor supports one ordered action at a time")
+
+
+class _PreconditionFailed(ProviderError):
+    """A precondition refusal with what failed (0.26.3): the object, the check
+    and, per differing field, keyed digests of the expected and live values
+    (never a value)."""
+
+    def __init__(self, category: str, precondition: dict[str, Any]) -> None:
+        super().__init__(category)
+        self.precondition = precondition
+
+
+def _object(action: PlanAction) -> dict[str, Any]:
+    ref = action.resource.ref
+    return {"object": {"kind": ref.kind, "namespace": ref.namespace, "name": ref.name}}
+
+
+#: At most this many differing fields are named.
+_MAX_DIFFERS = 20
+
+
+def _differing(expected: Any, actual: Any, pointer: str = "") -> list[str]:
+    """JSON pointers where ``actual`` does not contain ``expected``."""
+    if isinstance(expected, dict) and isinstance(actual, dict):
+        found: list[str] = []
+        for key, value in expected.items():
+            child = f"{pointer}/{str(key).replace('~', '~0').replace('/', '~1')}"
+            if key not in actual:
+                found.append(child)
+            else:
+                found.extend(_differing(value, actual[key], child))
+        return found
+    if isinstance(expected, list) and isinstance(actual, list):
+        if len(expected) != len(actual):
+            return [pointer or "/"]
+        found = []
+        for index, (left, right) in enumerate(zip(expected, actual, strict=True)):
+            found.extend(_differing(left, right, f"{pointer}/{index}"))
+        return found
+    return [] if expected == actual else [pointer or "/"]
+
+
+def _retained_refused(
+    action: PlanAction, check: str, expected: Any, live: Any
+) -> _PreconditionFailed:
+    """``retained-content-precondition-failed`` naming the differing fields.
+
+    Values are shown as HMAC-SHA256 digests under a key made for this one
+    error: equal digests mean equal values, and nothing else can be learned.
+    """
+    key = secrets.token_bytes(32)
+
+    def digest(value: Any) -> str:
+        encoded = json.dumps(value, sort_keys=True, separators=(",", ":"))
+        mac = hmac.new(key, encoded.encode(), hashlib.sha256).hexdigest()
+        return f"keyed:{mac[:16]}"
+
+    def at(value: Any, pointer: str) -> Any:
+        for part in pointer_parts(pointer) if pointer != "/" else ():
+            if isinstance(value, dict) and part in value:
+                value = value[part]
+            elif isinstance(value, list) and part.isdigit() and int(part) < len(value):
+                value = value[int(part)]
+            else:
+                return _MISSING
+        return value
+
+    differs = []
+    for pointer in _differing(expected, live)[:_MAX_DIFFERS]:
+        found = at(live, pointer)
+        differs.append(
+            {
+                "field": pointer,
+                "expected": digest(at(expected, pointer)),
+                "live": "absent" if found is _MISSING else digest(found),
+            }
+        )
+    return _PreconditionFailed(
+        "retained-content-precondition-failed",
+        _object(action) | {"check": check, "differs": differs},
+    )
+
+
+_MISSING = object()
+
+
+def precondition_text(precondition: Mapping[str, Any] | None) -> str:
+    """One line for a precondition refusal (0.26.3), or ``""``."""
+    if not isinstance(precondition, Mapping):
+        return ""
+    item = precondition.get("object") or {}
+    where = "/".join(
+        str(part) for part in (item.get("namespace"), item.get("name")) if part
+    )
+    text = f"{item.get('kind')} {where}: {precondition.get('check')} check"
+    if precondition.get("check") == "metadata-changes":
+        return (
+            f"{text}: planned {precondition.get('planned') or []}, "
+            f"found {precondition.get('found') or []}"
+        )
+    fields = [
+        f"{entry.get('field')} differs (expected {entry.get('expected')}, "
+        f"live {entry.get('live')})"
+        for entry in precondition.get("differs") or ()
+    ]
+    return (
+        f"{text}: "
+        + ("; ".join(fields) if fields else "the live object differs")
+        + "; Piceli never rewrites a retained object: keep the old value, or "
+        "put the new one in an object with a new name"
+    )
 
 
 class _Diagnosed(ProviderError):
@@ -709,11 +824,10 @@ class PlanExecutor:
         metadata = current.manifest["metadata"]
         if metadata.get("annotations", {}).get(OWNER_ANNOTATION) not in self._owners:
             raise ProviderError("ownership-precondition-failed")
-        if not _contains(
-            ResourceIntent.from_manifest(current.manifest).manifest,
-            self._manifest(action.resource),
-        ):
-            raise ProviderError("retained-content-precondition-failed")
+        live = ResourceIntent.from_manifest(current.manifest).manifest
+        desired = private_comparable(self._manifest(action.resource))
+        if not _contains(live, desired):
+            raise _retained_refused(action, "content", desired, live)
         return True
 
     def _foreign_owners(
@@ -761,8 +875,13 @@ class PlanExecutor:
             raise ProviderError("ownership-precondition-failed")
         manifest = self._manifest(action.resource)
         live = ResourceIntent.from_manifest(current.manifest).manifest
-        if not _spec_contained(live, manifest):
-            raise ProviderError("retained-content-precondition-failed")
+        if not _spec_contained(live, private_comparable(manifest)):
+            raise _retained_refused(
+                action,
+                "content",
+                without_metadata_maps(private_comparable(manifest)),
+                without_metadata_maps(live),
+            )
         planned = (
             action.adoption.metadata_changes
             if action.adoption is not None
@@ -770,7 +889,15 @@ class PlanExecutor:
         )
         changes = metadata_changes(manifest, live)
         if changes != planned:
-            raise ProviderError("retained-content-precondition-failed")
+            raise _PreconditionFailed(
+                "retained-content-precondition-failed",
+                _object(action)
+                | {
+                    "check": "metadata-changes",
+                    "planned": list(planned),
+                    "found": list(changes),
+                },
+            )
         if previous == self.provider.owner_id and not changes:
             # Already ours (e.g. adopted by an earlier execution): observe only.
             receipt = self._receipt(current, payload | {"retained_reconciled": True})
@@ -1744,6 +1871,15 @@ class PlanExecutor:
                             execution, document(error.category, error.workloads)
                         )
                     except ValueError:  # over budget: the category still stands
+                        pass
+                elif isinstance(error, _PreconditionFailed):
+                    try:
+                        self.journal.record_diagnosis(
+                            execution,
+                            document(error.category, [])
+                            | {"precondition": error.precondition},
+                        )
+                    except ValueError:
                         pass
                 self.journal.record_failure(execution, error.category)
                 self.journal.set_state(

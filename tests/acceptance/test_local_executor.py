@@ -772,11 +772,32 @@ def test_retained_operation_content_conflict_never_force_applies(local_api, tmp_
     report = run.run_bundle(bundle)
     assert report["state"] == "failed"
     assert report["failure_category"] == "retained-content-precondition-failed"
-    assert (
-        run.journal.summary(bundle.execution_id)["failure_category"]
-        == "retained-content-precondition-failed"
-    )
+    summary = run.journal.summary(bundle.execution_id)
+    assert summary["failure_category"] == "retained-content-precondition-failed"
     assert mutations(api) == []
+    # 0.26.3: the refusal names the object, the check and the field, with
+    # keyed digests of both values (never a value).
+    precondition = summary["diagnosis"]["precondition"]
+    assert precondition["object"] == {
+        "kind": "Secret",
+        "namespace": TARGET.namespace,
+        "name": "credentials",
+    }
+    assert precondition["check"] == "content"
+    [field] = precondition["differs"]
+    assert field["field"] == "/data/password"
+    assert field["expected"].startswith("keyed:")
+    assert field["live"].startswith("keyed:")
+    assert field["expected"] != field["live"]
+    encoded = json.dumps(summary)
+    assert "b2xk" not in encoded and "c2VjcmV0" not in encoded
+
+    from piceli.k8s.ops.executor import precondition_text
+
+    text = precondition_text(precondition)
+    assert text.startswith(f"Secret {TARGET.namespace}/credentials: content check: ")
+    assert "/data/password differs (expected keyed:" in text
+    assert "never rewrites a retained object" in text
 
 
 def test_revision_regrant_requires_explicit_adoption_and_preserves_action_ids(
