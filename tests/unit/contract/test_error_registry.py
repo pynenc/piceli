@@ -46,6 +46,7 @@ FIRST_ARGUMENT = {
     "MirrorError",
     "StateError",
     "SecretSourceError",
+    "ServiceError",
     "_source_refusal",
     "CacheError",
     "NodeFactsError",

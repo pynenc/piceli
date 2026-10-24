@@ -12207,8 +12207,30 @@
     "arguments": [],
     "flags": [],
     "subcommands": [
-     "serve"
+     "install",
+     "serve",
+     "status",
+     "uninstall"
     ]
+   },
+   "builder install": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--exec-sha256",
+     "--host",
+     "--image",
+     "--namespace",
+     "--no-publish-only",
+     "--print",
+     "--publish",
+     "--publish-only",
+     "--state-dir",
+     "--transport",
+     "--user"
+    ],
+    "subcommands": []
    },
    "builder serve": {
     "arguments": [],
@@ -12228,6 +12250,25 @@
      "--publish-only",
      "--state-dir",
      "--transport"
+    ],
+    "subcommands": []
+   },
+   "builder status": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--exec-sha256",
+     "--json",
+     "--namespace",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "builder uninstall": {
+    "arguments": [],
+    "flags": [
+     "--host"
     ],
     "subcommands": []
    },
@@ -14537,6 +14578,8 @@
    "build-platforms-invalid",
    "build-timed-out",
    "builder-not-approved",
+   "builder-service-failed",
+   "builder-service-invalid",
    "bundle-empty",
    "bundle-image-archive-missing",
    "bundle-image-mismatch",
@@ -17151,7 +17194,9 @@
   "piceli.importing.generate",
   "piceli.importing.sources",
   "piceli.infra",
+  "piceli.infra.build_host_status",
   "piceli.infra.builder_serve",
+  "piceli.infra.builder_service",
   "piceli.infra.builders",
   "piceli.infra.builds",
   "piceli.infra.cluster",

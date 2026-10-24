@@ -775,6 +775,12 @@ def _previews_status(state: Mapping[str, Any]) -> dict[str, Any] | None:
     return public(state)
 
 
+def _build_hosts(state: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    from piceli.infra.remote_builds import public_hosts
+
+    return public_hosts(state)
+
+
 def _failing(record: Mapping[str, Any], reason: str) -> str:
     """``; failing: name: detail, ...`` of a check failure's checks (0.19)."""
     checks = record.get("checks") or {}
@@ -1697,7 +1703,9 @@ class CompositionController:
                     self._preview(key, body)
                 else:
                     raise GitOpsError("gitops-request-invalid", "unknown request kind")
+                self._host_seen(str(kind), body, ok=True)
             except GitOpsError as error:
+                self._host_seen(str(kind), body, ok=False)
                 remember_rejected(
                     self.state,
                     {
@@ -1872,6 +1880,12 @@ class CompositionController:
             isinstance(body, Mapping) and body.get("kind") in WAKE_KINDS
             for body in pending.values()
         )
+
+    def _host_seen(self, kind: str, body: Mapping[str, Any], *, ok: bool) -> None:
+        """0.28.0: a build host's request is a sighting (``build_hosts``)."""
+        from piceli.infra import remote_builds
+
+        remote_builds.seen(self.state, kind, body, self.clock(), ok)
 
     def _approve(self, body: Mapping[str, Any]) -> None:
         name = str(body.get("env"))
@@ -4170,6 +4184,13 @@ class CompositionController:
                 ),
                 # Added in 0.26.0: images a merge train offered (only when any).
                 **({"prebuilt": offers} if (offers := _offers(self.state)) else {}),
+                # Added in 0.28.0: each build host's last sighting (its Piceli
+                # version, when, its last build), once any showed up.
+                **(
+                    {"build_hosts": seen_hosts}
+                    if (seen_hosts := _build_hosts(self.state))
+                    else {}
+                ),
                 # Added in 0.22.0: health events and quarantine of its build
                 # hosts and builder node, and the last rebuild request.
                 **(

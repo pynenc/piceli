@@ -39,7 +39,10 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli artifacts retention`](#cli-artifacts-retention) | Report which registry manifests the last releases, pins and live workloads keep, and delete the rest. | reads | yes |
 | [`piceli build job`](#cli-build-job) | Build at a commit as a Job on a builder node (plan, then --approve HASH). | writes | yes |
 | [`piceli build job-run`](#cli-build-job-run) | Inside the build Job: build and push; print the receipt line. | none | no |
+| [`piceli builder install`](#cli-builder-install) | Run builder serve as a service on this machine (systemd or launchd). | reads | no |
 | [`piceli builder serve`](#cli-builder-serve) | Take the builds the controller publishes, build and deliver them, answer it. | writes | no |
+| [`piceli builder status`](#cli-builder-status) | List the build hosts the controller heard from and what each last did. | reads | no |
+| [`piceli builder uninstall`](#cli-builder-uninstall) | Stop, disable and remove the build host service builder install wrote. | none | no |
 | [`piceli bundle`](#cli-bundle) | Package the app for a cluster Piceli never accesses (kustomize, prepare.sh, images). | none | no |
 | [`piceli cache prune`](#cli-cache-prune) | Remove what no release, rollback or resume needs: stale temporary directories and partial files, runs beyond --keep-last, unused delivery receipts, and (over --budget) build outputs and logs. | none | no |
 | [`piceli cache status`](#cli-cache-status) | Show the disk used per state directory and category, and Piceli's temporary directories. Read-only. | none | no |
@@ -670,6 +673,37 @@ Inside the build Job: build and push; print the receipt line.
 - **Output contract:** conforms
 - **Notes:** The command the Job runs; it prints one receipt line on stdout. The approval was the plan hash of `build job`. With --sources and --component it builds a composition's components from their piceli.toml (the Job the composition controller runs).
 
+(cli-builder-install)=
+### `piceli builder install`
+
+Run builder serve as a service on this machine (systemd or launchd).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster whose controller to serve |
+| `--host` | text | required | The declared build host this machine is (one service per name) |
+| `--publish` | text (repeatable) |  | MODULE:ATTR of a piceli.infra.NixCache this host publishes to (repeat); its keys must be in this machine's piceli secrets |
+| `--publish-only`, `--no-publish-only` | boolean |  | Passed on to builder serve |
+| `--image` | text |  | The builder image (passed on to builder serve) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--user` | text |  | As root: the user the service runs as (a system service); without root the service runs as you (a user service) |
+| `--state-dir` | path |  | builder serve's state directory (Git mirrors; launchd's builder.log); default ~/.cache/piceli/builder of the service user |
+| `--print` | boolean | `False` | Write the unit (or property list) to stdout and change nothing |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=DevBuilds(hosts=[...])), credential profile, the controller's status, MODULE:ATTR of each --publish NixCache and its keys from this machine's credentials (checked, never written to the unit), PATH (docker, git, kubectl)
+- **Writes:** /etc/systemd/system or ~/.config/systemd/user/piceli-builder-HOST.service (Linux), /Library/LaunchDaemons or ~/Library/LaunchAgents/piceli.builder.HOST.plist (macOS), systemctl daemon-reload, enable, restart (launchctl bootstrap)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.28.0. Runs the same checks as builder serve --check first (the profile reaches the controller; every credential the host needs is present, else infra-credential-missing names it) and refuses when docker, git or kubectl is missing (builder-service-invalid). The unit runs the piceli program that ran install (absolute path, version in its description), in the directory install ran in, with Restart=on-failure, RestartSec=10 and KillSignal=SIGINT; it holds directories, never a secret. As root it needs --user USER (a system service); otherwise it is a user service. --print writes the unit to stdout and changes nothing. A failing systemctl or launchctl is builder-service-failed.
+
 (cli-builder-serve)=
 ### `piceli builder serve`
 
@@ -702,6 +736,51 @@ Take the builds the controller publishes, build and deliver them, answer it.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** 0.21.0. Runs until Ctrl-C (--once: one build). The builder image must be the controller's Piceli version. 0.22.0: each delivered image's provenance is pushed as an OCI referrer when the registry takes it; a build showing a machine-health signature records a health event on the host, and a quarantined host claims nothing (quarantined in --once --json). 0.25.0: --publish MODULE:ATTR (repeatable) also takes the nix-publish builds of the NixReleases that name this host as builder, only for those caches; every key is read at start (infra-credential-missing, dev-nix-key-mismatch refuse it) and never leaves the host: a claim carries the cache key's signature over it. A native host with --publish only publishes. The publish itself was approved by the release's policy or gitops approve of its plan digest. 0.25.0: --publish-only (needs --publish, else dev-nix-invalid) claims only those publishes on any kind of host, never an image build (said once), and needs no cluster registry: a remote publisher is a docker host with an SSH context to itself, since a native host is the machine running Piceli. A host declared runs=False implies --publish-only and is refused without --publish or with --no-publish-only (dev-host-publish-only); without --host it is never the default. 0.26.0: before each publish the host fetches the plan's private flake inputs into its own store (its own git-token or git-ssh-key, or for credentials="controller" the controller's token sealed to the claim's one-time key), else build-failed with infra-nix-input-unreachable before any build; at start it warns per release of an input it holds no credential for, and --check claims nothing and prints piceli.builder-check.v1 (each release's mode, inputs and credential states; exit 1 when one is missing).
+
+(cli-builder-status)=
+### `piceli builder status`
+
+List the build hosts the controller heard from and what each last did.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster whose controller to serve |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=DevBuilds(hosts=[...])), credential profile, the controller's status
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.28.0. Read-only (controller.build_hosts, builds_wanted and build_health in gitops status); piceli.builder-status.v1 under --json.
+
+(cli-builder-uninstall)=
+### `piceli builder uninstall`
+
+Stop, disable and remove the build host service builder install wrote.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--host` | text | required | The build host's service |
+
+**Contract**
+
+- **Reads:** the unit or property list of --host
+- **Writes:** the unit or property list (removed); systemctl disable --now (launchctl bootout)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.28.0. state absent when none is installed (nothing runs).
 
 (cli-bundle)=
 ### `piceli bundle`

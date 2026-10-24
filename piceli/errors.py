@@ -6014,6 +6014,22 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "dev",
     ),
     _E(
+        "builder-service-invalid",
+        "Build host service refused",
+        "`piceli builder install` (0.28.0) wrote nothing: this machine has no systemd or launchd, a program `builder serve` runs (docker, git, kubectl) is not in `PATH`, it ran as root without `--user USER` (or with `--user` without root), or the running `piceli` program cannot be found. The message says which.",
+        "Install the missing program or add its directory to `PATH`; as root pass `--user USER`, else drop `--user`; then run `piceli builder install` again (`--print` shows the unit without writing it).",
+        False,
+        "dev",
+    ),
+    _E(
+        "builder-service-failed",
+        "Service manager call failed",
+        "`piceli builder install` or `uninstall` (0.28.0) wrote or removed the unit, but `systemctl` or `launchctl` failed. The message holds the command and its output.",
+        "Read the output; check the unit with `systemctl status piceli-builder-HOST` (or `launchctl print`), fix the cause and run the command again.",
+        True,
+        "dev",
+    ),
+    _E(
         "dev-toolchain-invalid",
         "Toolchain pin unreadable",
         "The source's `rust-toolchain.toml` (or `rust-toolchain`) is not valid TOML, or its channel, targets or components are not plain names (0.20.0); or a pin of `DevProfile(toolchains=...)` cannot be read (0.22.0: no such file in the tree, no exact node version, no single `wasm-bindgen` in the `Cargo.lock`). The message names the file.",

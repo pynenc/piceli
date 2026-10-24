@@ -94,6 +94,17 @@ CLAIM_SECONDS = 4 * 3600
 #: take the build and another host may claim it.
 CLAIM_STALE_SECONDS = 600.0
 WAITING = "build-waiting"
+#: 0.28.0: each build host's last sighting (version, when, last build).
+HOSTS_KEY = "build_hosts"
+#: Build hosts remembered (the most recently seen).
+HOSTS_KEPT = 32
+#: What each answer says about the build it names.
+_OUTCOMES = {
+    "build-claim": "claimed",
+    "built": "built",
+    "nix-published": "published",
+    "build-failed": "failed",
+}
 #: The registry domain of images imported into the nodes: ``.invalid``
 #: never resolves, so a node without the image never pulls one from elsewhere.
 NODE_DOMAIN = "node.piceli.invalid"
@@ -512,6 +523,47 @@ def progress(
         "log_tail": str(body.get("log_tail") or "")[-4000:],
         # 0.27.1: when the controller heard it (keeps the claim alive).
         **({"epoch": now} if now is not None else {}),
+    }
+
+
+def seen(
+    state: dict[str, Any], kind: str, body: Mapping[str, Any], now: float, ok: bool
+) -> None:
+    """Remember that a build host sent ``body`` (0.28.0, ``piceli builder
+    status``): its Piceli version, when and what; with ``ok`` (the
+    controller took it) also the build it names and the outcome. A refused
+    claim is a sighting, never a build of its own."""
+    host = str(body.get("host") or "")[:64]
+    if not host or kind not in (*_OUTCOMES, "build-progress"):
+        return
+    hosts = state.setdefault(HOSTS_KEY, {})
+    entry = dict(hosts.get(host) or {})
+    if body.get("version"):
+        entry["version"] = str(body["version"])[:40]
+    entry.update(seen_at=_iso(now), seen_epoch=now, seen=kind)
+    outcome = _OUTCOMES.get(kind)
+    if ok and outcome is not None:
+        build = str(body.get("id") or "")[:20]
+        before = entry.get("last_build") or {}
+        # An answered build has left the wanted builds: its kind is the claim's.
+        kind_ = ((state.get(STATE_KEY) or {}).get(build) or {}).get("kind") or (
+            before.get("kind") if before.get("id") == build else None
+        )
+        entry["last_build"] = {
+            "id": build, "kind": kind_, "outcome": outcome, "at": _iso(now),
+        }  # fmt: skip
+    hosts[host] = entry
+    for name in sorted(hosts, key=lambda k: float(hosts[k].get("seen_epoch") or 0))[
+        :-HOSTS_KEPT
+    ]:
+        del hosts[name]
+
+
+def public_hosts(state: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """``controller.build_hosts`` in the status (0.28.0)."""
+    return {
+        name: {k: v for k, v in entry.items() if k != "seen_epoch"}
+        for name, entry in sorted((state.get(HOSTS_KEY) or {}).items())
     }
 
 

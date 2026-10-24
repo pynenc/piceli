@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -109,65 +111,16 @@ def serve(
         prepare_cache,
     )
     from piceli.pipeline.backend import Backend, RegistryRoute
+    from piceli.pipeline.model import ClusterRegistry
     from piceli.profiles import override, resolve
 
-    if publish_only and not publish:
-        reject(
-            "dev-nix-invalid",
-            "--publish-only needs the caches it publishes to: --publish MODULE:ATTR",
-        )
     declared = load_cluster(cluster)
     dev = declared.dev
-    kinds = ("docker", "native") if publish else ("docker",)
-    hosts = [
-        item for item in (dev.hosts if dev is not None else ()) if item.kind in kinds
-    ]
-    # 0.25.0: the default host of image builds is never one declared
-    # runs=False (it only publishes); --host names it.
-    chosen = next(
-        (
-            item
-            for item in hosts
-            if item.name == host or (host is None and (item.runs or publish))
-        ),
-        None,
+    chosen, publish_only, images, builder_image = _select(
+        declared, host, publish or [], publish_only, image
     )
-    if chosen is None:
-        reject(
-            "dev-host-unknown",
-            f"no docker build host {host or ''} is declared: add "
-            "DevBuilds(hosts=[BuildHost.docker(...)])",
-        )
-    if not chosen.runs and (publish_only is False or not publish):
-        reject(
-            "dev-host-publish-only",
-            f"build host {chosen.name} is declared runs=False: it only publishes "
-            "Nix releases. Run builder serve on it with --publish MODULE:ATTR "
-            "(it then implies --publish-only), and build images on another host",
-        )
-    if publish_only is None:
-        publish_only = not chosen.runs
     publisher = _publisher(publish or [], dev, chosen) if publish else None
-    # 0.25.0: --publish-only claims no image build on any kind of host.
-    images = chosen.kind == "docker" and not publish_only
-    from piceli.pipeline.model import ClusterRegistry
-
     registry = declared.registry
-    nodes_delivery = (
-        declared.controller is not None and declared.controller.delivery == "nodes"
-    )
-    if not isinstance(registry, ClusterRegistry) and not nodes_delivery:
-        if publisher is None:
-            reject(
-                "composition-invalid",
-                f"{declared.name} needs registry=Registry.in_cluster(...): built "
-                'images go there (or Controller(delivery="nodes") with '
-                "Node(target=...))",
-            )
-        images = False  # 0.25.0: nowhere to deliver images; it only publishes
-    builder_image = image or chosen.image or (dev.image if dev is not None else None)
-    if images and not builder_image:
-        reject("cluster-build-invalid", "name the builder image with --image")
     cli = ContainerCli(chosen) if chosen.kind == "docker" else None
     try:
         if images and cli is not None and not check:
@@ -290,10 +243,413 @@ def serve(
             )
             + " (Ctrl-C stops)"
         )
+        _stop_on_sigterm()
         try:
             worker.serve(poll=poll)
         except KeyboardInterrupt:
             say("builder: stopped")
+
+
+def _stop_on_sigterm() -> None:
+    """0.28.0: SIGTERM stops serve as Ctrl-C does (launchd stops a service
+    with SIGTERM; the systemd unit sends SIGINT itself)."""
+    import signal
+
+    def stop(*_args: Any) -> None:
+        raise KeyboardInterrupt
+
+    try:
+        signal.signal(signal.SIGTERM, stop)
+    except ValueError:  # not the main thread (tests)
+        pass
+
+
+def _select(
+    declared: Any,
+    host: str | None,
+    publish: list[str],
+    publish_only: bool | None,
+    image: str | None,
+) -> tuple[Any, bool, bool, str | None]:
+    """The build host ``builder serve`` serves as, whether it only publishes,
+    whether it builds images and the builder image; refused as serve
+    refuses (shared by ``serve`` and ``install``)."""
+    from piceli.pipeline.model import ClusterRegistry
+
+    if publish_only and not publish:
+        reject(
+            "dev-nix-invalid",
+            "--publish-only needs the caches it publishes to: --publish MODULE:ATTR",
+        )
+    dev = declared.dev
+    kinds = ("docker", "native") if publish else ("docker",)
+    hosts = [
+        item for item in (dev.hosts if dev is not None else ()) if item.kind in kinds
+    ]
+    # 0.25.0: the default host of image builds is never one declared
+    # runs=False (it only publishes); --host names it.
+    chosen = next(
+        (
+            item
+            for item in hosts
+            if item.name == host or (host is None and (item.runs or publish))
+        ),
+        None,
+    )
+    if chosen is None:
+        reject(
+            "dev-host-unknown",
+            f"no docker build host {host or ''} is declared: add "
+            "DevBuilds(hosts=[BuildHost.docker(...)])",
+        )
+    if not chosen.runs and (publish_only is False or not publish):
+        reject(
+            "dev-host-publish-only",
+            f"build host {chosen.name} is declared runs=False: it only publishes "
+            "Nix releases. Run builder serve on it with --publish MODULE:ATTR "
+            "(it then implies --publish-only), and build images on another host",
+        )
+    if publish_only is None:
+        publish_only = not chosen.runs
+    # 0.25.0: --publish-only claims no image build on any kind of host.
+    images = chosen.kind == "docker" and not publish_only
+    registry = declared.registry
+    nodes_delivery = (
+        declared.controller is not None and declared.controller.delivery == "nodes"
+    )
+    if not isinstance(registry, ClusterRegistry) and not nodes_delivery:
+        if not publish:
+            reject(
+                "composition-invalid",
+                f"{declared.name} needs registry=Registry.in_cluster(...): built "
+                'images go there (or Controller(delivery="nodes") with '
+                "Node(target=...))",
+            )
+        images = False  # 0.25.0: nowhere to deliver images; it only publishes
+    builder_image = image or chosen.image or (dev.image if dev is not None else None)
+    if images and not builder_image:
+        reject("cluster-build-invalid", "name the builder image with --image")
+    return chosen, publish_only, images, builder_image
+
+
+ClusterOption = Annotated[
+    str,
+    typer.Option(
+        "--cluster",
+        envvar="PICELI_DEV_CLUSTER",
+        help="MODULE:ATTR of the piceli.infra.Cluster whose controller to serve",
+    ),
+]
+NamespaceOption = Annotated[
+    str, typer.Option("--namespace", help="The controller's namespace")
+]
+
+
+@app.command("install")
+def install(
+    cluster: ClusterOption,
+    host: Annotated[
+        str,
+        typer.Option(
+            "--host",
+            help="The declared build host this machine is (one service per name)",
+        ),
+    ],
+    publish: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--publish",
+            help="MODULE:ATTR of a piceli.infra.NixCache this host publishes to "
+            "(repeat); its keys must be in this machine's piceli secrets",
+        ),
+    ] = None,
+    publish_only: Annotated[
+        bool | None,
+        typer.Option(
+            "--publish-only/--no-publish-only",
+            help="Passed on to builder serve",
+        ),
+    ] = None,
+    image: Annotated[
+        str | None,
+        typer.Option("--image", help="The builder image (passed on to builder serve)"),
+    ] = None,
+    namespace: NamespaceOption = "piceli-system",
+    user: Annotated[
+        str | None,
+        typer.Option(
+            "--user",
+            help="As root: the user the service runs as (a system service); "
+            "without root the service runs as you (a user service)",
+        ),
+    ] = None,
+    state_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--state-dir",
+            help="builder serve's state directory (Git mirrors; launchd's "
+            "builder.log); default ~/.cache/piceli/builder of the service user",
+        ),
+    ] = None,
+    print_only: Annotated[
+        bool,
+        typer.Option(
+            "--print",
+            help="Write the unit (or property list) to stdout and change nothing",
+        ),
+    ] = False,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
+    transport: TransportOption = "https",
+) -> None:
+    """Run builder serve as a service on this machine (systemd or launchd)."""
+    from piceli import __version__
+    from piceli.infra import builder_service as bs
+
+    declared = load_cluster(cluster)
+    chosen, _publish_only, _images, _image = _select(
+        declared, host, publish or [], publish_only, image
+    )
+    serve_args = ["--cluster", cluster, "--host", chosen.name]
+    for ref in publish or []:
+        serve_args += ["--publish", ref]
+    if publish_only is not None:
+        serve_args.append("--publish-only" if publish_only else "--no-publish-only")
+    if image:
+        serve_args += ["--image", image]
+    if namespace != "piceli-system":
+        serve_args += ["--namespace", namespace]
+    if transport != "https":
+        serve_args += ["--transport", transport]
+    if allow_exec:
+        serve_args.append("--allow-exec")
+    if exec_sha256:
+        serve_args += ["--exec-sha256", exec_sha256]
+    machine = bs.Machine.current()
+    tools = bs.TOOLS if chosen.kind == "docker" else ("git", "kubectl")
+    try:
+        service = bs.plan(
+            machine,
+            host=chosen.name,
+            serve=serve_args,
+            user=user,
+            state_dir=state_dir.expanduser().absolute() if state_dir else None,
+            cwd=Path.cwd(),
+            version=str(__version__),
+            tools=tools,
+        )
+    except bs.ServiceError as error:
+        reject(error.code, str(error))
+    # The same checks as builder serve --check, as the service will run:
+    # the cache keys, the profile and kubeconfig reach the controller, and
+    # this host holds every credential it needs.
+    with _service_env(service.environment if service.scope == "system" else {}):
+        _check_caches(publish or [])
+        status = _read_status(declared, namespace, transport, allow_exec, exec_sha256)
+        _check_credentials(status or {}, chosen.name)
+    text = bs.render(service)
+    if print_only:
+        typer.echo(text, nl=False)
+        return
+    try:
+        commands = bs.install(machine, service)
+    except bs.ServiceError as error:
+        reject(error.code, str(error))
+    say(
+        f"builder: {service.manager} {service.scope} service {service.name} "
+        f"installed at {service.path} and started"
+    )
+    for note in service.notes:
+        say(f"builder: note: {note}")
+    say(
+        "builder: logs: "
+        + (
+            f"journalctl {'--user ' if service.scope == 'user' else ''}"
+            f"-u {service.name} -f"
+            if service.manager == "systemd"
+            else f"tail -f {service.log}"
+        )
+    )
+    emit_json(
+        {
+            "schema": "piceli.builder-install.v1",
+            "state": "installed",
+            "host": service.host,
+            "manager": service.manager,
+            "scope": service.scope,
+            "name": service.name,
+            "path": str(service.path),
+            "user": service.user,
+            "version": service.version,
+            "argv": list(service.argv),
+            "commands": commands,
+            "notes": service.notes,
+        }
+    )
+
+
+@app.command("uninstall")
+def uninstall(
+    host: Annotated[str, typer.Option("--host", help="The build host's service")],
+) -> None:
+    """Stop, disable and remove the build host service builder install wrote."""
+    from piceli.infra import builder_service as bs
+
+    try:
+        removed = bs.uninstall(bs.Machine.current(), host)
+    except bs.ServiceError as error:
+        reject(error.code, str(error))
+    say(
+        f"builder: service of {host} stopped and removed ({removed})"
+        if removed
+        else f"builder: no service of {host} is installed here"
+    )
+    emit_json(
+        {
+            "schema": "piceli.builder-uninstall.v1",
+            "state": "removed" if removed else "absent",
+            "host": host,
+            "path": str(removed) if removed else None,
+        }
+    )
+
+
+@app.command("status")
+def status(
+    cluster: ClusterOption,
+    namespace: NamespaceOption = "piceli-system",
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
+    transport: TransportOption = "https",
+    as_json: JsonOption = False,
+) -> None:
+    """List the build hosts the controller heard from and what each last did."""
+    from piceli.infra import build_host_status
+
+    declared = load_cluster(cluster)
+    dev = declared.dev
+    names = [
+        item.name
+        for item in (dev.hosts if dev is not None else ())
+        if item.kind in ("docker", "native")
+    ]
+    found = _read_status(declared, namespace, transport, allow_exec, exec_sha256)
+    if found is None:
+        reject("gitops-not-installed", "no GitOps controller status")
+    document = build_host_status.view(found, names)
+    for row in document["hosts"]:
+        if row["state"] == "never-seen":
+            say(
+                f"{row['host']:<16} never seen"
+                + (
+                    " (declared; is builder serve running there? "
+                    "piceli builder install --host " + row["host"] + ")"
+                    if row["declared"]
+                    else ""
+                )
+            )
+            continue
+        claim = row["claim"]
+        last = row["last_build"] or {}
+        line = (
+            f"{row['host']:<16} {row['state']:<13} "
+            f"Piceli {row['version'] or '?':<8} seen {row['last_seen']}"
+        )
+        if claim:
+            line += f"; claim {str(claim['build'])[:12]} {claim['state']}" + (
+                f" ({claim['stage']})" if claim.get("stage") else ""
+            )
+        if last:
+            line += f"; last build {str(last.get('id'))[:12]} {last.get('outcome')}"
+        if row["quarantined"]:
+            quarantine = row["quarantine"]
+            line += (
+                f"; QUARANTINED since {quarantine['since']}: {quarantine['reason']} "
+                f"(piceli gitops release-host {row['host']})"
+            )
+        say(line)
+    if as_json:
+        emit_json(document)
+
+
+@contextmanager
+def _service_env(environment: dict[str, str]) -> Iterator[None]:
+    """The service user's ``HOME`` and Piceli directories while checking
+    (a system service installed by root runs as ``--user``)."""
+    from piceli.infra.builder_service import PASSED_ENV
+
+    names = ("HOME", *PASSED_ENV)
+    before = {name: os.environ.get(name) for name in names}
+    try:
+        for name in names:
+            if name in environment:
+                os.environ[name] = environment[name]
+        yield
+    finally:
+        for name, value in before.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def _read_status(
+    declared: Any,
+    namespace: str,
+    transport: str,
+    allow_exec: bool,
+    exec_sha256: str | None,
+) -> dict[str, Any] | None:
+    """The controller's published status, through the cluster's profile."""
+    from piceli.gitops.state import ConfigMapChannel
+
+    with connect(declared, transport, allow_exec, exec_sha256) as api, _cluster_guard():
+        return ConfigMapChannel(api.client, namespace).read_status()
+
+
+def _check_caches(refs: list[str]) -> None:
+    """Every ``--publish`` cache's keys are on this machine (as serve checks
+    at start), without starting any container."""
+    from piceli.dev.model import DevError
+    from piceli.infra.machines.model import InfraError
+    from piceli.infra.nix_releases import cache_keys
+    from piceli.k8s.cli.dev_nix import load_cache
+
+    for ref in refs:
+        cache = load_cache(ref)
+        if cache.scheme == "https":
+            reject(
+                "dev-nix-cache-invalid",
+                "an https:// cache is read-only; publish to its s3:// or file:// URL",
+            )
+        try:
+            cache_keys(cache)
+        except (DevError, InfraError) as error:
+            reject(error.code, str(error))
+
+
+def _check_credentials(status: dict[str, Any], host: str) -> None:
+    """Refuse when ``host`` lacks a credential the NixReleases it publishes
+    need (``builder serve --check``), naming each and how to add it."""
+    from piceli.dev.nix_inputs import host_check
+
+    lacking = [
+        (release["release"], item)
+        for release in host_check(status, host)
+        for item in release["inputs"]
+        if item["state"] in ("missing", "unusable")
+    ]
+    if lacking:
+        reject(
+            "infra-credential-missing",
+            f"build host {host} lacks "
+            + "; ".join(
+                f"credential {item['credential']} ({item['state']}) for input "
+                f"{item['input']} of nix release {release}: piceli secrets "
+                f"git-token {item['credential']} --host {host} --prompt"
+                for release, item in lacking
+            ),
+        )
 
 
 def _say_inputs(releases: list[Any], host: str, *, quiet: bool) -> bool:
