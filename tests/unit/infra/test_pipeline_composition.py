@@ -903,3 +903,78 @@ def test_the_build_job_keeps_cargos_downloads_on_its_cache_claim() -> None:
     )
     script = job["spec"]["template"]["spec"]["containers"][0]["command"][2]
     assert 'export CARGO_HOME="${CARGO_HOME:-/cache/cargo-home}"' in script
+
+
+# ------------------------------------------- a restart after a failed import (0.27.1)
+
+
+def _restarted(world: dict[str, Any]) -> CompositionController:
+    """A new controller process over the same state (an upgrade, a restart)."""
+    controller = _controller(
+        world["state"].parent, world["infra"], world["ports"], {"now": 1_000_100.0}
+    )
+    world["controller"] = controller
+    return controller
+
+
+def test_a_new_version_retries_the_commit_an_older_one_failed_to_import(
+    world: dict[str, Any],
+) -> None:
+    """An older controller could not import the head (it used a newer API)
+    and recorded it failed; the upgraded controller imports it and deploys."""
+    controller, infra, ports = world["controller"], world["infra"], world["ports"]
+    controller.poll_once()
+    head = infra.commit({"config/api.json": '{"greeting": "hello"}\n'})
+    entry = controller.state["composition"]
+    entry.update(failed=head, error="composition-invalid",
+                 error_detail="importing the composition failed: TypeError")  # fmt: skip
+    entry.pop("failed_version", None)  # written by a version before 0.27.1
+    from piceli.infra.controller import save_state
+
+    save_state(world["state"], controller.state)
+    built = len(ports.builder.built)
+    status = _restarted(world).poll_once()
+    repo = status["controller"]["composition_repo"]
+    assert repo["commit"] == head and repo["failed"] is None, repo
+    assert status["envs"]["main"]["state"] == "deployed"
+    assert len(ports.builder.built) > built  # the step ran
+
+
+def test_after_a_restart_the_last_good_composition_keeps_deploying(
+    world: dict[str, Any],
+) -> None:
+    controller, infra, api = world["controller"], world["infra"], world["api"]
+    ports = world["ports"]
+    good = controller.poll_once()["controller"]["composition_repo"]["commit"]
+    broken = infra.commit({"infra.py": "raise TypeError('roots_dir is unknown')\n"})
+    status = controller.poll_once()
+    assert status["controller"]["composition_repo"]["failed"] == broken
+    restarted = _restarted(world)
+    status = restarted.poll_once()
+    repo = status["controller"]["composition_repo"]
+    assert repo["commit"] == good and repo["failed"] == broken
+    assert "TypeError: roots_dir is unknown" in repo["error_detail"]
+    problem = status["controller"]["composition_problem"]
+    assert problem.startswith(f"composition at {broken[:12]} failed to import")
+    assert f"deploying the last good commit {good[:12]}" in problem
+    built = len(ports.builder.built)
+    api.commit({"site/index.html": "<h1>v2</h1>\n"})
+    status = restarted.poll_once()
+    assert len(ports.builder.built) > built  # steps run on the last good one
+    assert status["envs"]["main"]["state"] == "deployed"
+
+
+def test_with_no_composition_loaded_the_status_says_nothing_deploys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    remotes = tmp_path / "remotes"
+    files = example_files(EXAMPLE / "infra")
+    files["infra.py"] = "raise TypeError('roots_dir is unknown')\n"
+    infra = Repo(remotes, "infra", files)
+    monkeypatch.setenv("EXAMPLE_INFRA_URL", infra.url)
+    controller = _controller(tmp_path, infra, FakePorts(), {"now": 1_000_000.0})
+    status = controller.poll_once()
+    assert status["controller"]["state"] == "degraded"
+    problem = status["controller"]["composition_problem"]
+    assert problem.endswith("nothing deploys")
+    assert "TypeError: roots_dir is unknown" in problem

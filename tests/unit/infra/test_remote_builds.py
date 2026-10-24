@@ -443,3 +443,105 @@ def test_a_newer_commit_mid_build_is_what_gets_deployed(
     assert main["components"]["web"]["digest"] == "sha256:" + "2" * 64
     assert status["controller"]["builds_wanted"] == []
     assert len(builds) == 2
+
+
+# ------------------------------------- dead claims and what a wait waits for (0.27.1)
+
+
+def test_a_dead_hosts_claim_expires_for_the_fallback_and_other_hosts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host that claimed and then stopped reporting no longer blocks."""
+    from piceli.infra.remote_builds import CLAIM_STALE_SECONDS
+
+    world = _world(tmp_path, monkeypatch, host_wait="20s", poll_seconds=60)
+    controller, ports, channel = world["controller"], world["ports"], world["channel"]
+    (wanted,) = controller.poll_once()["controller"]["builds_wanted"]
+    channel.add_request(*build_claim_request(wanted["id"], "builder-2"))
+    status = _next_try(world)
+    main = status["envs"]["main"]
+    assert "claimed by builder-2 at" in main["waiting_for"], main
+    assert ports.builder.built == []  # a live claim holds the fallback
+    world["clock"]["now"] += CLAIM_STALE_SECONDS - 120
+    channel.add_request(*build_claim_request(wanted["id"], "builder-1"))
+    status = controller.poll_once()
+    assert "builder-2 already builds it" in status["rejected_requests"][-1]["message"]
+    world["clock"]["now"] += 121  # no report from builder-2 for 10 min
+    status = _next_try(world)
+    assert ports.builder.built == [["api", "catalog", "web"]]
+    assert status["envs"]["main"]["state"] == "deployed"
+
+
+def test_progress_reports_keep_a_claim_alive(world: dict[str, Any]) -> None:
+    from piceli.gitops.state import build_progress_request
+    from piceli.infra.remote_builds import CLAIM_STALE_SECONDS, public
+
+    controller, channel, clock = world["controller"], world["channel"], world["clock"]
+    (wanted,) = controller.poll_once()["controller"]["builds_wanted"]
+    channel.add_request(*build_claim_request(wanted["id"], "builder-2"))
+    controller.poll_once()
+    for _ in range(3):
+        clock["now"] += CLAIM_STALE_SECONDS - 60
+        channel.add_request(
+            *build_progress_request(wanted["id"], "builder-2", "build", "", "t")
+        )
+        controller.poll_once()
+    (shown,) = public(controller.state, clock["now"])
+    assert shown["claimed"]["host"] == "builder-2"
+    clock["now"] += CLAIM_STALE_SECONDS
+    (shown,) = public(controller.state, clock["now"])
+    assert shown["claimed"] is None and shown["claim_expired"]["host"] == "builder-2"
+
+
+def test_the_waiting_status_says_the_fallback_time_or_why_there_is_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = _world(tmp_path, monkeypatch, host_wait="20s", poll_seconds=60)
+    controller = world["controller"]
+    status = controller.poll_once()
+    main = status["envs"]["main"]
+    assert main["waiting_for"] == (
+        "waiting for a build host (docker) to build api, catalog, web: offered "
+        "to any build host; not claimed; in-cluster fallback at 1970-01-12T13:47:00Z"
+    )
+    controller.ports.builder.builds_images = False  # no --builder-image
+    world["clock"]["now"] += 30
+    main = controller.poll_once()["envs"]["main"]
+    assert main["reason"] == "build-waiting"
+    assert main["waiting_for"].endswith(
+        "no in-cluster fallback: no in-cluster builder image "
+        "(piceli gitops enable --builder-image)"
+    )
+    assert controller.ports.builder.built == []
+
+
+def test_builder_serve_says_once_why_it_skips_a_build(
+    world: dict[str, Any], tmp_path: Path
+) -> None:
+    from piceli.infra.builder_serve import BuilderServe
+
+    controller, channel = world["controller"], world["channel"]
+    (wanted,) = controller.poll_once()["controller"]["builds_wanted"]
+    channel.add_request(*build_claim_request(wanted["id"], "builder-2"))
+    controller.poll_once()
+    lines: list[str] = []
+    worker = BuilderServe(
+        host="builder-1",
+        image="ghcr.io/x/builder@sha256:" + "e" * 64,
+        channel=channel,
+        container=lambda *_a: 0,
+        push=lambda *_a: "",
+        index=lambda *_a: "",
+        root=tmp_path / "builder",
+        say=lines.append,
+        sleep=lambda _s: controller.poll_once(),
+    )
+    assert worker.once() is None and worker.once() is None
+    assert lines == [
+        f"builder: not building {wanted['id']}: claimed by build host builder-2 "
+        f"at {controller.state['host_builds'][wanted['id']]['claimed']['at']}"
+    ]
+    # A claim the controller refuses is said with its reason.
+    entry = dict(wanted, claimed=None)
+    assert worker.claim(entry) is False
+    assert "claim refused: build host builder-2 already builds it" in lines[-1]

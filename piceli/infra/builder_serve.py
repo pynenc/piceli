@@ -374,6 +374,14 @@ class BuilderServe:
     _sealed: dict[str, Any] = field(default_factory=dict)
     #: 0.26.0: the build in hand's progress reports and cancel check.
     _progress: Any = None
+    #: 0.27.1: why a wanted build is skipped, each said once.
+    _skips: set[tuple[str, str]] = field(default_factory=set)
+
+    def _skip(self, build: str, why: str) -> None:
+        """Say once, plainly, why this host leaves ``build`` (0.27.1)."""
+        if (build, why) not in self._skips:
+            self._skips.add((build, why))
+            self.say(f"builder: not building {build}: {why}")
 
     # ------------------------------------------------------------ choosing
     def wanted(self) -> list[dict[str, Any]]:
@@ -402,8 +410,17 @@ class BuilderServe:
         # it (its next poll); never build it again meanwhile.
         self.answered &= {str(entry.get("id")) for entry in entries}
         for entry in entries:
-            if entry.get("failed") or str(entry.get("id")) in self.answered:
-                continue  # a failed build is retried by `piceli gitops sync`
+            if entry.get("failed"):
+                # a failed build is retried by `piceli gitops sync`
+                failure = entry["failed"]
+                self._skip(
+                    str(entry.get("id")),
+                    f"it failed on {failure.get('host')} ({failure.get('reason')}); "
+                    "piceli gitops sync offers it again",
+                )
+                continue
+            if str(entry.get("id")) in self.answered:
+                continue
             if entry.get("kind") == "nix-publish":
                 if not self._can_publish(entry):
                     continue
@@ -418,6 +435,10 @@ class BuilderServe:
             claimed = entry.get("claimed") or {}
             if not claimed or claimed.get("host") == self.host:
                 return entry
+            self._skip(
+                str(entry.get("id")),
+                f"claimed by build host {claimed.get('host')} at {claimed.get('at')}",
+            )
         return None
 
     def _can_publish(self, entry: Mapping[str, Any]) -> bool:
@@ -459,9 +480,8 @@ class BuilderServe:
             if entry.get("kind") == "nix-publish"
             else None
         )
-        self.channel.add_request(
-            *build_claim_request(build, self.host, proof, recipient)
-        )
+        key, body = build_claim_request(build, self.host, proof, recipient)
+        self.channel.add_request(key, body)
         deadline = self.clock() + self.claim_wait
         while self.clock() < deadline:
             self.sleep(5.0)
@@ -472,10 +492,33 @@ class BuilderServe:
                         self._sealed[build] = current.get("sealed")
                         return True
                     if holder:
-                        return False
+                        return self._refused_claim(
+                            build, key, f"build host {holder} won it"
+                        )
+                    if self._rejection(key) is not None:
+                        return self._refused_claim(build, key, "")
                     break
             else:
-                return False  # no longer wanted
+                # 0.27.1: said, not silent.
+                return self._refused_claim(build, key, "no longer wanted")
+        return self._refused_claim(
+            build, key, f"the controller did not answer in {self.claim_wait:.0f}s"
+        )
+
+    def _rejection(self, key: str) -> str | None:
+        """The controller's reason for refusing request ``key``, if it did."""
+        try:
+            status = self.channel.read_status() or {}
+        except Exception:
+            return None
+        for item in status.get("rejected_requests") or ():
+            if isinstance(item, Mapping) and item.get("request") == key:
+                return str(item.get("message") or item.get("reason") or "refused")
+        return None
+
+    def _refused_claim(self, build: str, key: str, fallback: str) -> bool:
+        why = self._rejection(key) or fallback
+        self._skip(build, f"claim refused: {why}")
         return False
 
     @staticmethod
