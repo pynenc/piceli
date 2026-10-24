@@ -170,6 +170,12 @@ def _fail(message: str) -> BuildSpecError:
     return BuildSpecError("invalid-spec", message)
 
 
+def _context_label(context: Any) -> str:
+    """``context 'name'`` plus its source, for an error naming the context."""
+    source = getattr(context, "source", None)
+    return f"context {context.name!r}" + (f" (source {source!r})" if source else "")
+
+
 def _keys(value: Any, required: set[str], optional: set[str], where: str) -> None:
     try:
         object_keys(value, required, frozenset(optional))
@@ -1352,7 +1358,9 @@ class BuildSpec:
             try:
                 manifests[context.name] = context.selection.scan(root)
             except BuildContextError as error:
-                raise BuildSpecError(error.code, str(error)) from None
+                raise BuildSpecError(
+                    error.code, f"{_context_label(context)}: {error}"
+                ) from None
             roots[context.name] = root
         dockerfiles = {
             platform: self.render(platform, manifests, roots)

@@ -432,6 +432,86 @@ def test_the_job_run_builds_the_spec_and_pushes_only_the_named_images(
     assert entry["pull_ref"].startswith("registry.example:5000/example/worker@")
 
 
+def _linked_sources(tmp_path: Path) -> Path:
+    """The Job's layout since 0.23.0: each ``/work/src/<name>`` is a link to its
+    checkout on the cache claim (``/cache/sources/<name>``)."""
+    checkouts = tmp_path / "cache" / "sources"
+    checkouts.mkdir(parents=True)
+    sources = tmp_path / "work" / "src"
+    sources.mkdir(parents=True)
+    files = {
+        "infra": {"host-build.toml": SPEC, "config/api.json": "{}\n"},
+        "api": {"site/index.html": "<h1>hi</h1>\n"},
+        "worker": {"jobs/run.sh": "echo hi\n"},
+    }
+    for name, content in files.items():
+        repo = Repo(tmp_path / "remotes", name, content)
+        repo.work.rename(checkouts / name)
+        (sources / name).symlink_to(checkouts / name)
+    return sources
+
+
+def test_the_job_run_builds_from_sources_linked_to_the_cache_checkouts(
+    tmp_path: Path,
+) -> None:
+    """0.26.3: a context at a source's top failed context-missing in every
+    Job, its root being the script's link, not a real directory."""
+    pushed: list[str] = []
+
+    def deliver(
+        archive: Any, target: Any, grant: Any, *, node_registry: Any
+    ) -> dict[str, Any]:
+        pushed.append(target.repository)
+        return {
+            "state": "succeeded",
+            "pull_ref": f"{node_registry}/{target.repository}@sha256:" + "8" * 64,
+        }
+
+    receipt = job_run_spec(
+        sources=_linked_sources(tmp_path),
+        spec="infra/host-build.toml",
+        images=[{"image": "api", "repository": "two/api", "key": "sha256:" + "7" * 64}],
+        platforms=("linux/arm64",),
+        cache=tmp_path / "cache",
+        out=tmp_path / "out",
+        registry_url="oci://registry.example:5000",
+        node_registry="registry.example:5000",
+        deliver=deliver,
+    )
+    assert pushed == ["two/api"]
+    assert receipt["images"]["api"]["key"] == "sha256:" + "7" * 64
+
+
+def test_a_missing_context_root_names_the_context_and_its_path(
+    tmp_path: Path,
+) -> None:
+    from piceli.infra import CompositionError
+
+    sources = _linked_sources(tmp_path)
+    target = (sources / "worker").resolve()
+    (sources / "worker").unlink()
+    (sources / "worker").symlink_to(tmp_path / "gone")  # a dangling link
+    with pytest.raises(CompositionError) as failed:
+        job_run_spec(
+            sources=sources,
+            spec="infra/host-build.toml",
+            images=[
+                {"image": "api", "repository": "two/api", "key": "sha256:" + "7" * 64}
+            ],
+            platforms=("linux/arm64",),
+            cache=tmp_path / "cache",
+            out=tmp_path / "out",
+            registry_url="oci://registry.example:5000",
+            node_registry="registry.example:5000",
+            deliver=lambda *a, **k: {},
+        )
+    message = str(failed.value)
+    assert "host build failed (context-missing)" in message
+    assert "context 'worker' (source 'worker')" in message
+    assert str(sources / "worker") in message
+    assert target.exists()
+
+
 def test_a_pipeline_environment_renders_into_its_namespace_with_given_images(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

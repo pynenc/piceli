@@ -76,6 +76,7 @@ from piceli.artifacts.build_spec import (
     _argv,
     _BuildLog,
     _changed_sources,
+    _context_label,
     _default_runner,
     _fail,
     _keys,
@@ -538,7 +539,9 @@ class HostBuildSpec:
             try:
                 manifests[context.name] = context.selection.scan(root)
             except BuildContextError as error:
-                raise BuildSpecError(error.code, str(error)) from None
+                raise BuildSpecError(
+                    error.code, f"{_context_label(context)}: {error}"
+                ) from None
             roots[context.name] = root
         tools: dict[str, tuple[Path, ToolPin]] = {}
         for name in self.tools:

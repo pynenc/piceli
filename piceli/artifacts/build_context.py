@@ -309,9 +309,17 @@ class ContextSelection:
 
     def scan(self, root: Path) -> ContextManifest:
         """Select and hash the declared files. Reads only; writes nothing."""
-        if root.is_symlink() or not root.is_dir():
+        if root.is_symlink():
             raise BuildContextError(
-                "context-missing", "context root must be a real directory"
+                "context-missing",
+                f"context root {root} is a symbolic link (to {os.readlink(root)}), "
+                "not a real directory",
+            )
+        if not root.is_dir():
+            raise BuildContextError(
+                "context-missing",
+                f"context root {root} "
+                + ("is not a directory" if root.exists() else "does not exist"),
             )
         includes = [Glob(item) for item in self.include]
         includes_re = [item.regex() for item in includes]
@@ -329,7 +337,9 @@ class ContextSelection:
                 entries = sorted(os.scandir(local), key=lambda entry: entry.name)
             except OSError as error:
                 raise BuildContextError(
-                    "context-missing", "context directory is unreadable"
+                    "context-missing",
+                    f"context directory {local} is unreadable "
+                    f"({error.strerror or type(error).__name__})",
                 ) from error
             for entry in entries:
                 parts = (*directory, entry.name)

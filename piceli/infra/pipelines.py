@@ -506,8 +506,12 @@ def run_spec_build(
         except BuildSpecError as error:
             from piceli.infra.builders import build_failed
 
+            # 0.26.3: a context error names the context and its path (in the
+            # Job: /work/src/<source>/...); the code alone said too little.
+            detail = f": {error}" if error.code.startswith("context-") else ""
             raise build_failed(
-                f"build {request.spec}: host build failed ({error.code})", error
+                f"build {request.spec}: host build failed ({error.code}){detail}",
+                error,
             ) from None
         if receipt.get("toolchains"):  # 0.22: the versions, for provenance
             from piceli.dev.toolchains import versions
