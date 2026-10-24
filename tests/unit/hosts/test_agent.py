@@ -98,6 +98,10 @@ def publish(
     return signed
 
 
+class Killed(BaseException):
+    """The agent's process killed mid-call (a SIGTERM from its own switch)."""
+
+
 class FakeHost:
     """``nix``, ``nix-env``, ``switch-to-configuration`` and ``systemctl``."""
 
@@ -111,6 +115,12 @@ class FakeHost:
         self.fail_copy = False
         self.fail_delete = False
         self.fail_gc: int | Exception = 0
+        # 0.26.2: the boot default (``switch-to-configuration boot``), a
+        # verb of one system that fails, and calls that hang or kill.
+        self.boot: str | None = None
+        self.fail_verb: set[tuple[str, str]] = set()
+        self.hang: str | None = None
+        self.kill: str | None = None
 
     # The system profile, as ``nix-env -p PROFILE`` keeps it: numbered
     # ``PROFILE-N-link`` generations and ``PROFILE`` -> the current one.
@@ -157,6 +167,11 @@ class FakeHost:
         self.calls.append(argv)
         self.envs.append(kwargs.get("env") or {})
         self.timeouts.append(kwargs.get("timeout"))
+        joined = " ".join(argv)
+        if self.kill and self.kill in joined:
+            raise Killed(joined)
+        if self.hang and self.hang in joined:
+            raise subprocess.TimeoutExpired(argv, kwargs.get("timeout") or 0)
         out, code = b"", 0
         if argv[0] == "fake-nix-env":
             code = self._profile(argv)
@@ -172,11 +187,15 @@ class FakeHost:
             out = json.dumps({path: {"narHash": nar_hash_of(path)}}).encode()
         elif argv[0].endswith("/bin/switch-to-configuration"):
             path = argv[0][: -len("/bin/switch-to-configuration")]
-            if path in self.fail_switch:
+            verb = argv[1]
+            if path in self.fail_switch or (verb, path) in self.fail_verb:
                 code = 1
             else:
-                self.current.unlink()
-                self.current.symlink_to(path)
+                if verb in ("test", "switch"):
+                    self.current.unlink()
+                    self.current.symlink_to(path)
+                if verb in ("boot", "switch"):
+                    self.boot = path
         elif argv[0] == "fake-systemctl":
             code = 0 if self.unit_active else 3
         return subprocess.CompletedProcess(argv, code, out, b"")
@@ -269,7 +288,7 @@ def test_a_tag_host_switches_to_the_highest_version_and_checks_it(
     assert body["previous"]["store_path"] == OLD
     attempt = body["last_attempt"]
     assert [s["name"] for s in attempt["stages"]] == [
-        "resolve", "verify", "realise", "switch", "checks",
+        "resolve", "verify", "realise", "activate", "checks", "boot",
     ]  # fmt: skip
     assert all(s["state"] == "passed" and "seconds" in s for s in attempt["stages"])
     assert attempt["checks"] == [
@@ -386,10 +405,11 @@ def test_a_failing_check_rolls_back_and_marks_the_build_bad(
     assert attempt["checks"][0]["state"] == "failed"
     assert attempt["checks"][0]["tries"] == 6  # every 2 s for 10 s
     assert attempt["rollback"]["state"] == "done" and attempt["rollback"]["to"] == OLD
-    assert fake.commands("fake-nix-env")[-1][-1] == OLD
-    assert fake.commands("switch-to-configuration")[-1][0] == (
-        f"{OLD}/bin/switch-to-configuration"
-    )
+    assert fake.commands("fake-nix-env") == []  # 0.26.2: the profile never moved
+    assert fake.commands("switch-to-configuration")[-1] == [
+        f"{OLD}/bin/switch-to-configuration",
+        "test",
+    ]
     assert os.readlink(fake.current) == OLD
     assert status(tmp_path)["current"]["store_path"] == OLD
     # Not retried: the build is bad until a newer pointer.
@@ -701,7 +721,7 @@ def test_a_pin_deploys_an_older_tag_and_holds_it_until_unpinned(
     assert result["state"] == "pinned" and result["reason"] is None
     assert result["attempt"]["trigger"] == "pin"
     assert [s["name"] for s in result["attempt"]["stages"]] == [
-        "resolve", "verify", "realise", "switch", "checks",
+        "resolve", "verify", "realise", "activate", "checks", "boot",
     ]  # fmt: skip
     assert os.readlink(fake.current) == store_path(commit_of(1))
     hold = status(tmp_path)["hold"]
@@ -776,7 +796,7 @@ def test_a_rollback_returns_to_the_previous_system_and_holds_it(
     assert result["state"] == "rolled-back"
     attempt = result["attempt"]
     assert attempt["trigger"] == "rollback"
-    assert [s["name"] for s in attempt["stages"]] == ["switch", "checks"]
+    assert [s["name"] for s in attempt["stages"]] == ["activate", "checks", "boot"]
     assert not any(" copy " in " ".join(c) for c in fake.calls[calls:])  # in store
     assert os.readlink(fake.current) == store_path(commit_of(1))
     body = status(tmp_path)

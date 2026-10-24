@@ -264,6 +264,24 @@ def _say_status(status: dict[str, Any]) -> None:
             f"gc {gc.get('state')}{freed})")  # fmt: skip
 
 
+def _report_endpoint(host: Any) -> str | None:
+    report = getattr(host, "report", None)
+    return str(report.endpoint) if report is not None else None
+
+
+def _unread(error: Any, host: Any) -> tuple[str, dict[str, Any]]:
+    """The message of a failed status read, and its fields: with the
+    ``HostReport`` endpoint, where the agent's own reports go (0.26.2)."""
+    endpoint = _report_endpoint(host)
+    message = str(error)
+    if endpoint and error.code in ("host-unreachable", "host-ssh-failed"):
+        message += (
+            f"; the agent reports each deploy to its HostReport, {endpoint} "
+            "(OTLP logs): read its state there"
+        )
+    return message, {"report": endpoint}
+
+
 @host_app.command("status")
 def status(
     target: TargetArgument,
@@ -274,11 +292,12 @@ def status(
     from piceli.hosts.model import HostError
     from piceli.hosts.remote import read_status
 
-    _, ssh, known = _target(target, infra)
+    host, ssh, known = _target(target, infra)
     try:
         body = read_status(ssh, known_hosts=known)
     except HostError as error:
-        reject(error.code, str(error))
+        message, fields = _unread(error, host)
+        reject(error.code, message, target=ssh.address, **fields)
     _say_status(body)
     if as_json:
         emit_json({**body, "target": ssh.address})
@@ -313,18 +332,23 @@ def wait(
     from piceli.hosts.model import HostError
     from piceli.hosts.remote import outcome, read_status
 
-    _, ssh, known = _target(target, infra)
+    host, ssh, known = _target(target, infra)
     started = time.monotonic()
     body: dict[str, Any] = {"schema": "piceli.host-wait.v1", "rev": rev,
                             "target": ssh.address,
                             "published_after": published_after}  # fmt: skip
     last_error: str | None = None
+    last_message: str | None = None
     while True:
         try:
             current = read_status(ssh, known_hosts=known)
             last_error = None
         except HostError as error:
-            current, last_error = {}, error.code
+            message, _ = _unread(error, host)
+            if error.code != last_error:  # each new failure once, then retry
+                say(f"  cannot read the status: {message} [{error.code}]; "
+                    "retrying")  # fmt: skip
+            current, last_error, last_message = {}, error.code, message
         state, reason = (
             outcome(current, rev, published_after) if current else ("waiting", None)
         )
@@ -346,9 +370,10 @@ def wait(
             fail(
                 "host-wait-timeout",
                 f"{rev} was not running on {ssh.address} after {timeout}s"
-                + (f" (last read: {last_error})" if last_error else ""),
+                + (f" (last read: {last_message})" if last_error else ""),
                 **body,
                 last_error=last_error,
+                report=_report_endpoint(host),
             )
         time.sleep(interval)
 

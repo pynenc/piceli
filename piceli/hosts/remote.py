@@ -32,6 +32,7 @@ __all__ = [
     "outcome",
     "read_status",
     "ssh_argv",
+    "ssh_message",
     "write_age_key",
 ]
 
@@ -42,15 +43,32 @@ AGENT = "/run/current-system/sw/bin/piceli-host-agent"
 CONTROL_SECONDS = 4 * 3600
 _HEX = re.compile(r"[0-9a-f]{7,64}")
 _LIMIT = 4 << 20
+#: 0.26.2: a status read gives up within this: the connection (10 s), a
+#: silent session (keepalives every 5 s, 2 unanswered) and the whole command.
+STATUS_SECONDS = 30
+#: What ``ssh`` prints when it never got a session: no route, refused,
+#: unresolved, the host key or the login. Anything else after an exit 255
+#: (nothing at all, ``closed by remote host``) is a session that broke.
+_UNREACHABLE = (
+    "connect to host", "could not resolve", "no route", "network is unreachable",
+    "connection refused", "connection timed out", "operation timed out",
+    "host key verification failed", "remote host identification has changed",
+    "permission denied", "too many authentication failures",
+    "no matching host key", "kex_exchange_identification", "banner exchange",
+)  # fmt: skip
 
 
 def ssh_argv(
     target: SshTarget,
     known_hosts: Path | None = None,
     remote: list[str] | None = None,
+    *,
+    alive: tuple[int, int] = (30, 3),
 ) -> list[str]:
     """``ssh`` running ``remote`` (default: reading the status file): no
-    prompt, a known host key only; as root, else through ``sudo -n``."""
+    prompt, a known host key only; as root, else through ``sudo -n``.
+    ``alive`` is ``(ServerAliveInterval, ServerAliveCountMax)``: a session
+    silent that long is closed."""
     ssh = shutil.which("ssh")
     if ssh is None:
         raise HostError("host-unreachable", "ssh was not found on PATH")
@@ -64,7 +82,8 @@ def ssh_argv(
         "-o", "StrictHostKeyChecking=yes",
         "-o", f"UserKnownHostsFile={' '.join(files)}",
         "-o", "ConnectTimeout=10",
-        "-o", "ServerAliveInterval=30",
+        "-o", f"ServerAliveInterval={alive[0]}",
+        "-o", f"ServerAliveCountMax={alive[1]}",
         "-p", str(target.port),
         "-l", target.user,
         "--", target.address,
@@ -80,22 +99,44 @@ def _ssh(
     runner: Callable[..., Any],
     timeout: float,
     data: bytes | None = None,
+    alive: tuple[int, int] = (30, 3),
 ) -> Any:
     try:
         done = runner(
-            ssh_argv(target, known_hosts, remote),
+            ssh_argv(target, known_hosts, remote, alive=alive),
             **({"input": data} if data is not None else {"stdin": subprocess.DEVNULL}),
             capture_output=True,
             timeout=timeout,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError:
         raise HostError("host-unreachable", f"ssh to {target.address} failed") from None
-    if done.returncode == 255:
+    except subprocess.TimeoutExpired as hung:
+        said = ssh_message(hung.stderr)
         raise HostError(
-            "host-unreachable",
-            f"ssh to {target.address} failed (network, host key or login)",
+            "host-ssh-failed",
+            f"ssh to {target.address} did not finish in {timeout:g}s"
+            + (f": {said}" if said else ""),
+        ) from None
+    if done.returncode == 255:
+        said = ssh_message(done.stderr)
+        if any(mark in said.lower() for mark in _UNREACHABLE):
+            raise HostError("host-unreachable", f"ssh to {target.address}: {said}")
+        raise HostError(
+            "host-ssh-failed",
+            f"ssh to {target.address}: "
+            + (said or "the session closed with no exit status"),
         )
     return done
+
+
+def ssh_message(stderr: bytes | str | None) -> str:
+    """The last line ``ssh`` printed (its diagnostic), printable, at most
+    200 characters; a remote command's output is never on ssh's stderr
+    here (status reads print nothing there)."""
+    text = stderr.decode("utf-8", "replace") if isinstance(stderr, bytes) else stderr
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    last = lines[-1] if lines else ""
+    return "".join(c for c in last if c.isprintable())[:200]
 
 
 def control(
@@ -233,11 +274,17 @@ def read_status(
     *,
     known_hosts: Path | None = None,
     runner: Callable[..., Any] = subprocess.run,
-    timeout: float = 60,
+    timeout: float = STATUS_SECONDS,
 ) -> dict[str, Any]:
-    """The agent's status (``host-unreachable``, ``host-status-missing``)."""
+    """The agent's status (``host-unreachable``, ``host-ssh-failed``,
+    ``host-status-missing``); never longer than ``timeout``."""
     done = _ssh(
-        target, None, known_hosts=known_hosts, runner=runner, timeout=timeout
+        target,
+        None,
+        known_hosts=known_hosts,
+        runner=runner,
+        timeout=timeout,
+        alive=(5, 2),
     )  # the status file is readable by anyone: no sudo
     if done.returncode != 0 or not done.stdout:
         raise HostError(

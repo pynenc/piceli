@@ -6,8 +6,8 @@ never an application credential: the ``Infomaniak`` preset refuses
 with the commands that make and store each pair by hand. A ``NixCache``
 names such pairs (``write_credentials=``, ``read_credentials=``);
 ``piceli host secrets`` installs the read pair as it installs a bucket's
-read key, and ``secrets status`` lists both ``pending`` with the command
-that stores them.
+read key, and ``secrets status`` lists both ``missing`` (0.26.2; ``pending``
+before) with the command that stores them, and exits 1 until they are.
 """
 
 from __future__ import annotations
@@ -214,24 +214,25 @@ host = NixHost("web-1", server="ssh://root@web-1.example.org", flake=".#web-1",
 """
 
 
-def test_secrets_status_lists_owner_pairs_pending_with_the_command(
+def test_secrets_status_lists_owner_pairs_missing_with_the_command(
     homes: Path,
 ) -> None:
     path = homes / "owner_pairs.py"
     path.write_text(f"PUBLIC = {PUBLIC!r}\nSTATE = {str(homes / 'state')!r}\n" + MODULE)
     result = CliRunner().invoke(app, ["secrets", "status", str(path), "--json"])
+    assert result.exit_code == 1, result.output  # missing until stored
     body = json.loads(result.stdout)
     rows = {row["name"]: row for row in body["secrets"]}
     for name in ("cache-write", "cache-read"):
         row = rows[name]
-        assert (row["state"], row["created_by"]) == ("pending", "owner")
+        assert (row["state"], row["created_by"]) == ("missing", "owner")
         assert row["next"] == f"piceli secrets s3 {name} --prompt"
         assert "openstack ec2 credentials create" in row["detail"]
         assert "signed in as the project's user" in row["detail"]
     assert "on host web-1" in rows["cache-read"]["where"]
     lines = [line for line in result.stderr.splitlines() if "cache-" in line]
     assert any(
-        line.split()[:3] == ["cache-read", "s3-keys", "pending"]
+        line.split()[:3] == ["cache-read", "s3-keys", "missing"]
         and line.rstrip().endswith("piceli secrets s3 cache-read --prompt")
         for line in lines
     ), lines

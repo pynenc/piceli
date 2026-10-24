@@ -241,7 +241,9 @@ def test_status_is_read_over_ssh_with_known_host_keys_only() -> None:
     assert argv[-3:] == ["cat", "--", "/var/lib/piceli-host/status.json"]
 
     def unreachable(argv: list[str], **_: Any) -> Any:
-        return subprocess.CompletedProcess(argv, 255, b"", b"")
+        return subprocess.CompletedProcess(
+            argv, 255, b"", b"ssh: connect to host web-1 port 2222: No route to host\n"
+        )
 
     from piceli.hosts.model import HostError
 

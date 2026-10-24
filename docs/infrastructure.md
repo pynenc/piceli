@@ -390,9 +390,9 @@ cache = NixCache("cache-1:…", bucket=nix_bucket,
                  write_credentials="cache-write", read_credentials="cache-read")
 ```
 
-`piceli secrets status` lists both `pending`, created by `owner`, with
-`piceli secrets s3 NAME --prompt` as the next command, until they are
-stored; `piceli host secrets` installs the read pair on the host exactly as
+`piceli secrets status` lists both `missing` (0.26.2; `pending` before),
+created by `owner`, with `piceli secrets s3 NAME --prompt` as the next
+command, and exits 1 until they are stored; `piceli host secrets` installs the read pair on the host exactly as
 it installs a bucket's read key (see {doc}`nix_hosts`). Both pairs have
 the user's project roles: the read pair is separate, not read-only, as
 described above. `read_credentials=` and a bucket's `S3Key(access="read")`

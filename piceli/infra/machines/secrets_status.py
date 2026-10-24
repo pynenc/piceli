@@ -8,8 +8,8 @@ credentials are a ``piceli login`` profile); :func:`report` lists what they
 need (:func:`~piceli.infra.machines.keys.needed_secrets`), each with:
 
 - its state: ``present``, ``pending`` (a pair the next ``infra apply``
-  creates, or, 0.25.3, an S3 pair the owner makes by hand and has not
-  stored yet), ``missing``, ``incomplete`` (a credential that
+  creates), ``missing`` (also, 0.26.2, an S3 pair the owner makes by hand
+  and has not stored yet: ``pending`` in 0.25.3), ``incomplete`` (a credential that
   lacks a part: :func:`~piceli.infra.machines.credential_parts.credential_report`),
   ``damaged`` (unreadable, readable by others, another kind, or a Nix
   signing key whose public key is not the declared one), ``copy`` (a Nix
@@ -371,7 +371,10 @@ def _state(secret: NeededSecret, index: _Index) -> tuple[str, str | None]:
         if secret.created_by == "infra-apply" and not _applied(secret.name, index):
             return "pending", PENDING
         if secret.created_by == "owner":
-            return "pending", f"{secret.hint}; {BY_HAND}" if secret.hint else BY_HAND
+            # 0.26.2: an owner-made S3 pair blocks (``missing``, exit 1)
+            # until stored; nothing else will ever create it.
+            state = "missing" if secret.kind == "s3-keys" else "pending"
+            return state, f"{secret.hint}; {BY_HAND}" if secret.hint else BY_HAND
         if secret.kind == "user-data" and secret.name in index.user_data:
             infra, server = index.user_data[secret.name]
             if _created(infra, server):
