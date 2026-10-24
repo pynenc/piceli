@@ -101,9 +101,9 @@ def test_observation_returns_a_scan_warning_when_a_lazy_listing_fails() -> None:
 def test_preferences_are_owner_only_and_build_loopback_command(tmp_path: Path) -> None:
     store = PreferenceStore(tmp_path / "observe.json")
     forward = PortForward("web", "demo", "service/web", 18080, 3000)
-    store.replace_user(UserPreferences("jose", (forward,)))
+    store.replace_user(UserPreferences("dev-user", (forward,)))
     assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
-    loaded = store.load()["jose"].forwards[0]
+    loaded = store.load()["dev-user"].forwards[0]
     assert loaded.command(
         kubectl="kubectl", kubeconfig=Path("/tmp/kube"), context="lab"
     ) == [
@@ -125,9 +125,9 @@ def test_preferences_are_owner_only_and_build_loopback_command(tmp_path: Path) -
 def test_forward_health_path_is_private_preference_metadata(tmp_path: Path) -> None:
     store = PreferenceStore(tmp_path / "observe.json")
     forward = PortForward("web", "demo", "service/web", 18080, 3000, "/healthz")
-    store.replace_user(UserPreferences("jose", (forward,)))
+    store.replace_user(UserPreferences("dev-user", (forward,)))
 
-    assert store.load()["jose"].forwards == (forward,)
+    assert store.load()["dev-user"].forwards == (forward,)
     with pytest.raises(ValueError, match="health path"):
         PortForward("bad", "demo", "service/api", 18081, 80, "relative")
 
@@ -161,7 +161,7 @@ def test_forward_supervisor_owns_only_saved_loopback_processes(tmp_path: Path) -
     store = PreferenceStore(tmp_path / "observe.json")
     store.replace_user(
         UserPreferences(
-            "jose",
+            "dev-user",
             (
                 PortForward(
                     "api", "demo", "service/api", worker_port(), 80, scope=SCOPE
@@ -171,7 +171,7 @@ def test_forward_supervisor_owns_only_saved_loopback_processes(tmp_path: Path) -
     )
     supervisor = ForwardSupervisor(
         preferences=store,
-        user="jose",
+        user="dev-user",
         kubeconfig=tmp_path / "kubeconfig",
         context="lab",
         kubectl="definitely-not-kubectl",
@@ -202,13 +202,13 @@ def test_forward_supervisor_leaves_an_external_port_owner_untouched(
         port = listener.getsockname()[1]
         store.replace_user(
             UserPreferences(
-                "jose",
+                "dev-user",
                 (PortForward("api", "demo", "service/api", port, 80, scope=SCOPE),),
             )
         )
         supervisor = ForwardSupervisor(
             preferences=store,
-            user="jose",
+            user="dev-user",
             kubeconfig=tmp_path / "kubeconfig",
             context="lab",
             scope=SCOPE,

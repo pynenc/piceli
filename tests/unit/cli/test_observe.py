@@ -21,7 +21,7 @@ def test_forward_preferences_are_saved_and_emitted_as_shell_free_json(
         [
             "forward-save",
             "--user",
-            "jose",
+            "dev-user",
             "--name",
             "web",
             "--namespace",
@@ -42,7 +42,7 @@ def test_forward_preferences_are_saved_and_emitted_as_shell_free_json(
         [
             "forward-command",
             "--user",
-            "jose",
+            "dev-user",
             "--name",
             "web",
             "--kubeconfig",

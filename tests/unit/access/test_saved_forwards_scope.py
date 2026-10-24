@@ -73,10 +73,10 @@ def test_store_round_trips_scope_and_reads_legacy_entries(tmp_path: Path) -> Non
     store = PreferenceStore(tmp_path / "observe.json")
     scoped = PortForward("web", "demo", "service/web", 18080, 80, scope=scope)
     legacy = PortForward("api", "demo", "service/api", 18081, 80)
-    store.replace_user(UserPreferences("jose", (legacy, scoped)))
+    store.replace_user(UserPreferences("dev-user", (legacy, scoped)))
     raw = json.loads(store.path.read_text())
     assert "scope" not in raw["users"][0]["forwards"][0]  # older readers still work
-    assert store.load()["jose"].forwards == (legacy, scoped)
+    assert store.load()["dev-user"].forwards == (legacy, scoped)
     assert scoped.matches(scope, "demo") and scoped.matches(scope, None)
     assert not scoped.matches(scope, "prod")
     assert not legacy.matches(scope, "demo")
@@ -90,7 +90,7 @@ def test_restore_starts_only_forwards_saved_for_this_cluster(tmp_path: Path) -> 
     ports = [worker_port() for _ in range(4)]
     store.replace_user(
         UserPreferences(
-            "jose",
+            "dev-user",
             (
                 PortForward("mine", "demo", "service/a", ports[0], 80, scope=scope),
                 PortForward("legacy", "demo", "service/b", ports[1], 80),
@@ -103,7 +103,7 @@ def test_restore_starts_only_forwards_saved_for_this_cluster(tmp_path: Path) -> 
     )
     supervisor = ForwardSupervisor(
         preferences=store,
-        user="jose",
+        user="dev-user",
         kubeconfig=tmp_path / "kubeconfig",
         context="lab",
         namespace="demo",
@@ -130,7 +130,7 @@ def test_a_forward_added_from_the_dashboard_is_saved_with_the_scope(
     store = PreferenceStore(tmp_path / "observe.json")
     supervisor = ForwardSupervisor(
         preferences=store,
-        user="jose",
+        user="dev-user",
         kubeconfig=tmp_path / "kubeconfig",
         context="lab",
         scope=scope,
@@ -139,7 +139,7 @@ def test_a_forward_added_from_the_dashboard_is_saved_with_the_scope(
         supervisor.add_or_update(PortForward("web", "demo", "service/web", 1234, 80))
     finally:
         supervisor.close()
-    (saved,) = store.load()["jose"].forwards
+    (saved,) = store.load()["dev-user"].forwards
     assert saved.scope == scope
 
 
@@ -271,7 +271,7 @@ def test_forward_save_scopes_with_kubeconfig_and_context(tmp_path: Path) -> None
     base = [
         "forward-save",
         "--user",
-        "jose",
+        "dev-user",
         "--namespace",
         "demo",
         "--target",
@@ -291,11 +291,11 @@ def test_forward_save_scopes_with_kubeconfig_and_context(tmp_path: Path) -> None
     result = runner.invoke(observe_app, [*base, "--name", "bad", "--context", "lab"])
     assert result.exit_code == 2
     assert json.loads(result.stdout)["reason"] == "invalid-forward-preference"
-    (saved,) = PreferenceStore(store).load()["jose"].forwards
+    (saved,) = PreferenceStore(store).load()["dev-user"].forwards
     assert saved.scope == forward_scope(kubeconfig, "lab")
     listed = runner.invoke(
         observe_app,
-        ["forward-list", "--user", "jose", "--preferences", str(store)],
+        ["forward-list", "--user", "dev-user", "--preferences", str(store)],
     )
     assert json.loads(listed.stdout)["forwards"][0]["scope"]["context"] == "lab"
 
