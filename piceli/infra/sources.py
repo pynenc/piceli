@@ -9,7 +9,9 @@
   which is what a component's source digest is made of: a commit that leaves
   the paths a build reads untouched leaves the digest unchanged;
 - the files below a directory at a commit with their blob ids
-  (``git ls-tree -r``): what a pipeline image's change key is made of.
+  (``git ls-tree -r``): what a pipeline image's change key is made of;
+- whether a commit is in another's history (``git rev-list --count``): a
+  branch merged into ``main``.
 
 Git runs as :class:`piceli.gitops.repo.GitRemote` runs it: no prompt, the
 credentials only from the mounted Secret directory (one for every source),
@@ -141,6 +143,16 @@ class SourceSet:
                 path = path[len(prefix) + 1 :]
             found.append((path, mode, oid))
         return found
+
+    def contains(self, key: str, target: str, commit: str) -> bool:
+        """Whether ``commit`` is in the history of ``target`` (0.28.0: a
+        branch merged into ``main``). :raises GitOpsError: an unknown commit."""
+        if not (_COMMIT.fullmatch(commit) and _COMMIT.fullmatch(target)):
+            raise GitOpsError("gitops-git-failed", "invalid commit id")
+        out = self._git(
+            key, "rev-list", "--count", f"{target}..{commit}", what="rev-list"
+        )
+        return out.decode().strip() == "0"
 
     def read(self, key: str, commit: str, path: str) -> bytes | None:
         """The bytes of ``path`` at ``commit`` (``None``: absent)."""

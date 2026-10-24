@@ -372,3 +372,56 @@ def rollout(
     if not fresh or not body["envs"]:
         return None, body
     return ("deployed" if done else None), body
+
+
+PREVIEW_SCHEMA = "piceli.env-preview.v1"
+
+
+def preview(
+    document: Mapping[str, Any] | None, branch: str, request: str, action: str
+) -> tuple[str | None, dict[str, Any]]:
+    """Where a ``preview`` request stands (``piceli env up|down BRANCH
+    --wait``, 0.28.0): ``ready`` (the branch runs the head the request saw,
+    its checks passed; ``url`` then), ``removed`` (``down``), ``failed``
+    (rejected, or the deploy failed: ``reason``), or ``None`` to keep waiting.
+
+    The request counts only once the controller lists it as served
+    (``controller.previews.served``), so a status published before it is
+    never mistaken for the answer.
+    """
+    doc = _dict(document)
+    controller = _dict(doc.get("controller"))
+    body: dict[str, Any] = {"branch": branch, "request": request, "action": action}
+    for item in doc.get("rejected_requests") or ():
+        if isinstance(item, Mapping) and item.get("request") == request:
+            body.update(
+                reason=item.get("reason"), detail=item.get("message"), text="rejected"
+            )
+            return "failed", body
+    served = request in (_dict(controller.get("previews")).get("served") or ())
+    record = _dict(_dict(doc.get("envs")).get(branch))
+    if not served:
+        body["text"] = "requested; waiting for the controller"
+        return None, body
+    if action == "down":
+        if not record:
+            body["text"] = "removed"
+            return "removed", body
+        body["text"] = "tearing down"
+        return None, body
+    if not record:
+        body["text"] = "pending"
+        return None, body
+    now = _epoch(controller.get("heartbeat_at") or controller.get("last_poll"))
+    view = progress(branch, record, now)
+    body.update(text=view["text"], base=view["base"], commit=record.get("commit"))
+    if view["state"] == "failed":
+        failure = view["failure"]
+        body.update(reason=failure.get("reason"), failure=failure)
+        return "failed", body
+    if view["state"] != "done":
+        return None, body
+    url = _dict(record.get("preview")).get("url")
+    if url:
+        body["url"] = url
+    return "ready", body

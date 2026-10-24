@@ -541,6 +541,8 @@ class Environment:
         replicas: Mapping[str, int] | None = None,
         restore_points: Any = None,
         access: Any = None,
+        url: str | None = None,
+        down_when_merged: bool = False,
     ) -> BranchEnvironments:
         """One environment per Git branch of the sources (a composition's branch rule).
 
@@ -557,6 +559,15 @@ class Environment:
         :param restore_points: ``"off"``, ``"touched"``, ``"all"`` or a
             :class:`~piceli.restore.RestorePoints` for these environments
             (default: the pipeline's ``restore_points``).
+        :param url: Where a branch's preview is reached, from ``{branch}``
+            (the branch as a DNS label: ``wp/Login`` gives ``wp-login``) and
+            ``{namespace}``: ``"https://{branch}.preview.example.org"``.
+            Piceli creates no Ingress or DNS record for it: the cluster's
+            wildcard ingress, or the app, serves that host. ``piceli env up
+            BRANCH --wait`` prints it once the preview is ready.
+        :param down_when_merged: Also tear a branch's environment down once
+            its own commits reached the fallback branch (a merge), not only
+            when the branch is deleted.
 
         Every other parameter is the :class:`EnvConfig` one of the same name
         (``on_nodes`` is ``branch_nodes``, ``stack`` is ``branch_stack``).
@@ -585,6 +596,8 @@ class Environment:
             replicas=replicas,
             restore_points=restore_points,
             access=access,
+            url=url,
+            down_when_merged=down_when_merged,
         )
 
     @property
@@ -683,6 +696,29 @@ def describe_restore_points(value: Any) -> Any:
     return value if value is None or isinstance(value, str) else value.describe()
 
 
+_URL_FIELDS = re.compile(r"\{(branch|namespace)\}")
+
+
+def _check_preview(env: Any, what: str) -> None:
+    """``url=`` and ``down_when_merged=`` of a branch rule (0.28.0)."""
+    if not isinstance(env.down_when_merged, bool):
+        raise EnvError(
+            "env-config-invalid", f"{what}: down_when_merged is True or False"
+        )
+    if env.url is None:
+        return
+    sample = _URL_FIELDS.sub("x", env.url) if isinstance(env.url, str) else ""
+    if (
+        not sample.startswith(("https://", "http://"))
+        or any(ch in sample for ch in "{} \t\n")
+        or len(env.url) > 200
+    ):
+        raise EnvError(
+            "env-config-invalid",
+            f"{what}: url is http(s)://... with {{branch}} and {{namespace}} only",
+        )
+
+
 def _check_access(env: Any, what: str) -> None:
     if env.access is None:
         return
@@ -752,6 +788,9 @@ class BranchEnvironments:
     rollout: Any = None
     restore_points: Any = field(default=None, compare=False)
     access: Any = field(default=None, compare=False)
+    #: 0.28.0: the preview URL pattern ({branch}, {namespace}); see per_branch.
+    url: str | None = None
+    down_when_merged: bool = False
     sources: tuple[tuple[Any, tuple[Any, ...]], ...] = field(
         init=False, default=(), compare=False, repr=False
     )
@@ -796,6 +835,7 @@ class BranchEnvironments:
         # The EnvConfig checks every remaining field (quota, sizes, idle stop).
         self.env_config()
         _check_clusters(self, what)
+        _check_preview(self, what)
 
     @property
     def prefix(self) -> str:
@@ -842,6 +882,9 @@ class BranchEnvironments:
                 else {}
             ),
             **({"access": self.access.describe()} if self.access is not None else {}),
+            # 0.28.0, only when declared.
+            **({"url": self.url} if self.url else {}),
+            **({"down_when_merged": True} if self.down_when_merged else {}),
         }
 
 

@@ -2791,9 +2791,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
                 "kubeconfig",
                 "state_dir",
                 "build receipt (--receipt)",
+                "--cluster infra.py:CLUSTER (its credentials profile) or --state-dir",
             ),
             writes=(
                 "<state_dir>/branches/<namespace> (journal, release state, secrets)",
+                "--state-dir requests (local controller)",
             ),
             cluster="writes",
             approval_required=True,
@@ -2815,13 +2817,31 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(--seed-from main). --approve-if-policy runs a branch when "
             "EnvConfig(auto_approve=True), or when the pipeline's auto_approve "
             "policy allows the deploy and nothing is stopped; main only by the "
-            "policy. --wait refuses with env-budget-full instead of stopping.",
+            "policy. --wait refuses with env-budget-full instead of stopping. "
+            "0.28.0: with --cluster infra.py:CLUSTER (or --state-dir) it asks a "
+            "composition's GitOps controller instead: a preview request in the "
+            "ConfigMap piceli-gitops-requests, served within seconds (the "
+            "controller wakes for it), taking the images a train offered for "
+            "the branch's head; a branch outside the rule's patterns gets one "
+            "on request. --wait then waits until the preview runs its head "
+            "with its checks passed and prints its URL "
+            "(Environment.per_branch(url=...)) once (exit 0), the failure or "
+            "a rejected request (exit 1), or the timeout (gitops-wait-timeout, "
+            "exit 2). The --pipeline options are refused there "
+            "(gitops-request-invalid).",
         ),
         "env down": _C(
             "Delete a branch environment: its claims, namespace and volumes "
             "(approval by env_hash; never main's).",
-            reads=("pipeline module (--pipeline or $PICELI_PIPELINE)", "kubeconfig"),
-            writes=("<state_dir>/branches/<namespace> (removed)",),
+            reads=(
+                "pipeline module (--pipeline or $PICELI_PIPELINE)",
+                "kubeconfig",
+                "--cluster infra.py:CLUSTER (its credentials profile) or --state-dir",
+            ),
+            writes=(
+                "<state_dir>/branches/<namespace> (removed)",
+                "--state-dir requests (local controller)",
+            ),
             cluster="writes",
             approval_required=True,
             safe_to_retry=True,
@@ -2834,7 +2854,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "volumes bound to them; with --approve HASH (or --approve-if-policy "
             "and EnvConfig(auto_approve=True)) it deletes the claims, the "
             "namespace and those volumes. An absent environment prints state "
-            "absent (exit 0).",
+            "absent (exit 0). 0.28.0: with --cluster (or --state-dir) it asks "
+            "the GitOps controller to tear the branch's preview down; it stays "
+            "down until the branch's next push. --wait waits until it is "
+            "removed (exit 0), rejected (1) or timed out (2).",
         ),
         "env seed": _C(
             "Restore main's latest restore point into a branch environment's "

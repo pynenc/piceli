@@ -58,10 +58,9 @@ TransportOption = Annotated[
 ]
 
 
-def _environment(cluster: str, env: str) -> Any:
-    """The named environment ``env`` of the composition holding ``cluster``."""
+def _composition_of(cluster: str) -> tuple[Any, Any]:
+    """``(Cluster, Composition)`` named by ``--cluster infra.py:CLUSTER``."""
     from piceli.app.render import load_target
-    from piceli.envs.model import Environment
     from piceli.infra import Cluster, CompositionError
     from piceli.infra.composition import load_composition
 
@@ -77,6 +76,28 @@ def _environment(cluster: str, env: str) -> Any:
     if not isinstance(declared, Cluster):
         say(f"piceli: {cluster} is not a piceli.infra.Cluster")
         reject("cluster-invalid")
+    return declared, composition
+
+
+def credentials_of(cluster: str) -> tuple[Path, str]:
+    """``(kubeconfig, context)`` of ``--cluster infra.py:CLUSTER``'s
+    ``piceli login`` profile (rejects)."""
+    from piceli.profiles import ProfileError, resolve
+
+    declared, _composition = _composition_of(cluster)
+    try:
+        credentials = resolve(declared.credentials)
+    except ProfileError as error:
+        say(f"piceli: {error}")
+        reject(error.code)
+    return credentials.kubeconfig, credentials.context
+
+
+def _environment(cluster: str, env: str) -> Any:
+    """The named environment ``env`` of the composition holding ``cluster``."""
+    from piceli.envs.model import Environment
+
+    declared, composition = _composition_of(cluster)
     found = next(
         (
             item

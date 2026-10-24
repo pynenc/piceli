@@ -452,6 +452,9 @@ def _env_dict(item: EnvItem, home: Cluster | None = None) -> dict[str, Any]:
         "claim_sizes": dict(item.claim_sizes),
         "allow_egress": list(item.allow_egress),
         **({"allow_api": True} if item.allow_api else {}),
+        # 0.28.0, only when declared: other configs keep their hash.
+        **({"url": item.url} if item.url else {}),
+        **({"down_when_merged": True} if item.down_when_merged else {}),
     }
 
 
@@ -540,6 +543,8 @@ def _env_from(
             claim_sizes=item.get("claim_sizes") or {},
             allow_egress=tuple(item.get("allow_egress") or ()),
             allow_api=item.get("allow_api") is True,
+            url=item.get("url") or None,
+            down_when_merged=item.get("down_when_merged") is True,
             **common,
         )
     return Environment(item["name"], stopped=item.get("stopped") is True, **common)

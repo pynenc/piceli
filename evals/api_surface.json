@@ -1012,6 +1012,7 @@
     "cluster",
     "clusters",
     "describe",
+    "down_when_merged",
     "env_config",
     "follow",
     "idle_stop",
@@ -1028,7 +1029,8 @@
     "secrets",
     "settings",
     "sources",
-    "stack"
+    "stack",
+    "url"
    ],
    "init": [
     "access",
@@ -1039,6 +1041,7 @@
     "claim_sizes",
     "cluster",
     "clusters",
+    "down_when_merged",
     "follow",
     "idle_stop",
     "limit",
@@ -1052,7 +1055,8 @@
     "rollout",
     "secrets",
     "settings",
-    "stack"
+    "stack",
+    "url"
    ],
    "methods": {
     "describe": [],
@@ -12653,7 +12657,14 @@
     "flags": [
      "--approve",
      "--approve-if-policy",
-     "--pipeline"
+     "--cluster",
+     "--interval",
+     "--namespace",
+     "--pipeline",
+     "--state-dir",
+     "--timeout",
+     "--transport",
+     "--wait"
     ],
     "subcommands": []
    },
@@ -12715,12 +12726,18 @@
     "flags": [
      "--approve",
      "--approve-if-policy",
+     "--cluster",
      "--commit",
      "--digest",
+     "--interval",
+     "--namespace",
      "--pipeline",
      "--plan",
      "--receipt",
      "--seed-from",
+     "--state-dir",
+     "--timeout",
+     "--transport",
      "--wait"
     ],
     "subcommands": []
@@ -17167,6 +17184,7 @@
   "piceli.infra.multicluster",
   "piceli.infra.nix_releases",
   "piceli.infra.pipelines",
+  "piceli.infra.previews",
   "piceli.infra.promote",
   "piceli.infra.promotion",
   "piceli.infra.provenance",
@@ -17192,6 +17210,7 @@
   "piceli.k8s.cli.dev",
   "piceli.k8s.cli.dev_nix",
   "piceli.k8s.cli.env",
+  "piceli.k8s.cli.env_preview",
   "piceli.k8s.cli.env_push",
   "piceli.k8s.cli.env_stop",
   "piceli.k8s.cli.gitops",

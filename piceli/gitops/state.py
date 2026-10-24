@@ -64,6 +64,8 @@ REQUEST_KINDS = (
     "prebuilt",
     # 0.26.0: start a build by hand, cancel one, a build host's progress
     "build", "build-cancel", "build-progress",
+    # 0.28.0: piceli env up|down BRANCH (a preview, now)
+    "preview",
 )  # fmt: skip
 #: Env states a status may carry.
 ENV_STATES = (
@@ -546,6 +548,28 @@ def stop_request(
 
         at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     return request("start" if start else "stop", env=env, via=via, at=at)
+
+
+def preview_request(
+    branch: str, *, action: str = "up", at: str | None = None
+) -> tuple[str, dict[str, Any]]:
+    """Deploy (``up``) or tear down (``down``) the preview of ``branch`` now
+    (``piceli env up|down BRANCH``, 0.28.0).
+
+    ``at`` (now by default, with microseconds) makes each request its own
+    key: ``env up --wait`` follows that key in the controller's status.
+    """
+    from piceli.infra.previews import check_branch
+
+    check_branch(branch)
+    if action not in ("up", "down"):
+        raise GitOpsError("gitops-request-invalid", "a preview is up or down")
+    if at is None:
+        from datetime import UTC, datetime
+
+        at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    nonce = os.urandom(4).hex()  # two requests in one microsecond stay two
+    return request("preview", branch=branch, action=action, at=at, nonce=nonce)
 
 
 class Channel(Protocol):

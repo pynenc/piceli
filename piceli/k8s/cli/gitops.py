@@ -2559,6 +2559,9 @@ def _refresher(
 RETRY_FIRST_SECONDS = 5.0
 #: The longest wait between failed polls.
 RETRY_MAX_SECONDS = 300.0
+#: 0.28.0: between two polls, look this often for a request people made
+#: (``env up``, ``sync``, ``approve``...) and poll at once when one waits.
+WAKE_CHECK_SECONDS = 2.0
 
 
 def _forever(
@@ -2642,11 +2645,37 @@ def _loop(
             if due is not None:
                 wait = min(wait, due - clock())
             wait = max(1.0, wait)
-        # Sleep in short steps so SIGTERM stops the pod promptly.
-        while wait > 0 and not stopped():
-            step = min(wait, 1.0) if handle_signals else wait
-            sleep(step)
-            wait -= step
+        _pause(controller, wait, stopped, sleep, handle_signals)
+
+
+def _pause(
+    controller: Any,
+    wait: float,
+    stopped: Callable[[], bool],
+    sleep: Callable[[float], None],
+    handle_signals: bool,
+) -> None:
+    """Sleep until the next poll, in short steps so SIGTERM stops the pod
+    promptly; a controller with ``wake_requested`` (0.28.0) is asked every
+    :data:`WAKE_CHECK_SECONDS` and polls at once when a request waits."""
+    wake = getattr(controller, "wake_requested", None)
+    since_check = 0.0
+    while wait > 0 and not stopped():
+        step = min(wait, 1.0) if handle_signals else wait
+        if callable(wake):
+            step = min(step, WAKE_CHECK_SECONDS - since_check)
+        sleep(step)
+        wait -= step
+        since_check += step
+        if callable(wake) and since_check >= WAKE_CHECK_SECONDS:
+            since_check = 0.0
+            try:
+                woken = bool(wake())
+            except Exception:  # never stop the loop on it
+                woken = False
+            if woken:
+                say("request waiting; polling now")
+                return
 
 
 def register(root: typer.Typer) -> None:

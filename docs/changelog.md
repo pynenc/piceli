@@ -40,6 +40,20 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   and the live controller keeps running; `--force` replaces it anyway. The
   Job and its ConfigMap are removed when the command ends. See
   {ref}`gitops-enable-canary`.
+- **Previews in minutes.** `piceli env up BRANCH --cluster infra.py:CLUSTER
+  --wait` asks the GitOps controller to deploy the branch's preview now: the
+  controller wakes for the request within 2 seconds instead of waiting for
+  its next poll, takes the images a merge train offered for the branch's
+  head (no build), and the command prints the preview's URL once it runs
+  with its checks passed (`Environment.per_branch(url=
+  "https://{branch}.preview.example.org")`). A branch outside the rule's
+  patterns gets a preview on request. `piceli env down BRANCH --cluster ...`
+  tears it down until the branch's next push, and
+  `Environment.per_branch(down_when_merged=True)` also tears down a branch
+  once it is merged into `main` (deleting the branch always did). Exit codes
+  as `gitops enable --wait`. Every request people make (`env up`, `gitops
+  sync`, `gitops approve`, `promote`, ...) now wakes the controller at once.
+  See {ref}`previews-in-minutes`.
 
 ## Version 0.27.1
 

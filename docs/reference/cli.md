@@ -1325,17 +1325,24 @@ Delete BRANCH's environment: its claims, namespace and volumes (never main's).
 | `--pipeline` | text | env `PICELI_PIPELINE` | The pipeline: MODULE:ATTR or path/to/file.py:ATTR naming a Pipeline that declares envs=EnvConfig(...) (default: $PICELI_PIPELINE) |
 | `--approve` | text |  | The env_hash to execute (from the plan) |
 | `--approve-if-policy` | boolean | `False` | Execute without --approve when the owner allows it: EnvConfig(auto_approve=True) for branch environments, or the pipeline's auto_approve policy for the deploy (never for main's teardown or seed) |
+| `--cluster` | text |  | Ask the GitOps controller of this composition's Cluster (infra.py:CLUSTER, its credentials profile) instead of --pipeline: a preview of the branch, now |
+| `--state-dir` | path |  | With the controller: a local controller's state directory |
+| `--namespace` | text | `piceli-system` | With the controller: its namespace |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--wait` | boolean | `False` | With the controller: wait until the preview is removed |
+| `--timeout` | text | `10m` | With the controller and --wait: give up after (10m, 1h) |
+| `--interval` | float | `2.0` | With the controller and --wait: seconds between status reads |
 
 **Contract**
 
-- **Reads:** pipeline module (--pipeline or $PICELI_PIPELINE), kubeconfig
-- **Writes:** <state_dir>/branches/<namespace> (removed)
+- **Reads:** pipeline module (--pipeline or $PICELI_PIPELINE), kubeconfig, --cluster infra.py:CLUSTER (its credentials profile) or --state-dir
+- **Writes:** <state_dir>/branches/<namespace> (removed), --state-dir requests (local controller)
 - **Cluster:** writes
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Refuses the main branch and the main namespace always (env-main-protected) and a namespace without this app's piceli.io/env-of label or of another branch (env-namespace-not-managed). The plan lists the claims and the volumes bound to them; with --approve HASH (or --approve-if-policy and EnvConfig(auto_approve=True)) it deletes the claims, the namespace and those volumes. An absent environment prints state absent (exit 0).
+- **Notes:** Refuses the main branch and the main namespace always (env-main-protected) and a namespace without this app's piceli.io/env-of label or of another branch (env-namespace-not-managed). The plan lists the claims and the volumes bound to them; with --approve HASH (or --approve-if-policy and EnvConfig(auto_approve=True)) it deletes the claims, the namespace and those volumes. An absent environment prints state absent (exit 0). 0.28.0: with --cluster (or --state-dir) it asks the GitOps controller to tear the branch's preview down; it stays down until the branch's next push. --wait waits until it is removed (exit 0), rejected (1) or timed out (2).
 
 (cli-env-push)=
 ### `piceli env push`
@@ -1452,18 +1459,24 @@ Deploy BRANCH into its namespace (created when absent), isolated.
 | `--plan` | boolean | `False` | Plan only; print the env_hash |
 | `--approve` | text |  | The env_hash to execute (from the plan) |
 | `--approve-if-policy` | boolean | `False` | Execute without --approve when the owner allows it: EnvConfig(auto_approve=True) for branch environments, or the pipeline's auto_approve policy for the deploy (never for main's teardown or seed) |
-| `--wait` | boolean | `False` | When the budget is full, refuse (env-budget-full) instead of stopping the least recently pushed environment |
+| `--wait` | boolean | `False` | With --pipeline: when the budget is full, refuse (env-budget-full) instead of stopping the least recently pushed environment. With the controller: wait until the preview is ready and print its URL (exit 0), failed (1) or timed out (2) |
+| `--cluster` | text |  | Ask the GitOps controller of this composition's Cluster (infra.py:CLUSTER, its credentials profile) instead of --pipeline: a preview of the branch, now |
+| `--state-dir` | path |  | With the controller: a local controller's state directory |
+| `--namespace` | text | `piceli-system` | With the controller: its namespace |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--timeout` | text | `10m` | With the controller and --wait: give up after (10m, 1h) |
+| `--interval` | float | `2.0` | With the controller and --wait: seconds between status reads |
 
 **Contract**
 
-- **Reads:** pipeline module (--pipeline or $PICELI_PIPELINE), kubeconfig, state_dir, build receipt (--receipt)
-- **Writes:** <state_dir>/branches/<namespace> (journal, release state, secrets)
+- **Reads:** pipeline module (--pipeline or $PICELI_PIPELINE), kubeconfig, state_dir, build receipt (--receipt), --cluster infra.py:CLUSTER (its credentials profile) or --state-dir
+- **Writes:** <state_dir>/branches/<namespace> (journal, release state, secrets), --state-dir requests (local controller)
 - **Cluster:** writes
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** The branch's namespace is <prefix><slug> (at most 63 characters, hash suffix when cut); main maps to the main namespace, which is never created. Branch environments never build: images come from --digest NAME=REF or --receipt. The app is isolated at render time (relative Service names, no NodePort, hostPort or hostPath, namespace-qualified cluster objects, its own generated Secrets) and gets a default-deny NetworkPolicy across namespaces and a ResourceQuota. The plan (--plan, or without an approval) lists the namespace to create, the environments the budget stops (max_envs, least recently pushed first; scaled to zero, kept), the deploy's combined plan and the seed (--seed-from main). --approve-if-policy runs a branch when EnvConfig(auto_approve=True), or when the pipeline's auto_approve policy allows the deploy and nothing is stopped; main only by the policy. --wait refuses with env-budget-full instead of stopping.
+- **Notes:** The branch's namespace is <prefix><slug> (at most 63 characters, hash suffix when cut); main maps to the main namespace, which is never created. Branch environments never build: images come from --digest NAME=REF or --receipt. The app is isolated at render time (relative Service names, no NodePort, hostPort or hostPath, namespace-qualified cluster objects, its own generated Secrets) and gets a default-deny NetworkPolicy across namespaces and a ResourceQuota. The plan (--plan, or without an approval) lists the namespace to create, the environments the budget stops (max_envs, least recently pushed first; scaled to zero, kept), the deploy's combined plan and the seed (--seed-from main). --approve-if-policy runs a branch when EnvConfig(auto_approve=True), or when the pipeline's auto_approve policy allows the deploy and nothing is stopped; main only by the policy. --wait refuses with env-budget-full instead of stopping. 0.28.0: with --cluster infra.py:CLUSTER (or --state-dir) it asks a composition's GitOps controller instead: a preview request in the ConfigMap piceli-gitops-requests, served within seconds (the controller wakes for it), taking the images a train offered for the branch's head; a branch outside the rule's patterns gets one on request. --wait then waits until the preview runs its head with its checks passed and prints its URL (Environment.per_branch(url=...)) once (exit 0), the failure or a rejected request (exit 1), or the timeout (gitops-wait-timeout, exit 2). The --pipeline options are refused there (gitops-request-invalid).
 
 (cli-envs)=
 ### `piceli envs`
