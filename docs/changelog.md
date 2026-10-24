@@ -4,6 +4,17 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.26.2
+
+- **The forward and access tests no longer race for ports under load.**
+  They take their loopback ports from a slice of their own per pytest-xdist
+  worker, below the ephemeral range, instead of a free port another process
+  binds later; and the fake `kubectl` of tests that expect a live forward
+  keeps its connections open, so the supervisor no longer restarts it. The
+  busy-forward test restarts only after two failed probes in a row (one idle
+  probe that timed out under load cut its download), and the forward health
+  tests wait up to 30 s for a state instead of 10.
+
 ## Version 0.26.1
 
 - **Private flake inputs are fetched on a docker build host.** The fetch

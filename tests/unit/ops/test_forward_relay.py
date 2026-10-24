@@ -24,15 +24,10 @@ import pytest
 from piceli.k8s.forward_relay import PortRelay
 from piceli.k8s.observe import ForwardStatus, ForwardSupervisor
 from piceli.k8s.ui_config import HealthProbe, RestartPolicy, UiShortcut
+from tests.ports import worker_port
 from tests.unit.ops.test_forward_health import FAKE_KUBECTL
 
 CHUNKS, CHUNK_DELAY = 50, 0.1  # a 5-second download
-
-
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
 
 
 def _wait_for(predicate: Callable[[], bool], timeout: float = 30.0) -> bool:
@@ -80,7 +75,7 @@ class _Slow(BaseHTTPRequestHandler):
 
 @pytest.fixture
 def slow_upstream() -> Iterator[ThreadingHTTPServer]:
-    server = ThreadingHTTPServer(("127.0.0.1", _free_port()), _Slow)
+    server = ThreadingHTTPServer(("127.0.0.1", worker_port()), _Slow)
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -103,12 +98,14 @@ def _status(supervisor: ForwardSupervisor, item: str) -> ForwardStatus:
     return next(s for s in supervisor.statuses() if s.name == item)
 
 
-def _supervisor(tmp_path: Path, kubectl: Path, remote: int) -> ForwardSupervisor:
+def _supervisor(
+    tmp_path: Path, kubectl: Path, remote: int, failure_threshold: int = 1
+) -> ForwardSupervisor:
     shortcut = UiShortcut(
         id="api",
         label="API",
         target="service/api",
-        local_port=_free_port(),
+        local_port=worker_port(),
         remote_port=remote,
         health=HealthProbe(
             type="http",
@@ -118,7 +115,7 @@ def _supervisor(tmp_path: Path, kubectl: Path, remote: int) -> ForwardSupervisor
             # (0.2 s timed some out and restarted an idle forward).
             interval=0.3,
             timeout=1.0,
-            failure_threshold=1,
+            failure_threshold=failure_threshold,
             startup_grace=5.0,
         ),
         restart=RestartPolicy(backoff_initial=0.1, backoff_max=0.5, max_restarts=20),
@@ -154,7 +151,7 @@ def test_the_relay_passes_bytes_on_counts_them_and_survives_a_new_target() -> No
 
     first, first_port = echo_server()
     second, second_port = echo_server()
-    relay = PortRelay(_free_port()).start()
+    relay = PortRelay(worker_port()).start()
     try:
         assert relay.busy() is False
         relay.target = first_port
@@ -181,7 +178,12 @@ def test_the_relay_passes_bytes_on_counts_them_and_survives_a_new_target() -> No
 def test_a_busy_forward_is_not_restarted_while_its_probe_times_out(
     tmp_path: Path, fake_kubectl: Path, slow_upstream: ThreadingHTTPServer
 ) -> None:
-    supervisor = _supervisor(tmp_path, fake_kubectl, slow_upstream.server_port)
+    # Two failures in a row restart the forward: a single idle probe that
+    # timed out on a loaded runner restarted it as the download began, and
+    # cut it. A probe behind moving bytes reads busy whatever the threshold.
+    supervisor = _supervisor(
+        tmp_path, fake_kubectl, slow_upstream.server_port, failure_threshold=2
+    )
     try:
         supervisor.quick_start("api")
         assert _wait_for(lambda: _status(supervisor, "api").health == "healthy")
@@ -243,7 +245,7 @@ def test_a_probe_that_waited_while_bytes_moved_is_not_a_failure(
     behind it, which says nothing about the forward being broken."""
     from types import SimpleNamespace
 
-    supervisor = _supervisor(tmp_path, fake_kubectl, _free_port())
+    supervisor = _supervisor(tmp_path, fake_kubectl, worker_port())
     try:
         managed = supervisor._managed(supervisor._shortcut_forward("api"))
         managed.relay = SimpleNamespace(busy=lambda: False, last_byte=100.0)  # type: ignore[assignment]

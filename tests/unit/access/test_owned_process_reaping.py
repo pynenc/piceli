@@ -18,6 +18,7 @@ import pytest
 from piceli.k8s import owned_processes as owned
 from piceli.k8s.owned_processes import OwnedProcessRegistry, process_identity
 from piceli.k8s.ui_state import private_ui_state_dir
+from tests.ports import LISTENER, worker_port
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32", reason="process groups and SIGKILL are POSIX"
@@ -25,30 +26,21 @@ pytestmark = pytest.mark.skipif(
 
 REPO = Path(__file__).resolve().parents[3]
 
+# A healthy forward keeps its connections open: one that closed them would
+# look like a dead upstream, and the supervisor would restart it (a new pid).
 _FAKE_KUBECTL = """import socket
 import sys
 
 args = sys.argv[1:]
 port = int(args[args.index("port-forward") + 2].split(":", 1)[0])
+held = []
 with socket.socket() as server:
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind(("127.0.0.1", port))
     server.listen(8)
     while True:
         connection, _ = server.accept()
-        connection.close()
-"""
-
-_LISTENER = """import socket
-import sys
-import time
-
-with socket.socket() as server:
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(("127.0.0.1", int(sys.argv[1])))
-    server.listen(8)
-    print("ready", flush=True)
-    time.sleep(120)
+        held.append(connection)
 """
 
 _OWNER = """import socket
@@ -91,12 +83,6 @@ time.sleep(120)
 """
 
 
-def _free_port() -> int:
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        return int(listener.getsockname()[1])
-
-
 def _accepting(port: int) -> bool:
     with socket.socket() as probe:
         probe.settimeout(1)
@@ -136,7 +122,7 @@ def test_a_sigkilled_servers_forward_is_reaped_at_the_next_start(
     state = private_ui_state_dir(tmp_path / "state")
     assert state.stat().st_mode & 0o777 == 0o700
     registry = state / "forwards"
-    port = _free_port()
+    port = worker_port()
     child = 0
     try:
         with _process(
@@ -179,10 +165,9 @@ def test_a_reused_pid_or_a_live_owners_child_is_never_signalled(
     tmp_path: Path,
 ) -> None:
     registry = OwnedProcessRegistry(tmp_path / "forwards")
-    port = _free_port()
-    with _process([sys.executable, "-c", _LISTENER, str(port)]) as foreign:
+    with _process([sys.executable, "-c", LISTENER]) as foreign:
         assert foreign.stdout is not None
-        assert foreign.stdout.readline().strip() == "ready"
+        port = int(foreign.stdout.readline())
         identity = process_identity(foreign.pid)
         assert identity is not None
         registry.directory.mkdir(mode=0o700)

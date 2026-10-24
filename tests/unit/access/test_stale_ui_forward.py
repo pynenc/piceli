@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import random
 import shutil
 import signal
 import socket
@@ -43,6 +42,7 @@ from piceli.k8s.port_owner import (
     recognise,
 )
 from piceli.k8s.ui_config import UiShortcut
+from tests.ports import LISTENER, worker_port
 from tests.unit.cli.test_access_ui import lab  # noqa: F401  (fixture)
 
 pytestmark = pytest.mark.skipif(
@@ -129,48 +129,6 @@ except KeyboardInterrupt:
 finally:
     supervisor.close()
 """
-
-# Another program's listener: it binds a port the kernel picks and prints it.
-_LISTENER = """import socket
-import time
-
-with socket.socket() as server:
-    server.bind(("127.0.0.1", 0))
-    server.listen(8)
-    print(server.getsockname()[1], flush=True)
-    time.sleep(120)
-"""
-
-
-_SLICE = 64  # ports per pytest-xdist worker
-
-
-def _ephemeral_ports() -> tuple[int, int]:
-    try:
-        low, high = Path("/proc/sys/net/ipv4/ip_local_port_range").read_text().split()
-        return int(low), int(high)
-    except (OSError, ValueError):
-        return 49152, 65535  # IANA's range: macOS and the BSDs
-
-
-def _forward_port() -> int:
-    """A free port for the fake forward: below the ephemeral range, in this worker's slice.
-
-    A free ephemeral port can be handed out again as the source port of any
-    connection before the fake kubectl starts and binds it, and a parallel
-    run of this test can pick the same free port in that time (its kubectl
-    then answers for this one). Below the range only an explicit bind takes
-    a port, and each pytest-xdist worker draws from a slice of its own.
-    """
-    low, _high = _ephemeral_ports()
-    worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0").removeprefix("gw")
-    slices = (low - low // 2) // _SLICE
-    start = low // 2 + (int(worker) if worker.isdigit() else 0) % slices * _SLICE
-    for port in random.sample(range(start, start + _SLICE), _SLICE):
-        with socket.socket() as probe, suppress(OSError):
-            probe.bind(("127.0.0.1", port))
-            return port
-    raise AssertionError("no free port in this worker's slice")
 
 
 def _accepting(port: int) -> bool:
@@ -366,7 +324,7 @@ def test_a_stale_access_ui_forward_is_recognised_and_stopped(tmp_path: Path) -> 
     kubeconfig = tmp_path / "lab.kubeconfig"
     kubeconfig.write_text("apiVersion: v1\nkind: Config\n")
     registry = OwnedProcessRegistry(tmp_path / "state" / "forwards")
-    port = _forward_port()
+    port = worker_port()
     child = 0
     env = {
         "FAKE_UI_PORT": str(port),
@@ -379,7 +337,7 @@ def test_a_stale_access_ui_forward_is_recognised_and_stopped(tmp_path: Path) -> 
             _process(
                 [sys.executable, str(piceli), "access", "ui", "--profile", "lab"], env
             ) as owner,
-            _process([sys.executable, "-c", _LISTENER]) as foreign,
+            _process([sys.executable, "-c", LISTENER]) as foreign,
         ):
             assert owner.stdout is not None and foreign.stdout is not None
             child = int(owner.stdout.readline())
