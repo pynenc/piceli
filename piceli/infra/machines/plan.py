@@ -314,6 +314,9 @@ class InfraPlan:
     images: tuple[dict[str, Any], ...] = ()
     #: Uploads an earlier run left at the cloud, deleted by the apply (not hashed).
     stale_images: tuple[dict[str, Any], ...] = ()
+    #: The ``tofu show -json`` of a kept ``file`` (0.26.2; apply reads it
+    #: once, never shown).
+    document: dict[str, Any] | None = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
         body = {
@@ -635,7 +638,7 @@ def plan(
         if keep is not None:
             target = keep / "plan.tfplan"
             file.replace(target)
-            return replace(result, file=target)
+            return replace(result, file=target, document=document)
         return result
 
 
@@ -681,13 +684,10 @@ def apply(
         file = fresh.file
         uploaded: list[dict[str, Any]] = []
         if fresh.images:
-            shown = _check(
-                ws.run("show", "-json", str(fresh.file)),
-                "infra-tofu-failed", "show", ws, known=False,
-            )  # fmt: skip
+            assert fresh.document is not None
             try:
                 image_upload.upload_images(
-                    ws, json.loads(shown.stdout), fresh.images, say=say,
+                    ws, fresh.document, fresh.images, say=say,
                     progress=progress, done=uploaded,
                 )  # fmt: skip
             except InfraError as error:
@@ -714,25 +714,22 @@ def apply(
             file = second.file
         say(f"applying {len(fresh.changes)} change(s) with tofu {ws.tofu.version_text}")
         result = ws.run("apply", "-input=false", "-json", str(file), timeout=3600)
-        from piceli.infra.machines.keys import store_keys
-
+        # 0.26.2: one read of the state for the S3 keys, the inventory and
+        # the images in use (each read derives the state key: about 1 s).
+        state, fresh_values, failed = _read_state(ws)
         if result.code == 0:
             (ws.directory / TOFU_LOG.format("apply")).unlink(missing_ok=True)
-            store_keys(ws)
-            inventory = refresh_inventory(ws, prices=fresh.estimate)
+            if failed is not None:
+                raise failed
+            inventory = refresh_inventory(ws, prices=fresh.estimate, shown=state)
             if uploaded or image_upload.retired(ws):
-                shown = _state_document(ws)
                 for image_id in image_upload.delete_retired(
-                    ws, image_upload.in_use(shown)
+                    ws, image_upload.in_use(_document_of(state))
                 ):
                     say(f"deleted the replaced image {image_id}")
             if uploaded:
                 inventory = {**inventory, "uploaded_images": uploaded}
             return fresh, inventory
-        try:
-            fresh_values = store_keys(ws)
-        except InfraError:
-            fresh_values = []
         error = tofu_failure(
             result, "infra-apply-failed", "apply", ws, secrets=fresh_values
         )
@@ -745,7 +742,7 @@ def apply(
                 partial = adopted
         error.fields.update(partial)
         try:
-            refresh_inventory(ws, prices=fresh.estimate)
+            refresh_inventory(ws, prices=fresh.estimate, shown=state)
         except InfraError:
             if not partial:
                 raise
@@ -771,8 +768,33 @@ def _adopted(
     }
 
 
-def _state_document(ws: Workspace) -> dict[str, Any]:
-    shown = ws.run("show", "-json")
+def _read_state(ws: Workspace) -> tuple[TofuResult, list[str], InfraError | None]:
+    """One ``tofu show -json`` of the state after an apply (0.26.2): the S3
+    key pairs are stored from it unredacted, in memory only
+    (:func:`~piceli.infra.machines.keys.store_keys`); the result, redacted
+    as every other read (the new pairs too), serves the inventory and the
+    images in use. Also the new values (for redaction) and the error the
+    keys raised."""
+    from piceli.infra.machines.keys import reads_keys, store_keys
+    from piceli.infra.machines.tofu import redact
+
+    if not reads_keys(ws):
+        return ws.run("show", "-json"), [], None
+    raw = ws.run("show", "-json", redacted=False)
+    fresh: list[str] = []
+    failed: InfraError | None = None
+    try:
+        fresh = store_keys(ws, shown=raw)
+    except InfraError as error:
+        failed = error
+    shown = TofuResult(
+        raw.code, redact(raw.stdout, ws.tofu.redaction(ws.env)), raw.stderr, raw.args
+    )
+    del raw
+    return shown, fresh, failed
+
+
+def _document_of(shown: TofuResult) -> dict[str, Any]:
     try:
         document = json.loads(shown.stdout) if shown.code == 0 else {}
     except ValueError:
@@ -849,12 +871,17 @@ def _finished(actions: list[str]) -> str:
 
 
 def refresh_inventory(
-    ws: Workspace, *, prices: dict[str, Any] | None = None
+    ws: Workspace,
+    *,
+    prices: dict[str, Any] | None = None,
+    shown: TofuResult | None = None,
 ) -> dict[str, Any]:
-    """Rewrite ``inventory.json`` from the state (``tofu show -json``)."""
+    """Rewrite ``inventory.json`` from the state (``tofu show -json``;
+    ``shown``: 0.26.2, the caller's redacted read of it)."""
     shown = _check(
-        ws.run("show", "-json"), "infra-tofu-failed", "show", ws, known=False
-    )
+        shown if shown is not None else ws.run("show", "-json"),
+        "infra-tofu-failed", "show", ws, known=False,
+    )  # fmt: skip
     try:
         document = json.loads(shown.stdout) if shown.stdout.strip() else {}
     except ValueError:

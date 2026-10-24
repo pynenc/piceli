@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from piceli.infra.machines.plan import Change, Workspace
+    from piceli.infra.machines.tofu import TofuResult
 
 __all__ = [
     "KEYS_RECORD",
@@ -157,9 +158,18 @@ def plan_entries(
 _S3_PARTS = ("access_key_id", "secret_access_key")
 
 
-def store_keys(ws: Workspace) -> list[str]:
+def reads_keys(ws: Workspace) -> bool:
+    """Whether :func:`store_keys` reads the state: S3 keys are declared or
+    recorded."""
+    return bool(ws.rendered.s3_keys or _record(ws.directory))
+
+
+def store_keys(ws: Workspace, shown: TofuResult | None = None) -> list[str]:
     """Store each key pair the state holds; delete those it no longer
-    holds. Returns the new values (for redaction); prints nothing."""
+    holds. Returns the new values (for redaction); prints nothing.
+
+    ``shown``: 0.26.2, the unredacted ``tofu show -json`` of the state the
+    caller read once for this and its inventory (else read here)."""
     from piceli.infra.machines.credentials import (
         credential_present,
         delete_credential,
@@ -171,7 +181,8 @@ def store_keys(ws: Workspace) -> list[str]:
     record = _record(ws.directory)
     if not ws.rendered.s3_keys and not record:
         return []
-    shown = ws.run("show", "-json", redacted=False)
+    if shown is None:
+        shown = ws.run("show", "-json", redacted=False)
     try:
         document = json.loads(shown.stdout) if shown.code == 0 else None
     except ValueError:

@@ -24,6 +24,14 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   false`, so `revCount` is checked too); a shallow fetch of the same rev
   gives the same `narHash` on Nix 2.18 to 2.35.
 
+- **`infra apply` reads the state once.** After an apply (and a destroy)
+  the S3 key pairs, the inventory and the images still in use come from
+  one `tofu show -json` instead of three (two with no image to retire):
+  the pairs are read from it in memory, never logged, and the rest from it
+  redacted as before. The images an apply uploads come from the plan
+  already shown, not from a second `show` of the plan file. Each read
+  derives the state key (about 1 s of CPU); the S3 keys test runs 43
+  OpenTofu commands instead of 47.
 - **The forward and access tests no longer race for ports under load.**
   They take their loopback ports from a slice of their own per pytest-xdist
   worker, below the ephemeral range, instead of a free port another process
