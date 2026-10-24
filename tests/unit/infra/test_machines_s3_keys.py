@@ -163,6 +163,11 @@ def test_needed_secrets_lists_who_creates_each() -> None:
 
 
 @needs_tofu
+# A hang guard sized for its work, not a speed check: 47 real tofu runs in
+# sequence (7 plans, 4 applies, their shows), each deriving the state key
+# with pbkdf2, about 45 s of CPU on an idle machine. Beside a parallel suite
+# it took over the default 120 s.
+@pytest.mark.timeout(600)
 def test_apply_stores_the_pairs_reapply_is_a_noop_removal_deletes(
     homes: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
