@@ -14,6 +14,16 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   failure too), and an `--image` build keeps `ROOTS_DIR/images/NAME` until
   the next build of that name, for `infra apply`'s upload. Without it, a
   docker host keeps no root, as before.
+- **`dev nix build` fetches the private inputs the release path fetches.**
+  A build without `--input` or `--publish` (an `--image` of the same
+  flake) fetched none, so its run's Nix tried the private repository
+  itself and failed; now the `--dev` module (as `--composition` or the
+  `--publish` module) gives the inputs of its NixReleases: their gates,
+  their `inputs=` and their Sources. Every path fetches a `git` input from
+  one function of the locked node, with its whole history (`shallow =
+  false`, so `revCount` is checked too); a shallow fetch of the same rev
+  gives the same `narHash` on Nix 2.18 to 2.35.
+
 - **The forward and access tests no longer race for ports under load.**
   They take their loopback ports from a slice of their own per pytest-xdist
   worker, below the ephemeral range, instead of a free port another process

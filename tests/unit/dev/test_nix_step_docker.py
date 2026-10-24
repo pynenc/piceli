@@ -32,9 +32,11 @@ Every container and the volume are removed at the end, on failure too.
 0.26.2: ``BuildHost.docker(roots_dir=)`` (a volume here, mounted at the same
 path in the steps and the daemon): a fetched input cannot be deleted from
 the store while the build holds its root, and can after; and ``dev nix
-build --image`` of a flake whose private input ``nix flake lock`` locked
-(``ref``, ``revCount``, a repository with history) builds and keeps its
-image rooted for ``infra apply``.
+build --image --dev machines.py:builds`` of a flake whose private input
+``nix flake lock`` locked (``ref``, ``revCount``, a repository with
+history), as the production report ran it (no ``--input``, the input
+declared by the composition's NixRelease), fetches the input first, builds
+and keeps its image rooted for ``infra apply``.
 """
 
 from __future__ import annotations
@@ -122,6 +124,18 @@ IMAGE_FLAKE = """{
 }
 """
 ROOTS = "/piceli-test-gcroots"
+#: The composition of the image build: the release declares the input.
+MACHINES = """
+from piceli.dev.nix import generate_key, public_key
+from piceli.infra import NixCache, NixHost, NixRelease, Source, Tag
+
+hosts = Source("https://example.org/org/hosts.git", name="hosts")
+cache = NixCache(public_key(generate_key("cache-1")), url="file:///nonexistent")
+web = NixHost("web-1", server="ssh://root@web-1.example.org", flake=".#web-1",
+              follow=Tag("web-v*"), cache=cache)
+web_release = NixRelease(web, source=hosts, builder="nix-host",
+                         inputs={"app": "app-read"})
+"""
 
 
 class Engine:
@@ -324,7 +338,9 @@ def test_dev_nix_build_image_with_a_private_input_on_a_docker_host(
     lock = live.lock(flake)
     assert '"revCount"' in lock  # as the report's lock
     source = repo(tmp_path / "hosts", {"flake.nix": flake})
-    commit(source, {"flake.lock": lock})
+    # The report's composition: a NixRelease of the flake declaring the
+    # input, and no --input or --publish on the image build (0.26.2).
+    commit(source, {"flake.lock": lock, "machines.py": MACHINES})
     monkeypatch.chdir(source)
     dev = DevBuilds(node=None, image=image, hosts=[host],
                     profiles=[DevProfile.for_nix(timeout="2h")])  # fmt: skip
@@ -333,8 +349,8 @@ def test_dev_nix_build_image_with_a_private_input_on_a_docker_host(
     system = {"amd64": "x86_64-linux", "arm64": "aarch64-linux"}[arch]
     done = CliRunner().invoke(app, [
         "dev", "nix", "build", f"packages.{system}.image", "--image",
-        "--name", "web-1-image", "--cluster", "infra.py:c", "--host",
-        "nix-host", "--input", "app=app-read", "--json",
+        "--name", "web-1-image", "--dev", "machines.py:builds", "--host",
+        "nix-host", "--json",
     ])  # fmt: skip
     assert done.exit_code == 0, done.stdout + done.stderr
     body = json.loads(done.stdout)

@@ -643,7 +643,10 @@ before the build, with a `git-token` of this machine's Piceli secrets
 (`piceli secrets git-token NAME --host github.com --prompt`; default name
 `git`); with `--publish`, the composition's `NixRelease` of that output
 adds its own (its gate's input, its `inputs=`, the inputs that are its
-`Source`s), and the plan lists them all. The build never sees the token; an
+`Source`s), and the plan lists them all. 0.26.2: the composition is
+`--composition`, else the `--publish` module, else the `--dev` module; a
+build without `--publish` of another output of the flake (an `--image`)
+fetches what every `NixRelease` there covers, as the release path does. The build never sees the token; an
 input that cannot be fetched refuses before the build
 (`infra-nix-input-unreachable`, naming the input, its URL and the
 credential). See {doc}`nix_hosts` (private flake inputs).

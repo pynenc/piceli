@@ -1047,3 +1047,60 @@ def test_an_unreachable_input_refuses_before_the_build(
                       "--input", "nope", "--json")  # fmt: skip
     assert unknown.exit_code == 2
     assert json.loads(unknown.stdout)["reason"] == "dev-nix-invalid"
+
+
+# ------------------------------------------------------------------ 0.26.2
+
+MACHINES = """
+from piceli.infra import NixCache, NixHost, NixRelease, Source, Tag
+
+hosts = Source("https://example.org/org/hosts.git", name="hosts")
+cache = NixCache("PUBLIC", url="file:///nonexistent/cache")
+web = NixHost("web-1", server="ssh://root@web-1.example.org", flake=".#web-1",
+              follow=Tag("web-v*"), cache=cache)
+web_release = NixRelease(web, source=hosts, builder="laptop",
+                         inputs={"app": "app-read"})
+"""
+
+
+def test_an_image_build_fetches_the_inputs_the_composition_releases_cover(
+    cli_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The production report: ``dev nix build .#web-1-image --image --dev
+    machines.py:builds`` fetched no private input (no ``--input``, no
+    ``--publish``), where the release of the same flake fetched it first."""
+    import piceli.k8s.cli.dev_nix as dev_nix
+    from piceli.dev import nix_inputs
+    from tests.unit.dev.test_pack import commit
+
+    commit(cli_env["app"], {"flake.lock": PRIVATE_LOCK,
+                            "machines.py": MACHINES.replace("PUBLIC", PUBLIC)})  # fmt: skip
+    loaded = dev_nix.load_dev
+    monkeypatch.setattr(dev_nix, "load_dev", lambda _ref: loaded("infra.py:c"))
+    fetched: list[dict[str, Any]] = []
+
+    def fake_fetcher(argv: Any, request: Any, tried: Any, **_: Any) -> Any:
+        fetched.append(request)
+        return {"state": "fetched", "inputs": [{"name": "app"}]}
+
+    monkeypatch.setattr(nix_inputs, "run_fetcher", fake_fetcher)
+    done = _invoke("dev", "nix", "build", "packages.x86_64-linux.web-1-image",
+                   "--image", "--dev", "machines.py:builds", "--json")  # fmt: skip
+    assert done.exit_code == 0, done.stdout + done.stderr
+    ((request),) = fetched
+    (item,) = request["inputs"]
+    assert item["name"] == "app" and item["locked"]["rev"] == "c" * 40
+    assert item["locked"]["narHash"] == "sha256-AAAA"
+
+
+def test_every_path_fetches_a_git_input_with_its_whole_history() -> None:
+    from piceli.dev import nix_fetch
+
+    locked = {"type": "git", "url": "ssh://git@github.com/org/app",
+              "rev": "c" * 40, "revCount": 7, "narHash": "sha256-AAAA",
+              "shallow": True}  # fmt: skip
+    attrs = nix_fetch.fetch_attrs(locked)
+    assert attrs == {**locked, "shallow": False}
+    assert '\\"shallow\\":false' in nix_fetch.fetch_expr(locked).replace(" ", "")
+    forge = {"type": "github", "owner": "org", "repo": "app", "rev": "c" * 40}
+    assert nix_fetch.fetch_attrs(forge) == forge

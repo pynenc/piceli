@@ -91,9 +91,21 @@ def nix_string(text: str) -> str:
     return f'"{escaped}"'
 
 
+def fetch_attrs(locked: Mapping[str, Any]) -> dict[str, Any]:
+    """The ``fetchTree`` attributes of a locked node, for every path that
+    fetches one (0.26.2): as ``flake.lock`` locks it, except that a ``git``
+    input is always fetched with its whole history (``shallow = false``,
+    whatever the lock or Nix's default), as ``nix flake lock`` fetched it, so
+    its ``revCount`` is checked too."""
+    attrs = dict(locked)
+    if attrs.get("type") == "git":
+        attrs["shallow"] = False
+    return attrs
+
+
 def fetch_expr(locked: Mapping[str, Any]) -> str:
     """The expression whose value is the store path of ``locked``'s tree."""
-    body = json.dumps(dict(locked), sort_keys=True)
+    body = json.dumps(fetch_attrs(locked), sort_keys=True)
     return f"(builtins.fetchTree (builtins.fromJSON {nix_string(body)})).outPath"
 
 
