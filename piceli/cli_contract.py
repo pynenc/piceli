@@ -432,14 +432,26 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         ),
         # ------------------------------------------------------- bundle
         "bundle": _C(
-            "Package the app for a cluster Piceli never accesses (kustomize, prepare.sh, images).",
+            "Package the app for a cluster Piceli never accesses (kustomize, prepare.sh, images; or a Helm chart).",
             reads=(
                 "module/app file",
                 "build receipt and its image archives (--receipt)",
+                "credentials file (--helm --push)",
             ),
-            writes=("--out bundle directory",),
+            writes=(
+                "--out bundle directory",
+                "OCI registry (--helm --push --approve DIGEST: chart blobs, manifest, version tag)",
+            ),
+            approval_required=True,
             contract="conforms",
-            notes="Never contacts a cluster or registry and writes no secret "
+            exit_codes=(0, 1, 2, 3),
+            notes="Approval applies to --helm --push only: without --approve it "
+            "prints the chart's deterministic digest and exits 3; --approve DIGEST "
+            "pushes path/<name>:<version> as helm push does. --helm writes a Helm "
+            "3 chart (Chart.yaml, values.yaml, values.schema.json, templates/) "
+            "instead of the kustomize bundle: settings, secret inputs and toggles "
+            "are values; generated Secrets are made at install and kept across "
+            "upgrades with lookup. Otherwise never contacts a cluster or registry and writes no secret "
             "value. Renders like `piceli render --env`; refuses objects that "
             "break a foreign-cluster safety rule (bundle-unsafe-<rule>, with "
             "every violation) unless the App waives it per object "

@@ -874,20 +874,7 @@ class Chart:
 
     def oci(self) -> FluxArtifact:
         """The OCI layout of ``helm push``: Helm config and one chart layer."""
-        layer = Blob(HELM_CONTENT, self.archive())
-        config = Blob(HELM_CONFIG, _canonical(self.metadata()))
-        document = {
-            "schemaVersion": 2,
-            "mediaType": OCI_MANIFEST,
-            "config": config.descriptor(),
-            "layers": [layer.descriptor()],
-            "annotations": {
-                "org.opencontainers.image.description": self.metadata()["description"],
-                "org.opencontainers.image.title": self.name,
-                "org.opencontainers.image.version": self.version,
-            },
-        }
-        return FluxArtifact(config, layer, _canonical(document), (self.archive_name,))
+        return helm_oci(self.metadata(), self.archive(), self.archive_name)
 
     @property
     def tag(self) -> str:
@@ -987,6 +974,26 @@ class Chart:
             image = _lookup(values, ("images", *site.path))
             return join_image(image["repository"], image["tag"], image["digest"])
         return copy.deepcopy(_lookup(values, site.path))
+
+
+def helm_oci(
+    metadata: Mapping[str, Any], archive: bytes, archive_name: str
+) -> FluxArtifact:
+    """The OCI layout ``helm push`` writes for a chart archive and its metadata."""
+    layer = Blob(HELM_CONTENT, archive)
+    config = Blob(HELM_CONFIG, _canonical(dict(metadata)))
+    document = {
+        "schemaVersion": 2,
+        "mediaType": OCI_MANIFEST,
+        "config": config.descriptor(),
+        "layers": [layer.descriptor()],
+        "annotations": {
+            "org.opencontainers.image.description": metadata["description"],
+            "org.opencontainers.image.title": metadata["name"],
+            "org.opencontainers.image.version": metadata["version"],
+        },
+    }
+    return FluxArtifact(config, layer, _canonical(document), (archive_name,))
 
 
 def _index(path: Sequence[str | int]) -> str:

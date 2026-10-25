@@ -4,6 +4,39 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.30.0
+
+**Features**
+
+- **`piceli bundle --helm`: the client bundle as a Helm chart.** The same
+  render, after the same safety gate, becomes a Helm 3 chart (`Chart.yaml`,
+  `values.yaml`, `values.schema.json`, `README.md`, `templates/`), so a client
+  installs it with one `helm install` and removes it with one `helm
+  uninstall`, with no archive and no `prepare.sh`. ConfigMap keys and secret
+  inputs become camelCase values (`poet-cluster-id` → `poetClusterId`; an
+  imported token is `--set-file NAME=FILE`); a `HelmChart` declaration names
+  required settings (Helm's `required`), descriptions and boolean toggles
+  (`HelmToggle`: JSON Patch or merge patches applied when the value is true; the
+  patched render passes the safety gate too). Generated Secrets (`Random`,
+  `Static`, `Template`) are made at install like `prepare.sh` makes them and
+  kept across `helm upgrade` (`lookup`). Images stay pinned by digest;
+  `image.registry` points every image at a mirror, `image.pullSecrets` names
+  pull Secrets, `storageClass` sets every claim's class and
+  `deleteDataOnUninstall` makes uninstall delete the StatefulSets' claims
+  (by default they stay). Cluster-scoped RBAC follows the release namespace
+  and is removed by `helm uninstall`. `values.schema.json` refuses unknown
+  values. See {doc}`client_delivery`.
+- **`piceli bundle --helm --push oci://HOST/PATH`** publishes the chart as
+  `helm push` does, to `PATH/<name>:<version>`: without `--approve` it
+  prints the chart's deterministic digest and exits 3; `--approve DIGEST`
+  pushes it (`--credentials FILE`, `--ca-file`). `--app-version` sets
+  `appVersion`.
+
+**Not covered**
+
+- TLS generators (`TlsCa`, self-signed) and build images from `--receipt`
+  are refused with `--helm`; use the kustomize bundle for them.
+
 ## Version 0.29.0
 
 **Features**

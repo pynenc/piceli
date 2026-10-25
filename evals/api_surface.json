@@ -4673,6 +4673,45 @@
    },
    "pydantic": true
   },
+  "HelmChart": {
+   "attr_types": {
+    "toggles": "HelmToggle"
+   },
+   "attrs": [
+    "descriptions",
+    "required",
+    "setting_keys",
+    "settings",
+    "target",
+    "toggles"
+   ],
+   "init": [
+    "descriptions",
+    "required",
+    "settings",
+    "target",
+    "toggles"
+   ],
+   "methods": {
+    "setting_keys": []
+   }
+  },
+  "HelmToggle": {
+   "attrs": [
+    "default",
+    "description",
+    "patches",
+    "resolved"
+   ],
+   "init": [
+    "default",
+    "description",
+    "patches"
+   ],
+   "methods": {
+    "resolved": []
+   }
+  },
   "Hetzner": {
    "attrs": [
     "address",
@@ -12283,11 +12322,17 @@
     ],
     "flags": [
      "--all-platforms",
+     "--app-version",
+     "--approve",
+     "--ca-file",
+     "--credentials",
      "--env",
+     "--helm",
      "--name",
      "--out",
      "--output-dir",
      "--platform",
+     "--push",
      "--receipt",
      "--storage-class",
      "--version"
@@ -15492,6 +15537,12 @@
    "HealthProbe": {
     "class": "HealthProbe"
    },
+   "HelmChart": {
+    "class": "HelmChart"
+   },
+   "HelmToggle": {
+    "class": "HelmToggle"
+   },
    "HttpRoute": {
     "class": "HttpRoute"
    },
@@ -17174,6 +17225,7 @@
   "piceli.bundle",
   "piceli.bundle.build",
   "piceli.bundle.guides",
+  "piceli.bundle.helm",
   "piceli.bundle.images",
   "piceli.bundle.prepare",
   "piceli.bundle.rules",
@@ -17560,5 +17612,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.29.0"
+ "version": "0.30.0"
 }

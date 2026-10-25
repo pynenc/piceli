@@ -23,6 +23,7 @@ SECONDS = {
     "test_restore_verify_kind.py": 127,
     "test_failed_build_output_kind.py": 86,
     "test_prerollout_kind.py": 83,
+    "test_bundle_helm_kind.py": 60,
     "test_claim_growth_kind.py": 50,
     "test_restore_points_kind.py": 44,
     "test_shared_state_kind.py": 41,
