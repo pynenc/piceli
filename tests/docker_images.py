@@ -23,13 +23,21 @@ def enabled() -> bool:
     wanted = os.environ.get("PICELI_DOCKER_TESTS") == "1" or bool(
         os.environ.get("PICELI_KIND_KUBECONFIG")
     )
-    return wanted and shutil.which("docker") is not None
+    return wanted and _DOCKER is not None
+
+
+_DOCKER = shutil.which("docker")  # found once: a test may change PATH
 
 
 def _docker(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["docker", *args], capture_output=True, text=True, timeout=120, check=False
-    )
+    if _DOCKER is None:
+        return subprocess.CompletedProcess(args, 127, "", "docker not found")
+    try:
+        return subprocess.run(
+            [_DOCKER, *args], capture_output=True, text=True, timeout=120, check=False
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return subprocess.CompletedProcess(args, 127, "", type(error).__name__)
 
 
 def images() -> set[str]:
