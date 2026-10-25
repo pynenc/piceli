@@ -66,16 +66,17 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.30
+## What's new in 0.31
 
-- **Client bundles as Helm charts**: `piceli bundle app.py:chart --helm`
-  writes the same safety-checked bundle as a Helm 3 chart, so a client
-  installs it with one `helm install` and removes it with one `helm
-  uninstall`; settings, secret inputs and toggles are values, generated
-  Secrets are made at install and kept across upgrades.
-- **Publish it**: `--helm --push oci://HOST/PATH` prints the chart's digest
-  and pushes only with `--approve`; see the
-  [guide](https://docs.pynenc.org/projects/piceli/en/stable/client_delivery.html).
+- **Client charts the client shapes**: optional objects (`HelmOptional`),
+  values written into objects (`HelmValue`, a policy's namespace list),
+  `existingSecret` for Argo CD and `storage.size` with a derived disk limit;
+  see the [guide](https://docs.pynenc.org/projects/piceli/en/stable/client_delivery.html).
+- **Image labels** per image in host and in-cluster builds
+  (`org.opencontainers.image.licenses`).
+- **`piceli access`** prints web pages as links and marks TURN, databases
+  and raw ports "not a web page"; **`promote --wait --machines`** names the
+  machines module.
 
 ## Web UI
 

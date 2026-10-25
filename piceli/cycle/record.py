@@ -134,7 +134,10 @@ def _builds_phases(
     spans = [
         (epoch(item.get("started_at")), epoch(item.get("finished_at")))
         for item in builds.values()
-        if isinstance(item, Mapping) and item.get("state") != "cached"
+        if isinstance(item, Mapping)
+        and item.get("state") != "cached"
+        # 0.31.0: a build host's delivery: its own phases (host_build).
+        and item.get("via") != "host"
     ]
     spans = [(a, b) for a, b in spans if a is not None and b is not None]
     if not spans:

@@ -108,9 +108,11 @@ def test_the_chart_has_metadata_values_and_templates(tmp_path: Path) -> None:
         "apiToken": "",
         "clusterId": "",
         "deleteDataOnUninstall": False,
+        "existingSecret": "",
         "image": {"pullSecrets": [], "registry": ""},
         "relayOnly": False,
         "siteName": "lab",
+        "storage": {"size": ""},
         "storageClass": "",
         "team": "",
     }
@@ -474,3 +476,103 @@ def test_push_needs_the_digest_and_helm_can_pull_it(tmp_path: Path) -> None:
             assert (
                 "sha256:" + hashlib.sha256(data).hexdigest() == body["archive_digest"]
             )
+
+
+# ------------------------------------- 0.31.0: optional objects, values, sizes
+
+INTAKE = "tests/unit/bundle/helm_intake_app.py:chart"
+BASE = ("--set", "team=t1", "--set", "clusterId=42")
+
+
+def _intake(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
+    out = tmp_path / "intake"
+    result = _run(INTAKE, "--helm", "--out", str(out), "--version", "1.0.0")
+    assert result.exit_code == 0, result.output
+    return out, json.loads(result.stdout)
+
+
+def test_the_new_values_are_declared(tmp_path: Path) -> None:
+    out, body = _intake(tmp_path)
+    assert body["optional"] == ["intake.expose"]
+    assert body["values"] == ["intake.allowNamespaces"]
+    assert body["existing_secret_keys"] == ["api-token", "cluster-key", "intake-token"]
+    values = yaml.safe_load((out / "values.yaml").read_text())
+    assert values["intake"] == {"allowNamespaces": ["workers"], "expose": False}
+    assert values["storage"] == {"size": ""} and values["existingSecret"] == ""
+    schema = json.loads((out / "values.schema.json").read_text())["properties"]
+    assert schema["intake"]["properties"]["allowNamespaces"]["type"] == "array"
+    readme = (out / "README.md").read_text()
+    assert "`existingSecret`" in readme and "Argo CD" in readme
+    assert "`intake.expose`" in readme and "`storage.size`" in readme
+
+
+def test_optional_objects_values_size_and_disk_env(helm: str, tmp_path: Path) -> None:
+    out, _body = _intake(tmp_path)
+    off = _template(helm, out, *BASE, "--set", "apiToken=x")
+    assert off.returncode == 0, off.stderr
+    assert ("Service", "agent-intake") not in _objects(off.stdout)
+    on = _template(
+        helm, out, *BASE, "--set", "apiToken=x", "--set", "intake.expose=true",
+        "--set", "intake.allowNamespaces={w1,w2}", "--set", "storage.size=20Gi",
+    )  # fmt: skip
+    assert on.returncode == 0, on.stderr
+    objects = _objects(on.stdout)
+    assert ("Service", "agent-intake") in objects
+    peer = objects[("NetworkPolicy", "agent-intake")]["spec"]["ingress"][0]["from"][0]
+    assert peer["namespaceSelector"]["matchExpressions"][0]["values"] == ["w1", "w2"]
+    statefulset = objects[("StatefulSet", "agent")]
+    claim = statefulset["spec"]["volumeClaimTemplates"][0]
+    assert claim["spec"]["resources"]["requests"]["storage"] == "20Gi"
+    env = {e["name"]: e.get("value") for e in _pod(objects)["containers"][0]["env"]}
+    assert env["DISK_LIMIT"] == str(20 * 2**30 * 90 // 100)
+    plain = _objects(_template(helm, out, *BASE, "--set", "apiToken=x").stdout)
+    env = {e["name"]: e.get("value") for e in _pod(plain)["containers"][0]["env"]}
+    assert env["DISK_LIMIT"] == "900M"
+    bad = _template(
+        helm, out, *BASE, "--set", "apiToken=x", "--set", "storage.size=1.5Gi"
+    )
+    assert bad.returncode != 0
+
+
+def test_an_existing_secret_replaces_every_secret_and_renders_stably(
+    helm: str, tmp_path: Path
+) -> None:
+    out, _body = _intake(tmp_path)
+    first = _template(helm, out, *BASE, "--set", "existingSecret=client-made")
+    second = _template(helm, out, *BASE, "--set", "existingSecret=client-made")
+    assert first.returncode == 0, first.stderr
+    assert first.stdout == second.stdout  # nothing generated: Argo CD is stable
+    objects = _objects(first.stdout)
+    assert not [key for key in objects if key[0] == "Secret"]
+    volumes = [v for v in _pod(objects)["volumes"] if "secret" in v]
+    assert {v["secret"]["secretName"] for v in volumes} == {"client-made"}
+    generated = _template(helm, out, *BASE, "--set", "apiToken=x")
+    assert ("Secret", "agent-private") in _objects(generated.stdout)
+
+
+def test_new_declarations_are_checked() -> None:
+    from piceli.bundle.helm import HelmOptional, HelmValue, _check_path
+
+    with pytest.raises(BundleError, match="up to three camelCase"):
+        _check_path("storage.size", "value")
+    with pytest.raises(ValueError, match="at least one object"):
+        HelmOptional("x", objects=[]).keys()
+    with pytest.raises(ValueError, match="non-empty path"):
+        HelmValue("x", targets=[("Service/a", "")]).resolved()
+
+
+def test_storage_env_and_value_targets_must_exist(tmp_path: Path) -> None:
+    module = tmp_path / "broken.py"
+    for name, change in (
+        ("env", "storage_env={'NOPE': 90}"),
+        ("value", "values={'x': HelmValue('x', targets=[('Service/agent-intake', '/spec/nope')])}"),
+    ):  # fmt: skip
+        module.write_text(
+            "import dataclasses\n"
+            "from piceli import HelmValue\n"
+            "from tests.unit.bundle.helm_intake_app import chart as base\n"
+            f"chart = dataclasses.replace(base, {change})\n"
+        )
+        result = _run(f"{module}:chart", "--helm", "--out", str(tmp_path / name))
+        assert result.exit_code == 2, result.output
+        assert json.loads(result.stdout)["reason"] == "bundle-invalid"

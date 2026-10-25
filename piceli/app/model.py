@@ -1296,6 +1296,23 @@ class Deployment(Workload):
             [(item.port, item.name) for item in ports],
         )
 
+    def access_scheme(self) -> str:
+        """What the ``access`` forward's port speaks (0.31.0), as
+        :meth:`Service.access_scheme`."""
+        from piceli.k8s.ui_config import port_scheme
+
+        if self.access is not None and self.access.scheme is not None:
+            return self.access.scheme
+        number = self.access_port()
+        found = [
+            item if isinstance(item, ContainerPort) else ContainerPort(port=item)
+            for item in self.containers[0].ports
+        ]
+        item = next(item for item in found if item.port == number)
+        return port_scheme(
+            number, name=item.name, protocol=getattr(item, "protocol", None)
+        )
+
     def manifest(
         self,
         namespace: str,
@@ -1348,12 +1365,22 @@ def _access_port(
 
 
 class ServicePort(_Model):
-    """One Service port. ``target_port`` defaults to ``port``."""
+    """One Service port. ``target_port`` defaults to ``port``.
+
+    ``app_protocol`` (0.31.0) renders ``appProtocol`` (``http``, ``https``,
+    ``kubernetes.io/h2c``, ``turn``...): what the port speaks, which
+    ``piceli access`` uses to print a web link or mark a service "not a web
+    page" (see :func:`piceli.k8s.ui_config.port_scheme`).
+    """
 
     port: PortNumber
     target_port: PortNumber | PortName | None = None
     name: PortName | None = None
     protocol: Protocol = "TCP"
+    app_protocol: str | None = Field(
+        default=None, pattern=r"^[A-Za-z0-9]([-A-Za-z0-9_.:/]*[A-Za-z0-9])?$",
+        max_length=63,
+    )  # fmt: skip
 
     def manifest(self) -> dict[str, Any]:
         return _compact(
@@ -1361,6 +1388,7 @@ class ServicePort(_Model):
             port=self.port,
             targetPort=self.target_port if self.target_port is not None else self.port,
             protocol=self.protocol,
+            appProtocol=self.app_protocol,
         )
 
 
@@ -1409,6 +1437,20 @@ class Service(_Model):
             self.access.port,
             [(item.port, item.name) for item in self.ports],
         )
+
+    def access_scheme(self) -> str:
+        """What the ``access`` forward's port speaks (0.31.0): the forward's
+        ``scheme``, else :func:`~piceli.k8s.ui_config.port_scheme` of the port."""
+        from piceli.k8s.ui_config import port_scheme
+
+        if self.access is not None and self.access.scheme is not None:
+            return self.access.scheme
+        number = self.access_port()
+        item = next(item for item in self.ports if item.port == number)
+        return port_scheme(
+            number, name=item.name, protocol=item.protocol,
+            app_protocol=item.app_protocol,
+        )  # fmt: skip
 
     @property
     def component_name(self) -> str:
@@ -1472,9 +1514,16 @@ class NetworkPeer(_Model):
     namespace_labels: Labels | None = None
     cidr_block: str | None = None
     cidr_except: tuple[str, ...] = ()
+    #: 0.31.0: namespaces by name, ``kubernetes.io/metadata.name In [...]``.
+    namespace_names: tuple[Name, ...] | None = None
 
     @model_validator(mode="after")
     def _shape(self) -> NetworkPeer:
+        if self.namespace_names is not None:
+            if not self.namespace_names:
+                raise ValueError("namespaces() needs at least one namespace name")
+            if self.namespace_labels is not None or self.cidr_block is not None:
+                raise ValueError("namespaces() takes names, not labels or a CIDR")
         selectors = [
             ("pod_labels", self.pod_labels),
             ("namespace_labels", self.namespace_labels),
@@ -1500,7 +1549,11 @@ class NetworkPeer(_Model):
                     raise ValueError(f"except {item!r} excludes the whole range")
         elif self.cidr_except:
             raise ValueError("except needs a CIDR")
-        elif self.pod_labels is None and self.namespace_labels is None:
+        elif (
+            self.pod_labels is None
+            and self.namespace_labels is None
+            and self.namespace_names is None
+        ):
             raise ValueError("a peer needs pod labels, namespace labels or a CIDR")
         return self
 
@@ -1539,6 +1592,18 @@ class NetworkPeer(_Model):
         )
 
     @classmethod
+    def namespaces(
+        cls, names: Sequence[str], *, pods: Mapping[str, str] | None = None
+    ) -> NetworkPeer:
+        """Several namespaces by name (0.31.0): one selector
+        ``kubernetes.io/metadata.name In [names]``; a chart can make the list
+        a value (:class:`~piceli.bundle.helm.HelmValue`)."""
+        return cls(
+            namespace_names=tuple(names),
+            pod_labels=dict(pods) if pods is not None else None,
+        )
+
+    @classmethod
     def cidr(cls, block: str, *, except_: Sequence[str] = ()) -> NetworkPeer:
         """An IP range, minus the ``except_`` sub-ranges."""
         return cls(cidr_block=block, cidr_except=tuple(except_))
@@ -1550,12 +1615,21 @@ class NetworkPeer(_Model):
                     cidr=self.cidr_block, **{"except": list(self.cidr_except) or None}
                 )
             }
-        return _compact(
-            namespaceSelector=(
+        if self.namespace_names is not None:
+            namespaces: dict[str, Any] | None = {
+                "matchExpressions": [
+                    {"key": "kubernetes.io/metadata.name", "operator": "In",
+                     "values": list(self.namespace_names)}
+                ]
+            }  # fmt: skip
+        else:
+            namespaces = (
                 {"matchLabels": self.namespace_labels}
                 if self.namespace_labels
                 else None
-            ),
+            )
+        return _compact(
+            namespaceSelector=namespaces,
             podSelector=({"matchLabels": self.pod_labels} if self.pod_labels else None),
         )
 

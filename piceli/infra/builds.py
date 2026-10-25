@@ -559,13 +559,16 @@ def _image_records(
             finished = max((t.get("finished_at") or "" for t in times), default="")
             failed = any(t.get("state") == "failed" for t in times)
             components = _dict(run.get("components"))
+            # The image's provenance, else (0.31.0) the build's own host.
             hosts = sorted(
                 {
                     str(
                         _dict(_dict(components.get(item)).get("provenance")).get("host")
+                        or _dict(builds.get(item)).get("host")
                     )
                     for item in built
                     if _dict(_dict(components.get(item)).get("provenance")).get("host")
+                    or _dict(builds.get(item)).get("host")
                 }
             )
             commits = [

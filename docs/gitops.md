@@ -1374,6 +1374,13 @@ failure). Exit 0: the host runs the tag with its checks passed; 1: a
 failure; 2: the time ran out (`gitops-wait-timeout`). The JSON carries the
 result under `wait`.
 
+The host is the `NixRelease`'s own `NixHost`. Its server's applied address
+and pinned host keys come from the `Infrastructure` that declares the
+server: the one the composition imports from its directory (a
+`machines.py` beside `infra.py`), or (0.31.0) the one `--machines
+MODULE[:ATTR]` names. `--infra` is an older name of `--composition`, not of
+the machines module.
+
 ### Removed objects are deleted (pruning)
 
 New in 0.14.7. Every sync, of a branch, a named environment or main, and of

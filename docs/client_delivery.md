@@ -173,7 +173,11 @@ What becomes a value:
 | each toggle (`relayOnly`) | `HelmChart(toggles=...)` | `true` applies the toggle's patches |
 | `image.registry`, `image.pullSecrets` | every image | a mirror's host (and path) replaces each image's registry; digests stay |
 | `storageClass` | every claim | empty: the cluster's default (or `--storage-class`) |
+| `storage.size` (0.31.0) | every claim | empty keeps each claim's declared size; set it at install (Kubernetes does not resize a StatefulSet's claims on upgrade) |
 | `deleteDataOnUninstall` | StatefulSets with claims | `true`: uninstall also deletes their claims (Kubernetes 1.27 or later) |
+| `existingSecret` (0.31.0) | every Secret of the app | the name of a Secret you created holding every secret key (the README lists them); the chart then makes no Secret and generates nothing |
+| each optional value (`intake.expose`, 0.31.0) | `HelmChart(optional=...)` | `true` installs the named objects |
+| each object value (`intake.allowNamespaces`, 0.31.0) | `HelmChart(values=...)` | written at a JSON pointer of named objects (a list, a string, a number) |
 
 `values.schema.json` refuses unknown values, so a mistyped name fails the
 install. Generated values (`Random`, `Static`, `Template`) are made at install
@@ -182,6 +186,15 @@ URL-safe base64), and read back with Helm's `lookup` on every upgrade, so
 they never change; they are never printed. TLS generators are refused
 (`bundle-secret-unsupported`): use the kustomize bundle for them. Build
 images from `--receipt` are refused: push them and declare them by digest.
+
+**Argo CD and `helm template`.** They render without a cluster, so `lookup`
+finds nothing and a generated value would change on every render (and roll
+the pods). There, the client creates the Secret (random values for the
+generated keys, for example `openssl rand -base64 32`) and sets
+`existingSecret`: nothing is generated, every render is the same, and the
+client holds every value, so it can copy one (an intake token) to another
+namespace. `existingSecret` is offered when the app's Secrets have distinct
+key names; a Secret volume then mounts that one Secret.
 
 Cluster-scoped objects (ClusterRoles and their bindings) belong to the
 release: their names follow the release namespace, and `helm uninstall`
@@ -221,6 +234,63 @@ chart = HelmChart(
 A toggle's patch is a JSON Patch (RFC 6902: `add`, `remove`, `replace`,
 `test`) or a mapping merged like `app.override`; the patched render passes
 the safety gate too, and two toggles may not change the same object.
+
+Objects the client opts into, values written into objects, and a disk
+limit that follows the claim size (0.31.0):
+
+```python
+from piceli import (
+    HelmChart,
+    HelmOptional,
+    HelmValue,
+    NetworkPeer,
+    NetworkPort,
+    NetworkRule,
+)
+
+intake = app.service(agent, port=4318, name="agent-intake")
+intake_policy = app.network_policy(
+    agent,
+    name="agent-intake",
+    policy_types=("Ingress",),
+    ingress=[
+        NetworkRule(
+            peers=(NetworkPeer.namespaces(["workers"]),),
+            ports=(NetworkPort(port=4318),),
+        )
+    ],
+)
+app.safety_exception(intake_policy, "network", reason="the client names the senders")
+
+chart = HelmChart(
+    pipeline,
+    optional={
+        "intake.expose": HelmOptional(
+            "Expose the intake to other namespaces", objects=[intake, intake_policy]
+        )
+    },
+    values={
+        "intake.allowNamespaces": HelmValue(
+            "Namespaces whose pods may send to the intake",
+            targets=[
+                (
+                    intake_policy,
+                    "/spec/ingress/0/from/0/namespaceSelector/matchExpressions/0/values",
+                )
+            ],
+        )
+    },
+    storage_env={"DISK_LIMIT": 90},
+)
+```
+
+`helm install ... --set intake.expose=true --set 'intake.allowNamespaces={jobs,web}'`
+installs the Service and the policy, which admits those namespaces
+(`NetworkPeer.namespaces([...])` renders `kubernetes.io/metadata.name In
+[...]`). A `HelmValue`'s default is the rendered value at its first target.
+With `--set storage.size=20Gi`, each container that declares `DISK_LIMIT`
+gets 90 % of 20Gi in bytes (`19327352832`); without it, its declared value.
+Optional objects pass the safety gate like every other object.
 
 Publish the chart to an OCI registry as `helm push` does, with an approval
 of its digest like every Piceli publish:

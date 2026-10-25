@@ -439,3 +439,45 @@ def test_a_failing_command_keeps_its_first_error_apart(
     assert "error[E0308]" not in failed.value.output_tail  # the end only
     assert failed.value.first_error.splitlines()[0] == "error[E0308]: mismatched types"
     assert len(failed.value.first_error.splitlines()) == 20
+
+
+def test_image_labels_reach_the_image_config(project: Path, tmp_path: Path) -> None:
+    """0.31.0: ``labels = {...}`` per image, in the image's config."""
+    text = project.read_text().replace(
+        'name = "web"\n',
+        'name = "web"\nlabels = { "org.opencontainers.image.licenses" = '
+        '"LicenseRef-Example", "org.opencontainers.image.source" = '
+        '"https://example.org/web" }\n',
+        1,
+    )
+    project.write_text(text)
+    receipt = build(project, tmp_path / "cache", tmp_path / "out")
+    web = receipt["outputs"]["images"]["web"]
+    with (tmp_path / "out" / web["archive"]).open("rb") as stream:
+        config = json.loads(scan_image_stream(stream).config_body)
+    labels = config["config"]["Labels"]
+    assert labels["org.opencontainers.image.licenses"] == "LicenseRef-Example"
+    assert labels["org.opencontainers.image.source"] == "https://example.org/web"
+    project.write_text(text.replace('"LicenseRef-Example"', "1", 1))
+    with pytest.raises(BuildSpecError, match="must be a string"):
+        HostBuildSpec.from_toml(project)
+
+
+def test_buildx_images_take_their_labels(tmp_path: Path) -> None:
+    from piceli.artifacts.build_spec import BuildSpec
+
+    document = {
+        "revision": "piceli.build-spec.v1",
+        "name": "labels",
+        "builder": {"image": "example.org/b", "digest": "sha256:" + "1" * 64},
+        "build": {"platforms": ["linux/arm64"], "dockerfile": "Dockerfile",
+                  "context": "src", "builder_arg": "BUILDER"},
+        "context": {"src": {"include": ["Dockerfile"]}},
+        "output": {"image": [{"name": "api", "repository": "example/api",
+                              "tag": "v1", "target": "api",
+                              "labels": {"org.opencontainers.image.licenses": "MIT"}}]},
+    }  # fmt: skip
+    spec = BuildSpec.from_dict(document, tmp_path)
+    (image,) = spec.images
+    argv = spec.invocation("linux/arm64", "image", image=image)
+    assert argv[argv.index("--label") + 1] == "org.opencontainers.image.licenses=MIT"

@@ -271,7 +271,11 @@ class App(BaseModel):
             if isinstance(item, Service) and item.access is not None:
                 result.append(
                     item.access.shortcut(
-                        item.name, f"service/{item.name}", item.access_port(), namespace
+                        item.name,
+                        f"service/{item.name}",
+                        item.access_port(),
+                        namespace,
+                        scheme=item.access_scheme(),
                     )
                 )
             elif isinstance(item, Deployment) and item.access is not None:
@@ -281,6 +285,7 @@ class App(BaseModel):
                         f"deployment/{item.name}",
                         item.access_port(),
                         namespace,
+                        scheme=item.access_scheme(),
                     )
                 )
         return tuple(result)

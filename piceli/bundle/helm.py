@@ -23,6 +23,18 @@ kustomize base and ``prepare.sh``:
   they stay.
 - **Toggles.** A :class:`HelmToggle` is a boolean value that patches named
   objects when true (``relayOnly: true`` narrowing an egress rule).
+- **Optional objects** (0.31.0). A :class:`HelmOptional` is a boolean value
+  (``intake.expose``) that renders named objects only when true.
+- **Values in objects** (0.31.0). A :class:`HelmValue` is a value (a list,
+  a string, a number) written at JSON pointers of named objects
+  (``intake.allowNamespaces`` as a NetworkPolicy's namespace list).
+- **An existing Secret** (0.31.0). ``existingSecret=NAME``: the chart makes
+  no Secret and every workload reads its secret keys from the client's
+  Secret ``NAME`` (it holds every key the README lists). Nothing is
+  generated, so ``helm template`` and Argo CD render the same every time.
+- **Storage size** (0.31.0). ``storage.size`` sets the size of every claim;
+  ``HelmChart(storage_env={"DISK_LIMIT": 90})`` sets an environment variable
+  the workloads declare to that percentage of it, in bytes.
 
 Cluster-scoped objects (ClusterRoles and their bindings) are part of the
 release, so ``helm uninstall`` removes them. The chart is deterministic: the
@@ -50,7 +62,12 @@ from piceli.bundle.build import (
 
 #: Top-level values every chart may have; a setting, input or toggle cannot
 #: take these names.
-RESERVED = frozenset({"global", "image", "storageClass", "deleteDataOnUninstall"})
+RESERVED = frozenset(
+    {"global", "image", "storageClass", "deleteDataOnUninstall", "storage",
+     "existingSecret"}
+)  # fmt: skip
+#: 0.31.0: a Kubernetes quantity ``storage.size`` takes (whole numbers).
+SIZE = re.compile(r"^([0-9]+(Ki|Mi|Gi|Ti|Pi|k|M|G|T|P)?)?$")
 VALUE_NAME = re.compile(r"^[a-z][A-Za-z0-9]{0,62}$")
 SCHEMA_DRAFT = "http://json-schema.org/draft-07/schema#"
 SECRETS_TEMPLATE = "templates/piceli-secrets.yaml"
@@ -147,6 +164,76 @@ class HelmToggle:
         return result
 
 
+def _check_path(name: str, what: str) -> tuple[str, ...]:
+    """The parts of a dotted value name (``intake.expose``), each camelCase;
+    the first is not a reserved value."""
+    parts = tuple(name.split("."))
+    if (
+        not 1 <= len(parts) <= 3
+        or not all(VALUE_NAME.fullmatch(part) for part in parts)
+        or parts[0] in RESERVED
+    ):
+        raise BundleError(
+            "bundle-invalid",
+            f"{what} {name!r} cannot be a chart value: up to three camelCase "
+            f"names joined by dots, not starting with one of {sorted(RESERVED)}",
+        )
+    return parts
+
+
+@dataclass(frozen=True)
+class HelmOptional:
+    """A boolean chart value that renders named objects only when true
+    (0.31.0). The objects are part of the app, so the safety gate checks
+    them; with the value false (``default``) they are not installed.
+
+    Example::
+
+        HelmOptional("Expose the intake to other namespaces",
+                     objects=[intake_service, intake_policy])
+    """
+
+    description: str
+    objects: Sequence[Any]
+    default: bool = False
+
+    def keys(self) -> list[str]:
+        """The objects as ``"Kind/name"``."""
+        keys = [_object_key(item) for item in self.objects]
+        if not keys:
+            raise ValueError("an optional value names at least one object")
+        return keys
+
+
+@dataclass(frozen=True)
+class HelmValue:
+    """A chart value written into named objects (0.31.0).
+
+    ``targets`` pairs a declared object (or ``"Kind/name"``) with a JSON
+    pointer of its rendered manifest; the value replaces what is there.
+    ``default`` (when ``None``: the rendered value at the first target) and
+    its JSON type (``array``, ``string``, ``integer``, ``number``,
+    ``boolean``, ``object``) go to ``values.yaml`` and the schema.
+
+    Example::
+
+        HelmValue("Namespaces whose pods may send", targets=[(
+            policy, "/spec/ingress/0/from/0/namespaceSelector/matchExpressions/0/values",
+        )])
+    """
+
+    description: str
+    targets: Sequence[tuple[Any, str]]
+    default: Any = None
+
+    def resolved(self) -> list[tuple[str, list[str]]]:
+        """``("Kind/name", pointer parts)`` of each target."""
+        result = [(_object_key(item), _pointer(path)) for item, path in self.targets]
+        if not result or any(not parts for _key, parts in result):
+            raise ValueError("a value names at least one object and a non-empty path")
+        return result
+
+
 @dataclass(frozen=True)
 class HelmChart:
     """How ``piceli bundle --helm`` names the values of a client chart.
@@ -164,6 +251,14 @@ class HelmChart:
     :param toggles: Value name → :class:`HelmToggle`.
     :param descriptions: Value name → one line for ``values.yaml`` and the
         README.
+    :param optional: 0.31.0: dotted value name (``intake.expose``) →
+        :class:`HelmOptional`.
+    :param values: 0.31.0: dotted value name (``intake.allowNamespaces``)
+        → :class:`HelmValue`.
+    :param storage_env: 0.31.0: environment variable → percent: when the
+        client sets ``storage.size``, each container that declares the
+        variable gets that percentage of the size, in bytes
+        (``{"DISK_LIMIT": 90}``); otherwise it keeps its declared value.
     """
 
     target: Any
@@ -171,6 +266,9 @@ class HelmChart:
     required: Sequence[str] = ()
     toggles: Mapping[str, HelmToggle] = field(default_factory=dict)
     descriptions: Mapping[str, str] = field(default_factory=dict)
+    optional: Mapping[str, HelmOptional] = field(default_factory=dict)
+    values: Mapping[str, HelmValue] = field(default_factory=dict)
+    storage_env: Mapping[str, int] = field(default_factory=dict)
 
     def setting_keys(self) -> dict[str, tuple[str, str]] | None:
         """Value name → ``(ConfigMap name, key)``, or ``None`` for the default."""
@@ -344,12 +442,24 @@ class _Templater:
         settings: Mapping[tuple[str, str], str],
         required: set[str],
         storage_class: str | None,
+        *,
+        secret_names: frozenset[str] = frozenset(),
+        values_at: Mapping[str, Sequence[tuple[list[str], str]]] | None = None,
+        storage_env: Mapping[str, int] | None = None,
     ) -> None:
         self.name = name
         self.namespace = namespace
         self.settings = settings
         self.required = required
         self.storage_class = storage_class
+        #: 0.31.0: the app's Secrets ``existingSecret`` replaces (empty: no
+        #: ``existingSecret`` value).
+        self.secret_names = secret_names
+        #: 0.31.0: ``"Kind/name"`` → ``(pointer parts, value path)``.
+        self.values_at = dict(values_at or {})
+        self.storage_env = dict(storage_env or {})
+        self.placed: set[tuple[str, int]] = set()  # (value path, target number)
+        self.env_set: set[str] = set()
         self.sites: list[_Site] = []
         self.claims = False  # a StatefulSet with claim templates
 
@@ -411,7 +521,30 @@ class _Templater:
         pod_path = _POD_PATHS.get(kind)
         if pod_path is not None:
             self.workload(manifest, pod_path)
+        self.place_values(f"{kind}/{metadata.get('name')}", manifest)
         return self.escape(manifest)
+
+    def place_values(self, key: str, manifest: dict[str, Any]) -> None:
+        """Each :class:`HelmValue` aimed at ``key``, at its pointer."""
+        for number, (parts, value) in enumerate(self.values_at.get(key, ())):
+            try:
+                parent = _walk(manifest, parts[:-1])
+                last = parts[-1]
+                if isinstance(parent, list):
+                    index = int(last)
+                    if not 0 <= index < len(parent):
+                        raise IndexError(last)
+                    parent[index] = self.scalar(f"{{{{ toJson $.Values.{value} }}}}")
+                elif isinstance(parent, dict) and last in parent:
+                    parent[last] = self.scalar(f"{{{{ toJson $.Values.{value} }}}}")
+                else:
+                    raise KeyError(last)
+            except (KeyError, IndexError, TypeError, ValueError):
+                raise BundleError(
+                    "bundle-invalid",
+                    f"value {value}: {key} has nothing at /{'/'.join(parts)}",
+                ) from None
+            self.placed.add((value, number))
 
     def namespace_site(self) -> str:
         return self.scalar("{{ $.Release.Namespace | toJson }}")
@@ -431,6 +564,12 @@ class _Templater:
         if fallback:
             expression = f"({expression} | default {_literal(fallback)})"
         self.optional(spec, "storageClassName", expression)
+        requests = (spec.get("resources") or {}).get("requests")
+        if isinstance(requests, dict) and isinstance(requests.get("storage"), str):
+            size = _literal(requests["storage"])
+            requests["storage"] = self.scalar(
+                f"{{{{ $.Values.storage.size | default {size} | toJson }}}}"
+            )
 
     def workload(self, manifest: dict[str, Any], pod_path: Sequence[str]) -> None:
         spec = manifest.get("spec") or {}
@@ -453,12 +592,26 @@ class _Templater:
         if isinstance(annotations, dict):
             for key, helper in ((CONFIG_DIGEST, "config"), (SECRET_DIGEST, "secrets")):
                 if isinstance(annotations.get(key), str):
-                    annotations[key] = self.scalar(
+                    digest = (
                         f'{{{{ printf "sha256:%s" (sha256sum (cat {_literal(annotations[key])} '
                         f'(include "{self.name}.{helper}" $))) | toJson }}}}'
                     )
+                    if helper == "secrets" and self.secret_names:
+                        # 0.31.0: an existing Secret: its name, never its values.
+                        digest = (
+                            "{{ if $.Values.existingSecret }}"
+                            '{{ printf "sha256:%s" (sha256sum (printf "existing:%s" '
+                            "$.Values.existingSecret)) | toJson }}{{ else }}"
+                            + digest
+                            + "{{ end }}"
+                        )
+                    annotations[key] = self.scalar(digest)
+        if self.secret_names:
+            self.existing_secret(pod)
         for group in ("initContainers", "containers"):
             for container in pod.get(group) or ():
+                if isinstance(container, dict):
+                    self.disk_env(container)
                 image = container.get("image") if isinstance(container, dict) else None
                 if isinstance(image, str):
                     container["image"] = self.scalar(
@@ -474,6 +627,55 @@ class _Templater:
                 '{{ $names = append $names (dict "name" .) }}{{ end }}'
                 "{{ toJson $names }}",
             )
+
+    def _secret(self, name: Any) -> Any:
+        if not isinstance(name, str) or name not in self.secret_names:
+            return name
+        return self.scalar(
+            f"{{{{ $.Values.existingSecret | default {_literal(name)} | toJson }}}}"
+        )
+
+    def existing_secret(self, pod: dict[str, Any]) -> None:
+        """Every reference to an app Secret reads ``existingSecret`` when set."""
+        for group in ("initContainers", "containers"):
+            for container in pod.get(group) or ():
+                if not isinstance(container, dict):
+                    continue
+                for entry in container.get("env") or ():
+                    ref = _dig(entry, ("valueFrom", "secretKeyRef"))
+                    if isinstance(ref, dict):
+                        ref["name"] = self._secret(ref.get("name"))
+                for entry in container.get("envFrom") or ():
+                    ref = entry.get("secretRef") if isinstance(entry, dict) else None
+                    if isinstance(ref, dict):
+                        ref["name"] = self._secret(ref.get("name"))
+        for volume in pod.get("volumes") or ():
+            if not isinstance(volume, dict):
+                continue
+            secret = volume.get("secret")
+            if isinstance(secret, dict):
+                secret["secretName"] = self._secret(secret.get("secretName"))
+            for source in _dig(volume, ("projected", "sources")) or ():
+                ref = source.get("secret") if isinstance(source, dict) else None
+                if isinstance(ref, dict):
+                    ref["name"] = self._secret(ref.get("name"))
+
+    def disk_env(self, container: dict[str, Any]) -> None:
+        """``storage_env``: the declared variable, or a share of ``storage.size``."""
+        for entry in container.get("env") or ():
+            if not isinstance(entry, dict):
+                continue
+            percent = self.storage_env.get(str(entry.get("name")))
+            if percent is None or not isinstance(entry.get("value"), str):
+                continue
+            declared = _literal(entry["value"])
+            entry["value"] = self.scalar(
+                "{{ if $.Values.storage.size }}"
+                f'{{{{ include "{self.name}.percentOf" (list $.Values.storage.size '
+                f"{int(percent)}) | toJson }}}}"
+                f"{{{{ else }}}}{{{{ toJson {declared} }}}}{{{{ end }}}}"
+            )
+            self.env_set.add(str(entry["name"]))
 
     def escape(self, value: Any) -> Any:
         if isinstance(value, dict):
@@ -654,6 +856,11 @@ class HelmBundle:
     required: tuple[str, ...]
     cluster_objects: tuple[str, ...]
     claims: bool
+    #: 0.31.0: the optional-object values, the values written into objects,
+    #: and the keys an ``existingSecret`` holds (empty: not offered).
+    optional: tuple[str, ...] = ()
+    values: tuple[str, ...] = ()
+    existing_secret_keys: tuple[str, ...] = ()
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -702,6 +909,9 @@ class HelmBundle:
             "toggles": list(self.toggles),
             "required_values": list(self.required),
             "cluster_objects": list(self.cluster_objects),
+            "optional": list(self.optional),
+            "values": list(self.values),
+            "existing_secret_keys": list(self.existing_secret_keys),
         }
 
 
@@ -782,10 +992,46 @@ def build_helm(
     toggles = {
         _check_name(name, "toggle"): toggle for name, toggle in declared.toggles.items()
     }
+    try:
+        optional = {
+            name: (_check_path(name, "optional value"), item, item.keys())
+            for name, item in declared.optional.items()
+        }
+        placed_values = {
+            name: (_check_path(name, "value"), item, item.resolved())
+            for name, item in declared.values.items()
+        }
+    except ValueError as error:
+        raise BundleError("bundle-invalid", str(error)) from None
+    storage_env = {}
+    for env, percent in declared.storage_env.items():
+        if (
+            not isinstance(percent, int)
+            or isinstance(percent, bool)
+            or not (1 <= percent <= 100)
+        ):
+            raise BundleError(
+                "bundle-invalid", f"storage_env {env}: a percent from 1 to 100"
+            )
+        storage_env[str(env)] = percent
     names = [*settings, *inputs.values(), *toggles]
     duplicated = sorted({name for name in names if names.count(name) > 1})
     if duplicated:
         raise BundleError("bundle-invalid", f"two values are named {duplicated}")
+    paths = [parts for parts, _i, _k in (*optional.values(), *placed_values.values())]
+    for parts in paths:
+        clash = [
+            other for other in paths
+            if other != parts and other[: len(parts)] == parts
+        ] or ([parts] if parts[0] in names else [])  # fmt: skip
+        if clash or paths.count(parts) > 1:
+            raise BundleError(
+                "bundle-invalid", f"the value {'.'.join(parts)} is named twice"
+            )
+    # 0.31.0: an existing Secret holds every key of the app's Secrets; two
+    # Secrets with one key name could not share it, so it is not offered.
+    secret_keys = [key for plan in bundle.secrets for key, _output in plan.keys]
+    offer_existing = bool(secret_keys) and len(set(secret_keys)) == len(secret_keys)
     unknown = sorted(set(declared.required) - set(settings) - set(toggles))
     if unknown:
         raise BundleError(
@@ -796,9 +1042,32 @@ def build_helm(
         raise BundleError("bundle-invalid", "every toggle needs its rendered variant")
     required = {name for name in declared.required if name in settings}
     reverse = {ref: name for name, ref in settings.items()}
+    values_at: dict[str, list[tuple[list[str], str]]] = {}
+    for name, (_parts, _item, targets) in placed_values.items():
+        for key, pointer in targets:
+            values_at.setdefault(key, []).append((pointer, name))
     templater = _Templater(
-        bundle.name, bundle.namespace, reverse, required, bundle.storage_class
-    )
+        bundle.name, bundle.namespace, reverse, required, bundle.storage_class,
+        secret_names=frozenset(plan.name for plan in bundle.secrets)
+        if offer_existing
+        else frozenset(),
+        values_at=values_at, storage_env=storage_env,
+    )  # fmt: skip
+    gated: dict[str, str] = {}
+    by_key = {f"{item.kind}/{item.name}": item for item in bundle.objects}
+    for name, (_parts, _item, keys) in optional.items():
+        for key in keys:
+            found = by_key.get(key)
+            if found is None:
+                raise BundleError(
+                    "bundle-invalid",
+                    f"optional {name} names {key}, which the render lacks",
+                )
+            if found.file in gated:
+                raise BundleError(
+                    "bundle-invalid", f"{key} is optional under two values"
+                )
+            gated[found.file] = name
 
     base = {item.file: item for item in bundle.objects}
     order = [item.file for item in bundle.objects]
@@ -812,7 +1081,9 @@ def build_helm(
             mine, theirs = base.get(file), other.get(file)
             if (mine and mine.manifest) != (theirs and theirs.manifest):
                 changed.setdefault(file, []).append(toggle)
-    conflicts = sorted(file for file, owners in changed.items() if len(owners) > 1)
+    conflicts = sorted(
+        file for file, owners in changed.items() if len(owners) > 1 or file in gated
+    )
     if conflicts:
         raise BundleError(
             "bundle-invalid", f"two toggles change the same object(s): {conflicts}"
@@ -828,9 +1099,10 @@ def build_helm(
         header = f"# {file} (piceli bundle {bundle.name} {bundle.version})\n"
         if not owners:
             assert mine is not None
-            files[f"templates/{file}"] = (
-                header + templater.text(templater.manifest(mine))
-            ).encode()
+            body = templater.text(templater.manifest(mine))
+            if file in gated:
+                body = f"{{{{- if $.Values.{gated[file]} }}}}\n{body}{{{{- end }}}}\n"
+            files[f"templates/{file}"] = (header + body).encode()
             continue
         toggle = owners[0]
         theirs = {item.file: item for item in variants[toggle].objects}.get(file)
@@ -843,10 +1115,32 @@ def build_helm(
         else:
             body = f"{{{{- if not $.Values.{toggle} }}}}\n{off}{{{{- end }}}}\n"
         files[f"templates/{file}"] = (header + body).encode()
+    missing = sorted(
+        name
+        for name, (_parts, _item, targets) in placed_values.items()
+        for number in range(len(targets))
+        if (name, number) not in templater.placed
+    )
+    if missing:
+        raise BundleError(
+            "bundle-invalid",
+            f"value(s) {sorted(set(missing))} name objects the render lacks",
+        )
+    unset = sorted(set(storage_env) - templater.env_set)
+    if unset:
+        raise BundleError(
+            "bundle-invalid",
+            f"storage_env names {unset}, which no container declares with a value",
+        )
     if bundle.secrets:
+        body = _secrets_template(bundle.name, bundle)
+        if offer_existing:
+            body = (
+                f"{{{{- if not $.Values.existingSecret }}}}\n{body}\n{{{{- end }}}}\n"
+            )
         files[SECRETS_TEMPLATE] = (
             f"# The Secrets of {bundle.name}: generated once, kept across upgrades\n"
-            + _secrets_template(bundle.name, bundle)
+            + body
         ).encode()
 
     descriptions = dict(declared.descriptions)
@@ -888,6 +1182,70 @@ def build_helm(
         comments.append(
             f"# {name}: {text}" + (" (required)" if name in required else "")
         )
+    tree_values: dict[str, Any] = {}
+    tree_schema: dict[str, Any] = {}
+
+    def put(parts: tuple[str, ...], value: Any, node: dict[str, Any]) -> None:
+        here_v, here_s = tree_values, tree_schema
+        for part in parts[:-1]:
+            here_v = here_v.setdefault(part, {})
+            group = here_s.setdefault(
+                part, {"type": "object", "additionalProperties": False,
+                       "properties": {}},
+            )  # fmt: skip
+            here_s = group["properties"]
+        here_v[parts[-1]] = value
+        here_s[parts[-1]] = node
+
+    for name, (parts, item, _keys) in sorted(optional.items()):
+        text = descriptions.get(name) or item.description
+        put(parts, item.default, {"type": "boolean", "description": text})
+        comments.append(f"# {name}: {text} (true installs its objects)")
+    for name, (parts, item, targets) in sorted(placed_values.items()):
+        default = item.default
+        if default is None:
+            key, pointer = targets[0]
+            default = _walk(copy.deepcopy(dict(by_key[key].manifest)), pointer)
+        default = json.loads(json.dumps(default))
+        node: dict[str, Any] = {
+            "description": descriptions.get(name) or item.description
+        }
+        kind = {list: "array", str: "string", bool: "boolean", int: "integer",
+                float: "number", dict: "object"}.get(type(default))  # fmt: skip
+        if kind is not None:
+            node["type"] = kind
+        put(parts, default, node)
+        comments.append(f"# {name}: {node['description']}")
+    for top in sorted(tree_values):
+        values[top] = tree_values[top]
+        schema[top] = tree_schema[top]
+    if offer_existing:
+        values["existingSecret"] = ""
+        schema["existingSecret"] = {
+            "type": "string",
+            "description": "A Secret you created holding every secret key "
+            f"({', '.join(sorted(secret_keys))}); the chart then makes no Secret",
+        }
+        comments.append(
+            "# existingSecret: a Secret you created with the keys "
+            f"{', '.join(sorted(secret_keys))}; the chart then makes and reads no other"
+        )
+    values["storage"] = {"size": ""}
+    schema["storage"] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "size": {
+                "type": "string",
+                "pattern": SIZE.pattern,
+                "description": "Size of every claim (10Gi); empty keeps each "
+                "claim's declared size",
+            }
+        },
+    }
+    comments.append(
+        "# storage.size: size of every claim (10Gi); empty keeps the declared sizes"
+    )
     values["image"] = {"registry": "", "pullSecrets": []}
     schema["image"] = {
         "type": "object",
@@ -965,10 +1323,15 @@ def build_helm(
         required=tuple(sorted(required)),
         cluster_objects=tuple(cluster_objects),
         claims=templater.claims,
+        optional=tuple(sorted(optional)),
+        values=tuple(sorted(placed_values)),
+        existing_secret_keys=tuple(sorted(secret_keys)) if offer_existing else (),
     )
     files["Chart.yaml"] = yaml.safe_dump(chart.metadata(), sort_keys=True).encode()
     files["templates/NOTES.txt"] = _notes(chart).encode()
-    files["README.md"] = _readme(chart, descriptions, toggles).encode()
+    files["README.md"] = _readme(
+        chart, descriptions, toggles, declared.optional, declared.values
+    ).encode()
     return chart
 
 
@@ -986,6 +1349,16 @@ def _helpers(name: str, inputs: Mapping[str, str]) -> str:
         "{{- end -}}\n"
         f'{{{{- define "{name}.config" -}}}}\n'
         f"{{{{- toJson {config} -}}}}\n"
+        "{{- end -}}\n"
+        # 0.31.0: (list QUANTITY PERCENT) -> that share of the quantity, in bytes.
+        f'{{{{- define "{name}.percentOf" -}}}}\n'
+        "{{- $q := index . 0 | toString -}}\n"
+        '{{- $n := regexFind "^[0-9]+" $q | atoi -}}\n'
+        '{{- $u := regexFind "[A-Za-z]+$" $q -}}\n'
+        '{{- $m := dict "" 1 "k" 1000 "M" 1000000 "G" 1000000000 "T" 1000000000000 '
+        '"P" 1000000000000000 "Ki" 1024 "Mi" 1048576 "Gi" 1073741824 '
+        '"Ti" 1099511627776 "Pi" 1125899906842624 -}}\n'
+        "{{- div (mul $n (get $m $u) (index . 1)) 100 -}}\n"
         "{{- end -}}\n"
     )
 
@@ -1021,6 +1394,8 @@ def _readme(
     chart: HelmBundle,
     descriptions: Mapping[str, str],
     toggles: Mapping[str, HelmToggle],
+    optional: Mapping[str, HelmOptional] | None = None,
+    placed: Mapping[str, HelmValue] | None = None,
 ) -> str:
     lines = [
         f"# {chart.name}",
@@ -1064,7 +1439,23 @@ def _readme(
     for name in sorted(toggles):
         text = descriptions.get(name) or toggles[name].description
         lines.append(f"- `{name}` (true or false): {text}")
+    for name, item in sorted((optional or {}).items()):
+        text = descriptions.get(name) or item.description
+        objects = ", ".join(item.keys())
+        lines.append(f"- `{name}` (true or false): {text}; true installs {objects}")
+    for name, value in sorted((placed or {}).items()):
+        lines.append(f"- `{name}`: {descriptions.get(name) or value.description}")
+    if chart.existing_secret_keys:
+        keys = ", ".join(f"`{key}`" for key in chart.existing_secret_keys)
+        lines.append(
+            "- `existingSecret`: the name of a Secret you created in the release "
+            f"namespace with the keys {keys}; the chart then makes no Secret and "
+            "generates nothing"
+        )
     lines += [
+        "- `storage.size`: the size of every claim (for example `20Gi`); empty "
+        "keeps each claim's declared size. Set it at install: Kubernetes does "
+        "not resize a StatefulSet's claims on upgrade",
         "- `image.registry`: a mirror's host (and path) for every image; the digests stay",
         "- `image.pullSecrets`: names of existing image pull Secrets",
         "- `storageClass`: the storage class of every claim (empty: the cluster's default)",
@@ -1077,8 +1468,19 @@ def _readme(
         "",
         "Generated secrets are made once at install and kept across `helm upgrade` "
         "(read back with `lookup`); they are never printed.",
-        "",
     ]
+    if chart.existing_secret_keys:
+        lines += [
+            "",
+            "Argo CD and `helm template` render without a cluster, so `lookup` "
+            "finds nothing and generated secrets would change on every render. "
+            "There, create the Secret yourself (random values for the generated "
+            "keys, for example `openssl rand -base64 32`) and set "
+            "`existingSecret`: nothing is generated and every render is the same. "
+            "The same Secret is the one to copy a key from when other namespaces "
+            "need it.",
+        ]
+    lines.append("")
     return "\n".join(lines)
 
 

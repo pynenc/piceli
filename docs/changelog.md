@@ -4,6 +4,53 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.31.0
+
+**Features**
+
+- **Client charts: optional objects, values in objects, an existing Secret,
+  the claim size.** `HelmChart(optional={"intake.expose": HelmOptional(...,
+  objects=[...])})` installs named objects only when the client sets the
+  value; `HelmChart(values={"intake.allowNamespaces": HelmValue(...,
+  targets=[(obj, "/json/pointer")])})` writes a value (a list, a string, a
+  number) into named objects; `NetworkPeer.namespaces([...])` selects
+  namespaces by name (`kubernetes.io/metadata.name In [...]`), so a
+  policy's namespace list can be such a value. `existingSecret=NAME`: the
+  chart makes no Secret and every workload reads the client's Secret, which
+  holds every key the README lists; nothing is generated, so `helm template`
+  and Argo CD render the same every time. `storage.size` sets every claim's
+  size, and `HelmChart(storage_env={"DISK_LIMIT": 90})` sets a declared
+  variable to that share of it, in bytes. See {doc}`client_delivery`.
+- **Image labels.** `labels = {...}` per `[[output.image]]` in
+  `host-build.toml` (build hosts and the cluster) and `build.toml`
+  (`buildx --label`): image config labels such as
+  `org.opencontainers.image.licenses`. See {doc}`host_builds`.
+- **`piceli promote HOST --from ENV --wait --machines MODULE[:ATTR]`**
+  names the module declaring the `Infrastructure` of the host's server;
+  without it, the one the composition imports from its directory is used.
+  `--infra` stays an older name of `--composition`.
+- **`piceli access` prints services by what they speak.** Web pages
+  (`http`, `https`) first, with their label; others by scheme
+  (`turn:HOST:3478`) and marked "not a web page". The scheme comes from
+  `app.access.forward(scheme=...)`, the Service port's `appProtocol`
+  (`ServicePort(app_protocol=...)` renders it), its name, or a well-known
+  port; JSON entries carry `scheme` and `web`. See {doc}`access`.
+
+**Fixes**
+
+- `piceli gitops builds` names the build host of images a build host
+  delivered (they were missing from the history), and each in-cluster build
+  records the machine that built it.
+- Tests that build real images (`PICELI_DOCKER_TESTS=1`, the kind suites)
+  remove the `piceli-e2e/*` and `piceli-examples/*` images they add, on
+  every outcome; a test whose image cannot be removed fails.
+
+**Contributors**
+
+- `make release-bump VERSION=X.Y.Z` pins a release everywhere (pyproject,
+  uv.lock, the skill, the API snapshot, eval baselines); `make docs-fresh`
+  builds the docs without the cache.
+
 ## Version 0.30.0
 
 **Features**

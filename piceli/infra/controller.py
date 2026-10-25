@@ -1561,6 +1561,19 @@ class CompositionController:
         self._host_build_times(asked, receipt, host)
         # 0.22.0: where it was built, kept with the image.
         record = provenance.from_receipt(receipt, host)
+        # 0.31.0: the owner's next step counts these as built there, with the
+        # host (gitops builds, history): the step itself takes them cached.
+        pending = self.state.setdefault("delivered_builds", {}).setdefault(
+            str(asked.get("owner")), {}
+        )
+        for name in images:
+            pending[name] = {
+                "started_at": receipt.get("started_at") or _iso(self.clock()),
+                "finished_at": receipt.get("finished_at") or _iso(self.clock()),
+                "state": "done",
+                "host": host[:64],
+                "via": "host",  # its times are the host build's (piceli.cycle)
+            }
         for name, item in images.items():
             extra: dict[str, Any] = {"host": host, "provenance": record}
             if item["platforms"]:
@@ -2861,6 +2874,7 @@ class CompositionController:
         ``builds`` (0.16.0; images built by one call share its times)."""
         began = _iso(self.clock())
         state = "failed"
+        result: Any = None
         try:
             result = call()
             state = "done"
@@ -2872,6 +2886,11 @@ class CompositionController:
                     "finished_at": _iso(self.clock()),
                     "state": state,
                 }
+                # 0.31.0: which machine built it (the Job's node, the host).
+                image = result.get(name) if isinstance(result, Mapping) else None
+                found = (getattr(image, "extra", None) or {}).get("provenance")
+                if isinstance(found, Mapping) and found.get("host"):
+                    self._builds[name]["host"] = str(found["host"])[:64]
 
     def _stage(self, record: dict[str, Any], stage: str) -> None:
         """Show the stage the step is in (0.17.0: ``in_progress.stage``)."""
@@ -3571,6 +3590,14 @@ class CompositionController:
         started = (_iso(self.clock()), record.get("trigger"), record.get("approval"))
         self._built, self._last_outcome = [], None
         self._builds = {}
+        # 0.31.0: images a build host delivered for this environment since
+        # its last step: built in this step, by that host.
+        delivered = self.state.get("delivered_builds") or {}
+        for key in {str(record.get("branch")), str(record.get("group") or "")}:
+            for name, entry in (delivered.pop(key, None) or {}).items():
+                if isinstance(entry, Mapping):
+                    self._built.append(str(name))
+                    self._builds[str(name)] = dict(entry)
         self._step_started, self._step_env = started[0], str(record.get("branch"))
         # 0.28.0: cycle metrics (piceli.cycle): the wait and the first step.
         self._waited_since = record.get("waiting_since")

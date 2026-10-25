@@ -29,7 +29,8 @@
      "path",
      "port",
      "required",
-     "restart"
+     "restart",
+     "scheme"
     ]
    },
    "returns": {
@@ -2833,6 +2834,7 @@
     "accepts_claim_templates",
     "access",
     "access_port",
+    "access_scheme",
     "all_containers",
     "automount_token",
     "check_defaults",
@@ -2886,6 +2888,7 @@
    "methods": {
     "accepts_claim_templates": [],
     "access_port": [],
+    "access_scheme": [],
     "check_defaults": [
      "defaults"
     ],
@@ -4580,6 +4583,7 @@
     "port",
     "required",
     "restart",
+    "scheme",
     "shortcut"
    ],
    "init": [
@@ -4591,13 +4595,15 @@
     "path",
     "port",
     "required",
-    "restart"
+    "restart",
+    "scheme"
    ],
    "methods": {
     "shortcut": [
      "default_id",
      "namespace",
      "remote_port",
+     "scheme",
      "target"
     ]
    },
@@ -4675,25 +4681,49 @@
   },
   "HelmChart": {
    "attr_types": {
-    "toggles": "HelmToggle"
+    "optional": "HelmOptional",
+    "toggles": "HelmToggle",
+    "values": "HelmValue"
    },
    "attrs": [
     "descriptions",
+    "optional",
     "required",
     "setting_keys",
     "settings",
+    "storage_env",
     "target",
-    "toggles"
+    "toggles",
+    "values"
    ],
    "init": [
     "descriptions",
+    "optional",
     "required",
     "settings",
+    "storage_env",
     "target",
-    "toggles"
+    "toggles",
+    "values"
    ],
    "methods": {
     "setting_keys": []
+   }
+  },
+  "HelmOptional": {
+   "attrs": [
+    "default",
+    "description",
+    "keys",
+    "objects"
+   ],
+   "init": [
+    "default",
+    "description",
+    "objects"
+   ],
+   "methods": {
+    "keys": []
    }
   },
   "HelmToggle": {
@@ -4707,6 +4737,22 @@
     "default",
     "description",
     "patches"
+   ],
+   "methods": {
+    "resolved": []
+   }
+  },
+  "HelmValue": {
+   "attrs": [
+    "default",
+    "description",
+    "resolved",
+    "targets"
+   ],
+   "init": [
+    "default",
+    "description",
+    "targets"
    ],
    "methods": {
     "resolved": []
@@ -5302,6 +5348,7 @@
     "cmd",
     "entrypoint",
     "files",
+    "labels",
     "name",
     "ref",
     "repository",
@@ -5318,6 +5365,7 @@
     "cmd",
     "entrypoint",
     "files",
+    "labels",
     "name",
     "repository",
     "smoke",
@@ -6461,6 +6509,8 @@
     "manifest",
     "namespace",
     "namespace_labels",
+    "namespace_names",
+    "namespaces",
     "pod_labels",
     "pods",
     "workload"
@@ -6469,6 +6519,7 @@
     "cidr_block",
     "cidr_except",
     "namespace_labels",
+    "namespace_names",
     "pod_labels"
    ],
    "methods": {
@@ -6482,6 +6533,10 @@
      "name",
      "pods"
     ],
+    "namespaces": [
+     "names",
+     "pods"
+    ],
     "pods": [
      "labels"
     ],
@@ -6493,6 +6548,7 @@
    "returns": {
     "cidr": "NetworkPeer",
     "namespace": "NetworkPeer",
+    "namespaces": "NetworkPeer",
     "pods": "NetworkPeer",
     "workload": "NetworkPeer"
    }
@@ -10445,6 +10501,7 @@
    "attrs": [
     "access",
     "access_port",
+    "access_scheme",
     "component",
     "component_name",
     "headless",
@@ -10465,6 +10522,7 @@
    ],
    "methods": {
     "access_port": [],
+    "access_scheme": [],
     "manifest": [
      "labels",
      "namespace"
@@ -10504,6 +10562,7 @@
   },
   "ServicePort": {
    "attrs": [
+    "app_protocol",
     "manifest",
     "name",
     "port",
@@ -10511,6 +10570,7 @@
     "target_port"
    ],
    "init": [
+    "app_protocol",
     "name",
     "port",
     "protocol",
@@ -11465,8 +11525,10 @@
     "remote_port",
     "required",
     "restart",
+    "scheme",
     "target",
-    "url"
+    "url",
+    "web"
    ],
    "init": [
     "description",
@@ -11480,6 +11542,7 @@
     "remote_port",
     "required",
     "restart",
+    "scheme",
     "target"
    ],
    "methods": {},
@@ -13733,6 +13796,7 @@
      "--interval",
      "--json",
      "--kubeconfig",
+     "--machines",
      "--namespace",
      "--repo",
      "--state-dir",
@@ -15540,8 +15604,14 @@
    "HelmChart": {
     "class": "HelmChart"
    },
+   "HelmOptional": {
+    "class": "HelmOptional"
+   },
    "HelmToggle": {
     "class": "HelmToggle"
+   },
+   "HelmValue": {
+    "class": "HelmValue"
    },
    "HttpRoute": {
     "class": "HttpRoute"
@@ -17612,5 +17682,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.30.0"
+ "version": "0.31.0"
 }

@@ -588,6 +588,7 @@ class HostExecution:
                 user=image.user,
                 workdir=image.workdir,
                 env=image.env,
+                labels=image.labels,
             ),
             platform,
             epoch=epoch,

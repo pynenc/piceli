@@ -170,6 +170,7 @@ dirs = { "/var/lib/api" = "10001:10001:0700" }    # owned directories
 user = "10001:10001"
 entrypoint = ["/usr/local/bin/api"]
 env = { RUST_LOG = "info" }
+labels = { "org.opencontainers.image.licenses" = "MIT", "org.opencontainers.image.source" = "https://example.org/shop" }
 ```
 
 - `target_files` paths are relative to the shared target directory,
@@ -179,6 +180,10 @@ env = { RUST_LOG = "info" }
   supported (`base-layer-unsupported`).
 - An `entrypoint` without `cmd` clears the base image's `Cmd`, as a
   Dockerfile `ENTRYPOINT` does.
+- `labels` (0.31.0) are the image config's labels, the same on a build host
+  and in the cluster; registries read the OCI ones
+  (`org.opencontainers.image.licenses`, `.source`, `.description`). A
+  `build.toml` image takes the same table (`docker buildx build --label`).
 - `build.env` cannot set `PATH`, `CARGO_TARGET_DIR`, `SOURCE_DATE_EPOCH` or
   `PICELI_SHARED_TARGET_DIR`.
 - `contexts = ["api", "config"]` (optional, default every context) names

@@ -65,6 +65,15 @@ docs-reference: ## Regenerate docs/reference/{errors,cli}.md from code
 docs: ## Build the documentation (warnings are errors)
 	uv run --group docs sphinx-build -j auto -W --keep-going -b html docs docs/_build/html
 
+.PHONY: docs-fresh
+docs-fresh: ## Build the documentation from scratch (no cache; what CI sees)
+	uv run --group docs sphinx-build -E -a -j auto -W --keep-going -b html docs docs/_build/html
+
+.PHONY: release-bump
+release-bump: ## Pin VERSION=X.Y.Z everywhere (pyproject, uv.lock, skill, snapshot, baselines)
+	@test -n "$(VERSION)" || (echo "make release-bump VERSION=X.Y.Z" >&2; exit 2)
+	uv run --frozen python scripts/release_bump.py $(VERSION)
+
 .PHONY: docs-inventories
 docs-inventories: ## Refresh the committed intersphinx fallbacks in docs/_inventories
 	curl -sfL https://docs.python.org/3/objects.inv -o docs/_inventories/python.inv

@@ -94,7 +94,7 @@ _RESTORE_EXPORTS = frozenset({"Quiesce", "RestorePoints", "RestoreVerify"})
 _ENVS_EXPORTS = frozenset({"Branch", "EnvConfig", "Promote", "Stack", "Tag"})
 
 # Client charts for ``piceli bundle --helm``.
-_BUNDLE_EXPORTS = frozenset({"HelmChart", "HelmToggle"})
+_BUNDLE_EXPORTS = frozenset({"HelmChart", "HelmOptional", "HelmToggle", "HelmValue"})
 
 if TYPE_CHECKING:
     from piceli.app import (  # noqa: F401
@@ -146,7 +146,12 @@ if TYPE_CHECKING:
         UpgradeCheck,
         Workload,
     )
-    from piceli.bundle.helm import HelmChart, HelmToggle  # noqa: F401
+    from piceli.bundle.helm import (  # noqa: F401
+        HelmChart,
+        HelmOptional,
+        HelmToggle,
+        HelmValue,
+    )
     from piceli.checks import Checks  # noqa: F401
     from piceli.envs import Branch, EnvConfig, Promote, Stack, Tag  # noqa: F401
     from piceli.pipeline import (  # noqa: F401

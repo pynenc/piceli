@@ -925,6 +925,8 @@ def test_cli_access_supervises_declared_forwards_and_serves_the_dashboard(
             {
                 "id": "api",
                 "url": f"http://127.0.0.1:{local}/",
+                "scheme": "http",
+                "web": True,
                 "target": "service/api",
                 "local_port": local,
                 "remote_port": upstream,
