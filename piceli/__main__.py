@@ -22,6 +22,10 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "--help-json":
         sys.argv[1:2] = ["help-json"]
     from piceli.k8s.cli import app as k8s_app
+    from piceli.k8s.cli.builder import expand_args_file
+
+    # 0.29.0: builder serve --args-file PATH (a fixed NixOS unit's flags).
+    sys.argv[1:] = expand_args_file(sys.argv[1:])
     from piceli.k8s.cli.profiles import main_argv
     from piceli.k8s.cli.train import subcommand_argv
 

@@ -73,16 +73,42 @@ def serve(
     once: Annotated[
         bool, typer.Option("--once", help="Build at most one wanted build, then exit")
     ] = False,
+    take_next: Annotated[
+        bool,
+        typer.Option(
+            "--take-next",
+            help="With --once: stand by for the next build this host may take "
+            "(one waiting now, or the next one asked for), claim it before the "
+            "in-cluster fallback, build it, then exit (0.29.0)",
+        ),
+    ] = False,
+    timeout: Annotated[
+        float,
+        typer.Option(
+            "--timeout", min=1, help="--take-next: seconds to stand by at most"
+        ),
+    ] = 1800.0,
     check: Annotated[
         bool,
         typer.Option(
             "--check",
-            help="Claim nothing: list the NixReleases this host publishes, how "
+            help="Claim nothing: git ls-remote every source of the controller, "
+            "write into the scratch directory and build cache from inside the "
+            "builder container, list the NixReleases this host publishes, how "
             "each fetches its private flake inputs (credentials host or "
             "controller) and whether this host holds each credential, then exit "
-            "(1 when one is missing)",
+            "(1 when anything fails)",
         ),
     ] = False,
+    args_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--args-file",
+            help="Read more builder serve arguments from this file at start, one "
+            "per line (# comments); for a fixed service unit (NixOS) whose image "
+            "and flags change without rewriting the unit (0.29.0)",
+        ),
+    ] = None,
     poll: Annotated[
         float, typer.Option("--poll", min=5, help="Seconds between looks when idle")
     ] = 15.0,
@@ -99,6 +125,10 @@ def serve(
     as_json: JsonOption = False,
 ) -> None:
     """Take the builds the controller publishes, build and deliver them, answer it."""
+    if args_file is not None:  # the entry point expands it (expand_args_file)
+        reject("cluster-build-invalid", "--args-file is read by the piceli command")
+    if take_next and not once:
+        reject("cluster-build-invalid", "--take-next builds one build: add --once")
     from piceli.dev.hosts import ContainerCli
     from piceli.dev.model import DevError
     from piceli.gitops.state import ConfigMapChannel
@@ -123,7 +153,7 @@ def serve(
     registry = declared.registry
     cli = ContainerCli(chosen) if chosen.kind == "docker" else None
     try:
-        if images and cli is not None and not check:
+        if images and cli is not None:
             cli.platform()
             ensure_image(cli, str(builder_image), say)
             prepare_cache(cli, str(builder_image))
@@ -188,22 +218,38 @@ def serve(
             from piceli.dev.nix_inputs import host_check
 
             try:
-                releases = host_check(channel.read_status() or {}, chosen.name)
+                current = channel.read_status() or {}
+                releases = host_check(current, chosen.name)
             except Exception:  # a warning never stops the host from starting
                 if check:
                     raise
-                releases = []
+                current, releases = {}, []
             missing = _say_inputs(releases, chosen.name, quiet=not check)
             if check:
+                # 0.29.0: every source as the build fetches it, and a write
+                # into the scratch directory and cache from inside the image.
+                sources = _check_sources(current)
+                scratch = (
+                    _check_scratch(cli, str(builder_image))
+                    if images and cli is not None
+                    else None
+                )
+                failed = (
+                    missing
+                    or any(row["state"] != "reachable" for row in sources)
+                    or (scratch is not None and scratch["state"] != "writable")
+                )
                 emit_json(
                     {
                         "schema": "piceli.builder-check.v1",
                         "host": chosen.name,
                         "releases": releases,
-                        "complete": not missing,
+                        "sources": sources,
+                        "scratch": scratch,
+                        "complete": not failed,
                     }
                 )
-                raise typer.Exit(1 if missing else 0)
+                raise typer.Exit(1 if failed else 0)
         worker = BuilderServe(
             host=chosen.name,
             image=str(builder_image or ""),
@@ -222,7 +268,7 @@ def serve(
             images=images,
         )
         if once:
-            built = worker.once()
+            built = worker.take_next(timeout=timeout) if take_next else worker.once()
             if as_json:
                 emit_json(
                     {
@@ -248,6 +294,87 @@ def serve(
             worker.serve(poll=poll)
         except KeyboardInterrupt:
             say("builder: stopped")
+
+
+def _check_sources(status: Any) -> list[dict[str, Any]]:
+    """``--check`` (0.29.0): ``git ls-remote`` of every source the
+    controller follows, said per source."""
+    from piceli.infra.builder_serve import check_sources
+
+    urls = {
+        str(name): str((item or {}).get("url") or "")
+        for name, item in ((status or {}).get("sources") or {}).items()
+    }
+    rows = check_sources(urls)
+    for row in rows:
+        say(
+            f"builder: source {row['source']} {row['state']}"
+            + (f" via {row['via']}" if row.get("via") else "")
+            + (f": {row['detail']}" if row.get("detail") else "")
+        )
+    if not rows:
+        say("builder: the controller lists no sources yet")
+    return rows
+
+
+def _check_scratch(cli: Any, image: str) -> dict[str, Any]:
+    """``--check`` (0.29.0): the write test inside the builder container."""
+    from piceli.infra.builder_serve import scratch_check
+
+    found = scratch_check(cli, image)
+    say(
+        "builder: scratch directory and build cache "
+        + (
+            "writable from the builder container"
+            if found["state"] == "writable"
+            else f"NOT writable from the builder container: {found.get('detail')}"
+        )
+    )
+    return found
+
+
+def read_args_file(path: Path) -> list[str]:
+    """The arguments in ``path`` (0.29.0, ``--args-file``): one per line,
+    blank lines and ``#`` comments skipped; never another ``--args-file``."""
+    try:
+        text = path.read_text()
+    except OSError as error:
+        reject(
+            "cluster-build-invalid",
+            f"cannot read the arguments file {path} ({error.strerror})",
+        )
+    found = [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    if any(item == "--args-file" or item.startswith("--args-file=") for item in found):
+        reject("cluster-build-invalid", "an arguments file names no --args-file")
+    return found
+
+
+def expand_args_file(argv: list[str]) -> list[str]:
+    """``piceli builder serve ... --args-file PATH`` (0.29.0): ``argv`` with
+    the option replaced by the file's arguments, after the command line's
+    own (the entry point applies it before parsing); other argv unchanged."""
+    if argv[:2] != ["builder", "serve"]:
+        return argv
+    kept: list[str] = []
+    files: list[Path] = []
+    items = iter(argv)
+    for item in items:
+        if item == "--args-file":
+            value = next(items, None)
+            if value is None:
+                reject("cluster-build-invalid", "--args-file names no file")
+            files.append(Path(value))
+        elif item.startswith("--args-file="):
+            files.append(Path(item.split("=", 1)[1]))
+        else:
+            kept.append(item)
+    for path in files:
+        kept += read_args_file(path.expanduser())
+    return kept
 
 
 def _stop_on_sigterm() -> None:
@@ -440,6 +567,16 @@ def install(
         )
     except bs.ServiceError as error:
         reject(error.code, str(error))
+    text = bs.render(service)
+    if print_only:
+        # 0.29.0: printed whatever this machine holds (the unit may be for
+        # another machine, or NixOS writes it); the checks run where it runs.
+        say(
+            "builder: --print checks nothing; run piceli builder serve --check "
+            "where the service runs"
+        )
+        typer.echo(text, nl=False)
+        return
     # The same checks as builder serve --check, as the service will run:
     # the cache keys, the profile and kubeconfig reach the controller, and
     # this host holds every credential it needs.
@@ -447,10 +584,6 @@ def install(
         _check_caches(publish or [])
         status = _read_status(declared, namespace, transport, allow_exec, exec_sha256)
         _check_credentials(status or {}, chosen.name)
-    text = bs.render(service)
-    if print_only:
-        typer.echo(text, nl=False)
-        return
     try:
         commands = bs.install(machine, service)
     except bs.ServiceError as error:

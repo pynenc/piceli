@@ -536,6 +536,65 @@ digest and platforms, and a receipt: host, times, builder image, commits).
 A failure answers `build-failed` with the output's tail: the environment's
 step fails with it, as an in-cluster build would.
 
+(build-host-handover)=
+**A failure before the build runs is handed over (0.29.0).** When a host
+fails before the build's first command (it cannot fetch a source, or its
+container engine cannot start the build container), the build is not
+failed. The host answers `build-failed` with `early`; the controller drops
+its claim, **quarantines the host for that source** and hands the build on:
+
+- to another declared build host that may take it, which gets 60 seconds
+  before the in-cluster fallback runs;
+- to the in-cluster fallback at once when no other host may take it;
+- with `builds=("hosts",)` and no other host, the environment fails with
+  the host's reason.
+
+A quarantined host's claims of builds that need that source are refused,
+and its `builder serve` skips them and says why. The quarantine lasts until
+`piceli gitops release-host HOST` (the status shows it under
+`controller.source_quarantine`; the waiting environment says `handed over
+by HOST (reason)`). A failure after the build started (a compiler error)
+still fails the step, as before.
+
+(build-hosts-declared)=
+**Only declared hosts build (0.29.0).** When the composition declares build
+hosts (`DevBuilds(hosts=[...])`), the controller takes claims, answers and
+standbys only from them; a request from any other host is refused
+(`rejected_requests`, `not declared in the composition`). A host still
+running after you removed it from the composition says so in its `builder
+serve` output and claims nothing until it is declared again:
+
+```text
+builder: the controller's composition does not declare build host old-host
+  (it declares builder-1, builder-2); claiming nothing. Declare it in
+  DevBuilds(hosts=[...]) or stop this service (piceli builder uninstall
+  --host old-host)
+```
+
+The status lists the declared hosts (`controller.build_hosts_declared`). A
+composition that declares none takes any host, as before.
+
+(builder-take-next)=
+**Test a host by hand: `--once --take-next` (0.29.0).** A short `host_wait`
+(for example `20s`) lets the in-cluster fallback win every race against a
+`builder serve --once` started by hand. With `--take-next` the host stands
+by: it tells the controller (`build-standby`), takes the next build it may
+(one waiting now, or the next one asked for), claims it and builds it,
+then exits. While it stands by, the fallback waits for it, at most 2
+minutes past its usual time:
+
+```sh
+piceli builder serve --cluster infra.py:my_cluster --host builder-1 \
+  --once --take-next --timeout 600 --json
+# elsewhere, to give it a build at a commit already built:
+piceli gitops build main
+```
+
+`piceli gitops build ENV` builds the environment's images again at the
+commit it follows, through its usual plan and approval. Since 0.29.0 it
+also does so when that commit is already deployed (before, it did nothing
+then, so a host could not be tested on a built commit).
+
 **Private sources.** Sources are fetched at the URLs the composition
 declares, never with a prompt. An HTTPS URL is fetched with the host's Git
 credentials (its credential helper); when that fails, the same repository is
@@ -620,7 +679,19 @@ is stopped with SIGINT, as Ctrl-C stops `serve` (SIGTERM, which launchd
 sends, stops it the same way). Its `PATH` holds the directories where
 docker, git and kubectl are now; `install` refuses when one is missing
 (`builder-service-invalid`, naming it). `--print` writes the unit to
-stdout and changes nothing.
+stdout and changes nothing; since 0.29.0 it checks nothing either, so it
+prints the unit on a machine that does not hold the secrets yet (run
+`builder serve --check` where the service runs).
+
+**`--check` (0.29.0) also tries every source and the scratch directory.**
+Besides the credentials, `builder serve --check` runs `git ls-remote` of
+every source the controller follows, as the build fetches it (the URL, then
+the same repository over SSH, never prompting), and runs the builder image
+as a build does (its user, no capabilities) to write into a scratch archive
+directory and the build cache. Each result is a line and a field of
+`piceli.builder-check.v1` (`sources`: `reachable` with `via`, or
+`unreachable` with Git's message; `scratch`: `writable` or `not-writable`);
+the command exits 1 when one fails.
 
 Before it writes anything, `install` runs the checks of `builder serve
 --check`: the cluster's credential profile and kubeconfig reach the
@@ -657,8 +728,59 @@ needs, and nothing more:
 A host that delivers into the nodes over SSH, or only publishes Nix
 releases, needs only the first line.
 
-**NixOS.** Keep the unit in your configuration instead: `piceli builder
-install ... --print` shows it, and this is the same service:
+(builder-nixos)=
+**NixOS.** On NixOS `/etc/systemd/system` is read-only: keep the unit in
+your configuration. `piceli builder install ... --print` shows the unit
+`install` would write. To upgrade Piceli or change the builder image without
+a `nixos-rebuild`, keep the unit fixed and put what changes in files under
+the state directory that the unit reads at start (0.29.0):
+
+- `/var/lib/piceli-builder/version`: the Piceli version, for example
+  `0.29.0`;
+- `/var/lib/piceli-builder/serve.args`: the `builder serve` arguments, one
+  per line (`#` comments), read by `--args-file`:
+
+```text
+# builder serve arguments for builder-1
+--image
+ghcr.io/pynenc/piceli-builder@sha256:<digest>
+--poll
+15
+```
+
+```nix
+users.users.builder.extraGroups = [ "docker" ];
+systemd.services.piceli-builder-builder-1 = {
+  description = "Piceli build host builder-1";
+  wantedBy = [ "multi-user.target" ];
+  wants = [ "network-online.target" ];
+  after = [ "network-online.target" "docker.service" ];
+  path = [ pkgs.docker pkgs.git pkgs.kubectl pkgs.uv ];
+  environment.HOME = "/var/lib/piceli-builder";
+  # The version and the flags are read when the service starts.
+  script = ''
+    exec uvx --from "piceli==$(cat /var/lib/piceli-builder/version)" \
+      piceli builder serve --cluster infra.py:my_cluster --host builder-1 \
+      --state-dir /var/lib/piceli-builder \
+      --args-file /var/lib/piceli-builder/serve.args
+  '';
+  serviceConfig = {
+    User = "builder";
+    WorkingDirectory = "/srv/deploy";  # where infra.py is
+    Restart = "on-failure";
+    RestartSec = 10;
+    KillSignal = "SIGINT";
+    TimeoutStopSec = 120;
+  };
+};
+```
+
+An upgrade is then: write the new version (and the new image digest in
+`serve.args`), `systemctl restart piceli-builder-builder-1`, and `builder
+status` shows the new version. If the deploy directory pins Piceli itself
+(a `uv.lock`), run `uv run piceli ...` there instead of `uvx` and upgrade by
+updating the lock. The fixed unit without these files is the same service
+`install` writes:
 
 ```nix
 users.users.builder.extraGroups = [ "docker" ];

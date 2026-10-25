@@ -66,25 +66,19 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.28
+## What's new in 0.29
 
-- **Alarms**: the GitOps controller sends ntfy or webhook alarms when an
-  environment fails, waits too long for a build host or an approval, a Nix
-  release fails, or the composition stops importing; `piceli gitops alarms
-  --follow` raises them on your desktop.
-- **Safer upgrades**: `piceli gitops enable --canary` tries the new
-  controller version on your composition without applying anything before
-  it replaces the live one, and `--wait` waits until every environment runs
-  the new revision with its checks passed (exit codes for scripts).
-- **Previews in minutes**: `piceli env up BRANCH --cluster ... --wait`
-  deploys a branch now, reusing the images the train built, and prints its
-  URL when it is ready.
-- **Build hosts as services**: `piceli builder install` sets up a systemd
-  or launchd service on the build host; `piceli builder status` shows which
-  hosts serve.
-- **Faster adoption and numbers**: `piceli train init --from SCRIPT` writes a
-  starting train spec, `--compare` runs your old script beside the train, and
-  `piceli cycle report` gives push-to-running times per target; see the
+- **Build hosts that fail early hand the build over**: a host that cannot
+  fetch a source passes the build to the next host or the in-cluster
+  fallback at once, and stays out of that source's builds until released.
+- **Only declared build hosts build**: a host removed from the composition
+  is refused and says so.
+- **Test a host by hand**: `piceli builder serve --once --take-next` claims
+  the next build before the fallback, and `piceli gitops build ENV` now
+  rebuilds a commit that is already deployed.
+- **Better checks**: `builder serve --check` tries every source and writes
+  from inside the builder container; `builder install --print` works
+  without secrets, for NixOS; see the
   [guide](https://docs.pynenc.org/projects/piceli/en/latest/gitops.html).
 
 ## Web UI

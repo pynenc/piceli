@@ -4,6 +4,63 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.29.0
+
+**Features**
+
+- **Only declared build hosts build.** When the composition declares build
+  hosts (`DevBuilds(hosts=[...])`), the GitOps controller refuses claims,
+  answers and standbys from any other host (`not declared in the
+  composition` in `rejected_requests`). A host still running after it was
+  removed from the composition says so in its `builder serve` output and
+  claims nothing until it is declared again. The status lists the declared
+  hosts (`controller.build_hosts_declared`). See {ref}`build-hosts-declared`.
+- **A failure before the build runs is handed over.** A build host that
+  cannot fetch a source, or whose container engine cannot start the build,
+  answers `build-failed` with `early`. The build is not failed: the
+  controller hands it to another declared host (60 seconds before the
+  in-cluster fallback) or to the fallback at once when no host is left, and
+  quarantines that host for that source until `piceli gitops release-host`
+  (`controller.source_quarantine`). Before, the host kept claiming the
+  build and failing it, and the fallback never ran. See
+  {ref}`build-host-handover`.
+- **`piceli builder serve --once --take-next`** stands by for the next build
+  this host may take, claims it before the in-cluster fallback (which waits
+  for a standing-by host at most 2 minutes past `host_wait`), builds it and
+  exits (`--timeout`, default 30 minutes). Claims and standbys wake the
+  controller within 2 seconds. See {ref}`builder-take-next`.
+- **`builder serve --check`** also runs `git ls-remote` of every source the
+  controller follows, as the build fetches it, and writes into a scratch
+  directory and the build cache from inside the builder container
+  (`sources` and `scratch` in `piceli.builder-check.v1`; exit 1 when one
+  fails).
+- **NixOS build hosts.** `builder install --print` prints the unit without
+  checking anything, so it works before the secrets exist.
+  `builder serve --args-file PATH` reads more arguments at start (one per
+  line), so a fixed unit from Nix takes its image and flags from a file
+  under the state directory. See {ref}`builder-nixos`.
+
+**Fixes**
+
+- `piceli gitops build ENV` did nothing when the environment's commit was
+  already deployed: it now builds its images again (offered to build hosts,
+  or in the cluster) and deploys them through the usual plan and approval.
+- The images a build host delivered for `gitops build` are no longer asked
+  for again at the next step.
+
+**Design**
+
+- A proposal for alarm targets per organisation and environment (named
+  webhook-based targets, routes, a test command): {doc}`contributing/alarm_targets_design`.
+  Not implemented yet.
+
+**Upgrade notes**
+
+- A build host that is not in `DevBuilds(hosts=[...])` of a composition
+  that declares hosts can no longer claim builds: declare it, or stop it.
+- `builder install --print` no longer runs the checks; run `builder serve
+  --check` where the service runs.
+
 ## Version 0.28.0
 
 **Features**

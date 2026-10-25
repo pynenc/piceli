@@ -12238,6 +12238,7 @@
     "arguments": [],
     "flags": [
      "--allow-exec",
+     "--args-file",
      "--check",
      "--cluster",
      "--exec-sha256",
@@ -12251,6 +12252,8 @@
      "--publish",
      "--publish-only",
      "--state-dir",
+     "--take-next",
+     "--timeout",
      "--transport"
     ],
     "subcommands": []
