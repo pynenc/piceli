@@ -169,7 +169,7 @@ What becomes a value:
 | Value | From | Notes |
 | --- | --- | --- |
 | each ConfigMap key, in camelCase (`cluster-id` → `clusterId`) | the app's ConfigMaps | or only the keys `HelmChart(settings=...)` names; one in `required` fails the install with a message naming it |
-| each secret input, in camelCase (`api_token` → `apiToken`) | a generator Piceli cannot run (an import, SOPS, Vault) | `--set-file NAME=FILE`; required on the first install, kept across upgrades when not passed again; a trailing newline is trimmed like `prepare.sh` |
+| each secret input, in camelCase (`api_token` → `apiToken`) | a generator Piceli cannot run (an import, SOPS, Vault) | `--set-file NAME=FILE`; required on the first install, kept across upgrades when not passed again; trailing whitespace (a newline, `\r\n`) is trimmed |
 | each toggle (`relayOnly`) | `HelmChart(toggles=...)` | `true` applies the toggle's patches |
 | `image.registry`, `image.pullSecrets` | every image | a mirror's host (and path) replaces each image's registry; digests stay |
 | `storageClass` | every claim | empty: the cluster's default (or `--storage-class`) |

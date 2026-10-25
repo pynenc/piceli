@@ -371,7 +371,7 @@ def test_secrets_are_generated_and_the_input_is_passed(
 ) -> None:
     out, _ = _write(tmp_path)
     token = tmp_path / "token"
-    token.write_text("token-from-file\n")
+    token.write_bytes(b"token-from-file \r\n")
     result = _template(
         helm, out, "--set", "team=t", "--set", "clusterId=1",
         "--set-file", f"apiToken={token}",
@@ -381,7 +381,7 @@ def test_secrets_are_generated_and_the_input_is_passed(
     data = {
         key: base64.b64decode(value).decode() for key, value in secret["data"].items()
     }
-    assert data["api-token"] == "token-from-file"  # trailing newline trimmed
+    assert data["api-token"] == "token-from-file"  # trailing whitespace trimmed
     for key in ("intake-token", "cluster-key"):
         # 32 random bytes, URL-safe base64 without padding (as prepare.sh).
         assert len(data[key]) == 43 and set(data[key]) <= set(

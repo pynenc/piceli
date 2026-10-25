@@ -592,7 +592,7 @@ def _secret_helper(name: str, bundle: Bundle, inputs: Mapping[str, str]) -> str:
             value = inputs[generator]
             lines.append(f'{{{{- $v = $.Values.{value} | default "" | toString -}}}}')
             if isinstance(spec, ImportSecretSpec) and spec.trim_newline:
-                lines.append('{{- $v = regexReplaceAll "\\n+$" $v "" -}}')
+                lines.append('{{- $v = regexReplaceAll "\\\\s+$" $v "" -}}')
             lines += kept(generator)
             message = (
                 f"{value} is required on the first install: --set-file {value}=FILE"
