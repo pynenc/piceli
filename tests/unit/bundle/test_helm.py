@@ -148,8 +148,8 @@ def test_the_archive_is_deterministic(tmp_path: Path) -> None:
 
 
 def test_value_names_are_camel_case() -> None:
-    assert value_name("poet-cluster-id") == "poetClusterId"
-    assert value_name("shibuya_token") == "shibuyaToken"
+    assert value_name("site-cluster-id") == "siteClusterId"
+    assert value_name("api_token") == "apiToken"
     assert value_name("organisation") == "organisation"
 
 

@@ -13,7 +13,7 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `values.yaml`, `values.schema.json`, `README.md`, `templates/`), so a client
   installs it with one `helm install` and removes it with one `helm
   uninstall`, with no archive and no `prepare.sh`. ConfigMap keys and secret
-  inputs become camelCase values (`poet-cluster-id` → `poetClusterId`; an
+  inputs become camelCase values (`cluster-id` → `clusterId`; an
   imported token is `--set-file NAME=FILE`); a `HelmChart` declaration names
   required settings (Helm's `required`), descriptions and boolean toggles
   (`HelmToggle`: JSON Patch or merge patches applied when the value is true; the

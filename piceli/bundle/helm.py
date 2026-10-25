@@ -5,7 +5,7 @@ the same safety gate for foreign clusters) into a Helm 3 chart instead of a
 kustomize base and ``prepare.sh``:
 
 - **Settings.** Each key of the app's ConfigMaps is a top-level value named
-  in camelCase (``poet-cluster-id`` becomes ``poetClusterId``), or only the
+  in camelCase (``cluster-id`` becomes ``clusterId``), or only the
   keys a :class:`HelmChart` names. A required setting fails the install with
   a message naming it (Helm's ``required``).
 - **Secrets.** Each Secret the app declares is rendered by the chart, never
