@@ -81,7 +81,8 @@ jobs:
 
   comparisons:
     # examples/comparisons: the same app in Helm, Kustomize, cdk8s and Pulumi
-    # renders the same objects as Piceli (docs/comparisons.md). Pinned tools;
+    # renders the same objects as Piceli (docs/comparisons.md); `piceli
+    # bundle --helm` charts pass helm lint and template. Pinned tools;
     # PICELI_COMPARISONS=require turns a missing tool into a failure.
     runs-on: ubuntu-latest
     env:
@@ -115,7 +116,7 @@ jobs:
           uv run
           --with-requirements examples/comparisons/cdk8s/requirements.txt
           --with-requirements examples/comparisons/pulumi/requirements.txt
-          pytest tests/unit/comparisons -v
+          pytest tests/unit/comparisons tests/unit/bundle/test_helm.py -v
 
   kind-nodes:
     # The supported Kubernetes minors (.github/kind-nodes.json, newest first,

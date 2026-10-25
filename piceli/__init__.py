@@ -93,6 +93,9 @@ _RESTORE_EXPORTS = frozenset({"Quiesce", "RestorePoints", "RestoreVerify"})
 # ``piceli.envs.Environment``.
 _ENVS_EXPORTS = frozenset({"Branch", "EnvConfig", "Promote", "Stack", "Tag"})
 
+# Client charts for ``piceli bundle --helm``.
+_BUNDLE_EXPORTS = frozenset({"HelmChart", "HelmToggle"})
+
 if TYPE_CHECKING:
     from piceli.app import (  # noqa: F401
         Access,
@@ -143,6 +146,7 @@ if TYPE_CHECKING:
         UpgradeCheck,
         Workload,
     )
+    from piceli.bundle.helm import HelmChart, HelmToggle  # noqa: F401
     from piceli.checks import Checks  # noqa: F401
     from piceli.envs import Branch, EnvConfig, Promote, Stack, Tag  # noqa: F401
     from piceli.pipeline import (  # noqa: F401
@@ -187,6 +191,10 @@ def __getattr__(name: str) -> Any:
         from piceli import envs
 
         return getattr(envs, name)
+    if name in _BUNDLE_EXPORTS:
+        from piceli.bundle import helm
+
+        return getattr(helm, name)
     raise AttributeError(f"module 'piceli' has no attribute {name!r}")
 
 
@@ -199,5 +207,6 @@ def __dir__() -> list[str]:
             *_CHECKS_EXPORTS,
             *_RESTORE_EXPORTS,
             *_ENVS_EXPORTS,
+            *_BUNDLE_EXPORTS,
         ]
     )

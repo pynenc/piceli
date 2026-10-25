@@ -150,6 +150,91 @@ UNINSTALL.md deletes the namespace and the cluster-scoped objects by label
 app.kubernetes.io/part-of=<name>`) and checks that nothing is left. Both need
 `kubectl` 1.27 or later (kustomize 5).
 
+## As a Helm chart
+
+`piceli bundle ... --helm` writes the same bundle (the same render, after the
+same safety gate) as a Helm 3 chart instead: `Chart.yaml`, `values.yaml`,
+`values.schema.json`, `README.md` and `templates/`. The client installs and
+removes it with one command each, with no archive and no `prepare.sh`:
+
+```sh
+piceli bundle app.py:chart --helm --out chart --version 1.4.0
+helm install agent oci://registry.example/acme/charts/agent --version 1.4.0 \
+  -n agent --create-namespace --set team=T1 --set-file apiToken=token.txt
+helm uninstall agent -n agent
+```
+
+What becomes a value:
+
+| Value | From | Notes |
+| --- | --- | --- |
+| each ConfigMap key, in camelCase (`cluster-id` → `clusterId`) | the app's ConfigMaps | or only the keys `HelmChart(settings=...)` names; one in `required` fails the install with a message naming it |
+| each secret input, in camelCase (`api_token` → `apiToken`) | a generator Piceli cannot run (an import, SOPS, Vault) | `--set-file NAME=FILE`; required on the first install, kept across upgrades when not passed again; trailing whitespace (a newline, `\r\n`) is trimmed |
+| each toggle (`relayOnly`) | `HelmChart(toggles=...)` | `true` applies the toggle's patches |
+| `image.registry`, `image.pullSecrets` | every image | a mirror's host (and path) replaces each image's registry; digests stay |
+| `storageClass` | every claim | empty: the cluster's default (or `--storage-class`) |
+| `deleteDataOnUninstall` | StatefulSets with claims | `true`: uninstall also deletes their claims (Kubernetes 1.27 or later) |
+
+`values.schema.json` refuses unknown values, so a mistyped name fails the
+install. Generated values (`Random`, `Static`, `Template`) are made at install
+in the same form as `prepare.sh` makes them (`Random(32)`: 32 random bytes,
+URL-safe base64), and read back with Helm's `lookup` on every upgrade, so
+they never change; they are never printed. TLS generators are refused
+(`bundle-secret-unsupported`): use the kustomize bundle for them. Build
+images from `--receipt` are refused: push them and declare them by digest.
+
+Cluster-scoped objects (ClusterRoles and their bindings) belong to the
+release: their names follow the release namespace, and `helm uninstall`
+deletes them. A StatefulSet's claims (its data) stay after uninstall unless
+`deleteDataOnUninstall=true`; delete the namespace to remove them.
+
+Name the values with a `HelmChart` beside the pipeline and point `piceli
+bundle` at it:
+
+```python
+from piceli import HelmChart, HelmToggle
+
+chart = HelmChart(
+    pipeline,
+    required=("team", "clusterId"),
+    toggles={
+        "relayOnly": HelmToggle(
+            "UDP only to the relay's ports",
+            patches=[
+                (
+                    policy,
+                    [
+                        {
+                            "op": "replace",
+                            "path": "/spec/egress/1/ports",
+                            "value": [{"port": 3478, "protocol": "UDP"}],
+                        }
+                    ],
+                )
+            ],
+        )
+    },
+    descriptions={"team": "the team id"},
+)
+```
+
+A toggle's patch is a JSON Patch (RFC 6902: `add`, `remove`, `replace`,
+`test`) or a mapping merged like `app.override`; the patched render passes
+the safety gate too, and two toggles may not change the same object.
+
+Publish the chart to an OCI registry as `helm push` does, with an approval
+of its digest like every Piceli publish:
+
+```sh
+piceli bundle app.py:chart --helm --version 1.4.0 --push oci://registry.example/acme/charts
+# exit 3, prints the digest; nothing is sent
+piceli bundle app.py:chart --helm --version 1.4.0 --push oci://registry.example/acme/charts \
+  --approve sha256:... --credentials registry.json
+```
+
+The chart goes to `<path>/<name>:<version>`; the same app, name and version
+always give the same archive and digest.
+
 ## Support bundles
 
 ```sh
@@ -186,7 +271,8 @@ URL credentials, JWTs and private keys become `[REDACTED]`).
 | `bundle-secret-value`, `bundle-secret-unsupported` | a secret value outside a Secret; a Secret key bound to no generator |
 | `bundle-image-unresolved`, `bundle-image-unpinned` | a build image missing from `--receipt`; an image without digest |
 | `bundle-image-platform-missing`, `bundle-image-archive-missing`, `bundle-image-mismatch`, `bundle-receipt-invalid` | the receipt lacks a platform or an archive, or does not match its files |
-| `bundle-invalid`, `bundle-out-refused`, `bundle-empty` | invalid name, version or labels; `--out` not empty |
+| `bundle-invalid`, `bundle-out-refused`, `bundle-empty` | invalid name, version, labels, value names or toggles; `--out` not empty |
+| `chart-target-invalid`, `chart-artifact-changed`, `chart-push-failed` | with `--helm --push`: a bad `oci://` path, a digest that is not this chart's, a failed push |
 | `support-bundle-*` | unreachable API, missing namespace, existing `--out` |
 
 All codes: {doc}`reference/errors`.

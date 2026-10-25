@@ -43,7 +43,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli builder serve`](#cli-builder-serve) | Take the builds the controller publishes, build and deliver them, answer it. | writes | no |
 | [`piceli builder status`](#cli-builder-status) | List the build hosts the controller heard from and what each last did. | reads | no |
 | [`piceli builder uninstall`](#cli-builder-uninstall) | Stop, disable and remove the build host service builder install wrote. | none | no |
-| [`piceli bundle`](#cli-bundle) | Package the app for a cluster Piceli never accesses (kustomize, prepare.sh, images). | none | no |
+| [`piceli bundle`](#cli-bundle) | Package the app for a cluster Piceli never accesses (kustomize, prepare.sh, images; or a Helm chart). | none | yes |
 | [`piceli cache prune`](#cli-cache-prune) | Remove what no release, rollback or resume needs: stale temporary directories and partial files, runs beyond --keep-last, unused delivery receipts, and (over --budget) build outputs and logs. | none | no |
 | [`piceli cache status`](#cli-cache-status) | Show the disk used per state directory and category, and Piceli's temporary directories. Read-only. | none | no |
 | [`piceli chart manifests`](#cli-chart-manifests) | Print (or write) plain manifests with a values file applied; no Helm needed. | none | no |
@@ -790,12 +790,12 @@ Stop, disable and remove the build host service builder install wrote.
 (cli-bundle)=
 ### `piceli bundle`
 
-Package the app for a cluster Piceli never accesses (kustomize, prepare.sh, images).
+Package the app for a cluster Piceli never accesses (kustomize, prepare.sh, images; or a Helm chart).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `TARGET` | text | required |  |
-| `--out` | path | required | Bundle directory to write (absent or empty) |
+| `--out` | path |  | Bundle (or, with --helm, chart) directory to write (absent or empty) |
 | `--env` | text |  | Render this environment (e.g. client) |
 | `--receipt` | path |  | Build receipt (piceli artifacts build-spec run) holding the app's build images; their archives go into images/ |
 | `--output-dir` | path |  | Directory the receipt's paths are relative to (default: its directory) |
@@ -804,17 +804,23 @@ Package the app for a cluster Piceli never accesses (kustomize, prepare.sh, imag
 | `--name` | text |  | Bundle name and part-of label (default: the render's part-of label) |
 | `--version` | text | `0.1.0` | Bundle version (X.Y.Z) |
 | `--storage-class` | text |  | storageClassName of every claim, in the overlay |
+| `--helm` | boolean | `False` | Write a Helm chart (Chart.yaml, values.yaml, templates/) instead of the kustomize bundle and prepare.sh |
+| `--app-version` | text |  | With --helm: appVersion of Chart.yaml (default: --version) |
+| `--push` | text |  | With --helm: oci://host[:port]/path; the chart goes to path/<name>:<version> (needs --approve DIGEST) |
+| `--approve` | text |  | With --push: the digest printed without --approve; pushes it |
+| `--credentials` | path |  | With --push: private JSON file, {"username", "password"} or {"token"} |
+| `--ca-file` | path |  | With --push: CA bundle for a TLS registry |
 
 **Contract**
 
-- **Reads:** module/app file, build receipt and its image archives (--receipt)
-- **Writes:** --out bundle directory
+- **Reads:** module/app file, build receipt and its image archives (--receipt), credentials file (--helm --push)
+- **Writes:** --out bundle directory, OCI registry (--helm --push --approve DIGEST: chart blobs, manifest, version tag)
 - **Cluster:** none
-- **Approval required:** no
+- **Approval required:** yes
 - **Safe to retry:** yes
-- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Never contacts a cluster or registry and writes no secret value. Renders like `piceli render --env`; refuses objects that break a foreign-cluster safety rule (bundle-unsafe-<rule>, with every violation) unless the App waives it per object (app.safety_exception). Writes a kustomize base and overlays/dev, prepare.sh (the generated Secrets, made in the client's cluster with kubectl and openssl), OCI image archives with SBOMs, INSTALL.md, UNINSTALL.md, bundle.json and SHA256SUMS. --out must be absent or empty; nothing is left behind on failure.
+- **Notes:** Approval applies to --helm --push only: without --approve it prints the chart's deterministic digest and exits 3; --approve DIGEST pushes path/<name>:<version> as helm push does. --helm writes a Helm 3 chart (Chart.yaml, values.yaml, values.schema.json, templates/) instead of the kustomize bundle: settings, secret inputs and toggles are values; generated Secrets are made at install and kept across upgrades with lookup. Otherwise never contacts a cluster or registry and writes no secret value. Renders like `piceli render --env`; refuses objects that break a foreign-cluster safety rule (bundle-unsafe-<rule>, with every violation) unless the App waives it per object (app.safety_exception). Writes a kustomize base and overlays/dev, prepare.sh (the generated Secrets, made in the client's cluster with kubectl and openssl), OCI image archives with SBOMs, INSTALL.md, UNINSTALL.md, bundle.json and SHA256SUMS. --out must be absent or empty; nothing is left behind on failure.
 
 (cli-cache-prune)=
 ### `piceli cache prune`

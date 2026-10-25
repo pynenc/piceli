@@ -66,20 +66,16 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.29
+## What's new in 0.30
 
-- **Build hosts that fail early hand the build over**: a host that cannot
-  fetch a source passes the build to the next host or the in-cluster
-  fallback at once, and stays out of that source's builds until released.
-- **Only declared build hosts build**: a host removed from the composition
-  is refused and says so.
-- **Test a host by hand**: `piceli builder serve --once --take-next` claims
-  the next build before the fallback, and `piceli gitops build ENV` now
-  rebuilds a commit that is already deployed.
-- **Better checks**: `builder serve --check` tries every source and writes
-  from inside the builder container; `builder install --print` works
-  without secrets, for NixOS; see the
-  [guide](https://docs.pynenc.org/projects/piceli/en/latest/gitops.html).
+- **Client bundles as Helm charts**: `piceli bundle app.py:chart --helm`
+  writes the same safety-checked bundle as a Helm 3 chart, so a client
+  installs it with one `helm install` and removes it with one `helm
+  uninstall`; settings, secret inputs and toggles are values, generated
+  Secrets are made at install and kept across upgrades.
+- **Publish it**: `--helm --push oci://HOST/PATH` prints the chart's digest
+  and pushes only with `--approve`; see the
+  [guide](https://docs.pynenc.org/projects/piceli/en/stable/client_delivery.html).
 
 ## Web UI
 

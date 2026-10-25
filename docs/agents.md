@@ -228,7 +228,11 @@ noted.
   `SHA256SUMS`); it writes only local files, contacts no cluster or
   registry and writes no secret value. A refusal `bundle-unsafe-<rule>`
   lists every violation; fix the model or, with the owner, declare
-  `app.safety_exception(...)`. See {doc}`client_delivery`.
+  `app.safety_exception(...)`. See {doc}`client_delivery`. With `--helm`
+  it writes a Helm chart instead (settings, secret inputs and toggles as
+  values; generated Secrets made at install and kept across upgrades);
+  `--helm --push oci://…` **without** `--approve` prints the chart's digest
+  (exit `3`); nothing is pushed.
 - `piceli support-bundle --kubeconfig F --context C --namespace NS --out
   FILE`: reads one namespace with GET requests only (never Secrets, never
   env or ConfigMap values) and writes a redacted archive.
@@ -415,6 +419,7 @@ Exporting deploy events (`--otlp-endpoint`, or `OTEL_EXPORTER_OTLP_*` in the env
 | `piceli release check` | Nothing by itself, but runs the spec's checks (declared pod execs and Python functions) | The owner's go-ahead for a spec you did not write |
 | `piceli artifacts deliver` | A registry or node | `--approve-digest <config digest>` |
 | `piceli publish` | A registry (the manifests as an OCI artifact, which something other than Piceli then applies, without Piceli's plan) | `--approve <artifact digest>` printed by `piceli publish` without `--approve`, after the owner reviewed the files and the target; see {doc}`gitops` |
+| `piceli bundle` (only `--helm --push`) | A registry (the client chart, which a client then installs with Helm) | `--approve <digest>` printed by the same command without `--approve`, after the owner reviewed the chart, its version and the target; see {doc}`client_delivery` |
 | `piceli chart publish` | A registry (the Helm chart, which other people then install with Helm) | `--approve <digest>` printed by `piceli chart publish` without `--approve`, after the owner reviewed the chart, its version and the target; see {doc}`helm_charts` |
 | `piceli artifacts build-spec run` | Runs a build, writes outputs and images | `--approve-builder <digest>` and `--approve-plan <hash>` (a `host-build.toml`: `--approve-plan` only) |
 | `piceli artifacts publish` | A hosted registry: images of every platform, their index, attestations, signatures, the version tag | `--approve <digest>` (printed without it) |

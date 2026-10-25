@@ -38,10 +38,13 @@ def _reject(reason: str, message: str) -> NoReturn:
     reject(reason, message)
 
 
-def _load(target: str, env: str | None) -> tuple[str, list[dict[str, Any]], Any, Any]:
-    """``(namespace, components, app, generators)`` of the target."""
+def _load(
+    target: str, env: str | None
+) -> tuple[str, list[dict[str, Any]], Any, Any, Any]:
+    """``(namespace, components, app, generators, HelmChart or None)``."""
     from piceli.app import App
     from piceli.app import render as rendering
+    from piceli.bundle.helm import HelmChart
     from piceli.k8s.cli.render import _render, _render_pipeline
     from piceli.pipeline import Pipeline, PipelineError
 
@@ -54,18 +57,48 @@ def _load(target: str, env: str | None) -> tuple[str, list[dict[str, Any]], Any,
             "render-target-invalid",
             f"importing {target} failed: {type(error).__name__}",
         )
+    declaration = None
+    if isinstance(value, HelmChart):
+        declaration, value = value, value.target
+        if not isinstance(value, Pipeline | App):
+            reject(
+                "render-target-invalid",
+                "a HelmChart wraps a Pipeline or an App",
+            )
+        if isinstance(value, App):
+            namespace, components, app = _render_app(value, env)
+            return namespace, components, app, {}, declaration
     if isinstance(value, Pipeline):
         namespace, components, _ = _render_pipeline(value, None, env, _reject)
         try:
             chosen = value.for_environment(env) if env is not None else value
         except PipelineError as error:
             reject(error.code, str(error))
-        return namespace, components, chosen.app, dict(chosen.secrets)
+        return namespace, components, chosen.app, dict(chosen.secrets), declaration
     namespace, components, _ = _render(target, None, None, env, _reject)
     app = value if isinstance(value, App) else None
     if app is not None and env is not None:
         app = app.for_environment(env)
-    return namespace, components, app, {}
+    return namespace, components, app, {}, declaration
+
+
+def _render_app(value: Any, env: str | None) -> tuple[str, list[dict[str, Any]], Any]:
+    """Render an App object offline, as ``piceli render`` renders its target."""
+    from pydantic import ValidationError
+
+    from piceli.app import render as rendering
+    from piceli.app.environment import EnvironmentInvalid
+
+    context = rendering.empty_context(
+        rendering.environment_namespace(value, env) or "default"
+    )
+    try:
+        composition, app = rendering.render_app_target(value, context, env)
+    except EnvironmentInvalid as error:
+        reject(error.code, str(error))
+    except (rendering.RenderError, ValidationError, ValueError) as error:
+        reject("render-model-invalid", str(error))
+    return context.namespace, rendering.rendered(composition, {}), app
 
 
 def _forward(app: Any, components: list[dict[str, Any]]) -> Any:
@@ -103,9 +136,13 @@ def bundle(
         ),
     ],
     out: Annotated[
-        Path,
-        typer.Option("--out", help="Bundle directory to write (absent or empty)"),
-    ],
+        Path | None,
+        typer.Option(
+            "--out",
+            help="Bundle (or, with --helm, chart) directory to write (absent or empty)",
+            show_default=False,
+        ),
+    ] = None,
     env: Annotated[
         str | None, typer.Option("--env", help="Render this environment (e.g. client)")
     ] = None,
@@ -154,8 +191,52 @@ def bundle(
             "--storage-class", help="storageClassName of every claim, in the overlay"
         ),
     ] = None,
+    helm: Annotated[
+        bool,
+        typer.Option(
+            "--helm",
+            help="Write a Helm chart (Chart.yaml, values.yaml, templates/) instead "
+            "of the kustomize bundle and prepare.sh",
+        ),
+    ] = False,
+    app_version: Annotated[
+        str | None,
+        typer.Option(
+            "--app-version",
+            help="With --helm: appVersion of Chart.yaml (default: --version)",
+            show_default=False,
+        ),
+    ] = None,
+    push: Annotated[
+        str | None,
+        typer.Option(
+            "--push",
+            help="With --helm: oci://host[:port]/path; the chart goes to "
+            "path/<name>:<version> (needs --approve DIGEST)",
+            show_default=False,
+        ),
+    ] = None,
+    approve: Annotated[
+        str | None,
+        typer.Option(
+            "--approve",
+            help="With --push: the digest printed without --approve; pushes it",
+            show_default=False,
+        ),
+    ] = None,
+    credentials: Annotated[
+        Path | None,
+        typer.Option(
+            "--credentials",
+            help='With --push: private JSON file, {"username", "password"} or {"token"}',
+        ),
+    ] = None,
+    ca_file: Annotated[
+        Path | None,
+        typer.Option("--ca-file", help="With --push: CA bundle for a TLS registry"),
+    ] = None,
 ) -> None:
-    """Package the app for a cluster Piceli never accesses (kustomize, prepare.sh, images)."""
+    """Package the app for a cluster Piceli never accesses (kustomize, prepare.sh, images; or a Helm chart)."""
     from piceli.bundle.build import BundleError, build_bundle, part_of, write_bundle
     from piceli.bundle.images import (
         DEFAULT_PLATFORMS,
@@ -166,7 +247,23 @@ def bundle(
 
     if platform and all_platforms:
         reject("bundle-invalid", "pass --platform or --all-platforms, not both")
-    namespace, components, app, generators = _load(target, env)
+    if not helm and (push or approve or app_version or credentials or ca_file):
+        reject(
+            "bundle-invalid",
+            "--push, --approve, --app-version, --credentials and --ca-file need --helm",
+        )
+    if approve is not None and push is None:
+        reject("bundle-invalid", "--approve needs --push")
+    if out is None and push is None:
+        reject("bundle-out-refused", "pass --out DIR (or, with --helm, --push)")
+    if helm and receipt is not None:
+        reject(
+            "bundle-invalid",
+            "a Helm chart names its images by digest in a registry; push the "
+            "build images and declare them repository@sha256:... (--receipt is "
+            "for the kustomize bundle)",
+        )
+    namespace, components, app, generators, declaration = _load(target, env)
     chosen_name = name or part_of(components) or (app.name if app is not None else None)
     if chosen_name is None:
         reject("bundle-invalid", "the render has no single part-of label; pass --name")
@@ -189,6 +286,25 @@ def bundle(
             ]
         except ImageExportError as error:
             reject(error.code, str(error))
+    if helm:
+        _helm(
+            components,
+            declaration,
+            name=chosen_name,
+            version=version,
+            namespace=namespace,
+            generators=generators,
+            env=env,
+            storage_class=storage_class,
+            app_version=app_version,
+            out=out,
+            push=push,
+            approve=approve,
+            credentials=credentials,
+            ca_file=ca_file,
+        )
+        return
+    assert out is not None
     try:
         built = build_bundle(
             components,
@@ -230,6 +346,141 @@ def bundle(
     for item in built.exceptions:
         say(f"  exception: {item.kind}/{item.name} waives {item.rule}: {item.reason}")
     say(f"  next: read {out / 'INSTALL.md'} and send the directory to the client")
+
+
+def _helm(
+    components: list[dict[str, Any]],
+    declaration: Any,
+    *,
+    name: str,
+    version: str,
+    namespace: str,
+    generators: Any,
+    env: str | None,
+    storage_class: str | None,
+    app_version: str | None,
+    out: Path | None,
+    push: str | None,
+    approve: str | None,
+    credentials: Path | None,
+    ca_file: Path | None,
+) -> None:
+    """``bundle --helm``: the chart directory, and the OCI push plan or push."""
+    from piceli.bundle.build import BundleError, build_bundle
+    from piceli.bundle.helm import apply_toggle, build_helm, write_helm
+    from piceli.chart import archive_digest
+
+    registry = _registry(push, version) if push is not None else None
+
+    def bundled(rendered: list[dict[str, Any]]) -> Any:
+        return build_bundle(
+            rendered,
+            name=name,
+            version=version,
+            namespace=namespace,
+            generators=generators,
+            environment=env,
+            storage_class=storage_class,
+        )
+
+    try:
+        base = bundled(components)
+        variants = {
+            toggle: bundled(apply_toggle(components, toggle, spec))
+            for toggle, spec in (
+                declaration.toggles.items() if declaration is not None else ()
+            )
+        }
+        chart = build_helm(
+            base, variants=variants, declaration=declaration, app_version=app_version
+        )
+        files = write_helm(out, chart) if out is not None else []
+    except BundleError as error:
+        if error.violations:
+            reject(
+                error.code,
+                str(error),
+                violations=[item.public() for item in error.violations],
+            )
+        reject(error.code, str(error))
+    archive = chart.archive()
+    body: dict[str, Any] = {
+        **chart.public(),
+        "environment": env,
+        "archive_digest": archive_digest(archive),
+        "safety_exceptions": [item.public() for item in base.exceptions],
+    }
+    if out is not None:
+        body.update({"directory": str(out), "files": files})
+    if registry is None:
+        emit_json({"state": "written", **body})
+        say(f"wrote chart {chart.name} {chart.version} to {out}")
+        say(
+            f"  next: helm lint {out}; helm install {chart.name} {out} -n {chart.name} --create-namespace ..."
+        )
+        return
+    from piceli.cli_contract import EXIT_APPROVAL
+    from piceli.k8s.cli.chart import _push
+
+    target = registry(chart.name)
+    artifact = chart.oci()
+    body.update(
+        {
+            "digest": artifact.digest,
+            "media_type": artifact.public()["media_type"],
+            "config": artifact.config.descriptor(),
+            "layer": artifact.layer.descriptor(),
+            "target": target.identity,
+        }
+    )
+    if approve is None:
+        emit_json({"state": "approval-required", **body})
+        say(
+            f"chart {chart.name} {chart.version} for {target.identity}; nothing was pushed"
+        )
+        say(f"approve with: --approve {artifact.digest}")
+        raise typer.Exit(EXIT_APPROVAL)
+    if approve != artifact.digest:
+        reject(
+            "chart-artifact-changed",
+            "the approved digest is not this chart's digest",
+            digest=artifact.digest,
+        )
+    body.update(_push(target, artifact, credentials, ca_file))
+    emit_json({"state": "published", **body})
+    say(f"published {body['url']} --version {chart.version}")
+
+
+def _registry(push: str, version: str) -> Any:
+    """A function of the chart name giving the push target of ``--push``."""
+    from piceli.artifacts.registry import RegistryTarget
+    from piceli.errors import ERRORS
+
+    try:
+        parsed = RegistryTarget.parse(push)
+    except ValueError as error:
+        code = str(getattr(error, "code", ""))
+        reject(code if code in ERRORS else "chart-target-invalid", str(error))
+    if parsed.tag is not None:
+        reject(
+            "chart-target-invalid",
+            "--push names a path, not a tag: the chart is pushed as "
+            "path/<name>:<version>",
+        )
+
+    def target(chart: str) -> Any:
+        try:
+            return RegistryTarget(
+                parsed.host,
+                parsed.port,
+                f"{parsed.repository}/{chart}",
+                version.replace("+", "_"),
+                parsed.tls,
+            )
+        except ValueError as error:
+            reject("chart-target-invalid", str(error))
+
+    return target
 
 
 def support_bundle(
