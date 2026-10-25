@@ -593,3 +593,33 @@ def test_the_controller_publishes_each_build_hosts_last_sighting(
     status = controller.poll_once()
     last = status["controller"]["build_hosts"]["builder-1"]["last_build"]
     assert last["outcome"] == "built" and last["id"] == wanted["id"]
+
+
+def _image_builds(world: dict[str, Any]) -> list[dict[str, Any]]:
+    import time
+
+    from piceli.infra import builds as projection
+
+    channel = world["channel"]
+    document = projection.records(
+        channel.read_status(), channel.read_history(), now=time.time()
+    )
+    return [item for item in document["builds"] if item["kind"] == "images"]
+
+
+def test_gitops_builds_names_the_host_that_built_the_images(
+    world: dict[str, Any],
+) -> None:
+    """0.31.0: a host's delivered build is the next step's build, by that host."""
+    controller, channel = world["controller"], world["channel"]
+    (wanted,) = controller.poll_once()["controller"]["builds_wanted"]
+    channel.add_request(*build_claim_request(wanted["id"], "laptop"))
+    controller.poll_once()
+    channel.add_request(
+        *built_request(wanted["id"], "laptop", _images(wanted), {"host": "laptop"})
+    )
+    assert controller.poll_once()["envs"]["main"]["state"] == "deployed"
+    (built,) = [item for item in _image_builds(world) if item["stage"] == "published"]
+    assert built["host"] == "laptop"
+    assert sorted(built["images"]) == ["api", "catalog", "web"]
+    assert controller.state.get("delivered_builds") == {}

@@ -118,11 +118,15 @@ def promote_host(
     namespace: str,
     as_json: bool,
     wait: dict[str, Any] | None = None,
+    machines: str | None = None,
 ) -> None:
     """Pin the newest commit an environment verified in flake.lock, commit,
     tag and push (plan, then --approve DIGEST). ``wait`` (0.28.0, ``--wait``):
     ``{"timeout", "interval"}``, then wait until the host runs the tag with
-    its checks passed (exit 1: a failure, 2: timeout)."""
+    its checks passed (exit 1: a failure, 2: timeout). ``machines`` (0.31.0,
+    ``--machines``): the module (``MODULE[:ATTR]``) declaring the
+    ``Infrastructure`` of the host's server, when the composition does not
+    import it."""
     from piceli.infra import promote as promotion_plan
     from piceli.infra.promotion import PromotionError
 
@@ -150,6 +154,7 @@ def promote_host(
         f"piceli promote {host} --from {source_env} --composition {composition} "
         f"--repo {repo}"
         + (f" --bump {bump}" if bump != "patch" else "")
+        + (f" --machines {machines}" if machines is not None else "")
         + (f" --state-dir {state_dir}" if state_dir is not None else "")
         + (
             f" --kubeconfig {kubeconfig} --context {context}"
@@ -168,7 +173,7 @@ def promote_host(
         _wait_and_emit(
             document, host, str(found["tag"]), composition, found_composition,
             wait, kubeconfig=kubeconfig, context=context, state_dir=state_dir,
-            namespace=namespace,
+            namespace=namespace, machines=machines,
         )  # fmt: skip
         return
     digest = found["digest"]
@@ -215,7 +220,7 @@ def promote_host(
     _wait_and_emit(
         document, host, str(document["tag"]), composition, found_composition,
         wait, kubeconfig=kubeconfig, context=context, state_dir=state_dir,
-        namespace=namespace,
+        namespace=namespace, machines=machines,
     )  # fmt: skip
 
 
@@ -231,11 +236,13 @@ def _wait_and_emit(
     context: str | None,
     state_dir: Path | None,
     namespace: str,
+    machines: str | None = None,
 ) -> None:
     code, result = wait_host_release(
         host,
         tag,
         composition=composition,
+        machines=machines,
         controller=lambda: _release_record(
             found_composition,
             host,
@@ -356,6 +363,7 @@ def wait_host_release(
     timeout: int,
     interval: float,
     sleep: Any = None,
+    machines: str | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Wait until ``host`` runs ``tag`` with its checks passed: ``(exit
     code, body)``. Reads the controller's publish of the tag (a failed
@@ -371,10 +379,9 @@ def wait_host_release(
         EXIT_TIMEOUT,
         say_failure,
     )
-    from piceli.k8s.cli.host import _target
 
     sleep = sleep or time.sleep
-    _found, ssh, known = _target(host, str(composition))
+    ssh, known = release_ssh(host, composition, machines)
     started = time.monotonic()
     body: dict[str, Any] = {"schema": "piceli.promote-wait.v1", "host": host,
                             "tag": tag, "target": ssh.address}  # fmt: skip
@@ -421,3 +428,75 @@ def wait_host_release(
                                   "reason": "gitops-wait-timeout",
                                   "waited_seconds": round(waited, 1)}  # fmt: skip
         sleep(min(interval, max(0.0, timeout - waited)))
+
+
+def _declared_values(composition: Path, kind: type) -> list[Any]:
+    """The ``kind`` values of the composition module and of every module it
+    imported from its directory (``machines.py`` beside ``infra.py``)."""
+    import sys
+
+    directory = composition.resolve().parent
+    found: dict[int, Any] = {}
+    for module in list(sys.modules.values()):
+        file = getattr(module, "__file__", None)
+        if not file:
+            continue
+        try:
+            inside = Path(file).resolve().is_relative_to(directory)
+        except (OSError, ValueError):
+            continue
+        if not inside or "site-packages" in Path(file).parts:
+            continue
+        for value in list(vars(module).values()):
+            if isinstance(value, kind):
+                found[id(value)] = value
+    return list(found.values())
+
+
+def release_ssh(
+    host: str, composition: Path, machines: str | None
+) -> tuple[Any, Path | None]:
+    """``(SshTarget, known_hosts)`` of the gated NixRelease's host (0.31.0).
+
+    The host is the ``NixRelease``'s own ``NixHost``; the ``Infrastructure``
+    of its server (applied address, pinned host keys) is the one
+    ``--machines`` names, else the one the composition or a module it
+    imports from its directory declares. Without a declared NixRelease of
+    ``host``, ``piceli host``'s rules apply (an SSH target)."""
+    from piceli.hosts.model import HostError
+    from piceli.infra import Infrastructure
+    from piceli.infra.machines.model import InfraError
+    from piceli.infra.nix_releases import NixRelease
+    from piceli.k8s.cli.host import _infrastructure, _target, ssh_for
+
+    releases = {
+        id(item.host): item.host
+        for item in _declared_values(composition, NixRelease)
+        if getattr(item.host, "name", None) == host
+    }
+    if len(releases) != 1:
+        _found, ssh, known = _target(host, machines or str(composition))
+        return ssh, known
+    declared = next(iter(releases.values()))
+    infra = None
+    server = declared.server
+    if not isinstance(server, str):
+        if machines is not None:
+            infra = _infrastructure(machines, server)
+        else:
+            found = {
+                item.name: item
+                for item in _declared_values(composition, Infrastructure)
+                if server in item.servers
+            }
+            if len(found) > 1 or (not found and server.ssh.address is None):
+                reject(
+                    "infra-not-found",
+                    f"the composition imports {len(found)} Infrastructure(s) with "
+                    f"server {server.name}: give --machines MODULE[:ATTR]",
+                )
+            infra = next(iter(found.values()), None)
+    try:
+        return ssh_for(declared, infra)
+    except (HostError, InfraError) as error:
+        reject(error.code, str(error))

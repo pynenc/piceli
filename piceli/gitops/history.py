@@ -139,6 +139,10 @@ def _builds(value: Any) -> dict[str, dict[str, Any]]:
             "finished_at": _text(entry.get("finished_at"), 40),
             "state": state if state in _BUILD_STATES else None,
         }
+        if _text(entry.get("host"), 64):  # 0.31.0: the machine that built it
+            found[name]["host"] = _text(entry.get("host"), 64)
+        if entry.get("via") == "host":  # 0.31.0: delivered by a build host
+            found[name]["via"] = "host"
         timings = _dict(entry.get("timings"))
         if timings:  # 0.17.0: only when the builder reported them
             found[name]["timings"] = {

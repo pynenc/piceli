@@ -92,6 +92,34 @@ def _is_env(target: str) -> bool:
     return ":" not in target and not target.endswith((".toml", ".py"))
 
 
+def _web_first(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Web pages first (0.31.0), each group in its declared order."""
+    return sorted(entries, key=lambda item: not item.get("web", True))
+
+
+def _entry_line(entry: dict[str, Any], via: str | None) -> str:
+    """One human line of ``piceli access`` (0.31.0): a web page with its
+    declared label, any other service marked "not a web page"."""
+    ident = str(entry["id"])
+    label = str(entry.get("label") or "")
+    named = label and label != ident and ":" not in label
+    head = f"{label} ({ident}):" if named else f"{ident:<12}"
+    notes = [via] if via and via != "tailnet" else []
+    if via == "tailnet":
+        notes.append("tailnet")
+    if not entry.get("web", True):
+        scheme = str(entry.get("scheme") or "tcp").upper()
+        notes.append(f"{scheme}, not a web page")
+    tail = ""
+    if notes:
+        arrow = [n for n in notes if n.startswith("->")]
+        rest = [n for n in notes if not n.startswith("->")]
+        tail = "".join(f"  {n}" for n in arrow) + (
+            f"  ({', '.join(rest)})" if rest else ""
+        )
+    return f"  {head} {entry.get('url')}{tail}"
+
+
 def _resolve(
     target: str,
     pipeline: str | None = None,
@@ -189,6 +217,11 @@ def _human_status(document: dict[str, Any], target: str) -> str:
         lines.append(
             f"  {forward['forward']:<9} {forward['id']:<12} {forward['url']}  "
             f"-> {forward['target']}:{forward['remote_port']}"
+            + (
+                ""
+                if forward.get("web", True)
+                else f"  ({str(forward.get('scheme')).upper()}, not a web page)"
+            )
         )
         owner = forward.get("owner")
         if forward["forward"] == "occupied":
@@ -516,8 +549,8 @@ def access(
             )
         else:
             typer.echo(f"{resolved.name} on the tailnet (no forward needed):")
-            for item in on_tailnet:
-                typer.echo(f"  {item['id']:<12} {item['url']}")
+            for item in _web_first(on_tailnet):
+                typer.echo(_entry_line(item, None))
         return
     if not selected and not ui:
         reject("access-none-declared")
@@ -584,6 +617,9 @@ def access(
                 {
                     "id": item.id,
                     "url": item.url,
+                    # 0.31.0: what it speaks; only a web page is a link.
+                    "scheme": item.scheme,
+                    "web": item.web,
                     "target": item.target,
                     "local_port": item.local_port,
                     "remote_port": item.remote_port,
@@ -605,14 +641,16 @@ def access(
                 f"Forwarding {len(start)} port(s) of {resolved.name} "
                 f"(namespace {resolved.namespace}); Ctrl-C stops them."
             )
-            for item in start:
-                typer.echo(
-                    f"  {item.id:<12} {item.url}  -> {item.target}:{item.remote_port}"
-                )
+            entries = [
+                {"id": item.id, "label": item.label, "url": item.url,
+                 "scheme": item.scheme, "web": item.web,
+                 "via": f"-> {item.target}:{item.remote_port}"}
+                for item in start
+            ] + [{**item, "via": "tailnet"} for item in on_tailnet]  # fmt: skip
+            for entry in _web_first(entries):
+                typer.echo(_entry_line(entry, entry["via"]))
             for conflict in conflicts:
                 typer.echo(f"  skipped: {conflict.describe()}")
-            for item in on_tailnet:
-                typer.echo(f"  {item['id']:<12} {item['url']}  (tailnet)")
             if dashboard:
                 typer.echo(f"  dashboard    http://127.0.0.1:{dashboard}")
             if launch:

@@ -301,3 +301,92 @@ def test_promote_wait_needs_from(tmp_path: Path) -> None:
     )
     assert result.exit_code == 2
     assert json.loads(result.stdout)["reason"] == "promote-invalid"
+
+
+# ------------------------------------- 0.31.0: the machines module of --wait
+
+_MACHINES = """
+from piceli.infra import Image, Infomaniak, Infrastructure, Server, Ssh
+
+cloud = Infomaniak(credentials="cloud", prices={"a1-ram2-disk20-perf1": 4.70})
+web = Server("web-1", provider=cloud, type="a1-ram2-disk20-perf1",
+             image=Image("base", url="https://example.org/base.qcow2",
+                         sha256="0" * 64),
+             ssh=Ssh(user="root"))
+infra = Infrastructure("web-1", servers=[web])
+"""
+
+_RELEASES = """
+from {machines} import web
+from piceli.infra import NixCache, NixHost, NixRelease, Source, Tag
+
+hosts = Source("https://example.org/hosts.git", name="hosts")
+cache = NixCache("example-cache-1:jXbGkEMPpvXtlVqGBrqfsnU8Jyn1cZB9u0QhGhvsKP0=",
+                 url="file:///nonexistent-cache")
+host = NixHost("web-1", server=web, flake=".#web-1", follow=Tag("web-v*"),
+               cache=cache)
+release = NixRelease(host, source=hosts, builder="mini")
+"""
+
+
+@pytest.fixture
+def two_modules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[tuple[Path, list[Any]]]:
+    """``machines`` (the Infrastructure) and ``infra.py`` (the NixRelease of
+    its server), as a project keeps them; ``ssh_for`` records the
+    Infrastructure it is given."""
+    import sys
+
+    from piceli.infra.composition import load_composition
+
+    name = "promote_wait_machines_" + tmp_path.name.replace("-", "_")
+    (tmp_path / f"{name}.py").write_text(_MACHINES)
+    composition = tmp_path / "infra.py"
+    composition.write_text(_RELEASES.format(machines=name))
+    monkeypatch.chdir(tmp_path)
+    seen: list[Any] = []
+
+    def ssh_for(host: Any, infra: Any) -> tuple[Any, None]:
+        seen.append(infra)
+        return _Ssh(), None
+
+    monkeypatch.setattr("piceli.k8s.cli.host.ssh_for", ssh_for)
+    load_composition(composition)
+    yield composition, seen
+    for key, module in list(sys.modules.items()):
+        if str(getattr(module, "__file__", "") or "").startswith(str(tmp_path)):
+            del sys.modules[key]
+
+
+def test_promote_wait_finds_the_infrastructure_the_composition_imports(
+    two_modules: tuple[Path, list[Any]],
+) -> None:
+    from piceli.k8s.cli import promote
+
+    composition, seen = two_modules
+    ssh, _known = promote.release_ssh("web-1", composition, None)
+    assert ssh.address == _Ssh.address
+    assert [item.name for item in seen] == ["web-1"]
+
+
+def test_promote_wait_takes_the_machines_module(
+    two_modules: tuple[Path, list[Any]],
+) -> None:
+    from piceli.k8s.cli import promote
+
+    composition, seen = two_modules
+    machines = next(composition.parent.glob("promote_wait_machines_*.py")).name
+    promote.release_ssh("web-1", composition, f"{machines}:infra")
+    promote.release_ssh("web-1", composition, machines)
+    assert [item.name for item in seen] == ["web-1", "web-1"]
+
+
+def test_promote_machines_needs_from_wait(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        cli,
+        ["promote", "wp-1@abcdef1", "--machines", "machines.py",
+         "--state-dir", str(tmp_path)],
+    )  # fmt: skip
+    assert result.exit_code == 2
+    assert json.loads(result.stdout)["reason"] == "promote-invalid"

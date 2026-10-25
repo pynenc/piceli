@@ -53,10 +53,13 @@ def forward_shortcut(
     local_port: int,
     remote_port: int,
     label: str | None = None,
+    scheme: str = "http",
 ) -> UiShortcut:
-    """One supervised loopback forward to ``kind/name:remote_port``."""
+    """One supervised loopback forward to ``kind/name:remote_port``
+    (``scheme``, 0.31.0: what the port speaks)."""
     return UiShortcut(
         id=id,
+        scheme=scheme,
         label=label or f"{name}:{remote_port}",
         target=f"{kind.lower()}/{name}",
         namespace=namespace,
@@ -68,8 +71,12 @@ def forward_shortcut(
 def service_forwards(
     namespace: str, services: Iterable[Mapping[str, Any]], *, port: Callable[[], int]
 ) -> tuple[UiShortcut, ...]:
-    """One forward per Service port, ordered by Service name and port."""
+    """One forward per Service port, ordered by Service name and port, each
+    with the scheme its spec implies (0.31.0, :func:`live_port_scheme`)."""
+    from piceli.k8s.ui_config import live_port_scheme
+
     found: list[tuple[str, int]] = []
+    schemes: dict[tuple[str, int], str] = {}
     for raw in services:
         name = (raw.get("metadata") or {}).get("name")
         if not isinstance(name, str) or not name:
@@ -82,6 +89,7 @@ def service_forwards(
                 and 0 < value < 65536
             ):
                 found.append((name, value))
+                schemes.setdefault((name, value), live_port_scheme(dict(item)))
     return tuple(
         forward_shortcut(
             _ID.sub("-", f"{name}-{remote}".lower()).strip("-")[:63],
@@ -90,6 +98,7 @@ def service_forwards(
             namespace=namespace,
             local_port=port(),
             remote_port=remote,
+            scheme=schemes[(name, remote)],
         )
         for name, remote in sorted(set(found))
     )
@@ -169,6 +178,7 @@ def tailnet_urls(
     is ``ready: False`` and the forward stays the way in.
     """
     from piceli.envs.access import ACCESS_LABEL, SERVICE_LABEL
+    from piceli.k8s.ui_config import is_web, service_url
 
     by_service: dict[str, list[Mapping[str, Any]]] = {}
     for raw in companions:
@@ -193,16 +203,21 @@ def tailnet_urls(
         host = _host(companion)
         path = getattr(item, "path", None) or ""
         secure = companion.get("kind") == "Ingress"
+        scheme = "https" if secure else getattr(item, "scheme", "http")
         url = None
         if host:
             url = (
                 f"https://{host}{path or '/'}"
                 if secure
-                else (f"http://{host}:{item.remote_port}{path}")
+                else service_url(scheme, host, item.remote_port, path)
             )
         found.append(
             {
                 "id": item.id,
+                # 0.31.0: what it speaks; only a web page is a link to open.
+                "label": item.label,
+                "scheme": scheme,
+                "web": is_web(scheme),
                 "service": service,
                 "port": item.remote_port,
                 "host": host,

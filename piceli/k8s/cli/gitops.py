@@ -1872,9 +1872,20 @@ def promote(
         typer.Option(
             "--composition",
             "--infra",
-            help="With --from: the composition module declaring the NixRelease",
+            help="With --from: the composition module declaring the NixRelease "
+            "(--infra is an older name of this option, not the machines module)",
         ),
     ] = Path("infra.py"),
+    machines: Annotated[
+        str | None,
+        typer.Option(
+            "--machines",
+            help="With --from --wait (0.31.0): MODULE or MODULE:ATTR of the "
+            "Infrastructure of the host's server (its applied address and "
+            "pinned host keys); default: the one the composition imports",
+            show_default=False,
+        ),
+    ] = None,
     repo: Annotated[
         Path, typer.Option("--repo", help="With --from: the flake's working copy")
     ] = Path("."),
@@ -1926,11 +1937,13 @@ def promote(
             target, from_env, composition=composition, repo=repo, bump=bump,
             approve=approve, kubeconfig=kubeconfig, context=context,
             state_dir=state_dir, namespace=namespace, as_json=as_json,
-            wait=waiting,
+            wait=waiting, machines=machines,
         )  # fmt: skip
         return
     if wait:
         reject("promote-invalid", "--wait waits for a --from promotion")
+    if machines is not None:
+        reject("promote-invalid", "--machines goes with --from --wait")
     if approve is not None:
         reject("promote-invalid", "--approve approves a --from promotion plan")
     from piceli.gitops.state import promote_request

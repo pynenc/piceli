@@ -104,6 +104,24 @@ _ARCH_ALIASES = {"aarch64": "arm64", "x86_64": "amd64", "armv7l": "arm/v7"}
 _NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,62}")
 _ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 _ENV_VALUE = re.compile(r"[^\"\\$\x00-\x1f\x7f]{0,4096}")
+#: 0.31.0: an image label's key (``org.opencontainers.image.licenses``).
+_LABEL_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,253}")
+_LABEL_VALUE = re.compile(r"[^\x00-\x1f\x7f]{0,1024}")
+
+
+def parse_labels(value: Any, where: str) -> tuple[tuple[str, str], ...]:
+    """``labels = {KEY = "value"}`` of an image (0.31.0), sorted: image
+    config labels such as ``org.opencontainers.image.licenses``."""
+    if not isinstance(value, dict) or len(value) > 64:
+        raise _fail(f"{where} must be a table of at most 64 labels")
+    for key, text in value.items():
+        _match(_LABEL_KEY, key, f"{where} key")
+        if not isinstance(text, str):
+            raise _fail(f"{where}.{key} must be a string")
+        _match(_LABEL_VALUE, text, f"{where}.{key}")
+    return tuple(sorted(value.items()))
+
+
 _ABS_PATH = re.compile(r"/(?:[A-Za-z0-9._+@-]+/?)*")
 _REL_PATH = re.compile(r"[A-Za-z0-9._+@-]+(?:/[A-Za-z0-9._+@-]+)*")
 _IMAGE = re.compile(
@@ -493,6 +511,8 @@ class ImageOutput:
     workdir: str | None = None
     target: str | None = None
     smoke: SmokeCheck | None = None
+    #: 0.31.0: image config labels (``--label``).
+    labels: tuple[tuple[str, str], ...] = ()
 
     @property
     def templated(self) -> bool:
@@ -538,6 +558,8 @@ class ImageOutput:
             "user": self.user,
             "workdir": self.workdir,
             "target": self.target,
+            # Only when declared: every other spec's digest is unchanged.
+            **({"labels": dict(self.labels)} if self.labels else {}),
         }
 
 
@@ -1022,6 +1044,7 @@ class BuildSpec:
                     "workdir",
                     "target",
                     "smoke",
+                    "labels",
                 },
                 "output.image",
             )
@@ -1056,6 +1079,7 @@ class BuildSpec:
                     if "target" in item
                     else None,
                     parse_smoke(item["smoke"]) if "smoke" in item else None,
+                    parse_labels(item.get("labels", {}), "output.image.labels"),
                 )
             )
         pinned = document.get("images", {})
@@ -1316,6 +1340,8 @@ class BuildSpec:
                 "--tag",
                 image.ref(platform, len(self.platforms) > 1, pending=pending),
             ]
+            for key, value in image.labels:
+                argv += ["--label", f"{key}={value}"]
         main = (
             f"{staging}/contexts/{self.dockerfile_context}"
             if self.dockerfile_context

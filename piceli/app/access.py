@@ -61,6 +61,10 @@ class Forward(BaseModel):
     :param required: ``False`` lets ``piceli access`` skip this forward when its
         local port is taken, instead of refusing to start.
     :param restart: Restart backoff and budget.
+    :param scheme: 0.31.0: what the port speaks (``http``, ``https``,
+        ``turn``, ``tcp``...); defaults to the port's ``app_protocol``, name
+        or well-known number (:func:`~piceli.k8s.ui_config.port_scheme`).
+        Only ``http`` and ``https`` are printed as web links.
 
     Invariants: ``local`` ports and ids are unique within an app; the target
     port must exist on the Service or container.
@@ -77,6 +81,7 @@ class Forward(BaseModel):
     description: str = Field(default="", max_length=200)
     required: bool = True
     restart: RestartPolicy = Field(default_factory=RestartPolicy)
+    scheme: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9+.-]{0,31}$")
 
     @field_validator("path")
     @classmethod
@@ -86,11 +91,18 @@ class Forward(BaseModel):
         return value
 
     def shortcut(
-        self, default_id: str, target: str, remote_port: int, namespace: str | None
+        self,
+        default_id: str,
+        target: str,
+        remote_port: int,
+        namespace: str | None,
+        *,
+        scheme: str | None = None,
     ) -> UiShortcut:
         """The access-profile entry that the supervisor and dashboard consume."""
         ident = self.name or default_id
         return UiShortcut(
+            scheme=self.scheme or scheme or "http",
             id=ident,
             label=self.label or ident,
             description=self.description,
@@ -120,6 +132,7 @@ class Access:
         description: str = "",
         required: bool = True,
         restart: RestartPolicy | None = None,
+        scheme: str | None = None,
     ) -> Forward:
         """Declare a loopback forward (see :class:`Forward` for the parameters)."""
         probe: HealthProbe
@@ -142,6 +155,7 @@ class Access:
             "label": label,
             "description": description,
             "required": required,
+            "scheme": scheme,
         }
         if restart is not None:
             values["restart"] = restart

@@ -110,6 +110,10 @@ These are enforced by tests or review. Do not weaken them.
   `load_kube_config` / `load_incluster_config` raise. A test that reaches for a
   real cluster fails loudly; mock the client or use the fake API instead.
 - `tests/integration`: real `kind` cluster via an explicit kubeconfig.
+- Tests that build real images tag them `piceli-e2e/...` (or
+  `piceli-examples/...`): an autouse fixture (`tests/docker_images.py`)
+  removes what a test added on every outcome and fails a test whose image
+  stays. Never tag a test image elsewhere.
 - Every behaviour change comes with a test. Docs generated from code
   (`docs/reference/*.md`) have a staleness test.
 

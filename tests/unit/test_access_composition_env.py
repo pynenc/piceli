@@ -209,6 +209,9 @@ def test_tailnet_exposed_services_are_reached_on_the_tailnet(
     assert resolved.tailnet == (
         {
             "id": "web",
+            "label": "web",
+            "scheme": "http",
+            "web": True,
             "service": "web",
             "port": 80,
             "host": "main-web.tail1.ts.net",

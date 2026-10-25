@@ -3083,7 +3083,8 @@ Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV; w
 | `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
 | `--transport` | text | `https` | https, or loopback-http for a local test API |
 | `--from` | text |  | 0.25.0: TARGET is a NixRelease's host; pin the newest commit this environment (its gate's) ran with passed release checks in the flake's flake.lock, commit, tag and push (plan, then --approve) |
-| `--composition`, `--infra` | path | `infra.py` | With --from: the composition module declaring the NixRelease |
+| `--composition`, `--infra` | path | `infra.py` | With --from: the composition module declaring the NixRelease (--infra is an older name of this option, not the machines module) |
+| `--machines` | text |  | With --from --wait (0.31.0): MODULE or MODULE:ATTR of the Infrastructure of the host's server (its applied address and pinned host keys); default: the one the composition imports |
 | `--repo` | path | `.` | With --from: the flake's working copy |
 | `--bump` | text | `patch` | With --from: major, minor or patch |
 | `--approve` | text |  | With --from: the promotion plan's digest |

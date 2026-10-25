@@ -165,7 +165,10 @@ noted.
   after the install or the push, wait until every environment (or the
   host) runs the expected revision with its checks passed. Exit 0: done;
   1: the first failure (JSON `wait.failure`: `env`, `reason`, `stage`,
-  `detail`, `log_tail`); 2: timeout (`gitops-wait-timeout`).
+  `detail`, `log_tail`); 2: timeout (`gitops-wait-timeout`). 0.31.0:
+  `--machines MODULE[:ATTR]` names the module declaring the host's
+  `Infrastructure` when the composition does not import it (`--infra` is
+  `--composition`).
 - `piceli gitops enable infra.py --approve HASH --canary` (0.28.0): before
   replacing a running controller, runs the new image once as a Job that
   imports the composition and plans every environment without applying.

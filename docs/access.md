@@ -411,6 +411,27 @@ The cluster's owner does this once per cluster:
    status` unless a grant reaches the operator's tag; the proxies do appear
    once a companion is deployed.
 
+## Web pages and other services
+
+New in 0.31.0. Each forward has a scheme: what the port speaks. Only `http`
+and `https` are printed as links, first and with their label; any other
+service is printed by its scheme and marked "not a web page":
+
+```text
+  Console (web): http://127.0.0.1:18090/  -> service/web:8090
+  turn         turn:127.0.0.1:13478  -> service/turn:3478  (TURN, not a web page)
+```
+
+The scheme is the forward's `scheme=` (`app.access.forward(local=..., scheme="tcp")`,
+or `scheme = "..."` in an access profile), else the Service port's
+`appProtocol` (`ServicePort(port=3478, app_protocol="turn")` renders it),
+else the first word of the port's name (`http-api`, `turn-udp`, `grpc`),
+else a well-known non-web port (3478 TURN, 5349 TURNS, 5432 PostgreSQL, 6379
+Redis, 4317 gRPC, ...), else `udp` for a UDP port, else `http`. TURN and STUN
+are written `turn:HOST:PORT` (RFC 7065); others `SCHEME://HOST:PORT`. The
+JSON of `access`, `status` and the tailnet entries carries `scheme` and
+`web`.
+
 ## Contract: `piceli access`
 
 | | |

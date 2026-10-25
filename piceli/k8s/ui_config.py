@@ -180,6 +180,10 @@ class UiShortcut(_Model):
     health: HealthProbe | None = None
     restart: RestartPolicy = Field(default_factory=RestartPolicy)
     required: bool = True
+    #: 0.31.0: what the port speaks (``http``, ``https``, ``turn``, ``tcp``,
+    #: ``udp``...), so a non-web service is never printed as a web link
+    #: (:func:`port_scheme` derives it from a Service port).
+    scheme: str = Field(default="http", pattern=r"^[a-z][a-z0-9+.-]{0,31}$")
 
     @model_validator(mode="after")
     def _single_health(self) -> UiShortcut:
@@ -223,8 +227,97 @@ class UiShortcut(_Model):
         return value
 
     @property
+    def web(self) -> bool:
+        """Whether the forward is a web page (``http`` or ``https``)."""
+        return is_web(self.scheme)
+
+    @property
     def url(self) -> str:
-        return f"http://127.0.0.1:{self.local_port}{self.path}"
+        return service_url(self.scheme, "127.0.0.1", self.local_port, self.path)
+
+
+#: Schemes a browser opens: everything else is "not a web page".
+WEB_SCHEMES = frozenset({"http", "https"})
+#: Schemes written ``scheme:host:port`` (RFC 7064, RFC 7065), not ``scheme://``.
+_OPAQUE = frozenset({"turn", "turns", "stun", "stuns"})
+#: A port name's first word (``http-api``, ``turn-udp``) or an
+#: ``appProtocol``, and the scheme it means.
+_NAMED = {
+    "http": "http", "http2": "http", "h2c": "http", "web": "http", "ui": "http",
+    "ws": "http", "metrics": "http", "https": "https", "wss": "https",
+    "grpc": "grpc", "turn": "turn", "turns": "turns", "stun": "stun",
+    "stuns": "stuns", "redis": "redis", "postgres": "postgres",
+    "postgresql": "postgres", "mysql": "mysql", "mongodb": "mongodb",
+    "amqp": "amqp", "mqtt": "mqtt", "nats": "nats", "kafka": "kafka",
+    "dns": "dns", "ssh": "ssh", "smtp": "smtp", "tcp": "tcp", "udp": "udp",
+}  # fmt: skip
+#: Well-known ports of services that are not web pages (and HTTPS).
+_PORTS = {
+    22: "ssh", 53: "dns", 443: "https", 1883: "mqtt", 3306: "mysql",
+    3478: "turn", 4222: "nats", 4317: "grpc", 5349: "turns", 5432: "postgres",
+    5672: "amqp", 6379: "redis", 8443: "https", 9092: "kafka", 27017: "mongodb",
+}  # fmt: skip
+
+
+def is_web(scheme: str) -> bool:
+    """Whether ``scheme`` is a web page a browser opens."""
+    return scheme in WEB_SCHEMES
+
+
+def service_url(scheme: str, host: str, port: int, path: str = "/") -> str:
+    """The address of ``host:port`` for its scheme: ``http://h:p/path`` for a
+    web page, ``turn:h:p`` for TURN/STUN, ``SCHEME://h:p`` otherwise."""
+    if is_web(scheme):
+        return f"{scheme}://{host}:{port}{path}"
+    if scheme in _OPAQUE:
+        return f"{scheme}:{host}:{port}"
+    return f"{scheme}://{host}:{port}"
+
+
+def port_scheme(
+    port: int,
+    *,
+    name: str | None = None,
+    protocol: str | None = None,
+    app_protocol: str | None = None,
+) -> str:
+    """What a Service port speaks (0.31.0), most specific first: its
+    ``appProtocol`` (``kubernetes.io/h2c`` is ``http``), the first word of
+    its name (``http-api``, ``turn-tcp``), a well-known non-web port (3478
+    TURN, 5432 PostgreSQL...), ``udp`` or ``sctp`` for those protocols, else
+    ``http``."""
+    if app_protocol:
+        word = app_protocol.lower().rsplit("/", 1)[-1]
+        if word in _NAMED:
+            return _NAMED[word]
+        if re.fullmatch(r"[a-z][a-z0-9+.-]{0,31}", word):
+            return word
+    if name:
+        word = re.split(r"[-_.]", name.lower(), maxsplit=1)[0]
+        if word in _NAMED:
+            return _NAMED[word]
+    if port in _PORTS:
+        return _PORTS[port]
+    if protocol and protocol.upper() in ("UDP", "SCTP"):
+        return protocol.lower()
+    return "http"
+
+
+def live_port_scheme(spec: Any) -> str:
+    """:func:`port_scheme` of one live Service port (``spec.ports[]``)."""
+    if not isinstance(spec, dict):
+        return "http"
+    number = spec.get("port")
+    return port_scheme(
+        number if isinstance(number, int) and not isinstance(number, bool) else 0,
+        name=spec.get("name") if isinstance(spec.get("name"), str) else None,
+        protocol=spec.get("protocol")
+        if isinstance(spec.get("protocol"), str)
+        else None,
+        app_protocol=spec.get("appProtocol")
+        if isinstance(spec.get("appProtocol"), str)
+        else None,
+    )
 
 
 class UiComponent(_Model):

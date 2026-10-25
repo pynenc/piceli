@@ -83,6 +83,7 @@ from piceli.artifacts.build_spec import (
     _match,
     _now,
     _rel_path,
+    parse_labels,
 )
 from piceli.artifacts.host_toolchains import RUST_ENV
 from piceli.artifacts.host_toolchains import parse as parse_toolchains
@@ -180,6 +181,9 @@ class HostImage:
     contexts: tuple[str, ...] | None = None
     #: 0.23: files of the shared target directory (``build.shared_commands``).
     shared_files: tuple[tuple[str, str], ...] = ()
+    #: 0.31.0: image config labels (``labels = {...}``), such as the OCI
+    #: ``org.opencontainers.image.licenses`` a registry shows.
+    labels: tuple[tuple[str, str], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -201,6 +205,7 @@ class HostImage:
                 if self.shared_files
                 else {}
             ),
+            **({"labels": dict(self.labels)} if self.labels else {}),
         }
 
     def reads(self, contexts: tuple[str, ...]) -> tuple[str, ...]:
@@ -804,6 +809,7 @@ def _image(item: Any) -> HostImage:
             "env",
             "contexts",
             "shared_files",
+            "labels",
         },
         "output.image",
     )
@@ -854,6 +860,7 @@ def _image(item: Any) -> HostImage:
     for key, value in env.items():
         _match(_ENV_KEY, key, "output.image.env name")
         _match(_ENV_VALUE, value, "output.image.env value")
+    labels = parse_labels(item.get("labels", {}), "output.image.labels")
     destinations = [*files.values(), *target_files.values(), *shared_files.values()]
     for dest in destinations:
         _abs_path(dest, "output.image file destination")
@@ -894,6 +901,7 @@ def _image(item: Any) -> HostImage:
                 for key, value in shared_files.items()
             )
         ),
+        labels,
     )
 
 

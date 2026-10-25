@@ -920,6 +920,9 @@ def forward_status(
         "label": shortcut.label,
         "target": shortcut.target,
         "url": shortcut.url,
+        # 0.31.0: what it speaks; only a web page is a link to open.
+        "scheme": shortcut.scheme,
+        "web": shortcut.web,
         "local_port": shortcut.local_port,
         "remote_port": shortcut.remote_port,
         "required": shortcut.required,

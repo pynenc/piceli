@@ -107,6 +107,25 @@ def _no_leftover_temporary_files_per_test(
 
 
 @pytest.fixture(autouse=True)
+def _no_leftover_docker_images() -> Iterator[None]:
+    """Remove the images a test built under ``piceli-e2e/`` or
+    ``piceli-examples/`` on every outcome, and fail the test when one stays
+    (only when real images are built: ``tests/docker_images.py``)."""
+    from tests import docker_images
+
+    if not docker_images.enabled():
+        yield
+        return
+    before = docker_images.images()
+    try:
+        yield
+    finally:
+        left = docker_images.remove(docker_images.images() - before)
+    if left:
+        pytest.fail(f"test left Docker images behind: {sorted(left)}")
+
+
+@pytest.fixture(autouse=True)
 def _no_foreign_process_groups(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fail a test that signals init's group or the test runner's own group.
 
