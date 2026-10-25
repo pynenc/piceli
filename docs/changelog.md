@@ -14,7 +14,7 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   composition` in `rejected_requests`). A host still running after it was
   removed from the composition says so in its `builder serve` output and
   claims nothing until it is declared again. The status lists the declared
-  hosts (`controller.build_hosts_declared`). See {ref}`build-hosts-declared`.
+  hosts (`controller.build_hosts_declared`). See {ref}`only declared hosts <build-hosts-declared>`.
 - **A failure before the build runs is handed over.** A build host that
   cannot fetch a source, or whose container engine cannot start the build,
   answers `build-failed` with `early`. The build is not failed: the
@@ -23,12 +23,12 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   quarantines that host for that source until `piceli gitops release-host`
   (`controller.source_quarantine`). Before, the host kept claiming the
   build and failing it, and the fallback never ran. See
-  {ref}`build-host-handover`.
+  {ref}`hand-over <build-host-handover>`.
 - **`piceli builder serve --once --take-next`** stands by for the next build
   this host may take, claims it before the in-cluster fallback (which waits
   for a standing-by host at most 2 minutes past `host_wait`), builds it and
   exits (`--timeout`, default 30 minutes). Claims and standbys wake the
-  controller within 2 seconds. See {ref}`builder-take-next`.
+  controller within 2 seconds. See {ref}`--take-next <builder-take-next>`.
 - **`builder serve --check`** also runs `git ls-remote` of every source the
   controller follows, as the build fetches it, and writes into a scratch
   directory and the build cache from inside the builder container
@@ -38,7 +38,7 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   checking anything, so it works before the secrets exist.
   `builder serve --args-file PATH` reads more arguments at start (one per
   line), so a fixed unit from Nix takes its image and flags from a file
-  under the state directory. See {ref}`builder-nixos`.
+  under the state directory. See {ref}`NixOS build hosts <builder-nixos>`.
 
 **Fixes**
 
