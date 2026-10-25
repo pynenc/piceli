@@ -38,7 +38,18 @@ STATE_KEY = "previews"
 KEEP_SERVED = 50
 #: The request kinds that wake the controller's run loop at once.
 WAKE_KINDS = frozenset(
-    {"preview", "sync", "approve", "promote", "build", "start", "stop"}
+    {
+        "preview",
+        "sync",
+        "approve",
+        "promote",
+        "build",
+        "start",
+        "stop",
+        # 0.29.0: a build host claiming or standing by is answered at once.
+        "build-claim",
+        "build-standby",
+    }
 )
 
 _BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}")

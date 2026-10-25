@@ -1683,7 +1683,8 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "next poll, recorded as triggered by cli with the requester (--by, "
             "else the user name). A NixRelease waits in approval-required unless "
             "auto_approve or --approve names the plan's digest. An environment "
-            "rebuilds every image at the commit it follows (--ref may name it). "
+            "rebuilds every image at the commit it follows (--ref may name it), "
+            "since 0.29.0 also when that commit is already deployed. "
             "An unknown target or ref is dropped (gitops-request-invalid or "
             "gitops-build-ref-unknown in gitops status).",
         ),
@@ -2058,7 +2059,20 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "infra-nix-input-unreachable before any build; at start it warns per "
             "release of an input it holds no credential for, and --check claims "
             "nothing and prints piceli.builder-check.v1 (each release's mode, "
-            "inputs and credential states; exit 1 when one is missing).",
+            "inputs and credential states; exit 1 when one is missing). 0.29.0: "
+            "--check also runs git ls-remote of every source the controller "
+            "follows and writes into a scratch directory and the build cache "
+            "from inside the builder image (sources and scratch in "
+            "piceli.builder-check.v1; exit 1 when one fails). A host the "
+            "composition does not declare claims nothing and says so. A failure "
+            "before the build's first command (a source it cannot fetch, an "
+            "engine that cannot start the build) answers build-failed with "
+            "early: the controller hands the build to another host or the "
+            "in-cluster fallback and quarantines this host for that source until "
+            "gitops release-host. --once --take-next stands by (build-standby) "
+            "for the next build it may take, claims it before the fallback and "
+            "exits (--timeout seconds, default 1800). --args-file PATH adds the "
+            "arguments in PATH (one per line, # comments) at start.",
         ),
         "builder install": _C(
             "On a build host: write and start a service (systemd on Linux, "
@@ -2090,8 +2104,9 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "and KillSignal=SIGINT; it holds directories, never a secret. As "
             "root it needs --user USER (a system service); otherwise it is a "
             "user service. --print writes the unit to stdout and changes "
-            "nothing. A failing systemctl or launchctl is "
-            "builder-service-failed.",
+            "nothing; since 0.29.0 it checks nothing either (the unit is printed "
+            "where the secrets are absent, for example for NixOS). A failing "
+            "systemctl or launchctl is builder-service-failed.",
         ),
         "builder uninstall": _C(
             "On a build host: stop, disable and remove the service builder "

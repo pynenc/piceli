@@ -45,6 +45,17 @@ signature (a crashed compiler, a segfault, a corrupt cached blob;
 :mod:`piceli.dev.health`) records a health event on the host; a quarantined
 host claims nothing and says why until ``piceli dev release-host``.
 
+0.29.0: a host the controller's composition no longer declares claims
+nothing and says so. A failure before the build's first command (a source
+this host cannot fetch, an engine that cannot start the build) answers
+``build-failed`` with ``early``: the controller hands the build to another
+host or its fallback at once and quarantines this host for that source
+until ``piceli gitops release-host``; this host skips the builds that need
+it. :meth:`BuilderServe.take_next` (``--once --take-next``) stands by for
+the next build and claims it before the in-cluster fallback.
+:func:`check_sources` and :func:`scratch_check` are ``--check``'s
+``git ls-remote`` of every source and write test inside the container.
+
 Nothing here holds a Tailscale, registry or cluster credential of its own:
 the profile reaches the API, the API reaches the registry; the nodes are
 reached with this host's own SSH access (its keys, its agent).
@@ -88,11 +99,25 @@ def _iso(seconds: float) -> str:
 
 
 class BuildFailed(Exception):
-    """The build failed; ``tail`` is its output's end."""
+    """The build failed; ``tail`` is its output's end. ``early`` (0.29.0):
+    before its first command (``source``: the one it could not fetch)."""
 
-    def __init__(self, reason: str, tail: str = "") -> None:
+    def __init__(
+        self,
+        reason: str,
+        tail: str = "",
+        *,
+        early: bool = False,
+        source: str | None = None,
+    ) -> None:
         super().__init__(reason)
         self.tail = tail
+        self.early = early
+        self.source = source
+
+
+#: ``docker run``'s own failure (the engine could not start the container).
+ENGINE_FAILED = 125
 
 
 def _slug(url: str) -> str:
@@ -376,6 +401,12 @@ class BuilderServe:
     _progress: Any = None
     #: 0.27.1: why a wanted build is skipped, each said once.
     _skips: set[tuple[str, str]] = field(default_factory=set)
+    #: 0.29.0: the hosts the controller's composition declares (empty: it
+    #: declares none, any host may serve) and this host's quarantined
+    #: sources, from its status.
+    declared: list[str] = field(default_factory=list)
+    blocked: dict[str, Any] = field(default_factory=dict)
+    _undeclared_said: bool = False
 
     def _skip(self, build: str, why: str) -> None:
         """Say once, plainly, why this host leaves ``build`` (0.27.1)."""
@@ -391,7 +422,28 @@ class BuilderServe:
         # claims of a host it quarantined).
         found = (controller.get("build_health") or {}).get(self.host)
         self.controller_health = found if isinstance(found, Mapping) else None
+        self.declared = [str(h) for h in controller.get("build_hosts_declared") or ()]
+        blocked = (controller.get("source_quarantine") or {}).get(self.host)
+        self.blocked = dict(blocked) if isinstance(blocked, Mapping) else {}
         return list(controller.get("builds_wanted") or ())
+
+    def undeclared(self) -> bool:
+        """0.29.0: the controller's composition declares build hosts and not
+        this one: it claims nothing (said once, and again when it changes)."""
+        if self.declared and self.host not in self.declared:
+            if not self._undeclared_said:
+                self._undeclared_said = True
+                self.say(
+                    f"builder: the controller's composition does not declare build "
+                    f"host {self.host} (it declares {', '.join(self.declared)}); "
+                    "claiming nothing. Declare it in DevBuilds(hosts=[...]) or stop "
+                    f"this service (piceli builder uninstall --host {self.host})"
+                )
+            return True
+        if self._undeclared_said:
+            self._undeclared_said = False
+            self.say(f"builder: build host {self.host} is declared again")
+        return False
 
     def pick(self) -> dict[str, Any] | None:
         entries = self.wanted()
@@ -406,6 +458,8 @@ class BuilderServe:
                 self._said = held.get("reason")
             return None
         self._said = None
+        if self.undeclared():
+            return None
         # 0.22.0: what this host answered stays until the controller drops
         # it (its next poll); never build it again meanwhile.
         self.answered &= {str(entry.get("id")) for entry in entries}
@@ -431,6 +485,16 @@ class BuilderServe:
                         f"builder: {self.host} only publishes NixReleases; "
                         "it leaves every image build to the other build hosts"
                     )
+                continue
+            blocked = sorted(set(self.blocked) & set(_commits(entry)))
+            if blocked:  # 0.29.0: it could not fetch one of them
+                record = self.blocked[blocked[0]] or {}
+                self._skip(
+                    str(entry.get("id")),
+                    f"this host could not fetch source {blocked[0]} "
+                    f"({record.get('reason')}); piceli gitops release-host "
+                    f"{self.host} lets it try again",
+                )
                 continue
             claimed = entry.get("claimed") or {}
             if not claimed or claimed.get("host") == self.host:
@@ -602,6 +666,48 @@ class BuilderServe:
         entry = self.pick()
         if entry is None or not self.claim(entry):
             return None
+        return self.run(entry)
+
+    def take_next(self, timeout: float = 1800.0, poll: float = 2.0) -> str | None:
+        """0.29.0 (``--once --take-next``): stand by for the next build this
+        host may take (one already waiting, or the next one asked for),
+        claim it before the in-cluster fallback and build it; its id, or
+        ``None`` after ``timeout`` seconds. The standby is renewed while it
+        waits and ended when it returns."""
+        from piceli.gitops.state import build_standby_request
+        from piceli.infra.remote_builds import STANDBY_SECONDS
+
+        deadline = self.clock() + timeout
+        renewed = -STANDBY_SECONDS
+        said = False
+        try:
+            while self.clock() < deadline:
+                if self.clock() - renewed >= STANDBY_SECONDS / 2:
+                    left = min(STANDBY_SECONDS, max(deadline - self.clock(), 1.0))
+                    self.channel.add_request(*build_standby_request(self.host, left))
+                    renewed = self.clock()
+                if self.quarantined() is None:
+                    entry = self.pick()
+                    if entry is not None and self.claim(entry):
+                        return self.run(entry)
+                    if not said and not self.undeclared():
+                        said = True
+                        self.say(
+                            f"builder: {self.host} stands by for the next build "
+                            f"(at most {timeout:.0f}s); the in-cluster fallback "
+                            "waits for it"
+                        )
+                self.sleep(poll)
+            self.say(f"builder: no build to take in {timeout:.0f}s")
+            return None
+        finally:
+            try:
+                self.channel.add_request(*build_standby_request(self.host, 0))
+            except Exception:  # the standby expires by itself
+                pass
+
+    def run(self, entry: Mapping[str, Any]) -> str:
+        """Build (or publish) the claimed ``entry`` and answer; its id."""
         if entry.get("kind") == "nix-publish":
             return self.release(entry)
         build = str(entry["id"])
@@ -622,10 +728,20 @@ class BuilderServe:
 
             text = error.tail or "\n".join(tail)
             self.channel.add_request(
-                *build_failed_request(build, self.host, str(error), text)
-            )
+                *build_failed_request(
+                    build, self.host, str(error), text,
+                    early=error.early, source=error.source,
+                )
+            )  # fmt: skip
             self.answered.add(build)
-            self.say(f"builder: {build} failed: {error}")
+            self.say(
+                f"builder: {build} failed: {error}"
+                + (
+                    "; handed to another host or the in-cluster fallback"
+                    if error.early
+                    else ""
+                )
+            )
             signal = (
                 self.signals[0] if self.signals else health_signal(text.splitlines())
             )
@@ -822,10 +938,17 @@ class BuilderServe:
             for name, commit in sorted(_commits(entry).items()):
                 url = urls.get(name)
                 if not url:
-                    raise BuildFailed(f"no URL for source {name}")
+                    raise BuildFailed(
+                        f"no URL for source {name}", early=True, source=name
+                    )
                 self.say(f"builder: source {name} at {commit[:12]}")
                 checkout = self.root / "checkouts" / f"{name}-{_slug(url)}"
-                export_source(url, commit, checkout, self.root / "git", self.git)
+                try:
+                    export_source(url, commit, checkout, self.root / "git", self.git)
+                except BuildFailed as error:  # 0.29.0: before the first command
+                    raise BuildFailed(
+                        str(error), error.tail, early=True, source=name
+                    ) from None
                 sources[name] = checkout
             receipt_line: list[str] = []
 
@@ -846,6 +969,13 @@ class BuilderServe:
 
             self._stage("build")
             code = self.container(job_argv(entry), sources, out, line)
+            if code == ENGINE_FAILED and not receipt_line:
+                # 0.29.0: the engine could not start the build on this host.
+                raise BuildFailed(
+                    f"the container engine could not start the build (exit {code})",
+                    "\n".join(tail),
+                    early=True,
+                )
             if code != 0 or not receipt_line:
                 raise BuildFailed(f"the build exited {code}", "\n".join(tail))
             receipt = decode_receipt(receipt_line[-1][len(RECEIPT_MARKER) :])
@@ -1058,6 +1188,79 @@ def docker_container(
         return process.wait()
 
     return run
+
+
+def check_sources(
+    sources: Mapping[str, str],
+    run: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
+) -> list[dict[str, Any]]:
+    """``builder serve --check`` (0.29.0): whether this host reaches every
+    source (``{name: url}``) with ``git ls-remote``, as the build fetches it
+    (the URL, then the same repository over SSH, never prompting). One row
+    per source: ``state`` ``reachable`` (``via`` the URL that answered) or
+    ``unreachable`` (``detail``, Git's last message)."""
+    env = fetch_env()
+    rows = []
+    for name, url in sorted(sources.items()):
+        errors: list[str] = []
+        via = None
+        for candidate in fetch_urls(url) if url else ():
+            try:
+                done = run(
+                    ["git", "ls-remote", "--heads", candidate],
+                    check=False, capture_output=True, timeout=60, env=env,
+                )  # fmt: skip
+            except subprocess.TimeoutExpired:
+                errors.append(f"{candidate}: timed out")
+                continue
+            if done.returncode == 0:
+                via = candidate
+                break
+            errors.append(f"{candidate}: {_tail(done) or f'exit {done.returncode}'}")
+        row: dict[str, Any] = {"source": name, "url": url}
+        if via is not None:
+            row.update(state="reachable", via=via)
+        else:
+            row.update(state="unreachable", detail=errors[-1] if errors else "no URL")
+        rows.append(row)
+    return rows
+
+
+#: The write test inside the builder container: the archive directory and
+#: the build cache, as the build writes them.
+_WRITE_TEST = f"""set -eu
+touch /work/out/.piceli-write-test && rm /work/out/.piceli-write-test
+mkdir -p {SOURCES}.write-test && rmdir {SOURCES}.write-test
+"""
+
+
+def scratch_check(
+    cli: Any, image: str, cache_volume: str = CACHE_VOLUME
+) -> dict[str, Any]:
+    """``builder serve --check`` (0.29.0): run the builder image as the build
+    does (its user, no capabilities, a scratch archive directory and the
+    build cache mounted) and write into both. ``state`` ``writable``, or
+    ``not-writable`` with the engine's last line."""
+    from piceli.tempfiles import temporary_directory
+
+    with temporary_directory("builder-check") as scratch:
+        out = Path(scratch) / "out"
+        out.mkdir()
+        os.chmod(out, 0o777)  # the image's user writes here, as in a build
+        done = cli.run(
+            "run", "--rm", "--user", "65532:65532", "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges", "-v", f"{out}:/work/out",
+            "-v", f"{cache_volume}:/cache", "--entrypoint", "sh", image,
+            "-c", _WRITE_TEST, timeout=300,
+        )  # fmt: skip
+    if done.returncode == 0:
+        return {"state": "writable", "cache": cache_volume}
+    lines = (done.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+    return {
+        "state": "not-writable",
+        "cache": cache_volume,
+        "detail": (lines[-1] if lines else f"exit {done.returncode}")[:300],
+    }
 
 
 def prepare_cache(cli: Any, image: str, cache_volume: str = CACHE_VOLUME) -> None:

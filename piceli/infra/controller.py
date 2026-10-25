@@ -781,6 +781,21 @@ def _build_hosts(state: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     return public_hosts(state)
 
 
+def _source_quarantine(state: Mapping[str, Any]) -> dict[str, Any]:
+    from piceli.infra.remote_builds import public_source_quarantine
+
+    return public_source_quarantine(state)
+
+
+def _standby(state: Mapping[str, Any], now: float) -> dict[str, Any]:
+    from piceli.infra.remote_builds import live_standby
+
+    return {
+        host: {"since": item.get("since"), "until": item.get("until_at")}
+        for host, item in live_standby(state, now).items()
+    }
+
+
 def _failing(record: Mapping[str, Any], reason: str) -> str:
     """``; failing: name: detail, ...`` of a check failure's checks (0.19)."""
     checks = record.get("checks") or {}
@@ -931,7 +946,9 @@ class CompositionController:
             record is not None
             and record.get("revision") == dict(revision)
             and record.get("state") != "deleting"
-            and not trigger.startswith("sync")
+            # 0.29.0: piceli gitops build (cli or ui) runs at the same
+            # revision too: before, it did nothing once that was deployed.
+            and not trigger.startswith(("sync", "cli build", "ui build"))
         ):
             return
         primary = next(iter(sorted(revision.values())), None)
@@ -1558,6 +1575,17 @@ class CompositionController:
         for signal in receipt.get("health") or ():
             if isinstance(signal, Mapping):
                 self._record_health(host, "host", signal, "builder-serve")
+        # 0.29.0: a rebuild asked for (piceli gitops build) is done for the
+        # images delivered: the next step takes them instead of asking again.
+        owner = asked.get("owner")
+        owner = (self._envs().get(str(owner)) or {}).get("group") or owner
+        rebuild = self.state.get("rebuild") or {}
+        if owner in rebuild:
+            left = sorted(set(rebuild[owner]) - set(images))
+            if left:
+                rebuild[owner] = left
+            else:
+                rebuild.pop(owner)
         self.log(
             f"build host {body.get('host')}: delivered {', '.join(sorted(images))}"
         )
@@ -1689,6 +1717,7 @@ class CompositionController:
                 elif kind == "build-claim":
                     from piceli.infra import remote_builds
 
+                    self._refuse_undeclared(body)
                     self._refuse_quarantined(str(body.get("host") or ""))
                     publish = self.nix.entry(body.get("id"))
                     if publish is not None:  # 0.25.0: proves the cache's key
@@ -1697,6 +1726,7 @@ class CompositionController:
                     if publish is not None:  # 0.26.0: credentials="controller"
                         self.nix.seal(publish, body, self._git_credential())
                 elif kind == "built":
+                    self._refuse_undeclared(body)
                     self._delivered(body)
                 elif kind == "prebuilt":
                     self._prebuilt(body)
@@ -1705,9 +1735,19 @@ class CompositionController:
                 elif kind == "build-failed":
                     from piceli.infra import remote_builds
 
-                    remote_builds.failed(self.state, body)
+                    self._refuse_undeclared(body)
+                    if remote_builds.failed(self.state, body, self.clock()):
+                        self.log(
+                            f"build host {body.get('host')}: handed build "
+                            f"{body.get('id')} over before it ran: {body.get('reason')}"
+                        )
                     self._build_failed_health(body)
                     self._wake_waiting()
+                elif kind == "build-standby":  # 0.29.0: builder serve --take-next
+                    from piceli.infra import remote_builds
+
+                    self._refuse_undeclared(body)
+                    remote_builds.standby(self.state, body, self.clock())
                 elif kind == "rebuild":
                     self._rebuild(body)
                 elif kind == "host-release":
@@ -2245,6 +2285,31 @@ class CompositionController:
                 )
         return None
 
+    def _declared_hosts(self) -> list[str]:
+        """The build hosts the loaded composition declares (0.29.0)."""
+        cluster = getattr(self._composition, "cluster", None)
+        dev = getattr(cluster, "dev", None)
+        return sorted(
+            str(getattr(host, "name", ""))
+            for host in (getattr(dev, "hosts", ()) or ())
+            if getattr(host, "kind", None) in ("docker", "native")
+        )
+
+    def _refuse_undeclared(self, body: Mapping[str, Any]) -> None:
+        """0.29.0: when the composition declares build hosts, only they may
+        claim, report or answer a build; a host it no longer declares is
+        refused (its builder serve says so)."""
+        declared = self._declared_hosts()
+        host = str(body.get("host") or "")
+        if declared and host not in declared:
+            raise GitOpsError(
+                "gitops-request-invalid",
+                f"build host {host or '?'} is not declared in the composition "
+                f"(it declares {', '.join(declared)}); stop its builder serve "
+                f"(piceli builder uninstall --host {host or 'HOST'}) or declare it "
+                "again in DevBuilds(hosts=[...])",
+            )
+
     def _refuse_quarantined(self, host: str) -> None:
         found = self._quarantine_of(host) if host else None
         if found is not None:
@@ -2288,11 +2353,16 @@ class CompositionController:
 
     def _release_host(self, body: Mapping[str, Any]) -> None:
         """``piceli gitops release-host NAME``: forget its health events."""
+        from piceli.infra import remote_builds
+
         name = str(body.get("host") or "")
         entry = (self.state.get("build_health") or {}).pop(name, None)
-        if entry is None:
+        # 0.29.0: also the sources it could not fetch.
+        sources = remote_builds.release_sources(self.state, name)
+        if entry is None and not sources:
             raise GitOpsError(
-                "gitops-request-invalid", f"no health events are recorded for {name}"
+                "gitops-request-invalid",
+                f"no health events or source quarantine are recorded for {name}",
             )
         self.state["host_release"] = {"host": name, "at": _iso(self.clock())}
         self.log(f"build health: {name} released")
@@ -4253,6 +4323,24 @@ class CompositionController:
                 **(
                     {"build_hosts": seen_hosts}
                     if (seen_hosts := _build_hosts(self.state))
+                    else {}
+                ),
+                # Added in 0.29.0: the build hosts the composition declares
+                # (others are refused), the sources a host could not fetch
+                # (until release-host) and the hosts standing by.
+                **(
+                    {"build_hosts_declared": declared}
+                    if (declared := self._declared_hosts())
+                    else {}
+                ),
+                **(
+                    {"source_quarantine": blocked}
+                    if (blocked := _source_quarantine(self.state))
+                    else {}
+                ),
+                **(
+                    {"build_standby": standing}
+                    if (standing := _standby(self.state, self.clock()))
                     else {}
                 ),
                 # Added in 0.22.0: health events and quarantine of its build

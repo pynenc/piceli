@@ -30,6 +30,22 @@ claim it. Before, a dead host's claim blocked both for hours. The waiting
 step says what it waits for (:meth:`HostBuilds.waiting`): the hosts it is
 offered to, who holds it, and when the fallback starts or why it never does.
 
+Hand-over (0.29.0): a host that fails before its build's first command
+(it cannot fetch a source, or its container engine cannot start the build)
+answers ``build-failed`` with ``early``. The build is not failed: the claim
+is dropped, the host is quarantined for that source
+(:data:`SOURCE_QUARANTINE_KEY`; its claims of builds that need the source
+are refused until ``piceli gitops release-host``) and the build goes to the
+next declared host, or to the in-cluster fallback at once when no other
+host may take it (within :data:`HANDOVER_SECONDS` when one may). With
+``builds=("hosts",)`` and no host left, the step fails with the host's reason.
+
+Standing by (0.29.0, ``piceli builder serve --once --take-next``): a host
+that waits to take the next build says so (``build-standby``); while it
+stands by, the in-cluster fallback waits for it at most
+:data:`STANDBY_SECONDS` past its usual time, so a host started by hand wins
+the build instead of racing ``host_wait``.
+
 Delivery into the nodes (0.22.0, ``Controller(delivery="nodes")``): the
 wanted build also names every declared node and its platform
 (``deliver.nodes``). The host imports each image into each node's
@@ -98,6 +114,18 @@ WAITING = "build-waiting"
 HOSTS_KEY = "build_hosts"
 #: Build hosts remembered (the most recently seen).
 HOSTS_KEPT = 32
+#: 0.29.0: sources a host could not fetch, ``{host: {source: {reason, at,
+#: build}}}``: its claims of builds that need them are refused until
+#: ``piceli gitops release-host``.
+SOURCE_QUARANTINE_KEY = "host_sources_quarantined"
+#: 0.29.0: after a host handed a build over, how long the in-cluster
+#: fallback leaves it to another declared host that may take it.
+HANDOVER_SECONDS = 60.0
+#: 0.29.0: hosts standing by for the next build (``build-standby``).
+STANDBY_KEY = "build_standby"
+#: 0.29.0: a standby lives this long after its last report, and holds the
+#: fallback at most this long past its usual time.
+STANDBY_SECONDS = 120.0
 #: What each answer says about the build it names.
 _OUTCOMES = {
     "build-claim": "claimed",
@@ -159,6 +187,83 @@ def live_claim(entry: Mapping[str, Any], now: float) -> dict[str, Any] | None:
     )
     limit = CLAIM_SECONDS if entry.get("kind") == "nix-publish" else CLAIM_STALE_SECONDS
     return dict(claimed) if now - last < limit else None
+
+
+def sources_of(entry: Mapping[str, Any]) -> dict[str, str]:
+    """``{source: commit}`` a wanted build fetches (0.29.0)."""
+    if entry.get("kind") == "components":
+        return {
+            str(item.get("source")): str(item.get("commit"))
+            for item in entry.get("components") or ()
+            if isinstance(item, Mapping)
+        }
+    return {str(k): str(v) for k, v in (entry.get("commits") or {}).items()}
+
+
+def blocked_sources(
+    state: Mapping[str, Any], host: str, entry: Mapping[str, Any]
+) -> dict[str, dict[str, Any]]:
+    """The sources of ``entry`` that ``host`` is quarantined for (0.29.0)."""
+    held = (state.get(SOURCE_QUARANTINE_KEY) or {}).get(host) or {}
+    return {
+        source: dict(held[source])
+        for source in sorted(sources_of(entry))
+        if source in held
+    }
+
+
+def describe_blocked(host: str, blocked: Mapping[str, Mapping[str, Any]]) -> str:
+    source, record = next(iter(sorted(blocked.items())))
+    return (
+        f"build host {host} cannot fetch source {source} (since {record.get('at')}: "
+        f"{record.get('reason')}); piceli gitops release-host {host} clears it"
+    )
+
+
+def live_standby(state: Mapping[str, Any], now: float) -> dict[str, dict[str, Any]]:
+    """The hosts standing by for the next build (0.29.0), by name."""
+    return {
+        name: dict(item)
+        for name, item in sorted((state.get(STANDBY_KEY) or {}).items())
+        if isinstance(item, Mapping) and float(item.get("until") or 0) > now
+    }
+
+
+def standby(state: dict[str, Any], body: Mapping[str, Any], now: float) -> None:
+    """``build-standby`` (0.29.0): ``host`` waits to take the next build for
+    ``seconds`` (at most :data:`STANDBY_SECONDS`; ``0`` ends it)."""
+    host = str(body.get("host") or "")[:64]
+    if not host:
+        raise GitOpsError("gitops-request-invalid", "a standby names no build host")
+    try:
+        seconds = min(max(float(body.get("seconds") or 0), 0.0), STANDBY_SECONDS)
+    except (TypeError, ValueError):
+        raise GitOpsError("gitops-request-invalid", "standby seconds") from None
+    found = state.setdefault(STANDBY_KEY, {})
+    if seconds <= 0:
+        found.pop(host, None)
+        return
+    found[host] = {
+        "since": (found.get(host) or {}).get("since") or _iso(now),
+        "until": now + seconds,
+        "until_at": _iso(now + seconds),
+    }
+    for name in [k for k, v in found.items() if float(v.get("until") or 0) <= now]:
+        del found[name]
+
+
+def release_sources(state: dict[str, Any], host: str) -> bool:
+    """``piceli gitops release-host``: ``host`` may fetch every source again."""
+    return (state.get(SOURCE_QUARANTINE_KEY) or {}).pop(host, None) is not None
+
+
+def public_source_quarantine(state: Mapping[str, Any]) -> dict[str, Any]:
+    """``controller.source_quarantine`` in the status (0.29.0)."""
+    return {
+        host: {source: dict(item) for source, item in sorted(held.items())}
+        for host, held in sorted((state.get(SOURCE_QUARANTINE_KEY) or {}).items())
+        if held
+    }
 
 
 def build_id(kind: str, body: Mapping[str, Any]) -> str:
@@ -284,6 +389,19 @@ class HostBuilds:
         entry["asked_epoch"] = now
         if owner is not None:
             entry["owner"] = owner
+        if (
+            entry.get("handed_over")
+            and "cluster" not in self.order
+            and self._eligible(entry) == []
+        ):
+            # 0.29.0: every declared host handed it over and there is no
+            # in-cluster fallback: the step fails with the last host's reason.
+            last = dict(entry["handed_over"][-1])
+            entry["failed"] = {
+                "host": last.get("host"),
+                "reason": last.get("reason"),
+                "log_tail": last.get("log_tail") or last.get("reason"),
+            }
         failure = entry.get("failed")
         if failure:
             del wanted[found]
@@ -293,6 +411,47 @@ class HostBuilds:
                 del failures[key]
             raise _failure_error(failure)
         return entry
+
+    def _eligible(self, entry: Mapping[str, Any]) -> list[str] | None:
+        """The declared hosts that may still take ``entry`` (0.29.0): not
+        handed over by them, not quarantined for one of its sources;
+        ``None`` when the composition declares no build host (any may)."""
+        if not self.hosts:
+            return None
+        handed = {str(item.get("host")) for item in entry.get("handed_over") or ()}
+        return [
+            host
+            for host in self.hosts
+            if host not in handed and not blocked_sources(self.state, host, entry)
+        ]
+
+    def _fallback_time(self, entry: Mapping[str, Any]) -> float:
+        """When the in-cluster fallback may take ``entry``: ``host_wait``
+        after the request; after a hand-over (0.29.0) at once when no other
+        host may take it, else within :data:`HANDOVER_SECONDS`."""
+        at = float(entry.get("requested_epoch") or 0) + self.host_wait
+        handed = entry.get("handed_epoch")
+        if handed is None:
+            return at
+        if self._eligible(entry) == []:
+            return min(at, float(handed))
+        return min(at, float(handed) + HANDOVER_SECONDS)
+
+    def _standby_hold(self, entry: Mapping[str, Any]) -> tuple[str, float] | None:
+        """A host standing by that may take ``entry`` (0.29.0) and until when
+        it holds the fallback, or ``None``."""
+        now = self.clock()
+        eligible = self._eligible(entry)
+        limit = self._fallback_time(entry) + STANDBY_SECONDS
+        if now >= limit:
+            return None
+        for host, item in live_standby(self.state, now).items():
+            if eligible is not None and host not in eligible:
+                continue
+            if blocked_sources(self.state, host, entry):
+                continue
+            return host, min(limit, float(item.get("until") or 0))
+        return None
 
     def _no_fallback(self, entry: Mapping[str, Any], method: str) -> str | None:
         """Why the in-cluster fallback may not take ``entry`` now, or ``None``."""
@@ -308,20 +467,30 @@ class HostBuilds:
         claimed = live_claim(entry, self.clock())
         if claimed is not None:
             return f"claimed by {claimed.get('host')} since {claimed.get('at')}"
+        held = self._standby_hold(entry)
+        if held is not None:
+            return (
+                f"standing by: build host {held[0]} takes it "
+                f"(piceli builder serve --take-next) until {_iso(held[1])}"
+            )
         return None
 
     def _fallback_at(self, entry: Mapping[str, Any], method: str) -> float | None:
         """When the in-cluster fallback may take ``entry`` (``None``: never,
         or not while a live host holds it)."""
-        if self._no_fallback(entry, method) is not None:
-            return None
-        return float(entry.get("requested_epoch") or 0) + self.host_wait
+        if self._no_fallback(entry, method) is None:
+            return self._fallback_time(entry)
+        held = self._standby_hold(entry)
+        if held is not None and live_claim(entry, self.clock()) is None:
+            return held[1]  # 0.29.0: looked at again when the standby ends
+        return None
 
     def _fallback_due(self, entry: Mapping[str, Any], method: str) -> bool:
-        return (
-            self._no_fallback(entry, method) is None
-            and self.clock() - float(entry.get("requested_epoch") or 0) > self.host_wait
-        )
+        if self._no_fallback(entry, method) is not None:
+            return False
+        at, now = self._fallback_time(entry), self.clock()
+        # A hand-over is due at its time; host_wait once it has passed.
+        return now > at or (entry.get("handed_epoch") is not None and now >= at)
 
     def waiting(
         self, entry: Mapping[str, Any], method: str, names: Sequence[str]
@@ -346,10 +515,12 @@ class HostBuilds:
             )
         else:
             text += "; not claimed"
+        for item in entry.get("handed_over") or ():
+            # 0.29.0: hosts that failed before the build's first command.
+            text += f"; handed over by {item.get('host')} ({item.get('reason')})"
         why = self._no_fallback(entry, method)
         if why is None:
-            at = float(entry.get("requested_epoch") or 0) + self.host_wait
-            text += f"; in-cluster fallback at {_iso(at)}"
+            text += f"; in-cluster fallback at {_iso(self._fallback_time(entry))}"
         elif claimed is None or not why.startswith("claimed by"):
             text += f"; no in-cluster fallback: {why}"
         return text
@@ -450,7 +621,7 @@ def public(state: Mapping[str, Any], now: float) -> list[dict[str, Any]]:
         item = {
             key: value
             for key, value in entry.items()
-            if key not in {"requested_epoch", "asked_epoch", "failed"}
+            if key not in {"requested_epoch", "asked_epoch", "failed", "handed_epoch"}
         } | {"claimed": {k: v for k, v in claimed.items() if k != "epoch"} or None}
         if entry.get("claimed") and not claimed:
             # 0.27.1: a dead host's claim, shown (any host may claim it).
@@ -484,6 +655,9 @@ def claim(state: dict[str, Any], body: Mapping[str, Any], now: float) -> None:
         raise GitOpsError("gitops-request-invalid", "no such wanted build")
     held = live_claim(entry, now) or {}
     host = str(body.get("host") or "")
+    blocked = blocked_sources(state, host, entry)
+    if blocked:  # 0.29.0: it could not fetch one of them
+        raise GitOpsError("gitops-request-invalid", describe_blocked(host, blocked))
     if held and held.get("host") != host:
         raise GitOpsError(
             "gitops-request-invalid",
@@ -494,18 +668,49 @@ def claim(state: dict[str, Any], body: Mapping[str, Any], now: float) -> None:
         entry.pop("progress", None)  # an earlier holder's
     at = held.get("at") if held.get("host") == host else None
     entry["claimed"] = {"host": host, "at": at or _iso(now), "epoch": now}
+    (state.get(STANDBY_KEY) or {}).pop(host, None)  # 0.29.0: it took one
 
 
-def failed(state: dict[str, Any], body: Mapping[str, Any]) -> None:
-    """A host could not build it (``build-failed``): the step fails with its tail."""
+def failed(
+    state: dict[str, Any], body: Mapping[str, Any], now: float | None = None
+) -> bool:
+    """A host could not build it (``build-failed``): the step fails with its
+    tail. 0.29.0: with ``early`` (it failed before the build's first
+    command) the build is handed over instead (see the module doc): the
+    claim goes, the host is quarantined for ``source`` (every source of the
+    build when it names none); returns whether it was handed over."""
     entry = (state.get(STATE_KEY) or {}).get(str(body.get("id")))
     if entry is None:
         raise GitOpsError("gitops-request-invalid", "no such wanted build")
+    host = str(body.get("host") or "?")[:64]
+    if body.get("early") and now is not None:
+        reason = str(body.get("reason") or "the build failed")[:300]
+        source = body.get("source")
+        sources = sources_of(entry)
+        quarantined = [str(source)] if source in sources else sorted(sources)
+        held = state.setdefault(SOURCE_QUARANTINE_KEY, {}).setdefault(host, {})
+        for name in quarantined:
+            held[name] = {"reason": reason, "at": _iso(now), "build": entry["id"]}
+        if (entry.get("claimed") or {}).get("host") == host:
+            entry.pop("claimed", None)
+            entry.pop("progress", None)
+        entry["handed_over"] = [
+            *[i for i in entry.get("handed_over") or () if i.get("host") != host],
+            {
+                "host": host,
+                "reason": reason,
+                "log_tail": str(body.get("log_tail") or "")[-2000:],
+                "at": _iso(now),
+            },
+        ][-8:]
+        entry["handed_epoch"] = now
+        return True
     entry["failed"] = {
         "host": str(body.get("host") or "?"),
         "reason": str(body.get("reason") or "the build failed")[:300],
         "log_tail": str(body.get("log_tail") or "")[-8000:],
     }
+    return False
 
 
 def progress(
@@ -534,7 +739,7 @@ def seen(
     controller took it) also the build it names and the outcome. A refused
     claim is a sighting, never a build of its own."""
     host = str(body.get("host") or "")[:64]
-    if not host or kind not in (*_OUTCOMES, "build-progress"):
+    if not host or kind not in (*_OUTCOMES, "build-progress", "build-standby"):
         return
     hosts = state.setdefault(HOSTS_KEY, {})
     entry = dict(hosts.get(host) or {})

@@ -111,7 +111,25 @@ def test_print_writes_the_unit_to_stdout_and_changes_nothing(
     assert f"WorkingDirectory={Path.cwd()}" in result.stdout
     assert world["runner"].calls == []
     assert not world["unit"].exists()
-    assert world["reads"] == ["piceli-system"]  # the checks still ran
+    # 0.29.0: --print checks nothing (the unit may be for another machine).
+    assert world["reads"] == []
+    assert "checks nothing" in result.stderr
+
+
+def test_print_works_without_the_secrets_or_the_controller(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0.29.0: a NixOS host prints the unit before its secrets exist."""
+
+    def refuse(*_args: Any) -> None:
+        raise AssertionError("no check runs with --print")
+
+    monkeypatch.setattr(builder_cli, "_read_status", refuse)
+    monkeypatch.setattr(builder_cli, "_check_caches", refuse)
+    monkeypatch.setattr(builder_cli, "_check_credentials", refuse)
+    result = _invoke(*INSTALL, "--print")
+    assert result.exit_code == 0, result.output
+    assert "[Service]" in result.stdout
 
 
 def test_install_checks_writes_and_enables_the_unit(world: dict[str, Any]) -> None:
@@ -257,7 +275,12 @@ def test_as_root_the_checks_read_the_service_users_secrets(
         return {}
 
     monkeypatch.setattr(builder_cli, "_read_status", read_status)
-    result = _invoke(*INSTALL, "--user", "builder", "--print")
+    installed: list[Any] = []
+    monkeypatch.setattr(
+        bs, "install", lambda _machine, service: installed.append(service) or []
+    )
+    result = _invoke(*INSTALL, "--user", "builder")
     assert result.exit_code == 0, result.output
     assert seen == [str(tmp_path / "builder")]
-    assert "User=builder" in result.stdout
+    (service,) = installed
+    assert "User=builder" in bs.render(service)

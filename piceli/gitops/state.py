@@ -66,6 +66,8 @@ REQUEST_KINDS = (
     "build", "build-cancel", "build-progress",
     # 0.28.0: piceli env up|down BRANCH (a preview, now)
     "preview",
+    # 0.29.0: a build host waits to take the next build (--take-next)
+    "build-standby",
 )  # fmt: skip
 #: Env states a status may carry.
 ENV_STATES = (
@@ -399,15 +401,43 @@ def prebuilt_request(
 
 
 def build_failed_request(
-    build: str, host: str, reason: str, log_tail: str
+    build: str,
+    host: str,
+    reason: str,
+    log_tail: str,
+    *,
+    early: bool = False,
+    source: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """The wanted build ``build`` failed on ``host`` (its output's tail)."""
+    """The wanted build ``build`` failed on ``host`` (its output's tail).
+
+    0.29.0: ``early``, it failed before the build's first command (a source
+    it cannot fetch, named by ``source``, or an engine that cannot start the
+    build): the controller hands the build to another host or its fallback."""
+    extra: dict[str, Any] = {}
+    if early:
+        extra["early"] = True
+        if source:
+            extra["source"] = str(source)[:100]
     return request(
         "build-failed",
         id=_build_id(build),
         host=str(host)[:64],
         reason=str(reason)[:300],
         log_tail=str(log_tail)[-8000:],
+        **extra,
+    )
+
+
+def build_standby_request(host: str, seconds: float) -> tuple[str, dict[str, Any]]:
+    """``host`` waits to take the next wanted build for ``seconds`` (0.29.0,
+    ``piceli builder serve --once --take-next``; ``0`` ends it)."""
+    return request(
+        "build-standby",
+        host=str(host)[:64],
+        seconds=float(seconds),
+        version=_piceli_version(),
+        at=_now(),
     )
 
 
