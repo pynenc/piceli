@@ -10581,6 +10581,34 @@
    },
    "pydantic": true
   },
+  "SigningError": {
+   "attrs": [
+    "add_note",
+    "args",
+    "with_traceback"
+   ],
+   "init": [
+    "code",
+    "message"
+   ],
+   "methods": {
+    "add_note": null,
+    "with_traceback": null
+   }
+  },
+  "SigningKey": {
+   "attrs": [
+    "name",
+    "public_key",
+    "purpose"
+   ],
+   "init": [
+    "name",
+    "public_key",
+    "purpose"
+   ],
+   "methods": {}
+  },
   "Smoke": {
    "attrs": [
     "command",
@@ -12013,6 +12041,7 @@
      "restore-points",
      "runs",
      "secrets",
+     "sign-file",
      "state",
      "status",
      "support-bundle",
@@ -12054,12 +12083,14 @@
      "build-spec",
      "deliver",
      "execute-command",
+     "fetch-file",
      "import-local",
      "inspect",
      "pin",
      "preview",
      "preview-command",
      "publish",
+     "publish-files",
      "retention"
     ]
    },
@@ -12153,6 +12184,18 @@
     ],
     "subcommands": []
    },
+   "artifacts fetch-file": {
+    "arguments": [],
+    "flags": [
+     "--ca-file",
+     "--credentials",
+     "--digest",
+     "--docker-config",
+     "--from",
+     "--out"
+    ],
+    "subcommands": []
+   },
    "artifacts import-local": {
     "arguments": [],
     "flags": [
@@ -12216,6 +12259,24 @@
      "--timeout",
      "--to",
      "--values-out"
+    ],
+    "subcommands": []
+   },
+   "artifacts publish-files": {
+    "arguments": [
+     "files"
+    ],
+    "flags": [
+     "--approve",
+     "--artifact-type",
+     "--ca-file",
+     "--credentials",
+     "--docker-config",
+     "--move-tag",
+     "--out",
+     "--tag",
+     "--timeout",
+     "--to"
     ],
     "subcommands": []
    },
@@ -14143,6 +14204,7 @@
      "restore",
      "s3",
      "setup",
+     "signing-key",
      "state-key",
      "status",
      "user-data"
@@ -14296,6 +14358,18 @@
     ],
     "subcommands": []
    },
+   "secrets signing-key": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--comment",
+     "--file",
+     "--generate",
+     "--replace"
+    ],
+    "subcommands": []
+   },
    "secrets state-key": {
     "arguments": [
      "name"
@@ -14323,6 +14397,18 @@
     "flags": [
      "--file",
      "--prompt"
+    ],
+    "subcommands": []
+   },
+   "sign-file": {
+    "arguments": [
+     "files"
+    ],
+    "flags": [
+     "--agent",
+     "--agent-socket",
+     "--key",
+     "--namespace"
     ],
     "subcommands": []
    },
@@ -15380,7 +15466,9 @@
    "secrets-token-refused",
    "server-target-identity-mismatch",
    "sign-failed",
+   "sign-file-invalid",
    "sign-key-invalid",
+   "signing-agent-failed",
    "smoke-env-secret",
    "smoke-failed",
    "smoke-output-mismatch",
@@ -16152,6 +16240,86 @@
      "timeout"
     ],
     "returns": "InputsVerification"
+   }
+  },
+  "piceli.artifacts.file_signing": {
+   "KIND": {},
+   "SigningError": {
+    "class": "SigningError"
+   },
+   "SigningKey": {
+    "class": "SigningKey"
+   },
+   "agent_sign": {
+    "params": [
+     "agent_socket",
+     "chunks",
+     "namespace",
+     "public_key",
+     "timeout"
+    ]
+   },
+   "allowed_signers_line": {
+    "params": [
+     "namespace",
+     "principal",
+     "public_key"
+    ]
+   },
+   "generate_private_key": {
+    "params": []
+   },
+   "load_signing_key": {
+    "params": [
+     "name"
+    ]
+   },
+   "parse_public_key": {
+    "params": [
+     "line"
+    ]
+   },
+   "private_key_of": {
+    "params": [
+     "text"
+    ]
+   },
+   "public_key_line": {
+    "params": [
+     "comment",
+     "key"
+    ]
+   },
+   "save_signing_key": {
+    "params": [
+     "comment",
+     "name",
+     "private"
+    ]
+   },
+   "sign": {
+    "params": [
+     "chunks",
+     "key",
+     "namespace"
+    ]
+   },
+   "sign_file": {
+    "params": [
+     "agent_key",
+     "agent_socket",
+     "key",
+     "namespace",
+     "path"
+    ]
+   },
+   "verify": {
+    "params": [
+     "armored",
+     "chunks",
+     "namespace",
+     "public_key"
+    ]
    }
   },
   "piceli.checks": {
@@ -17267,6 +17435,7 @@
   "piceli.artifacts.cluster_registry",
   "piceli.artifacts.delivery",
   "piceli.artifacts.delivery_inputs",
+  "piceli.artifacts.file_signing",
   "piceli.artifacts.gc",
   "piceli.artifacts.host_build",
   "piceli.artifacts.host_execution",
@@ -17282,6 +17451,7 @@
   "piceli.artifacts.plan",
   "piceli.artifacts.process",
   "piceli.artifacts.publish",
+  "piceli.artifacts.publish_files",
   "piceli.artifacts.registry",
   "piceli.artifacts.registry_delivery",
   "piceli.artifacts.registry_ref",
@@ -17457,6 +17627,7 @@
   "piceli.k8s.cli.restore",
   "piceli.k8s.cli.secrets_backup",
   "piceli.k8s.cli.secrets_status",
+  "piceli.k8s.cli.signing",
   "piceli.k8s.cli.state",
   "piceli.k8s.cli.targets",
   "piceli.k8s.cli.train",
@@ -17682,5 +17853,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.31.0"
+ "version": "0.32.0"
 }

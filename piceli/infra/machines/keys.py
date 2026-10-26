@@ -469,9 +469,10 @@ def needed_secrets(*declarations: Any) -> list[NeededSecret]:
 
     Takes :class:`~piceli.infra.Infrastructure`, ``Bucket``, ``NixCache``,
     ``NixHost``, ``NixRelease`` (its host's secrets; the cache's signing and
-    write keys also on its build host), ``DevBuilds`` (none of its own), or
-    lists of them. Nothing is read: this is the declaration.
+    write keys also on its build host), ``DevBuilds`` (none of its own),
+    ``SigningKey`` (0.32.0: a release signing key), or lists of them. Nothing is read: this is the declaration.
     """
+    from piceli.artifacts.file_signing import SigningKey
     from piceli.dev.model import DevBuilds
     from piceli.dev.nix import NixCache
     from piceli.hosts.model import NixHost
@@ -494,6 +495,12 @@ def needed_secrets(*declarations: Any) -> list[NeededSecret]:
             yield from _of_inputs(item)
         elif isinstance(item, DevBuilds):
             return
+        elif isinstance(item, SigningKey):
+            yield _operator(
+                item.name, "signing-key", item.purpose,
+                where="only in this store (or an SSH agent): back it up; "
+                "verifiers trust its public key in allowed_signers",
+            )  # fmt: skip
         elif isinstance(item, (list, tuple, set, frozenset)):
             for each in item:
                 yield from walk(each)

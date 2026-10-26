@@ -66,17 +66,15 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.31
+## What's new in 0.32
 
-- **Client charts the client shapes**: optional objects (`HelmOptional`),
-  values written into objects (`HelmValue`, a policy's namespace list),
-  `existingSecret` for Argo CD and `storage.size` with a derived disk limit;
-  see the [guide](https://docs.pynenc.org/projects/piceli/en/stable/client_delivery.html).
-- **Image labels** per image in host and in-cluster builds
-  (`org.opencontainers.image.licenses`).
-- **`piceli access`** prints web pages as links and marks TURN, databases
-  and raw ports "not a web page"; **`promote --wait --machines`** names the
-  machines module.
+- **Release files in your registry**: `piceli artifacts publish-files`
+  pushes downloads as one OCI artifact, each file addressed by its own
+  sha256, and `fetch-file` gets one back by digest; see the
+  [guide](https://docs.pynenc.org/projects/piceli/en/stable/release_files.html).
+- **Signed with a stored key**: `piceli secrets signing-key` keeps an
+  ssh-ed25519 key in the secret store and `piceli sign-file` writes the
+  signature `ssh-keygen -Y verify` checks (or signs through ssh-agent).
 
 ## Web UI
 

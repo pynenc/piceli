@@ -16,6 +16,7 @@ CODE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 # Constructors whose first positional argument is a fixed error code.
 FIRST_ARGUMENT = {
+    "SigningError",
     "DeliveryInputError",
     "BuildSpecError",
     "BuildContextError",

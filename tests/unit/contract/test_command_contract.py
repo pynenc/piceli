@@ -299,6 +299,21 @@ CASES: dict[str, tuple[Argv, str]] = {
         ),
         "publish-invalid",
     ),
+    "artifacts publish-files": (
+        lambda p: (
+            ["artifacts", "publish-files", str(p / "absent.tar.gz")]
+            + ["--to", "oci://127.0.0.1:9/x", "--tag", "1.0.0"]
+            + ["--artifact-type", "application/vnd.example.v1"]
+        ),
+        "publish-invalid",
+    ),
+    "artifacts fetch-file": (
+        lambda p: (
+            ["artifacts", "fetch-file", "--from", "oci://127.0.0.1:9/x"]
+            + ["--digest", "sha256:short", "--out", str(p / "out")]
+        ),
+        "publish-invalid",
+    ),
     "artifacts retention": (
         lambda p: (
             ["artifacts", "retention", "--to", "oci://127.0.0.1:9/x", "--keep", "0"]
@@ -805,6 +820,14 @@ CASES: dict[str, tuple[Argv, str]] = {
     "secrets nix-cache": (
         lambda p: ["secrets", "nix-cache", "cache-1", "a-key-value"],
         "infra-credential-refused",
+    ),
+    "secrets signing-key": (
+        lambda p: ["secrets", "signing-key", "release", "a-key-value"],
+        "infra-credential-refused",
+    ),
+    "sign-file": (
+        lambda p: ["sign-file", str(p / "absent.txt")],
+        "sign-file-invalid",
     ),
     "secrets s3": (
         lambda p: ["secrets", "s3", "cache-s3"],
