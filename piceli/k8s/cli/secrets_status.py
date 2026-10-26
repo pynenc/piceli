@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 import typer
 
 from piceli.cli_contract import EXIT_FAILED, emit_json, reject, say
-from piceli.infra.machines.secrets_status import MISMATCH
+from piceli.infra.machines.secrets_status import MISMATCH, SIGNING_MISMATCH
 
 if TYPE_CHECKING:
     from piceli.infra.machines.secrets_status import Item
@@ -44,7 +44,11 @@ RefArgument = Annotated[
 JsonOption = Annotated[
     bool, typer.Option("--json", help="Print one JSON object on stdout")
 ]
-_INTO = {"nix-signing-key": "NixCache(public_key=...)", "age-identity": ".sops.yaml"}
+_INTO = {
+    "nix-signing-key": "NixCache(public_key=...)",
+    "age-identity": ".sops.yaml",
+    "signing-key": "allowed_signers and SigningKey(public_key=...)",
+}
 _TITLES = {
     "provider": "1. Provider credentials: only you have them",
     "profile": "1. Cluster profiles: kubeconfig files only you have",
@@ -239,6 +243,16 @@ def _generate(walk: _Walk, item: Item, key_names: Mapping[str, list[str]]) -> No
         say("  put it in NixCache(public_key=...), or restore the key hosts trust")
         walk.result(item, "copy", public_key=stored)
         return
+    if item.detail == SIGNING_MISMATCH:
+        from piceli.artifacts.file_signing import load_signing_key
+
+        stored = load_signing_key(secret.name)[1]
+        say(f"  {secret.name}: the declaration names another key; public key: {stored}")
+        say(
+            "  put it in SigningKey(public_key=...), or restore the key verifiers trust"
+        )
+        walk.result(item, "copy", public_key=stored)
+        return
     if item.state == "damaged":
         say(f"  {secret.name} ({secret.kind}) is damaged: {item.detail}")
         if not (
@@ -264,6 +278,20 @@ def _generate(walk: _Walk, item: Item, key_names: Mapping[str, list[str]]) -> No
         walk.result(item, "needs-yes", next=item.next)
         return
     public: str | None = None
+    if secret.kind == "signing-key":
+        from piceli.artifacts.file_signing import (
+            generate_private_key,
+            save_signing_key,
+        )
+
+        private = generate_private_key()
+        public = save_signing_key(secret.name, private, secret.name)
+        del private
+        say(f"  generated {secret.name} ({secret.kind}); the secret was not printed")
+        say(f"  public key: {public}")
+        say("  put it in allowed_signers and SigningKey(public_key=...)")
+        walk.result(item, "generated", public_key=public)
+        return
     if secret.kind == "state-key":
         value = generate_passphrase()
     elif secret.kind == "nix-signing-key":

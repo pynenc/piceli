@@ -52,7 +52,7 @@ __all__ = [
 
 STATUS_SCHEMA = "piceli.secrets-status.v1"
 #: Kinds ``piceli secrets ... --generate`` creates: no one has to type them.
-GENERATED = frozenset({"state-key", "nix-signing-key", "age-identity"})
+GENERATED = frozenset({"state-key", "nix-signing-key", "age-identity", "signing-key"})
 STATES = (
     "present", "pending", "missing", "incomplete", "damaged", "copy", "not-needed",
 )  # fmt: skip
@@ -63,7 +63,7 @@ GROUPS = ("provider", "profile", "generated", "user-data", "s3", "git")
 #: serves), and the composition's Git Secret, which lives in the cluster.
 GIT_KINDS = ("git-token", "git-ssh-key")
 CLUSTER_GIT_KIND = "cluster-git-secret"
-_REPLACE = {"state-key", "nix-signing-key", "age-identity"}
+_REPLACE = {"state-key", "nix-signing-key", "age-identity", "signing-key"}
 PENDING = "created by the next infra apply"
 #: An S3 pair the owner makes by hand (0.25.3), after its ``hint``.
 BY_HAND = "Piceli cannot create it; store it with the next command"
@@ -71,6 +71,12 @@ MISMATCH = (
     "its public key is not NixCache(public_key=): put the stored key's public "
     "key (the next command prints it) in the declaration, or restore the key "
     "hosts trust"
+)
+#: 0.32.0: a stored release signing key that is not the declared one.
+SIGNING_MISMATCH = (
+    "its public key is not SigningKey(public_key=): restore the key verifiers "
+    "trust, or put the stored key's public key (piceli secrets signing-key "
+    "NAME prints it) into the declaration and allowed_signers"
 )
 
 
@@ -127,12 +133,14 @@ class _Index:
     key_infra: dict[str, Any] = field(default_factory=dict)
     user_data: dict[str, tuple[Any, Any]] = field(default_factory=dict)
     registered: dict[int, tuple[str, str]] = field(default_factory=dict)
+    signing_keys: dict[str, list[str]] = field(default_factory=dict)
 
 
 # ------------------------------------------------------------- declarations
 
 
 def _kinds() -> tuple[type, ...]:
+    from piceli.artifacts.file_signing import SigningKey
     from piceli.dev.model import DevBuilds
     from piceli.dev.nix import NixCache
     from piceli.hosts.model import NixHost
@@ -140,7 +148,10 @@ def _kinds() -> tuple[type, ...]:
     from piceli.infra.machines.model import Bucket
     from piceli.infra.nix_releases import NixRelease
 
-    return (Infrastructure, Bucket, NixCache, NixHost, NixRelease, DevBuilds, Cluster)
+    return (
+        Infrastructure, Bucket, NixCache, NixHost, NixRelease, DevBuilds, Cluster,
+        SigningKey,
+    )  # fmt: skip
 
 
 def declarations(values: Iterable[Any]) -> list[Any]:
@@ -207,6 +218,7 @@ def _profiles(decls: list[Any], index: _Index) -> list[NeededSecret]:
 
 
 def _index(decls: list[Any], module: str, names: Mapping[int, str]) -> _Index:
+    from piceli.artifacts.file_signing import SigningKey
     from piceli.dev.nix import NixCache
     from piceli.hosts.model import NixHost
     from piceli.infra import Infrastructure
@@ -238,6 +250,10 @@ def _index(decls: list[Any], module: str, names: Mapping[int, str]) -> _Index:
             cache(value.cache)
         elif isinstance(value, NixRelease):
             cache(value.host.cache)
+        elif isinstance(value, SigningKey):
+            keys = index.signing_keys.setdefault(value.name, [])
+            if value.public_key is not None:
+                keys.append(" ".join(value.public_key.split()[:2]))
     return index
 
 
@@ -322,6 +338,26 @@ def _value_state(
         if any(c.public_key is None for c in caches):
             # Declared with key_name= alone: the declaration waits for it.
             return "copy", copy_detail(public)
+    elif secret.kind == "signing-key":
+        import base64
+
+        from piceli.artifacts.file_signing import (
+            SigningError,
+            private_key_of,
+            public_key_line,
+        )
+
+        try:
+            public = public_key_line(
+                private_key_of(base64.b64decode(value, validate=True).decode())
+            )
+        except (SigningError, ValueError, UnicodeDecodeError):
+            return "damaged", "not an ssh-ed25519 private key"
+        finally:
+            del value
+        declared = index.signing_keys.get(secret.name) or []
+        if declared and public not in declared:
+            return "damaged", SIGNING_MISMATCH
     elif secret.kind == "age-identity":
         from piceli.hosts.age import AgeError, check_identity
 
@@ -445,6 +481,8 @@ def _next(
     if detail == MISMATCH:
         # The key is fine; the declaration names another one.
         return f"piceli secrets nix-cache {secret.name}", detail
+    if detail == SIGNING_MISMATCH:
+        return f"piceli secrets signing-key {secret.name}", detail
     if state == "damaged" and secret.kind in _REPLACE:
         command += " --replace"
         detail = (

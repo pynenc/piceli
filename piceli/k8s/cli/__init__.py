@@ -29,6 +29,7 @@ from piceli.k8s.cli.registry import register as register_registry_commands
 from piceli.k8s.cli.release import app as release_app
 from piceli.k8s.cli.render import render
 from piceli.k8s.cli.restore import register as register_restore_commands
+from piceli.k8s.cli.signing import register as register_signing_commands
 from piceli.k8s.cli.state import app as state_app
 from piceli.k8s.cli.targets import register as register_targets_command
 from piceli.k8s.cli.train import register as register_train_command
@@ -70,6 +71,7 @@ register_targets_command(app)
 register_train_command(app)
 register_trains_commands(app)
 register_cycle_commands(app)
+register_signing_commands(app)
 
 
 def _version(value: bool) -> None:

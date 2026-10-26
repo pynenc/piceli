@@ -16,6 +16,7 @@ PUBLIC_MODULES: tuple[str, ...] = (
     "piceli",
     "piceli.app",
     "piceli.artifacts",
+    "piceli.artifacts.file_signing",
     "piceli.checks",
     "piceli.envs",
     "piceli.infra",

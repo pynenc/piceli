@@ -872,6 +872,33 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "and contacts nothing. Pushes are content-addressed; a version tag "
             "that names another image is refused unless --move-tag.",
         ),
+        "artifacts publish-files": _C(
+            "Publish local files as one OCI artifact (each file one layer, by its sha256).",
+            contract="conforms",
+            reads=("the files", "credentials file or Docker config"),
+            writes=("OCI registry (blobs, manifest, tag)", "--out receipt"),
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            exit_codes=(0, 1, 2, 3),
+            notes="0.32.0. Without --approve it prints the plan (every file's "
+            "name, size and digest, the manifest digest) and its digest (exit 3) "
+            "and contacts nothing. Each file is stored as it is, so its blob "
+            "digest is its sha256; a file changed since the plan is refused "
+            "(publish-input-changed). A tag that names another manifest is "
+            "refused unless --move-tag. Never prints a credential.",
+        ),
+        "artifacts fetch-file": _C(
+            "Download one published file (a blob) by its digest and check it.",
+            contract="conforms",
+            reads=("OCI registry (one blob)", "credentials file or Docker config"),
+            writes=("--out PATH (only when the digest matches)",),
+            safe_to_retry=True,
+            exit_codes=(0, 1, 2),
+            notes="0.32.0. Anonymous unless --credentials or --docker-config: a "
+            "public repository's anonymous pull token is fetched as the registry "
+            "asks. blob-digest-mismatch leaves --out untouched.",
+        ),
         "artifacts retention": _C(
             "Report which registry manifests the last releases, pins and live workloads keep, and delete the rest.",
             contract="conforms",
@@ -2562,6 +2589,37 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "optionally, that host's known_hosts lines. Used before the build by "
             "the build host's fetch step, never inside the build. Prints the "
             "name and the host, never the key.",
+        ),
+        "secrets signing-key": _C(
+            "Generate or import a release signing key (ssh-ed25519) as a local "
+            "credential, or print its public key.",
+            reads=("--file PATH", "$PICELI_CREDENTIALS_DIR/NAME.json"),
+            writes=(
+                "$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600; --generate, --file)",
+            ),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.32.0. Prints the public key and its allowed_signers line, "
+            "never the private key. --file takes an ed25519 key without a "
+            "passphrase (a key with one stays in ssh-agent: sign-file --agent). "
+            "Without --generate or --file it only reads. Refuses to replace a "
+            "key without --replace (infra-credential-exists).",
+        ),
+        "sign-file": _C(
+            "Write FILE.sig for each file, as `ssh-keygen -Y sign -n file` would.",
+            contract="conforms",
+            reads=(
+                "the files",
+                "$PICELI_CREDENTIALS_DIR/NAME.json (--key)",
+                "SSH agent (--agent)",
+            ),
+            writes=("FILE.sig next to each file (replaced)",),
+            safe_to_retry=True,
+            exit_codes=(0, 2),
+            notes="0.32.0. The key is a stored signing-key (--key NAME) or one an "
+            "SSH agent holds (--agent KEY.pub). Verify with `ssh-keygen -Y "
+            "verify -f allowed_signers -I PRINCIPAL -n file -s FILE.sig < FILE`. "
+            "Never prints the private key.",
         ),
         "secrets user-data": _C(
             "Store a server's user data (a cloud-config, a script or a bootstrap "

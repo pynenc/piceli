@@ -30,12 +30,14 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli artifacts build-spec run`](#cli-artifacts-build-spec-run) | Run an approved containerized build and write a receipt. | none | yes |
 | [`piceli artifacts deliver`](#cli-artifacts-deliver) | Deliver a digest-approved image to a registry or node. | reads | yes |
 | [`piceli artifacts execute-command`](#cli-artifacts-execute-command) | Run a pinned external build command under an approved plan. | none | yes |
+| [`piceli artifacts fetch-file`](#cli-artifacts-fetch-file) | Download one published file (a blob) by its digest and check it. | none | no |
 | [`piceli artifacts import-local`](#cli-artifacts-import-local) | Import an OCI layout into the local Docker daemon. | none | yes |
 | [`piceli artifacts inspect`](#cli-artifacts-inspect) | Recheck an OCI layout and print its summary. | none | no |
 | [`piceli artifacts pin`](#cli-artifacts-pin) | Pin one public source file by digest. | none | no |
 | [`piceli artifacts preview`](#cli-artifacts-preview) | Preview a deterministic OCI build plan (no tools run). | none | no |
 | [`piceli artifacts preview-command`](#cli-artifacts-preview-command) | Preview a pinned external build command. | none | no |
 | [`piceli artifacts publish`](#cli-artifacts-publish) | Publish a build's images (every platform in one index) to a registry. | none | yes |
+| [`piceli artifacts publish-files`](#cli-artifacts-publish-files) | Publish local files as one OCI artifact (each file one layer, by its sha256). | none | yes |
 | [`piceli artifacts retention`](#cli-artifacts-retention) | Report which registry manifests the last releases, pins and live workloads keep, and delete the rest. | reads | yes |
 | [`piceli build job`](#cli-build-job) | Build at a commit as a Job on a builder node (plan, then --approve HASH). | writes | yes |
 | [`piceli build job-run`](#cli-build-job-run) | Inside the build Job: build and push; print the receipt line. | none | no |
@@ -165,9 +167,11 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli secrets restore`](#cli-secrets-restore) | Restore the secret store from an encrypted backup (plans first when not empty). | none | yes |
 | [`piceli secrets s3`](#cli-secrets-s3) | Store a bucket's S3 access keys, part by part (never printed). | none | no |
 | [`piceli secrets setup`](#cli-secrets-setup) | Walk through the missing secrets of a declaration, in order. | none | no |
+| [`piceli secrets signing-key`](#cli-secrets-signing-key) | A release signing key: generate or import it; print its public key. | none | no |
 | [`piceli secrets state-key`](#cli-secrets-state-key) | Store the passphrase that encrypts an infrastructure's OpenTofu state. | none | no |
 | [`piceli secrets status`](#cli-secrets-status) | Every secret a declaration needs: present or missing, who creates it, the next command. | none | no |
 | [`piceli secrets user-data`](#cli-secrets-user-data) | Store a server's user data (a cloud-config, a script or a bootstrap key). | none | no |
+| [`piceli sign-file`](#cli-sign-file) | Write FILE.sig for each file, as `ssh-keygen -Y sign -n file` would. | none | no |
 | [`piceli state export`](#cli-state-export) | Write the release's state to one file (secret material excluded unless asked). | reads | no |
 | [`piceli state import`](#cli-state-import) | Replace the release's state with an export (needs --approve DIGEST). | writes | yes |
 | [`piceli state pull`](#cli-state-pull) | Refresh the local working copy from the shared state (reads the cluster). | reads | no |
@@ -414,6 +418,33 @@ Run a pinned external build command under an approved plan.
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 
+(cli-artifacts-fetch-file)=
+### `piceli artifacts fetch-file`
+
+Download one published file (a blob) by its digest and check it.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--from` | text | required | oci://host/repository |
+| `--digest` | text | required | sha256:<hex> of the file |
+| `--out` | path | required | where to write it |
+| `--credentials` | path |  |  |
+| `--docker-config` | path |  |  |
+| `--ca-file` | path |  |  |
+
+Mutually exclusive: `credentials` / `docker_config`.
+
+**Contract**
+
+- **Reads:** OCI registry (one blob), credentials file or Docker config
+- **Writes:** --out PATH (only when the digest matches)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.32.0. Anonymous unless --credentials or --docker-config: a public repository's anonymous pull token is fetched as the registry asks. blob-digest-mismatch leaves --out untouched.
+
 (cli-artifacts-import-local)=
 ### `piceli artifacts import-local`
 
@@ -554,6 +585,38 @@ Mutually exclusive: `credentials` / `docker_config`.
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
 - **Notes:** Without --approve it prints the plan and its digest (exit 3) and contacts nothing. Pushes are content-addressed; a version tag that names another image is refused unless --move-tag.
+
+(cli-artifacts-publish-files)=
+### `piceli artifacts publish-files`
+
+Publish local files as one OCI artifact (each file one layer, by its sha256).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `FILES` | path | required |  |
+| `--to` | text | required | oci://host[:port]/repository |
+| `--tag` | text | required | the artifact's tag |
+| `--artifact-type` | text | required | the manifest's artifactType, e.g. application/vnd.example.downloads.v1 |
+| `--move-tag` | boolean | `False` |  |
+| `--approve` | text |  | the plan digest printed without --approve |
+| `--credentials` | path |  |  |
+| `--docker-config` | path |  |  |
+| `--ca-file` | path |  |  |
+| `--out` | path |  | write the receipt here |
+| `--timeout` | float | `1800` |  |
+
+Mutually exclusive: `credentials` / `docker_config`.
+
+**Contract**
+
+- **Reads:** the files, credentials file or Docker config
+- **Writes:** OCI registry (blobs, manifest, tag), --out receipt
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** 0.32.0. Without --approve it prints the plan (every file's name, size and digest, the manifest digest) and its digest (exit 3) and contacts nothing. Each file is stored as it is, so its blob digest is its sha256; a file changed since the plan is refused (publish-input-changed). A tag that names another manifest is refused unless --move-tag. Never prints a credential.
 
 (cli-artifacts-retention)=
 ### `piceli artifacts retention`
@@ -3946,6 +4009,30 @@ Walk through the missing secrets of a declaration, in order.
 - **Output contract:** conforms
 - **Notes:** 0.25.0. Provider credentials are asked for part by part (piped: one part per line, in the order status lists them; stdin at its end skips them). Keys Piceli generates (state key, Nix signing key, age identity) are generated after a confirmation on a terminal or with --yes, printing only public halves; a damaged key is replaced only after a confirmation on a terminal, never with --yes. User data is offered on a terminal only (default: later, right before infra apply); S3 pairs are left to infra apply. --json prints one object per step, then a summary. Never prints a value. Exit 0: everything stored but what is left for later on purpose (user data, the pairs infra apply makes); 1: something still missing, incomplete or damaged (a declined generation, a refused part, a profile); 2: a module that does not load or declares nothing.
 
+(cli-secrets-signing-key)=
+### `piceli secrets signing-key`
+
+A release signing key: generate or import it; print its public key.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--generate` | boolean | `False` | Generate a new ssh-ed25519 key |
+| `--file` | path |  | Import an existing ed25519 private key file (OpenSSH, no passphrase) |
+| `--comment` | text |  | The public key's comment and the allowed_signers principal (default: NAME) |
+| `--replace` | boolean | `False` | Replace an existing key (verifiers that trust the old one refuse new signatures) |
+
+**Contract**
+
+- **Reads:** --file PATH, $PICELI_CREDENTIALS_DIR/NAME.json
+- **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600; --generate, --file)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.32.0. Prints the public key and its allowed_signers line, never the private key. --file takes an ed25519 key without a passphrase (a key with one stays in ssh-agent: sign-file --agent). Without --generate or --file it only reads. Refuses to replace a key without --replace (infra-credential-exists).
+
 (cli-secrets-state-key)=
 ### `piceli secrets state-key`
 
@@ -4011,6 +4098,30 @@ Store a server's user data (a cloud-config, a script or a bootstrap key).
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** 0.24.0. Prints the name, size and a short digest (the one the plan shows), never the value; an argument is refused (infra-credential-refused) without echoing it. Used only by a plan that creates the server (Server(user_data=UserData(NAME))).
+
+(cli-sign-file)=
+### `piceli sign-file`
+
+Write FILE.sig for each file, as `ssh-keygen -Y sign -n file` would.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `FILES` | path | required |  |
+| `--key` | text |  | The stored signing key's credential name |
+| `--agent` | path |  | Sign with an SSH agent ($SSH_AUTH_SOCK) holding the key of this public key file |
+| `--agent-socket` | path |  | The agent's socket (default: $SSH_AUTH_SOCK) |
+| `--namespace` | text | `file` | The signature namespace (-n) |
+
+**Contract**
+
+- **Reads:** the files, $PICELI_CREDENTIALS_DIR/NAME.json (--key), SSH agent (--agent)
+- **Writes:** FILE.sig next to each file (replaced)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.32.0. The key is a stored signing-key (--key NAME) or one an SSH agent holds (--agent KEY.pub). Verify with `ssh-keygen -Y verify -f allowed_signers -I PRINCIPAL -n file -s FILE.sig < FILE`. Never prints the private key.
 
 (cli-state-export)=
 ### `piceli state export`

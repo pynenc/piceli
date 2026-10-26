@@ -713,7 +713,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`secrets-token-refused`](#error-secrets-token-refused) | cluster | no |
 | [`server-target-identity-mismatch`](#error-server-target-identity-mismatch) | kubernetes | no |
 | [`sign-failed`](#error-sign-failed) | publish | yes |
+| [`sign-file-invalid`](#error-sign-file-invalid) | publish | no |
 | [`sign-key-invalid`](#error-sign-key-invalid) | publish | no |
+| [`signing-agent-failed`](#error-signing-agent-failed) | publish | yes |
 | [`smoke-env-secret`](#error-smoke-env-secret) | build-spec | no |
 | [`smoke-failed`](#error-smoke-failed) | build-spec | no |
 | [`smoke-output-mismatch`](#error-smoke-output-mismatch) | build-spec | no |
@@ -5637,6 +5639,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Check the key and its password (`cosign sign --key cosign.key <image>@<digest>` by hand shows the cause), then publish again (safe to retry).
 - **Retry-safe:** yes
 
+(error-sign-file-invalid)=
+### `sign-file-invalid`
+
+**Cannot sign that file.** `piceli sign-file` needs regular files it can read and a directory where it can write `FILE.sig`, exactly one of `--key NAME` or `--agent KEY.pub`, and a namespace of letters, digits and `@._+-`.
+
+- **Fix:** Check the paths and the options, then sign again (safe to retry: the signature is replaced).
+- **Retry-safe:** no
+
 (error-sign-key-invalid)=
 ### `sign-key-invalid`
 
@@ -5644,6 +5654,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** `chmod 600 cosign.key` (from `cosign generate-key-pair`), then plan and approve again.
 - **Retry-safe:** no
+
+(error-signing-agent-failed)=
+### `signing-agent-failed`
+
+**The SSH agent did not sign.** `piceli sign-file --agent` found no agent (`SSH_AUTH_SOCK` or `--agent-socket`), the agent does not hold the key of that public key file, it refused (a declined confirmation), or its signature did not verify with that public key.
+
+- **Fix:** `ssh-add -L` lists the keys the agent holds; `ssh-add KEY` loads one. Then sign again.
+- **Retry-safe:** yes
 
 
 ## Registry retention (`piceli artifacts retention`)

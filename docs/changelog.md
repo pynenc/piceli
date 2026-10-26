@@ -4,6 +4,27 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.32.0
+
+**Features**
+
+- **`piceli artifacts publish-files`: release files as one OCI artifact.**
+  Each file is one layer stored as it is, so its digest is the file's
+  sha256, titled with its name; the manifest has `artifactType` and the
+  empty config, and no time, so the same files give the same digest. Plan
+  (exit 3), `--approve`, `--move-tag`, credentials and receipt as for
+  `artifacts publish`. **`piceli artifacts fetch-file`** downloads one file
+  by its digest (anonymous for a public repository) and writes it only when
+  the digest matches. See {doc}`release_files`.
+- **Release signing keys.** `piceli secrets signing-key NAME --generate`
+  (or `--file KEY` to import an ed25519 key) keeps an ssh-ed25519 key in the
+  local secret store (kind `signing-key`; `status`, `setup`, `backup` and
+  `delete` cover it; `SigningKey(NAME, public_key=...)` declares it) and
+  prints only its public key and `allowed_signers` line. `piceli sign-file
+  FILE... --key NAME` writes `FILE.sig`, the same bytes as `ssh-keygen -Y
+  sign -n file`; `--agent KEY.pub` signs with a key an SSH agent holds.
+  New codes `sign-file-invalid`, `signing-agent-failed`.
+
 ## Version 0.31.0
 
 **Features**

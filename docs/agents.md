@@ -244,6 +244,13 @@ noted.
   digest (exit `3`); it contacts no registry. `piceli artifacts build-spec
   preview --spec host-build.toml --platform …` plans a multi-platform host
   build without running anything. See {doc}`publishing_images`.
+- `piceli artifacts publish-files FILE... --to oci://… --tag T
+  --artifact-type TYPE` **without** `--approve`: hashes the files and prints
+  the plan and its digest (exit `3`); it contacts no registry.
+  `piceli artifacts fetch-file --from oci://… --digest sha256:… --out PATH`
+  downloads one published file and checks its digest. `piceli secrets
+  signing-key NAME` (no flag) prints a stored signing key's public key.
+  See {doc}`release_files`.
 - `piceli artifacts retention --to oci://… --receipts DIR` (without
   `--delete`): reads a registry (and, with `--kubeconfig`/`--context`, the
   cluster's pods, workload pod templates and environment records) and prints which manifests the last releases, pins and
@@ -426,6 +433,8 @@ Exporting deploy events (`--otlp-endpoint`, or `OTEL_EXPORTER_OTLP_*` in the env
 | `piceli chart publish` | A registry (the Helm chart, which other people then install with Helm) | `--approve <digest>` printed by `piceli chart publish` without `--approve`, after the owner reviewed the chart, its version and the target; see {doc}`helm_charts` |
 | `piceli artifacts build-spec run` | Runs a build, writes outputs and images | `--approve-builder <digest>` and `--approve-plan <hash>` (a `host-build.toml`: `--approve-plan` only) |
 | `piceli artifacts publish` | A hosted registry: images of every platform, their index, attestations, signatures, the version tag | `--approve <digest>` (printed without it) |
+| `piceli artifacts publish-files` | A registry: the files as blobs, one artifact manifest, the tag | `--approve <digest>` (printed without it), after the owner reviewed the files, the target and the tag |
+| `piceli secrets signing-key` (`--generate`, `--file`), `piceli sign-file` | Store a release signing key (`0600`); write `FILE.sig` next to each file | The owner runs `--generate`/`--file`; `sign-file` with the owner's go-ahead for that release. Never read the credential file |
 | `piceli artifacts retention` | With `--delete`, a registry: deletes the manifests no release, pin or live workload needs (blobs are freed by the registry's garbage collection) | `--approve <plan hash>` printed by `--delete` without `--approve`, after the owner reviewed the exact deletion list; never a digest a running workload uses; see {doc}`registry_retention` |
 | `piceli artifacts execute-command` | Runs a pinned tool | `--approve-plan <hash>` |
 | `piceli artifacts import-local` | The local Docker image store | `--approve-digest <digest>` |

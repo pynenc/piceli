@@ -111,6 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument("--kubectl-sha256")
     add_build_spec_commands(sub)
     add_publish_command(sub)
+    add_publish_files_commands(sub)
     add_retention_command(sub)
     return parser
 
@@ -162,12 +163,52 @@ def add_publish_command(sub: Any) -> None:
     cmd.add_argument("--timeout", type=float, default=1800)
 
 
+def add_publish_files_commands(sub: Any) -> None:
+    """``artifacts publish-files`` and ``artifacts fetch-file`` (0.32.0)."""
+    cmd = sub.add_parser(
+        "publish-files",
+        help="push local files as one OCI artifact (each file one layer, by its sha256)",
+    )
+    cmd.add_argument("files", nargs="+", type=Path, metavar="FILE")
+    cmd.add_argument("--to", required=True, help="oci://host[:port]/repository")
+    cmd.add_argument("--tag", required=True, help="the artifact's tag")
+    cmd.add_argument(
+        "--artifact-type",
+        required=True,
+        help="the manifest's artifactType, e.g. application/vnd.example.downloads.v1",
+    )
+    cmd.add_argument("--move-tag", action="store_true")
+    cmd.add_argument("--approve", help="the plan digest printed without --approve")
+    credentials = cmd.add_mutually_exclusive_group()
+    credentials.add_argument("--credentials", type=Path)
+    credentials.add_argument("--docker-config", type=Path)
+    cmd.add_argument("--ca-file", type=Path)
+    cmd.add_argument("--out", type=Path, help="write the receipt here")
+    cmd.add_argument("--timeout", type=float, default=1800)
+    cmd = sub.add_parser(
+        "fetch-file", help="download one blob (a published file) by its digest"
+    )
+    cmd.add_argument(
+        "--from", dest="source", required=True, help="oci://host/repository"
+    )
+    cmd.add_argument("--digest", required=True, help="sha256:<hex> of the file")
+    cmd.add_argument("--out", type=Path, required=True, help="where to write it")
+    credentials = cmd.add_mutually_exclusive_group()
+    credentials.add_argument("--credentials", type=Path)
+    credentials.add_argument("--docker-config", type=Path)
+    cmd.add_argument("--ca-file", type=Path)
+
+
 def main(arguments: list[str] | None = None) -> int:
     args = build_parser().parse_args(arguments)
     if args.command == "build-spec":
         return run_build_spec_command(args)
     if args.command == "publish":
         return run_publish_command(args)
+    if args.command == "publish-files":
+        return run_publish_files_command(args)
+    if args.command == "fetch-file":
+        return run_fetch_file_command(args)
     if args.command == "retention":
         return run_retention_command(args)
     try:
@@ -509,6 +550,106 @@ def run_publish_command(args: argparse.Namespace, **seams: Any) -> int:
         return rejection(error.code if error.code in ERRORS else "publish-invalid")
     except (ValueError, KeyError, TypeError, OSError):
         return rejection("publish-invalid")
+
+
+def _registry_credentials(
+    args: argparse.Namespace, registry: str
+) -> RegistryCredentials | None:
+    """``--credentials FILE`` or ``--docker-config FILE`` for ``registry``."""
+    from piceli.artifacts.registry import docker_config_credentials
+
+    if args.credentials is not None:
+        return _input(
+            "invalid-credentials-file",
+            lambda: RegistryCredentials.load(args.credentials.absolute()),
+        )
+    if args.docker_config is not None:
+        return docker_config_credentials(args.docker_config.absolute(), registry)
+    return None
+
+
+def run_publish_files_command(args: argparse.Namespace, **seams: Any) -> int:
+    """Plan (exit 3), or push an approved files artifact (exit 0, or 1 on failure)."""
+    from piceli.artifacts.publish import PublishError, PublishGrant
+    from piceli.artifacts.publish_files import FilePublisher, FilesPlan
+    from piceli.cli_contract import EXIT_APPROVAL, emit_json, say
+
+    try:
+        plan = FilesPlan.from_paths(
+            args.files, args.to, args.tag, args.artifact_type, move_tag=args.move_tag
+        )
+        if args.approve is None or args.approve != plan.digest:
+            if args.approve is not None:
+                raise PublishError("publish-not-approved")
+            emit_json({"state": "approval-required", **plan.preview()})
+            for item in plan.files:
+                say(f"  {item.name}  {item.size} bytes  {item.sha256}")
+            say(
+                f"publish-files: {len(plan.files)} file(s) to "
+                f"{plan.target.registry}/{plan.target.repository}:{plan.tag} "
+                f"(manifest {plan.manifest_digest}); approve with --approve {plan.digest}"
+            )
+            return EXIT_APPROVAL
+        credentials = _registry_credentials(args, plan.target.registry)
+        publisher = FilePublisher(
+            credentials=credentials,
+            ca_file=args.ca_file.absolute() if args.ca_file is not None else None,
+            timeout=args.timeout,
+            **seams,
+        )
+        result = publisher.publish(
+            plan, PublishGrant(plan.digest, time.time() + args.timeout)
+        )
+        if args.out is not None:
+            write_receipt(args.out, result)
+        emit_json(result)
+        if result["state"] != "published":
+            reason = (
+                result["reason"] if result["reason"] in ERRORS else "publish-failed"
+            )
+            say(f"publish-files: failed [{reason}]")
+            return 1
+        say(
+            f"published {result['repository']}:{result['tag']}@{result['manifest_digest']}"
+        )
+        return 0
+    except (PublishError, DeliveryInputError) as error:
+        return rejection(error.code if error.code in ERRORS else "publish-invalid")
+    except (ValueError, KeyError, TypeError, OSError):
+        return rejection("publish-invalid")
+
+
+def run_fetch_file_command(args: argparse.Namespace, **seams: Any) -> int:
+    """Download one published file by digest (exit 0, 1 on failure, 2 refused)."""
+    from piceli.artifacts.publish import PublishError
+    from piceli.artifacts.publish_files import fetch_file
+    from piceli.artifacts.registry import RegistryError
+    from piceli.cli_contract import emit_json, say
+
+    try:
+        validate_digest(args.digest)
+        target = RegistryTarget.parse(args.source)
+        credentials = _registry_credentials(args, target.registry)
+        result = fetch_file(
+            args.source,
+            args.digest,
+            args.out,
+            credentials=credentials,
+            ca_file=args.ca_file.absolute() if args.ca_file is not None else None,
+            **seams,
+        )
+    except RegistryError as error:
+        reason = error.reason if error.reason in ERRORS else "registry-error"
+        emit_json({"state": "failed", "reason": reason, "digest": args.digest})
+        say(f"fetch-file: failed [{reason}]")
+        return 1
+    except (PublishError, DeliveryInputError) as error:
+        return rejection(error.code if error.code in ERRORS else "publish-invalid")
+    except (ValueError, KeyError, TypeError, OSError):
+        return rejection("publish-invalid")
+    emit_json(result)
+    say(f"fetched {result['digest']} ({result['size']} bytes)")
+    return 0
 
 
 def _write_values(path: Path, values: dict[str, Any]) -> None:

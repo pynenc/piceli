@@ -3962,6 +3962,22 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "publish",
     ),
     _E(
+        "sign-file-invalid",
+        "Cannot sign that file",
+        "`piceli sign-file` needs regular files it can read and a directory where it can write `FILE.sig`, exactly one of `--key NAME` or `--agent KEY.pub`, and a namespace of letters, digits and `@._+-`.",
+        "Check the paths and the options, then sign again (safe to retry: the signature is replaced).",
+        False,
+        "publish",
+    ),
+    _E(
+        "signing-agent-failed",
+        "The SSH agent did not sign",
+        "`piceli sign-file --agent` found no agent (`SSH_AUTH_SOCK` or `--agent-socket`), the agent does not hold the key of that public key file, it refused (a declined confirmation), or its signature did not verify with that public key.",
+        "`ssh-add -L` lists the keys the agent holds; `ssh-add KEY` loads one. Then sign again.",
+        True,
+        "publish",
+    ),
+    _E(
         "build-platforms-invalid",
         "Invalid build platforms",
         "A multi-platform host build names no platform, names one twice, names one other than `linux/amd64` or `linux/arm64`, or names one that the spec's `build.platform` or `build.platforms` does not allow.",
