@@ -1,4 +1,8 @@
-"""0.31.0: the ``helm_app`` client with an optional intake (a Service and an
+"""0.34.0: ``intake.expose`` also patches the agent to listen on every
+address (``INTAKE_LISTEN``), and a private CA is an optional input
+(``privateCa``).
+
+0.31.0: the ``helm_app`` client with an optional intake (a Service and an
 ingress NetworkPolicy from listed namespaces), a disk limit that follows
 ``storage.size``, for the ``bundle --helm`` tests.
 
@@ -56,6 +60,7 @@ secrets = Secrets(
     api_token=ImportSecretSpec.model_validate({"type": "import", "env": "API_TOKEN"}),
     intake_token=Random(32),
     cluster_key=Random(32),
+    private_ca=ImportSecretSpec.model_validate({"type": "import", "env": "PRIVATE_CA"}),
 )
 private = app.secret(
     "agent-private",
@@ -63,6 +68,7 @@ private = app.secret(
         "api-token": secrets.ref("api_token"),
         "intake-token": secrets.ref("intake_token"),
         "cluster-key": secrets.ref("cluster_key"),
+        "private-ca": secrets.ref("private_ca"),
     },
 )
 settings = app.config(
@@ -82,6 +88,7 @@ agent = app.stateful_set(
         "TEAM": settings.key("team"),
         "CLUSTER_ID": settings.key("cluster-id"),
         "DISK_LIMIT": "900M",
+        "INTAKE_LISTEN": "127.0.0.1:4318",
     },
     ports=[7000, 4318],
     resources=RESOURCES,
@@ -154,6 +161,21 @@ RELAY_PORTS = [
     {"port": 3478, "protocol": "UDP"},
     {"port": 49160, "endPort": 49999, "protocol": "UDP"},
 ]
+# A merge patch: containers and env are merged by name.
+LISTEN_EVERYWHERE = {
+    "spec": {
+        "template": {
+            "spec": {
+                "containers": [
+                    {
+                        "name": "agent",
+                        "env": [{"name": "INTAKE_LISTEN", "value": "0.0.0.0:4318"}],
+                    }
+                ]
+            }
+        }
+    }
+}
 chart = HelmChart(
     pipeline,
     required=("team", "clusterId"),
@@ -182,7 +204,9 @@ chart = HelmChart(
     descriptions={"team": "the team id", "apiToken": "a file holding the API token"},
     optional={
         "intake.expose": HelmOptional(
-            "Expose the intake to other namespaces", objects=[intake, intake_policy]
+            "Expose the intake to other namespaces",
+            objects=[intake, intake_policy],
+            patches=[(agent, LISTEN_EVERYWHERE)],
         )
     },
     values={
@@ -197,4 +221,5 @@ chart = HelmChart(
         )
     },
     storage_env={"DISK_LIMIT": 90},
+    optional_inputs=("privateCa",),
 )

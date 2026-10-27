@@ -292,6 +292,55 @@ With `--set storage.size=20Gi`, each container that declares `DISK_LIMIT`
 gets 90 % of 20Gi in bytes (`19327352832`); without it, its declared value.
 Optional objects pass the safety gate like every other object.
 
+The same value can also patch other objects (0.34.0), so one switch both
+adds the objects and adjusts the ones that use them. Here the agent
+listens only on loopback until the intake is exposed:
+
+```python
+LISTEN_EVERYWHERE = {  # a merge patch: containers and env merge by name
+    "spec": {
+        "template": {
+            "spec": {
+                "containers": [
+                    {
+                        "name": "agent",
+                        "env": [{"name": "INTAKE_LISTEN", "value": "0.0.0.0:4318"}],
+                    }
+                ]
+            }
+        }
+    }
+}
+
+chart = HelmChart(
+    pipeline,
+    optional={
+        "intake.expose": HelmOptional(
+            "Expose the intake to other namespaces",
+            objects=[intake, intake_policy],
+            patches=[(agent, LISTEN_EVERYWHERE)],
+        )
+    },
+)
+```
+
+`patches` takes the same patches as a `HelmToggle` (a JSON Patch or a
+merge patch per object) and applies them only when the value is true; the
+patched render passes the safety gate. A patched object may not be one of
+the optional objects, nor be patched by another value or toggle.
+
+A secret input the client may leave out (0.34.0), for example a private
+certificate authority, is named in `optional_inputs` by its value name:
+
+```python
+chart = HelmChart(pipeline, optional_inputs=("privateCa",))
+```
+
+Without `--set-file privateCa=FILE` the install succeeds and the Secret
+keys that input fills are omitted, so mount the Secret as a volume (or
+read the key with an optional reference) and treat a missing file as "no
+private CA". Once passed, the value is kept across upgrades like any input.
+
 Publish the chart to an OCI registry as `helm push` does, with an approval
 of its digest like every Piceli publish:
 

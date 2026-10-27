@@ -66,16 +66,17 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.33
+## What's new in 0.34
 
-- **Build hosts follow the controller's version**: `piceli builder serve`
-  claims builds only while it runs the same Piceli version as the GitOps
-  controller. On a mismatch it claims nothing (the cluster builds), exits
-  75 and writes the controller's version into `--version-file`, so its
-  service installs that version without root and starts again; `builder
-  status`, `gitops hosts` and a `build-host-version` alarm show it. It
-  builds in the controller's builder image unless `--image` overrides it. See the
-  [guide](https://docs.pynenc.org/projects/piceli/en/latest/gitops.html#builder-version).
+- **One chart value adds objects and patches others**: in a client Helm
+  chart, `HelmOptional(description, objects=[...], patches=[(obj, patch)])`
+  installs its objects and patches other objects only when the client sets
+  the value (`intake.expose=true` adds a Service and a NetworkPolicy and
+  makes the app listen on every address).
+- **Optional secret inputs**: `HelmChart(optional_inputs=("privateCa",))`
+  lets the client leave out a `--set-file` input; its Secret keys are then
+  omitted. See the
+  [guide](https://docs.pynenc.org/projects/piceli/en/stable/client_delivery.html).
 
 ## Web UI
 
