@@ -762,6 +762,7 @@ systemd.services.piceli-builder-builder-1 = {
     exec uvx --from "piceli==$(cat /var/lib/piceli-builder/version)" \
       piceli builder serve --cluster infra.py:my_cluster --host builder-1 \
       --state-dir /var/lib/piceli-builder \
+      --version-file /var/lib/piceli-builder/version \
       --args-file /var/lib/piceli-builder/serve.args
   '';
   serviceConfig = {
@@ -777,7 +778,9 @@ systemd.services.piceli-builder-builder-1 = {
 
 An upgrade is then: write the new version (and the new image digest in
 `serve.args`), `systemctl restart piceli-builder-builder-1`, and `builder
-status` shows the new version. If the deploy directory pins Piceli itself
+status` shows the new version. 0.33.0: with `--version-file` the host
+writes the controller's version itself and exits 75; `Restart` starts it
+again on that version ({ref}`builder-version`). If the deploy directory pins Piceli itself
 (a `uv.lock`), run `uv run piceli ...` there instead of `uvx` and upgrade by
 updating the lock. The fixed unit without these files is the same service
 `install` writes:
@@ -802,6 +805,56 @@ systemd.services.piceli-builder-builder-1 = {
   };
 };
 ```
+
+(builder-version)=
+#### The same Piceli version as the controller (0.33.0)
+
+A build step may use a command or a format that only the newer Piceli
+knows, so a build host claims only while it runs the controller's version
+(`controller.version` in the status). On a mismatch `builder serve`:
+
+1. claims nothing; the controller builds in the cluster after `host_wait`,
+   with its own image;
+2. tells the controller its version (request `build-host-version`), so
+   `piceli builder status` shows the host `version-mismatch`, `piceli
+   gitops hosts` prints `VERSION MISMATCH` and the `build-host-version`
+   alarm fires (resolved once the host runs the same version);
+3. with `--version-file PATH`, writes the controller's version into PATH
+   (one line, only when it changed);
+4. exits **75** (`EX_TEMPFAIL`, rejection `builder-version-mismatch`).
+
+Its service then installs that version as the service user, without root,
+and starts it again. With Piceli installed by `uv tool install` into the
+service user's home, a systemd unit does it before each start:
+
+```ini
+[Service]
+User=builder
+Environment=HOME=/var/lib/piceli-builder
+ExecStartPre=/bin/sh -c 'uv tool install "piceli==$(cat /var/lib/piceli-builder/version)"'
+ExecStart=/var/lib/piceli-builder/.local/bin/piceli builder serve --cluster infra.py:my_cluster --host builder-1 --version-file /var/lib/piceli-builder/version
+# no --image: the host builds in the controller's builder image
+Restart=on-failure
+RestartSec=10
+```
+
+`uv tool install` with the version already installed does nothing. The
+`uvx --from "piceli==$(cat .../version)"` unit above follows the controller
+the same way once `--version-file` points at its version file. A unit that
+`builder install` wrote runs a fixed `piceli`: after a mismatch it restarts
+every 10 seconds and claims nothing until that program is upgraded (`uv
+tool upgrade piceli`, `pipx upgrade piceli`). `builder serve --check`
+reports both versions and both builder images (`version` in
+`piceli.builder-check.v1`) and exits 1 on a version mismatch.
+
+**The builder image is the controller's too.** The build steps run in the
+builder image, so a host on the right version still fails in an old image.
+The controller publishes its build Job's image (`controller.builder_image`);
+`builder serve` builds in that image, pulls it again when it changes, and
+claims nothing while it cannot pull it. `--image` is an override only: the
+host keeps it and says once that it differs from the controller's. Leave
+`--image` out of `serve.args` to follow the controller. The versions compare exactly; a controller that publishes
+none (or `unknown`) is not checked.
 
 #### Which build hosts serve: `piceli builder status` (0.28.0)
 

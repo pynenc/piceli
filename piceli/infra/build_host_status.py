@@ -7,7 +7,9 @@ Read from the GitOps controller's published status only:
 - ``controller.builds_wanted``: the claims it holds now (``claimed``, a live
   claim) or held until it went quiet (``claim_expired``, see
   :func:`piceli.infra.remote_builds.live_claim`), and its progress reports;
-- ``controller.build_health``: its quarantine and health records.
+- ``controller.build_health``: its quarantine and health records;
+- ``controller.version`` (0.33.0): a host whose last sighting shows another
+  Piceli version is ``version-mismatch`` (it claims nothing).
 
 The declared hosts (``DevBuilds(hosts=[...])``) that never showed up are
 listed too. Importing this module is side-effect free.
@@ -36,6 +38,7 @@ def view(status: Mapping[str, Any] | None, declared: Sequence[str]) -> dict[str,
     first in their declared order, then the others by name."""
     controller = _dict(_dict(status).get("controller"))
     sightings = _dict(controller.get("build_hosts"))
+    controller_version = controller.get("version")
     health = {
         name: _dict(entry)
         for name, entry in _dict(controller.get("build_health")).items()
@@ -73,10 +76,18 @@ def view(status: Mapping[str, Any] | None, declared: Sequence[str]) -> dict[str,
             *((claim["at"], claim["_seen"]) if claim else ()),
         )
         quarantined = bool(record.get("quarantined"))
+        mismatch = (
+            bool(sighting.get("version"))
+            and isinstance(controller_version, str)
+            and controller_version not in ("", "unknown")
+            and sighting.get("version") != controller_version
+        )
         if last_seen is None:
             state = "never-seen"
         elif quarantined:
             state = "quarantined"
+        elif mismatch and claim is None:
+            state = "version-mismatch"
         elif claim is not None:
             state = "building" if claim["state"] == "live" else "claim-expired"
         else:
@@ -87,6 +98,7 @@ def view(status: Mapping[str, Any] | None, declared: Sequence[str]) -> dict[str,
                 "declared": name in declared,
                 "state": state,
                 "version": sighting.get("version"),
+                "version_mismatch": mismatch,
                 "last_seen": last_seen,
                 "seen": sighting.get("seen"),
                 "last_build": _dict(sighting.get("last_build")) or None,
@@ -104,6 +116,7 @@ def view(status: Mapping[str, Any] | None, declared: Sequence[str]) -> dict[str,
         )
     return {
         "schema": SCHEMA,
+        "controller_version": controller_version,
         "hosts": rows,
         "never_seen": [row["host"] for row in rows if row["state"] == "never-seen"],
     }

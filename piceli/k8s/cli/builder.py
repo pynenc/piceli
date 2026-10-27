@@ -63,8 +63,9 @@ def serve(
         str | None,
         typer.Option(
             "--image",
-            help="The builder image (default: the host's, else DevBuilds(image=)); "
-            "the same Piceli version as the controller",
+            help="Override the builder image; default (0.33.0): the controller's "
+            "(controller.builder_image, followed when it changes), else the "
+            "host's, else DevBuilds(image=)",
         ),
     ] = None,
     namespace: Annotated[
@@ -112,6 +113,15 @@ def serve(
     poll: Annotated[
         float, typer.Option("--poll", min=5, help="Seconds between looks when idle")
     ] = 15.0,
+    version_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--version-file",
+            help="When the controller runs another Piceli version, write that "
+            "version into this file before exiting 75, for the service to "
+            "install it and start again (0.33.0)",
+        ),
+    ] = None,
     state_dir: Annotated[
         Path | None,
         typer.Option(
@@ -133,8 +143,10 @@ def serve(
     from piceli.dev.model import DevError
     from piceli.gitops.state import ConfigMapChannel
     from piceli.infra.builder_serve import (
+        EXIT_VERSION_MISMATCH,
         BuilderServe,
         BuildFailed,
+        VersionMismatch,
         docker_container,
         ensure_image,
         node_importer,
@@ -155,12 +167,8 @@ def serve(
     try:
         if images and cli is not None:
             cli.platform()
-            ensure_image(cli, str(builder_image), say)
-            prepare_cache(cli, str(builder_image))
     except DevError as error:
         reject(error.code, str(error))
-    except BuildFailed as error:
-        reject("dev-host-unavailable", str(error))
     profile = resolve(override() or declared.credentials)
     backend = Backend()
     push: Any = None
@@ -214,6 +222,32 @@ def serve(
 
     with connect(declared, transport, allow_exec, exec_sha256) as api, _cluster_guard():
         channel = ConfigMapChannel(api.client, namespace)
+        # 0.33.0: the builder image is the controller's (the image its own
+        # build Job runs), unless --image overrides it; the local module's
+        # only when the controller publishes none.
+        try:
+            first = channel.read_status() or {}
+        except Exception:  # the loop reads it again
+            first = {}
+        published = (first.get("controller") or {}).get("builder_image")
+        builder_image = image or published or builder_image
+        if images and not builder_image:
+            reject("cluster-build-invalid", "name the builder image with --image")
+        try:
+            if images and cli is not None:
+                ensure_image(cli, str(builder_image), say)
+                prepare_cache(cli, str(builder_image))
+        except DevError as error:
+            reject(error.code, str(error))
+        except BuildFailed as error:
+            reject("dev-host-unavailable", str(error))
+
+        def switch_image(new: str) -> Any:
+            """The controller's builder image changed: pull it, use it."""
+            ensure_image(cli, new, say)
+            prepare_cache(cli, new)
+            return docker_container(cli, new)
+
         if check or publisher is not None:
             from piceli.dev.nix_inputs import host_check
 
@@ -234,10 +268,15 @@ def serve(
                     if images and cli is not None
                     else None
                 )
+                version = _check_version(current) | {
+                    "image": str(builder_image or "") or None,
+                    "controller_image": published,
+                }
                 failed = (
                     missing
                     or any(row["state"] != "reachable" for row in sources)
                     or (scratch is not None and scratch["state"] != "writable")
+                    or not version["matches"]
                 )
                 emit_json(
                     {
@@ -246,6 +285,7 @@ def serve(
                         "releases": releases,
                         "sources": sources,
                         "scratch": scratch,
+                        "version": version,
                         "complete": not failed,
                     }
                 )
@@ -266,34 +306,100 @@ def serve(
             attest=attest,
             publisher=publisher,
             images=images,
+            version_file=version_file.expanduser().absolute() if version_file else None,
+            image_pinned=image is not None,
+            switch_image=switch_image if images and cli is not None else None,
         )
-        if once:
-            built = worker.take_next(timeout=timeout) if take_next else worker.once()
-            if as_json:
-                emit_json(
-                    {
-                        "schema": "piceli.builder-serve.v1",
-                        "built": built,
-                        # 0.22.0: why nothing was claimed, when quarantined.
-                        "quarantined": worker.quarantine,
-                    }
-                )
-            return
-        say(
-            f"builder: serving {declared.name} from {chosen.name}"
-            + ("" if images else ", publishing NixReleases only")
-            + (
-                f"; publishes to {', '.join(c.store_url for c in publisher.caches)}"
-                if publisher is not None
-                else ""
-            )
-            + " (Ctrl-C stops)"
-        )
-        _stop_on_sigterm()
         try:
-            worker.serve(poll=poll)
-        except KeyboardInterrupt:
-            say("builder: stopped")
+            _serve(
+                worker,
+                declared.name,
+                chosen.name,
+                images,
+                publisher,
+                once,
+                take_next,
+                timeout,
+                poll,
+                as_json,
+            )
+        except VersionMismatch as error:
+            reject(
+                "builder-version-mismatch",
+                f"{error}: claiming nothing; the controller builds in the "
+                "cluster meanwhile",
+                exit_code=EXIT_VERSION_MISMATCH,
+                hints=(
+                    f"install piceli {error.controller} on this host and start "
+                    "builder serve again"
+                    + (
+                        f" (written into {worker.version_file})"
+                        if worker.version_file
+                        else " (--version-file PATH writes it for the service)"
+                    ),
+                ),
+                host=error.host,
+                version=error.version,
+                controller_version=error.controller,
+                version_file=str(worker.version_file) if worker.version_file else None,
+            )
+
+
+def _serve(
+    worker: Any,
+    cluster: str,
+    host: str,
+    images: bool,
+    publisher: Any,
+    once: bool,
+    take_next: bool,
+    timeout: float,
+    poll: float,
+    as_json: bool,
+) -> None:
+    """``builder serve``'s loop (or its one build) over ``worker``."""
+    if once:
+        built = worker.take_next(timeout=timeout) if take_next else worker.once()
+        if as_json:
+            emit_json(
+                {
+                    "schema": "piceli.builder-serve.v1",
+                    "built": built,
+                    # 0.22.0: why nothing was claimed, when quarantined.
+                    "quarantined": worker.quarantine,
+                }
+            )
+        return
+    say(
+        f"builder: serving {cluster} from {host}"
+        + ("" if images else ", publishing NixReleases only")
+        + (
+            f"; publishes to {', '.join(c.store_url for c in publisher.caches)}"
+            if publisher is not None
+            else ""
+        )
+        + " (Ctrl-C stops)"
+    )
+    _stop_on_sigterm()
+    try:
+        worker.serve(poll=poll)
+    except KeyboardInterrupt:
+        say("builder: stopped")
+
+
+def _check_version(status: Any) -> dict[str, Any]:
+    """``--check`` (0.33.0): this host's Piceli version and the controller's;
+    a controller that publishes none matches."""
+    from piceli.infra.builder_serve import _piceli_version
+
+    controller = (status.get("controller") or {}).get("version") or None
+    version = _piceli_version()
+    matches = controller in (None, "unknown", version)
+    say(
+        f"builder: piceli {version}"
+        + ("" if matches else f", the controller {controller}: VERSION MISMATCH")
+    )
+    return {"host": version, "controller": controller, "matches": matches}
 
 
 def _check_sources(status: Any) -> list[dict[str, Any]]:
@@ -453,9 +559,8 @@ def _select(
                 "Node(target=...))",
             )
         images = False  # 0.25.0: nowhere to deliver images; it only publishes
+    # 0.33.0: builder serve prefers the controller's published builder image.
     builder_image = image or chosen.image or (dev.image if dev is not None else None)
-    if images and not builder_image:
-        reject("cluster-build-invalid", "name the builder image with --image")
     return chosen, publish_only, images, builder_image
 
 
@@ -694,6 +799,11 @@ def status(
             )
         if last:
             line += f"; last build {str(last.get('id'))[:12]} {last.get('outcome')}"
+        if row["version_mismatch"]:
+            line += (
+                f"; VERSION MISMATCH: the controller runs piceli "
+                f"{document['controller_version']}, this host claims nothing"
+            )
         if row["quarantined"]:
             quarantine = row["quarantine"]
             line += (

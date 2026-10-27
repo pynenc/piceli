@@ -12417,7 +12417,8 @@
      "--state-dir",
      "--take-next",
      "--timeout",
-     "--transport"
+     "--transport",
+     "--version-file"
     ],
     "subcommands": []
    },
@@ -14823,6 +14824,7 @@
    "builder-not-approved",
    "builder-service-failed",
    "builder-service-invalid",
+   "builder-version-mismatch",
    "bundle-empty",
    "bundle-image-archive-missing",
    "bundle-image-mismatch",
@@ -17853,5 +17855,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.32.0"
+ "version": "0.33.0"
 }

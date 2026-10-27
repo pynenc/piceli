@@ -1796,8 +1796,18 @@ def hosts(
     with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
         with _guard():
             document = channel.read_status() or {}
-    found = (document.get("controller") or {}).get("build_health") or {}
-    if not found:
+    from piceli.gitops.alarms import version_mismatches
+
+    controller = document.get("controller") or {}
+    found = controller.get("build_health") or {}
+    # 0.33.0: hosts that claim nothing until they run the controller's version.
+    mismatched = version_mismatches(controller)
+    for name, seen in mismatched.items():
+        say(
+            f"{name:<16} host  VERSION MISMATCH: piceli {seen}, the controller "
+            f"{controller.get('version')}; it claims nothing until upgraded"
+        )
+    if not found and not mismatched:
         say("no health events recorded for any build host or builder node")
     for name, entry in sorted(found.items()):
         line = f"{name:<16} {entry.get('kind') or '?':<5} "
@@ -1810,7 +1820,14 @@ def hosts(
             line += f"{entry.get('recent', 0)} recent health event(s)"
         say(line)
     if as_json:
-        emit_json({"schema": "piceli.gitops-hosts.v1", "hosts": found})
+        emit_json(
+            {
+                "schema": "piceli.gitops-hosts.v1",
+                "hosts": found,
+                "controller_version": controller.get("version"),
+                "version_mismatch": mismatched,
+            }
+        )
 
 
 @app.command("release-host")

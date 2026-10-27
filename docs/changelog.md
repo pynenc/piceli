@@ -4,6 +4,30 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.33.0
+
+**Features**
+
+- **Build hosts run the controller's Piceli version.** `piceli builder
+  serve` claims a build only while it runs the same Piceli version as the
+  GitOps controller (`controller.version`). On a mismatch it claims
+  nothing (the controller builds in the cluster), tells the controller its
+  version (new request `build-host-version`), writes the controller's
+  version into `--version-file PATH` when given and exits **75**
+  (`EX_TEMPFAIL`, new code `builder-version-mismatch`), so its service
+  installs that version without root (`uv tool install
+  "piceli==$(cat PATH)"` before it starts) and starts again. `piceli
+  builder status` shows `version-mismatch` (`version_mismatch`,
+  `controller_version` in `piceli.builder-status.v1`), `piceli gitops
+  hosts` prints `VERSION MISMATCH`, and the new alarm `build-host-version`
+  fires until the host runs the same version. `builder serve --check`
+  reports both versions and exits 1 on a mismatch. See {ref}`builder-version`.
+- **Build hosts build in the controller's builder image.** The controller
+  publishes its build Job's image (`controller.builder_image`); `builder
+  serve` uses it by default and pulls it again when it changes (claiming
+  nothing while it cannot), so a host never builds in an older image.
+  `--image` is now an explicit override, said once when it differs.
+
 ## Version 0.32.0
 
 **Features**

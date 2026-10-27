@@ -70,6 +70,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`builder-not-approved`](#error-builder-not-approved) | build-spec | no |
 | [`builder-service-failed`](#error-builder-service-failed) | dev | yes |
 | [`builder-service-invalid`](#error-builder-service-invalid) | dev | no |
+| [`builder-version-mismatch`](#error-builder-version-mismatch) | dev | yes |
 | [`bundle-empty`](#error-bundle-empty) | bundle | no |
 | [`bundle-image-archive-missing`](#error-bundle-image-archive-missing) | bundle | no |
 | [`bundle-image-mismatch`](#error-bundle-image-mismatch) | bundle | no |
@@ -5216,6 +5217,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Install the missing program or add its directory to `PATH`; as root pass `--user USER`, else drop `--user`; then run `piceli builder install` again (`--print` shows the unit without writing it).
 - **Retry-safe:** no
+
+(error-builder-version-mismatch)=
+### `builder-version-mismatch`
+
+**Build host runs another Piceli version.** `piceli builder serve` (0.33.0) runs another Piceli version than the GitOps controller (`controller.version` in its status). A build step may use a command or format only one of them knows, so the host claims nothing; the controller builds in the cluster (its fallback) meanwhile, and `builder serve` exits 75.
+
+- **Fix:** Install the controller's Piceli version on the build host (`builder serve --version-file PATH` writes it into PATH for its service, for example `uv tool install --force "piceli==$(cat PATH)"` before it starts) and start `builder serve` again; `piceli builder status` shows each host's version.
+- **Retry-safe:** yes
 
 (error-dev-cache-clear-failed)=
 ### `dev-cache-clear-failed`

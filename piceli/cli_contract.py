@@ -13,7 +13,8 @@ Convention (see ``docs/agents.md``):
   :data:`piceli.errors.ERRORS` (``piceli explain <code>``).
 - Exit codes: ``0`` success, ``1`` the operation ran but did not succeed (not
   ready, drift, build failed), ``2`` rejected before any change, ``3`` approval
-  required (nothing was executed).
+  required (nothing was executed); ``75`` (``builder serve`` only) the
+  controller runs another Piceli version.
 
 :data:`COMMANDS` records, for every command, what it touches and whether it
 needs approval; ``piceli help-json`` merges it into the generated CLI tree.
@@ -39,6 +40,8 @@ EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_REJECTED = 2
 EXIT_APPROVAL = 3
+#: 0.33.0: ``builder serve`` only (``EX_TEMPFAIL``).
+EXIT_VERSION_MISMATCH = 75
 
 EXIT_CODES: Mapping[int, str] = MappingProxyType(
     {
@@ -46,6 +49,8 @@ EXIT_CODES: Mapping[int, str] = MappingProxyType(
         EXIT_FAILED: "the operation ran but did not succeed (not ready, drift, build failed)",
         EXIT_REJECTED: "rejected before any change (stdout: the rejection object)",
         EXIT_APPROVAL: "approval required; nothing was executed",
+        EXIT_VERSION_MISMATCH: "builder serve: the controller runs another Piceli "
+        "version; install it and start again (nothing was claimed)",
     }
 )
 
@@ -2062,7 +2067,8 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             ),
             writes=(
                 "the controller's requests (build-claim, built, build-failed, "
-                "nix-published)",
+                "nix-published, build-host-version)",
+                "--version-file PATH: the controller's Piceli version (0.33.0)",
                 "the binary cache: closure, signed manifest, tag pointer (--publish)",
                 "images in the cluster's registry (through a port-forward)",
                 "~/.cache/piceli/builder (Git mirrors), the piceli-build-cache volume",
@@ -2070,7 +2076,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             ),
             cluster="writes",
             contract="conforms",
-            exit_codes=(0, 2),
+            exit_codes=(0, 2, 75),
             notes="0.21.0. Runs until Ctrl-C (--once: one build). The builder "
             "image must be the controller's Piceli version. 0.22.0: each "
             "delivered image's provenance is pushed as an OCI referrer when the "
@@ -2111,7 +2117,18 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "gitops release-host. --once --take-next stands by (build-standby) "
             "for the next build it may take, claims it before the fallback and "
             "exits (--timeout seconds, default 1800). --args-file PATH adds the "
-            "arguments in PATH (one per line, # comments) at start.",
+            "arguments in PATH (one per line, # comments) at start. 0.33.0: it "
+            "claims only while it runs the controller's Piceli version; on a "
+            "mismatch it claims nothing (the controller builds in the cluster), "
+            "tells the controller its version (build-host-version; builder "
+            "status, gitops hosts and the build-host-version alarm show it), "
+            "writes the controller's version into --version-file PATH when "
+            "given and exits 75 (builder-version-mismatch), for its service to "
+            "install that version and start it again. --check reports both "
+            "versions (version in piceli.builder-check.v1; exit 1 on a mismatch). "
+            "It builds in the controller's builder image (controller.builder_image, "
+            "pulled again when it changes; nothing claimed while it cannot be "
+            "pulled); --image is an override, said once when it differs.",
         ),
         "builder install": _C(
             "On a build host: write and start a service (systemd on Linux, "
