@@ -17,7 +17,7 @@ from typing import Annotated, Any
 
 import typer
 
-from piceli.cli_contract import emit_json, reject, say
+from piceli.cli_contract import EXIT_FAILED, emit_json, reject, say
 from piceli.k8s.cli.cluster import (
     JsonOption,
     TransportOption,
@@ -205,6 +205,15 @@ def run(
     queue_timeout: Annotated[
         int, typer.Option("--queue-timeout", help="Seconds to wait for a slot", min=1)
     ] = 3600,
+    unschedulable_seconds: Annotated[
+        int,
+        typer.Option(
+            "--unschedulable-seconds",
+            help="Fail when the run's pod finds no node for this long, with the "
+            "scheduler's reason (0.35.0)",
+            min=1,
+        ),
+    ] = 60,
     quiet: Annotated[
         bool,
         typer.Option(
@@ -253,6 +262,7 @@ def run(
             artifacts=list(artifact or ()),
             artifacts_dir=artifacts_dir,
             queue_timeout=float(queue_timeout),
+            unschedulable_timeout=float(unschedulable_seconds),
             keep=keep,
         )
     except DevError as error:
@@ -709,7 +719,10 @@ def cache_clear(
         job = cache_clear_job(
             dev, name=secrets.token_hex(4), lineage=lineage, crates=list(crate or ())
         )
-        result = port.clear_cache(job)
+        try:
+            result = port.clear_cache(job)
+        except DevError as error:
+            reject(error.code, str(error), exit_code=EXIT_FAILED)
     if result is None:
         reject("dev-cache-clear-failed", "the cache-clear Job printed no result")
     _report_cleared(result, crate, as_json)

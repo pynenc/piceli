@@ -71,8 +71,9 @@ runs need no hash of their own.
 `profiles` (the first is the default), `slots` (`"auto"` or a number),
 `run_cpu` (request; no CPU limit, so an idle builder lends its cores),
 `run_memory` (request and limit), `run_storage` (the run's scratch),
-`cache_size`, `timeout` (a command's deadline, default `1h`), `network`
-(`"fetch"` or `"none"`).
+`cache_size`, `cache_budget` (0.35.0: the share of `cache_size` the cache
+may hold, default `0.8`; see "The shared cache"), `timeout` (a command's
+deadline, default `1h`), `network` (`"fetch"` or `"none"`).
 
 `DevProfile` settings: `name`, `image` (default the `DevBuilds` image),
 `tools` (checked before the command runs: `dev-tool-missing`), `env`,
@@ -296,8 +297,18 @@ dir, so every worktree of a repository builds warm on the same lineages),
 `--cwd` (where the command runs inside it), `--source NAME=PATH[@REF]`
 (repeat), `--profile`, `--priority round|agent|normal`, `--requester`,
 `--artifact GLOB` (repeat; `target/...` is the cargo target directory),
-`--artifacts-dir`, `--queue-timeout`, `--quiet` (no streamed log), `--keep`
-(keep the Job), `--json`.
+`--artifacts-dir`, `--queue-timeout`, `--unschedulable-seconds` (0.35.0,
+default 60), `--quiet` (no streamed log), `--keep` (keep the Job), `--json`.
+
+**Never a silent wait** (0.35.0). A new run says at once what it waits
+behind: the queue (`queue: 2 running of 2 slot(s), 1 queued`), the cache
+against its budget, and a builder node under disk pressure. While it waits
+it repeats its state every 30 seconds. When the scheduler finds no node for
+its pod (a taint, disk or memory pressure, not enough CPU) for
+`--unschedulable-seconds`, the run fails with `dev-run-unschedulable` and
+the scheduler's own reason (`0/3 nodes are available: 1 node(s) had
+untolerated taint {node.kubernetes.io/disk-pressure: }`), instead of
+waiting for `--queue-timeout`.
 
 ## The queue
 
@@ -345,9 +356,25 @@ file**, so cargo's own fingerprints rebuild only the crates that changed.
 `CARGO_HOME` (the registry and downloaded crates) is shared per toolchain;
 cargo locks it itself.
 
-When the lineages pass `cache_size`, free ones are evicted, least recently
-used first; one in use never is. The dev cache never feeds release builds:
-untrusted development code cannot reach an image the controller deploys.
+**The cache's budget** (0.35.0). Before each run the wrapper measures the
+whole cache (the lineages, the toolchains, cargo's home and the Git
+mirrors) and evicts free lineages, least recently used first, while it
+holds more than `cache_budget` (default `0.8`) of `cache_size`, or while
+the cache's disk has less than 15% free. A lineage in use is counted, never
+evicted. A lineage whose run was killed before it released it, or that
+never recorded its size, is measured again first, so it can no longer grow
+unseen. This matters on a storage class without quotas (k3s `local-path`):
+there a claim is a directory on the node's disk, its size is not enforced,
+and a full cache is a node under `DiskPressure`. The run says what went
+(`[piceli-dev] cache budget: evicted 2 lineage(s), 41.3 GiB (over-budget)`),
+and its result's `cache` carries `used_bytes`, `max_bytes`, `other_bytes`,
+`freed_bytes`, `over_budget`, `fs_free_bytes` and `fs_low`. A cache still
+over its budget after eviction raises the controller's `cache-over-budget`
+alarm, a node under disk pressure `node-disk-pressure` ({doc}`gitops`). On
+a docker or native build host only the budget applies, not the disk floor.
+
+The dev cache never feeds release builds: untrusted development code cannot
+reach an image the controller deploys.
 
 ### A corrupted cache (0.19.0)
 
@@ -383,6 +410,8 @@ only the named crates' artifacts. `--host NAME` (0.20.0) clears a docker
 host's cache volume (a short container, no network) or a native host's
 cache directory instead. A lineage a run holds is skipped and
 listed under `busy`. The next run on a cleared lineage is cold.
+Since 0.35.0 the Job tolerates the `node.kubernetes.io/disk-pressure`
+taint: it frees space, so it runs on a node whose disk is full.
 
 A failed run's result also carries `first_error`: the first `error` line
 of the output and the 19 lines after it, so the cause survives a long log
@@ -737,6 +766,7 @@ push another's out. The plan lists them under `tag_patterns`.
 | `dev-run-failed` | The pod ended without a result or could not start | Check the image; report it |
 | `dev-run-cancelled` | The Job was deleted (Ctrl-C) | Run again when wanted |
 | `dev-queue-timeout` | No start within `--queue-timeout` | Wait or raise it |
+| `dev-run-unschedulable` | The run's pod found no node for `--unschedulable-seconds`; the message has the scheduler's reason | Under disk pressure, `piceli dev cache clear`; else free capacity on the node |
 | `dev-upload-failed` | The upload did not arrive intact; the message names the chunk and the cause (a dropped link after five retries, a bundle that does not apply, a commit the mirror lacks) | Run again; check `pods/exec` rights and the link |
 | `dev-isolation-not-enforced` | The cluster does not enforce the NetworkPolicy; nothing ran | Report it to the owner |
 | `dev-tool-missing` | The image lacks a profile tool | Use another profile |

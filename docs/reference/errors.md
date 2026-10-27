@@ -219,6 +219,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`dev-run-out-of-memory`](#error-dev-run-out-of-memory) | dev | yes |
 | [`dev-run-timed-out`](#error-dev-run-timed-out) | dev | yes |
 | [`dev-run-unknown`](#error-dev-run-unknown) | dev | no |
+| [`dev-run-unschedulable`](#error-dev-run-unschedulable) | dev | yes |
 | [`dev-source-invalid`](#error-dev-source-invalid) | dev | no |
 | [`dev-tool-missing`](#error-dev-tool-missing) | dev | no |
 | [`dev-toolchain-checksum`](#error-dev-toolchain-checksum) | dev | yes |
@@ -5441,6 +5442,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** List runs with `piceli dev status`.
 - **Retry-safe:** no
+
+(error-dev-run-unschedulable)=
+### `dev-run-unschedulable`
+
+**Run's pod cannot be scheduled.** The scheduler found no node for the run's pod for `--unschedulable-seconds` (default 60): the builder node is under disk or memory pressure, tainted, cordoned, or lacks the CPU or memory a run requests. The message carries the scheduler's reason.
+
+- **Fix:** Read the reason: under disk pressure, free the cache (`piceli dev cache clear`); otherwise free or add capacity on the node, or lower `DevBuilds(run_cpu=, run_memory=)`.
+- **Retry-safe:** yes
 
 (error-dev-source-invalid)=
 ### `dev-source-invalid`

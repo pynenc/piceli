@@ -34,6 +34,29 @@ def _chunks(path: Path) -> Iterator[bytes]:
         yield from iter(lambda: stream.read(_CHUNK), b"")
 
 
+#: 0.35.0: a run's pod the scheduler cannot place for this long fails
+#: (``dev-run-unschedulable``) instead of waiting for the queue timeout.
+UNSCHEDULABLE_SECONDS = 60.0
+#: 0.35.0: while a run waits, its state is said again this often.
+WAITING_REPEAT_SECONDS = 30.0
+
+
+def unschedulable(pod: dict[str, Any] | None) -> str | None:
+    """The scheduler's reason when it cannot place ``pod`` (its
+    ``PodScheduled`` condition), shortened; else ``None``."""
+    for condition in ((pod or {}).get("status") or {}).get("conditions") or ():
+        if (
+            condition.get("type") == "PodScheduled"
+            and condition.get("status") == "False"
+            and condition.get("reason") == "Unschedulable"
+        ):
+            text = " ".join(str(condition.get("message") or "").split())
+            return (
+                (text[:300] + "...") if len(text) > 300 else (text or "no reason given")
+            )
+    return None
+
+
 class DevCluster:
     """Runs in ``piceli-dev`` through an :class:`piceli.gitops.install.Api`."""
 
@@ -209,15 +232,25 @@ class DevCluster:
         run: str,
         timeout: float,
         on_wait: Callable[[str], None] = lambda _w: None,
+        unschedulable_timeout: float = UNSCHEDULABLE_SECONDS,
     ) -> str:
         """The run's pod name once its container runs.
 
+        Every state change is passed to ``on_wait`` at once, and the current
+        one again every :data:`WAITING_REPEAT_SECONDS` (0.35.0: never a
+        silent wait).
+
         :raises DevError: ``dev-run-cancelled`` (the Job went away),
             ``dev-run-failed`` (the pod ended or cannot start),
+            ``dev-run-unschedulable`` (0.35.0: the scheduler found no node
+            for the pod for ``unschedulable_timeout`` seconds; its reason),
             ``dev-queue-timeout``.
         """
-        deadline = time.monotonic() + timeout
+        began = time.monotonic()
+        deadline = began + timeout
         last = None
+        said_at = began
+        unschedulable_since: float | None = None
         position_at, position = 0.0, ""
         while True:
             job = self.job(run)
@@ -257,9 +290,27 @@ class DevCluster:
                     "dev-run-failed", f"the run's pod cannot start ({why})", failed=True
                 )
             state = why or phase or "queued"
+            now = time.monotonic()
+            reason = unschedulable(pod)
+            if reason is None:
+                unschedulable_since = None
+            else:
+                state = f"Unschedulable: {reason}"
+                if unschedulable_since is None:
+                    unschedulable_since = now
+                elif now - unschedulable_since >= unschedulable_timeout:
+                    raise DevError(
+                        "dev-run-unschedulable",
+                        f"the run's pod found no node for "
+                        f"{round(now - unschedulable_since)}s: {reason}",
+                        failed=True,
+                    )
             if state != last:
                 on_wait(state)
-                last = state
+                last, said_at = state, now
+            elif now - said_at >= WAITING_REPEAT_SECONDS:
+                on_wait(f"{state} (waiting {round(now - began)}s)")
+                said_at = now
             if time.monotonic() >= deadline:
                 raise DevError(
                     "dev-queue-timeout", f"run {run} did not start in time", failed=True
@@ -409,6 +460,7 @@ class DevCluster:
         query = f"?labelSelector={quote(f'{CLEAR_LABEL}={name}')}"
         deadline = time.monotonic() + timeout
         result = None
+        stuck_since: float | None = None
         try:
             while time.monotonic() < deadline:
                 found = self.api.call(
@@ -418,6 +470,19 @@ class DevCluster:
                     i for i in (found or {}).get("items") or () if isinstance(i, dict)
                 ]
                 phase = ((pods[-1].get("status") or {}).get("phase")) if pods else None
+                # 0.35.0: it tolerates disk pressure; any other reason it
+                # cannot be placed fails it in a minute, with the reason.
+                reason = unschedulable(pods[-1]) if pods else None
+                if reason is None:
+                    stuck_since = None
+                elif stuck_since is None:
+                    stuck_since = time.monotonic()
+                elif time.monotonic() - stuck_since >= UNSCHEDULABLE_SECONDS:
+                    raise DevError(
+                        "dev-run-unschedulable",
+                        f"the cache-clear pod found no node: {reason}",
+                        failed=True,
+                    )
                 if phase in {"Succeeded", "Failed"}:
                     text = self.api.text(
                         f"/api/v1/namespaces/{NAMESPACE}/pods/"

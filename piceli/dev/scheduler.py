@@ -133,6 +133,22 @@ def run_summary(job: Mapping[str, Any], now: float) -> dict[str, Any]:
     return body
 
 
+def disk_pressure(node: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """0.35.0: ``{node, since, message}`` when ``node``'s ``DiskPressure``
+    condition holds, else ``None``."""
+    for condition in ((node or {}).get("status") or {}).get("conditions") or ():
+        if (
+            condition.get("type") == "DiskPressure"
+            and condition.get("status") == "True"
+        ):
+            return {
+                "node": str(((node or {}).get("metadata") or {}).get("name") or ""),
+                "since": condition.get("lastTransitionTime"),
+                "message": str(condition.get("message") or "")[:200] or None,
+            }
+    return None
+
+
 class Scheduler:
     """One development-run queue over a port (:class:`piceli.dev.cluster.DevCluster`)."""
 
@@ -159,25 +175,39 @@ class Scheduler:
         self.seen: dict[str, dict[str, Any]] = {}
         self.cache: dict[str, Any] = {}
         self._slots: tuple[float, int] | None = None
+        #: 0.35.0: the node's DiskPressure condition while it holds.
+        self.node_pressure: dict[str, Any] | None = None
 
     def record(self, entry: dict[str, Any]) -> None:
         self.recent.appendleft(entry)
-        used = (entry.get("cache") or {}).get("used_bytes")
+        cache = entry.get("cache") or {}
+        used = cache.get("used_bytes")
         if isinstance(used, int):
             self.cache = {
                 "used_bytes": used,
-                "max_bytes": (entry.get("cache") or {}).get("max_bytes"),
+                "max_bytes": cache.get("max_bytes"),
                 "at": entry.get("finished_at"),
+                # 0.35.0: still over budget after eviction, or its disk low.
+                **{
+                    key: cache[key]
+                    for key in (
+                        "over_budget",
+                        "fs_low",
+                        "fs_free_bytes",
+                        "fs_total_bytes",
+                    )
+                    if key in cache
+                },
             }
 
     def slots(self) -> int:
         now = self.clock()
         if self._slots is None or now - self._slots[0] > 60:
-            node = (
-                None
-                if isinstance(self.dev.slots, int)
-                else self.port.node(self.dev.node)
-            )
+            try:
+                node = self.port.node(self.dev.node) if self.dev.node else None
+            except Exception:  # a read, never a reason to stop the queue
+                node = None
+            self.node_pressure = disk_pressure(node)
             self._slots = (now, auto_slots(self.dev, node))
         return self._slots[1]
 
@@ -280,6 +310,10 @@ class Scheduler:
             ],
             "recent": list(self.recent),
             "cache": dict(self.cache),
+            # 0.35.0: the node is under disk pressure (runs cannot start).
+            **(
+                {"node_disk_pressure": self.node_pressure} if self.node_pressure else {}
+            ),
         }
         self.port.publish(document)
         return document

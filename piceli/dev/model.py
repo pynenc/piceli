@@ -421,8 +421,13 @@ class DevBuilds:
         its cores).
     :param run_memory: Memory request and limit of one run.
     :param run_storage: The run's scratch (its upload and extracted tree).
-    :param cache_size: The shared cache claim; free lineages are evicted,
-        least recently used first, when their bytes pass it.
+    :param cache_size: The shared cache claim.
+    :param cache_budget: The share of ``cache_size`` the cache may hold
+        (0.35.0, default 0.8): before each run, free lineages are evicted,
+        least recently used first, while everything in the cache (lineages,
+        toolchains, cargo's home, Git mirrors) is over it, or while the
+        cache's disk has less than 15% free (a ``local-path`` claim is not
+        limited to its size).
     :param timeout: A command's deadline.
     :param network: ``"fetch"``: runs may reach public addresses on ports
         80 and 443 (crates, toolchains) and DNS, never cluster or private
@@ -440,6 +445,7 @@ class DevBuilds:
     run_memory: str = "8Gi"
     run_storage: str = "20Gi"
     cache_size: str = "200Gi"
+    cache_budget: float = 0.8
     timeout: str = "1h"
     network: Literal["fetch", "none"] = "fetch"
     hosts: Sequence[BuildHost] = ()
@@ -487,6 +493,12 @@ class DevBuilds:
                 raise _invalid(f"{name} is a byte quantity (8Gi)")
         if (_bytes(self.cache_size) or 0) < 1 << 30:
             raise _invalid("cache_size is at least 1Gi")
+        if (
+            isinstance(self.cache_budget, bool)
+            or not isinstance(self.cache_budget, int | float)
+            or not 0.1 <= self.cache_budget <= 0.95
+        ):
+            raise _invalid("cache_budget is a share of cache_size from 0.1 to 0.95")
         parse_seconds(self.timeout)
         if self.network not in ("fetch", "none"):
             raise _invalid('network is "fetch" or "none"')
@@ -537,6 +549,7 @@ class DevBuilds:
             "run_memory": self.run_memory,
             "run_storage": self.run_storage,
             "cache_size": self.cache_size,
+            "cache_budget": self.cache_budget,
             "timeout": self.timeout,
             "network": self.network,
         }
@@ -571,6 +584,7 @@ class DevBuilds:
             run_memory=str(value.get("run_memory", "8Gi")),
             run_storage=str(value.get("run_storage", "20Gi")),
             cache_size=str(value.get("cache_size", "200Gi")),
+            cache_budget=float(value.get("cache_budget", 0.8)),
             timeout=str(value.get("timeout", "1h")),
             network=value.get("network", "fetch"),
         )

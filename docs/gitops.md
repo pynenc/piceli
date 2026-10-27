@@ -361,7 +361,29 @@ piceli gitops cache clear --crate geometry     # only these crates' artifacts
 
 The controller runs it between steps, as a short Job on the builder node
 (the build Job's image and claim, no Secret), and records
-`controller.cache_clear` (`at`, `crates`, `state`).
+`controller.cache_clear` (`at`, `crates`, `state`). Since 0.35.0 the Job
+tolerates the `node.kubernetes.io/disk-pressure` taint: it frees space, so
+it runs on a node whose disk is full.
+
+**The build cache's budget** (0.35.0). On a storage class without quotas
+(k3s `local-path`) a claim is a directory on the node's disk, and nothing
+stops it from growing past its size until the node is full. So each build
+Job first measures its cache claim and evicts the least recently used
+**units** (each `target/<arch>-<page size>`, `target/shared`, each
+`stage/<name>` and `blobs`) while the cache holds more than 80% of the
+claim (`JobSettings.cache_budget`, `ClusterBuildConfig(cache_budget=)`) or
+its disk has less than 15% free. Its log says what went (`[build] cache
+budget: evicted target/arm64-16384 (3.2 GiB, over-budget)`), its receipt
+carries `cache` (`used_bytes`, `max_bytes`, `evicted`, `over_budget`,
+`fs_free_bytes`, `fs_low`), and the controller publishes it under
+`controller.storage.caches`.
+
+**Disk pressure** (0.35.0). Every minute the controller reads which nodes
+report `DiskPressure` and the development cache's last budget check
+({doc}`dev_builds`), and publishes them as `controller.storage` (`nodes`,
+`caches`, `checked_at`). A node under pressure raises `node-disk-pressure`
+and a cache still over its budget raises `cache-over-budget`, each resolved
+once the condition ends (`piceli gitops alarms`).
 
 **Why a check failed** (0.19.0). A failed check's own reason (the string a
 `Checks.python` entry returns, an HTTP status, an exit code) is kept in
@@ -1533,6 +1555,9 @@ After every poll the controller sends an alarm when:
 | `nix-release-waiting` | a `NixRelease` publish waits longer than `waiting_after` for a build host or an approval | `piceli gitops builds`, or its approve line |
 | `composition-failed` | the composition's own repository does not import at its commit, so nothing deploys | `piceli gitops status` |
 | `controller-restarted` | the controller runs a new Piceli version | `piceli gitops status` |
+| `build-host-version` | a build host runs another Piceli version than the controller | `install piceli VERSION on HOST ...` |
+| `node-disk-pressure` (0.35.0) | a node of the cluster reports `DiskPressure`: pods are evicted and nothing new starts there | `piceli dev cache clear; piceli gitops cache clear` |
+| `cache-over-budget` (0.35.0) | a build cache is still over its budget after eviction, or its disk is nearly full (below) | `piceli dev cache clear` or `piceli gitops cache clear` |
 
 Each message is short and names the environment or host, the reason code
 and the next command:

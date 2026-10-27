@@ -4,6 +4,47 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.35.0
+
+**Features**
+
+- **Cache budgets enforced by Piceli.** On a storage class without quotas
+  (k3s `local-path`) a cache claim is a directory on the node's disk and
+  could grow past its size until the node was full. Before each
+  development run the whole cache now counts (lineages, toolchains,
+  cargo's home, Git mirrors), and free lineages are evicted, least
+  recently used first, while it holds more than `DevBuilds(cache_budget=)`
+  (default `0.8`) of `cache_size` or while its disk has less than 15% free.
+  A lineage a killed run never released, or one that never recorded its
+  size, is measured again instead of counting as empty. Each cluster build
+  Job does the same on its cache claim (`JobSettings.cache_budget`,
+  `ClusterBuildConfig(cache_budget=)`, default `0.8`), evicting the least
+  recently used `target/<arch>-<page size>`, `stage/<name>` and `blobs`.
+  Both report `over_budget`, `fs_free_bytes`, `fs_low` and what they
+  evicted (the run's result and the build receipt's `cache`).
+- **Disk alarms.** The controller reads every minute which nodes report
+  `DiskPressure` and the caches' last budget checks, publishes them as
+  `controller.storage`, and `piceli gitops alarms` raises
+  `node-disk-pressure` and `cache-over-budget` (each resolved when the
+  condition ends). The dev scheduler's status carries
+  `node_disk_pressure`.
+- **`piceli dev run` never waits in silence.** It says at once what it
+  waits behind (queue, cache against its budget, a node under disk
+  pressure), repeats its state every 30 seconds, and fails with
+  `dev-run-unschedulable` and the scheduler's reason when its pod finds no
+  node for `--unschedulable-seconds` (default 60) instead of waiting for
+  `--queue-timeout`. `piceli dev cache clear` fails the same way.
+
+**Changes**
+
+- `piceli dev cache clear` and `piceli gitops cache clear` Jobs tolerate
+  `node.kubernetes.io/disk-pressure:NoSchedule`: they free space, so they
+  run on a node whose disk is full.
+- The development cache budget was 85% of `cache_size` for the lineages'
+  recorded bytes alone; it is now `cache_budget` (80%) of everything in the
+  cache. Build Jobs carry `PICELI_CACHE_MAX_BYTES` and
+  `PICELI_CACHE_MIN_FREE_RATIO`, so cluster build plan hashes change once.
+
 ## Version 0.34.0
 
 **Features**

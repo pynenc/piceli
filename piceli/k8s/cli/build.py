@@ -47,14 +47,31 @@ def _selector(values: list[str] | None) -> dict[str, str] | None:
     return result
 
 
-def _with_fetch(receipt: dict[str, Any]) -> dict[str, Any]:
-    """The build Job's source fetch time (0.23.0; its script measures it)."""
+def _with_fetch(
+    receipt: dict[str, Any], budget: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """The build Job's source fetch time (0.23.0; its script measures it) and
+    its cache budget check (0.35.0)."""
     import os
 
     value = os.environ.get("PICELI_BUILD_FETCH_SECONDS")
     if value and value.isdigit():
         receipt["fetch_seconds"] = float(value)
+    if budget is not None:
+        receipt["cache"] = budget
     return receipt
+
+
+def _cache_budget(cache: Path) -> dict[str, Any] | None:
+    """0.35.0: keep the Job's cache claim within its budget before building
+    (never fails the build)."""
+    from piceli.artifacts.cache_budget import from_environment
+
+    try:
+        return from_environment(cache, say=say)
+    except OSError as error:
+        say(f"[build] cache budget not checked ({type(error).__name__})")
+        return None
 
 
 @app.command("job")
@@ -255,6 +272,7 @@ def job_run(
     from piceli.artifacts.node_facts import NodeFacts, NodeFactsError
     from piceli.pipeline.errors import PipelineError
 
+    budget = _cache_budget(cache)
     if sources is not None and image:
         from piceli.infra.builders import job_run_spec
 
@@ -285,7 +303,7 @@ def job_run(
         except PipelineError as error:
             _say_tail(error)
             reject(error.code, str(error), exit_code=EXIT_FAILED)
-        sys.stdout.write("\n" + encode_receipt(_with_fetch(receipt)) + "\n")
+        sys.stdout.write("\n" + encode_receipt(_with_fetch(receipt, budget)) + "\n")
         sys.stdout.flush()
         return
     if sources is not None:
@@ -315,7 +333,7 @@ def job_run(
         except PipelineError as error:
             _say_tail(error)
             reject(error.code, str(error), exit_code=EXIT_FAILED)
-        sys.stdout.write("\n" + encode_receipt(_with_fetch(receipt)) + "\n")
+        sys.stdout.write("\n" + encode_receipt(_with_fetch(receipt, budget)) + "\n")
         sys.stdout.flush()
         return
     if source is None or commit is None or not spec:
@@ -346,7 +364,7 @@ def job_run(
         reject(error.code, str(error))
     except PipelineError as error:
         reject(error.code, str(error), exit_code=EXIT_FAILED)
-    sys.stdout.write("\n" + encode_receipt(_with_fetch(receipt)) + "\n")
+    sys.stdout.write("\n" + encode_receipt(_with_fetch(receipt, budget)) + "\n")
     sys.stdout.flush()
 
 

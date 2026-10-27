@@ -9,8 +9,9 @@ shared cache is ``/cache`` (the ``piceli-dev-cache`` claim).
 1. Wait for the client's upload (``/work/upload/tree.tar.gz`` and
    ``ready``), check its SHA-256, extract it (no absolute or escaping
    paths).
-2. Check the profile's tools, evict least recently used free lineages over
-   the cache size, and take a **lineage** of the run's key under an
+2. Check the profile's tools, evict least recently used free lineages while
+   the whole cache is over its budget or its disk is nearly full (0.35.0),
+   and take a **lineage** of the run's key under an
    exclusive lock (the one this branch used last, else the warmest free
    one, else a new one): a stable tree path and its ``CARGO_TARGET_DIR``.
    Never two runs on one lineage.
@@ -663,41 +664,197 @@ def du(path: Path) -> int:
     return total
 
 
-def evict(cache: Path, limit: int) -> tuple[list[str], int]:
-    """Remove least recently used free lineages until the recorded bytes fit;
-    the removed lineages and the bytes still recorded."""
-    lineages = cache / "lineages"
-    found = []
-    for meta in lineages.glob("*/*/meta.json"):
-        data = _read_meta(meta.parent)
-        found.append(
-            (
-                float(data.get("last_used") or 0),
-                int(data.get("bytes") or 0),
-                meta.parent,
-            )
-        )
-    total = sum(size for _used, size, _path in found)
-    removed: list[str] = []
-    for _used, size, path in sorted(found, key=lambda item: item[0]):
-        if total <= limit:
+#: 0.35.0: the share of a cache claim its contents may use before the least
+#: recently used lineages (or build targets) are evicted.
+CACHE_BUDGET = 0.8
+#: 0.35.0: the share of the cache's filesystem kept free. On a storage class
+#: without quotas (k3s ``local-path``) a claim is a directory on the node's
+#: disk: its size is not enforced and a full cache is a full node.
+MIN_FREE_RATIO = 0.15
+#: 0.35.0: the last budget check of a cache, kept at its root.
+BUDGET_FILE = ".piceli-budget.json"
+BUDGET_SCHEMA = "piceli.cache-budget.v1"
+#: How long the measured size of what is not evictable (toolchains, cargo's
+#: home, Git mirrors) is reused before it is measured again.
+OTHER_TTL_SECONDS = 600
+
+
+def filesystem(path: Path) -> tuple[int, int]:
+    """``(free, total)`` bytes of the filesystem holding ``path`` (0, 0 unknown)."""
+    try:
+        found = os.statvfs(path)
+    except OSError:
+        return 0, 0
+    return found.f_bavail * found.f_frsize, found.f_blocks * found.f_frsize
+
+
+def _remove_tree(path: Path) -> None:
+    for child in list(path.iterdir()) if path.is_dir() else ():
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            child.unlink(missing_ok=True)
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def _read_budget(cache: Path) -> dict[str, Any]:
+    try:
+        value = json.loads((cache / BUDGET_FILE).read_text())
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _write_budget(cache: Path, report: dict[str, Any]) -> None:
+    try:
+        partial = cache / f".{BUDGET_FILE}.partial"
+        partial.write_text(json.dumps(report, sort_keys=True))
+        os.replace(partial, cache / BUDGET_FILE)
+    except OSError:
+        pass  # a report, never a reason to fail the run
+
+
+def other_bytes(cache: Path, skip: Iterable[str], now: float) -> tuple[int, float]:
+    """Bytes under ``cache`` outside ``skip`` and when they were measured
+    (at most every :data:`OTHER_TTL_SECONDS`)."""
+    known = _read_budget(cache)
+    at, value = known.get("other_at"), known.get("other_bytes")
+    if (
+        isinstance(at, int | float)
+        and isinstance(value, int)
+        and 0 <= now - at < OTHER_TTL_SECONDS
+    ):
+        return value, float(at)
+    skipped = {*skip, BUDGET_FILE}
+    total = 0
+    for child in cache.iterdir() if cache.is_dir() else ():
+        if child.name in skipped:
+            continue
+        if child.is_dir() and not child.is_symlink():
+            total += du(child)
+        else:
+            try:
+                total += child.lstat().st_blocks * 512
+            except OSError:
+                continue
+    return total, now
+
+
+def shrink(
+    cache: Path,
+    units: list[tuple[float, int, str, Callable[[], bool]]],
+    held: int,
+    other: int,
+    max_bytes: int,
+    min_free_ratio: float,
+) -> dict[str, Any]:
+    """Evict ``units`` (``(last_used, bytes, name, remove)``), least recently
+    used first, while the cache is over ``max_bytes`` or its filesystem has
+    less than ``min_free_ratio`` free; the budget report.
+
+    ``held`` is what busy units hold (counted, never evicted) and ``other``
+    what is not evictable. ``remove()`` returns whether the unit went.
+    """
+    used = held + other + sum(size for _at, size, _name, _remove in units)
+    evicted: list[str] = []
+    freed = 0
+
+    def low() -> bool:
+        if min_free_ratio <= 0:
+            return False
+        free, total = filesystem(cache)
+        return total > 0 and free < total * min_free_ratio
+
+    why = None
+    for _at, size, name, remove in sorted(units, key=lambda item: item[0]):
+        over = used > max_bytes
+        if not over and not low():
             break
-        descriptor = _try_lock(path)
-        if descriptor is None:
-            continue  # in use: never removed
-        try:
-            for child in list(path.iterdir()):
-                if child.name != "lock":
-                    if child.is_dir() and not child.is_symlink():
-                        shutil.rmtree(child, ignore_errors=True)
-                    else:
-                        child.unlink(missing_ok=True)
-        finally:
+        why = why or ("over-budget" if over else "filesystem-low")
+        if remove():
+            used -= size
+            freed += size
+            evicted.append(name)
+    free, total = filesystem(cache)
+    report = {
+        "schema": BUDGET_SCHEMA,
+        "used_bytes": used,
+        "max_bytes": max_bytes,
+        "other_bytes": other,
+        "evicted": evicted,
+        "freed_bytes": freed,
+        "over_budget": used > max_bytes,
+        "fs_free_bytes": free,
+        "fs_total_bytes": total,
+        "fs_low": bool(min_free_ratio > 0 and total and free < total * min_free_ratio),
+        "min_free_ratio": min_free_ratio,
+    }
+    if why:
+        report["evicted_for"] = why
+    return report
+
+
+def evict(
+    cache: Path,
+    limit: int,
+    *,
+    min_free_ratio: float = 0.0,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Keep the development cache within its budget (0.35.0: everything in
+    it counts, not only the lineages' recorded bytes).
+
+    Removes least recently used free lineages while the cache holds more
+    than ``limit`` bytes, or its filesystem has less than ``min_free_ratio``
+    free. A lineage a run holds is counted, never removed. A free lineage
+    without a size, or one a run took and never released (a killed pod), is
+    measured first. Writes the report to :data:`BUDGET_FILE` and returns it.
+    """
+    now = time.time() if now is None else now
+    cache.mkdir(parents=True, exist_ok=True)
+    held = 0
+    units: list[tuple[float, int, str, Callable[[], bool]]] = []
+    locks: list[int] = []
+    lineages = cache / "lineages"
+    try:
+        for path in sorted(lineages.glob("*/*")):
+            if not path.name.isdigit() or not path.is_dir():
+                continue
+            meta = _read_meta(path)
+            changed = path.stat().st_mtime  # before the lock file touches it
+            descriptor = _try_lock(path)
+            if descriptor is None:
+                held += int(meta.get("bytes") or 0)
+                continue
+            locks.append(descriptor)
+            if "bytes" not in meta or meta.get("taken_at"):
+                meta["bytes"] = du(path)
+                meta["last_used"] = float(
+                    meta.get("last_used") or meta.get("taken_at") or changed
+                )
+                meta.pop("taken_at", None)
+                _write_meta(path, meta)
+
+            def remove(path: Path = path) -> bool:
+                _remove_tree(path)
+                return True
+
+            units.append(
+                (
+                    float(meta.get("last_used") or 0),
+                    int(meta.get("bytes") or 0),
+                    f"{path.parent.name}/{path.name}",
+                    remove,
+                )
+            )
+        other, other_at = other_bytes(cache, ("lineages",), now)
+        report = shrink(cache, units, held, other, limit, min_free_ratio)
+    finally:
+        for descriptor in locks:
             os.close(descriptor)
-        shutil.rmtree(path, ignore_errors=True)
-        total -= size
-        removed.append(f"{path.parent.name}/{path.name}")
-    return removed, total
+    report.update(at=now, other_at=other_at)
+    _write_budget(cache, report)
+    return report
 
 
 class Lineage:
@@ -710,6 +867,7 @@ class Lineage:
 
     def release(self, hint: str | None, run: str) -> None:
         meta = _read_meta(self.path)
+        meta.pop("taken_at", None)
         meta.update(
             last_used=time.time(),
             bytes=du(self.path),
@@ -768,6 +926,9 @@ def take_lineage(
                     os.close(item[3])
             if chosen is not None:
                 _index, meta, path, descriptor = chosen
+                # 0.35.0: a lineage whose run never releases it (a killed
+                # pod) keeps this mark; the next eviction measures it again.
+                _write_meta(path, {**meta, "taken_at": time.time()})
                 return Lineage(path, descriptor, bool(meta.get("runs")))
         finally:
             os.close(select)
@@ -1413,7 +1574,22 @@ def main(
         toolchain = _toolchain(spec, {**os.environ, **selected} if selected else None)
         timeline.phase("lineage")
         limit = int(spec.get("cache_max_bytes") or 1 << 62)
-        evicted, used = evict(cache, limit)
+        budget = evict(
+            cache, limit, min_free_ratio=float(spec.get("cache_min_free_ratio") or 0)
+        )
+        if budget["evicted"]:
+            emit(
+                f"[piceli-dev] cache budget: evicted {len(budget['evicted'])} "
+                f"lineage(s), {budget['freed_bytes'] / 2**30:.1f} GiB "
+                f"({budget.get('evicted_for')})"
+            )
+        if budget["over_budget"] or budget["fs_low"]:
+            emit(
+                f"[piceli-dev] cache over budget: {budget['used_bytes'] / 2**30:.1f} "
+                f"GiB of {limit / 2**30:.1f} GiB"
+                + (", its disk is nearly full" if budget["fs_low"] else "")
+                + "; piceli dev cache clear"
+            )
         if toolchain != "none":
             spec = {**spec, "lineage_key": f"{spec['lineage_key']}-{toolchain}"}
         lineage = take_lineage(cache, spec, clock)
@@ -1421,9 +1597,22 @@ def main(
             "lineage": f"{lineage.path.parent.name}/{lineage.path.name}",
             "lineage_dir": str(lineage.path),
             "warm": lineage.warm,
-            "evicted": evicted,
-            "used_bytes": used,
+            "evicted": budget["evicted"],
+            "used_bytes": budget["used_bytes"],
             "max_bytes": limit,
+            # 0.35.0: the whole cache counts; what eviction freed and
+            # whether the cache or its disk is still over its limit.
+            **{
+                key: budget[key]
+                for key in (
+                    "other_bytes",
+                    "freed_bytes",
+                    "over_budget",
+                    "fs_free_bytes",
+                    "fs_total_bytes",
+                    "fs_low",
+                )
+            },
         }
         emit(
             f"[piceli-dev] lineage {result['cache']['lineage']} "

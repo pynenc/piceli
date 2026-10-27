@@ -141,6 +141,9 @@ class ClusterBuildConfig:
     resources: Mapping[str, Any] | None = None
     # Optional, so existing CLI plans and their hashes remain unchanged.
     service_account: str | None = None
+    #: 0.35.0: the share of ``storage`` a cache claim may hold; the Job first
+    #: evicts least recently used targets over it.
+    cache_budget: float = 0.8
 
     def __post_init__(self) -> None:
         if self.service_account is not None and not _DNS.fullmatch(
@@ -426,6 +429,8 @@ def _job(
     host_network: bool,
     cache_key: str,
 ) -> dict[str, Any]:
+    from piceli.artifacts.cache_budget import job_env
+
     key = hashlib.sha256(
         _canonical([commit, claim, list(platforms), facts, list(specs)]).encode()
     ).hexdigest()[:10]
@@ -437,6 +442,7 @@ def _job(
         {"name": "PICELI_BUILD_NODE_REGISTRY", "value": node_registry},
         {"name": "PICELI_BUILD_TIMEOUT", "value": str(config.timeout_seconds)},
         {"name": "PICELI_BUILD_FACTS", "value": _canonical(facts)},
+        *job_env(config.storage, config.cache_budget),
         {
             "name": "GIT_USERNAME",
             "valueFrom": {"secretKeyRef": {"name": secret, "key": "username"}},

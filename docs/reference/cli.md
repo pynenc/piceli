@@ -1409,6 +1409,7 @@ Run COMMAND on the builder for a commit (--ref) or a working tree (default: here
 | `--artifact` | text (repeatable) |  | Copy back files matching this glob (target/... is the target dir; repeat) |
 | `--artifacts-dir` | path | `piceli-dev-artifacts` | Where artifacts land (under RUN/) |
 | `--queue-timeout` | integer | `3600` | Seconds to wait for a slot |
+| `--unschedulable-seconds` | integer | `60` | Fail when the run's pod finds no node for this long, with the scheduler's reason (0.35.0) |
 | `--quiet` | boolean | `False` | Do not stream the run's log (the tail is still in the result) |
 | `--keep` | boolean | `False` | Keep the run's Job (debugging) |
 | `--allow-exec` | boolean | `False` | Allow the profile's exec credential plugin |

@@ -150,6 +150,40 @@ FINAL_CODES = frozenset(
 )
 #: How often the controller measures the in-cluster registry's claim (seconds).
 REGISTRY_USAGE_SECONDS = 600
+#: 0.35.0: how often the controller reads node disk pressure and cache use.
+STORAGE_SECONDS = 60
+
+
+def _storage_view(state: Mapping[str, Any]) -> dict[str, Any] | None:
+    record = state.get("storage")
+    if not isinstance(record, Mapping):
+        return None
+    nodes = dict(record.get("nodes") or {})
+    caches = dict(record.get("caches") or {})
+    if not nodes and not caches:
+        return None
+    return {"nodes": nodes, "caches": caches, "checked_at": record.get("checked_at")}
+
+
+def _cache_view(report: Mapping[str, Any]) -> dict[str, Any]:
+    """The published part of a cache budget check."""
+    at = report.get("at")
+    return {
+        **{
+            key: report.get(key)
+            for key in (
+                "used_bytes",
+                "max_bytes",
+                "over_budget",
+                "fs_low",
+                "fs_free_bytes",
+                "fs_total_bytes",
+            )
+        },
+        "at": _iso(float(at)) if isinstance(at, int | float) else at,
+    }
+
+
 #: Why a named environment is stopped (its record's ``reason``).
 STOP_REASONS = ("declared", "requested")
 #: Failed attempts of one revision a record (and its successful run) keeps.
@@ -657,6 +691,26 @@ class DefaultCompositionPorts:
             "used_source": "du",
             "claim": cr.claim_name(registry),
         }
+
+    def storage(self) -> dict[str, Any]:
+        """0.35.0: the nodes under disk pressure and the development cache's
+        last budget check (``piceli-dev-status``), read from the API."""
+        from piceli.dev.cluster import DevCluster
+        from piceli.dev.scheduler import disk_pressure
+        from piceli.gitops.install import connect
+
+        with connect(self.kubeconfig, self.context, transport=self.transport) as api:
+            found = api.call("/api/v1/nodes", "GET") or {}
+            nodes = {}
+            for node in found.get("items") or ():
+                pressure = disk_pressure(node) if isinstance(node, dict) else None
+                if pressure:
+                    nodes[pressure["node"]] = {
+                        "disk_pressure": True,
+                        "since": pressure.get("since"),
+                    }
+            dev = DevCluster(api).status() or {}
+        return {"nodes": nodes, "dev_cache": dict(dev.get("cache") or {})}
 
 
 class RemoteEnvPorts:
@@ -3852,6 +3906,7 @@ class CompositionController:
             self._step(record, self._stop)
         self._probe_clusters()
         self._registry_usage(now)
+        self._storage(now)
         # 0.22.0: wanted builds no step asked for in three polls are leftovers.
         from piceli.infra import remote_builds
 
@@ -4070,6 +4125,43 @@ class CompositionController:
             "measured_at": _iso(now),
             "measured_epoch": now,
         }
+
+    def _storage(self, now: float) -> None:
+        """0.35.0: nodes under disk pressure and the build caches against
+        their budgets, read at most every :data:`STORAGE_SECONDS`
+        (``controller.storage``; the alarms ``node-disk-pressure`` and
+        ``cache-over-budget``). Never fails a poll."""
+        record = self.state.setdefault("storage", {})
+        report = getattr(self.ports.builder, "cache_report", None)
+        if isinstance(report, Mapping):
+            claim = f"{report.get('namespace')}/{report.get('claim')}"
+            record.setdefault("caches", {})[claim] = {
+                **_cache_view(report),
+                "clear": "piceli gitops cache clear",
+            }
+            self.ports.builder.cache_report = None
+        read = getattr(self.ports, "storage", None)
+        if not callable(read) or now - float(record.get("checked_epoch") or 0) < (
+            STORAGE_SECONDS
+        ):
+            return
+        record["checked_epoch"] = now
+        try:
+            found = read()
+        except Exception as error:  # never fail a poll on it
+            self.log(f"storage not read ({type(error).__name__})")
+            return
+        from piceli.dev.model import CACHE_CLAIM, NAMESPACE
+
+        record["nodes"] = dict(found.get("nodes") or {})
+        dev = found.get("dev_cache") or {}
+        caches = record.setdefault("caches", {})
+        if isinstance(dev.get("used_bytes"), int):
+            caches[f"{NAMESPACE}/{CACHE_CLAIM}"] = {
+                **_cache_view(dev),
+                "clear": "piceli dev cache clear",
+            }
+        record["checked_at"] = _iso(now)
 
     def _check_tokens(self, now: float) -> None:
         """Warn before a GitHub token expires (0.19.0, best effort)."""
@@ -4410,6 +4502,14 @@ class CompositionController:
                     else {}
                 ),
                 "poll_failures": int(self.state.get("poll_failures") or 0),
+                # Added in 0.35.0: nodes under disk pressure and the build
+                # caches against their budgets (alarms node-disk-pressure,
+                # cache-over-budget).
+                **(
+                    {"storage": found_storage}
+                    if (found_storage := _storage_view(self.state))
+                    else {}
+                ),
                 # Added in 0.14.6: the registry claim's use measured by the
                 # controller (``du`` in the registry pod), for the UI.
                 "registry_usage": {

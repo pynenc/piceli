@@ -461,6 +461,9 @@ class JobSettings:
     platforms: tuple[str, ...] = ("linux/amd64",)
     timeout_seconds: int = 3600
     cache_claim: str = "piceli-component-cache"
+    #: 0.35.0: the share of ``storage`` the cache may hold; each build first
+    #: evicts least recently used targets over it (piceli.artifacts.cache_budget).
+    cache_budget: float = 0.8
 
 
 def component_job(
@@ -473,6 +476,8 @@ def component_job(
     ``urls`` maps each source name to its URL; only the sources of
     ``items`` are fetched, each once, at its commit.
     """
+    from piceli.artifacts.cache_budget import job_env
+
     sources: dict[str, str] = {}
     for item in items:
         if sources.setdefault(item.source, item.commit) != item.commit:
@@ -533,6 +538,7 @@ def component_job(
                                 {"name": "PICELI_BUILD_REGISTRY", "value": settings.registry_url},
                                 {"name": "PICELI_BUILD_NODE_REGISTRY", "value": settings.node_registry},
                                 {"name": "PICELI_BUILD_TIMEOUT", "value": str(settings.timeout_seconds)},
+                                *job_env(settings.storage, settings.cache_budget),
                                 {
                                     "name": "GIT_USERNAME",
                                     "valueFrom": {"secretKeyRef": {"name": secret, "key": "username"}},
@@ -587,6 +593,8 @@ def cache_clear_job(
 ) -> dict[str, Any]:
     """The Job that empties the build cache claim's cargo targets: the build
     Job's node, image, user and claim; no Secret, no source."""
+    from piceli.dev.jobs import FREES_SPACE_TOLERATIONS
+
     labels = {
         "app.kubernetes.io/managed-by": "piceli",
         "piceli.io/build-cache-clear": name,
@@ -608,6 +616,8 @@ def cache_clear_job(
                 "spec": {
                     "restartPolicy": "Never",
                     "nodeSelector": dict(settings.selector),
+                    # 0.35.0: it frees space, so it runs on a node under disk pressure.
+                    "tolerations": [dict(item) for item in FREES_SPACE_TOLERATIONS],
                     "automountServiceAccountToken": False,
                     "securityContext": {
                         "runAsNonRoot": True,
@@ -1043,10 +1053,22 @@ class JobBuilder:
         self.attempt = 1
         #: Each image's ``timings`` from the last :meth:`build_spec` (0.17.0).
         self.timings: dict[str, dict[str, float]] = {}
+        #: 0.35.0: the last build Job's cache budget check (its receipt's
+        #: ``cache``, with the claim); the controller publishes it.
+        self.cache_report: dict[str, Any] | None = None
         #: The environment the next build is for (the controller sets it):
         #: its Jobs carry ``piceli.io/build-env`` so its teardown removes a
         #: failed Job kept for it (:meth:`forget`).
         self.environment: str | None = None
+
+    def _keep_cache_report(self, receipt: Mapping[str, Any]) -> None:
+        found = receipt.get("cache")
+        if isinstance(found, Mapping):
+            self.cache_report = {
+                **dict(found),
+                "claim": self.settings.cache_claim,
+                "namespace": self.settings.namespace,
+            }
 
     def clear_cache(self, crates: Sequence[str]) -> dict[str, Any]:
         """Empty the build cache's cargo targets (``piceli gitops cache clear``)."""
@@ -1111,6 +1133,7 @@ class JobBuilder:
             raise _job_failed(outcome, "component")
         try:
             receipt = decode_receipt(self.cluster.receipt_text)
+            self._keep_cache_report(receipt)
         except (ValueError, OSError):
             raise CompositionError(
                 "component-build-failed", "the build Job printed no readable receipt"
@@ -1179,6 +1202,7 @@ class JobBuilder:
             raise _job_failed(outcome, "image")
         try:
             receipt = decode_receipt(self.cluster.receipt_text)
+            self._keep_cache_report(receipt)
         except (ValueError, OSError):
             raise CompositionError(
                 "component-build-failed", "the build Job printed no readable receipt"

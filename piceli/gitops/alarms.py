@@ -34,7 +34,14 @@ alarms it already sent and sends what is new (:func:`observe`,
 - ``controller-restarted``: the controller runs a new Piceli version;
 - ``build-host-version`` (0.33.0): a build host runs another Piceli version
   than the controller (its last sighting, ``controller.build_hosts``), so it
-  claims nothing until it is upgraded.
+  claims nothing until it is upgraded;
+- ``node-disk-pressure`` (0.35.0): a node of the cluster reports
+  ``DiskPressure`` (``controller.storage.nodes``): the kubelet evicts pods
+  and nothing new starts there, builds and development runs included;
+- ``cache-over-budget`` (0.35.0): a build cache (the development runs'
+  ``piceli-dev-cache``, the build Jobs' component cache) is still over its
+  budget after eviction, or its disk is nearly full
+  (``controller.storage.caches``).
 
 Each alarm is sent once: the alarms already sent are kept in the
 controller's state (they survive a restart). When the condition ends, one
@@ -72,6 +79,8 @@ EVENTS = (
     "composition-failed",
     "controller-restarted",
     "build-host-version",
+    "node-disk-pressure",
+    "cache-over-budget",
 )
 #: The reason code of a failed send.
 FAILED_CODE = "gitops-alarm-failed"
@@ -230,6 +239,8 @@ class Alarm:
                 if self.event.endswith("failed")
                 else "upgraded"
                 if self.event == "build-host-version"
+                else "has disk space again"
+                if self.event in ("node-disk-pressure", "cache-over-budget")
                 else "no longer waiting"
             )
         return {
@@ -240,6 +251,8 @@ class Alarm:
             "composition-failed": "piceli: composition does not import",
             "controller-restarted": "piceli: controller restarted",
             "build-host-version": f"piceli: build host {self.subject} version",
+            "node-disk-pressure": f"piceli: node {self.subject} disk pressure",
+            "cache-over-budget": f"piceli: cache {self.subject} over budget",
         }.get(self.event, f"piceli: {self.subject}")
 
     @property
@@ -250,6 +263,8 @@ class Alarm:
             what = "recovered" if self.event.endswith("failed") else "no longer waiting"
             if self.event == "build-host-version":
                 what = "runs the controller's Piceli version"
+            if self.event in ("node-disk-pressure", "cache-over-budget"):
+                what = "has disk space again"
             return f"{self.subject} {what} (was {self.reason}). Next: {self.next}"
         detail = f": {self.detail}" if self.detail else ""
         if self.event == "env-failed":
@@ -465,7 +480,47 @@ def observe(status: Mapping[str, Any], now: float, waiting: float) -> dict[str, 
         if isinstance(record, Mapping):
             found += _release_alarms(name, record, now, waiting)
     found += _host_version_alarms(controller)
+    found += storage_alarms(_dict(controller.get("storage")))
     return {item.key: item for item in found}
+
+
+def storage_alarms(storage: Mapping[str, Any]) -> list[Alarm]:
+    """0.35.0: a node under disk pressure and a cache over its budget, from
+    ``controller.storage`` (``{"nodes": {name: {...}}, "caches": {name: {...}}}``)."""
+    found: list[Alarm] = []
+    for name, entry in sorted(_dict(storage.get("nodes")).items()):
+        entry = _dict(entry)
+        if not entry.get("disk_pressure"):
+            continue
+        found.append(
+            Alarm(
+                "node-disk-pressure", str(name), "node-disk-pressure",
+                "piceli dev cache clear; piceli gitops cache clear",
+                fingerprint=str(entry.get("since") or ""),
+                since=entry.get("since"),
+                detail=f"node {name} reports DiskPressure since {entry.get('since')}: "
+                "pods are evicted and nothing new starts there",
+            )
+        )  # fmt: skip
+    for name, entry in sorted(_dict(storage.get("caches")).items()):
+        entry = _dict(entry)
+        if not (entry.get("over_budget") or entry.get("fs_low")):
+            continue
+        gib = 2**30
+        used = int(entry.get("used_bytes") or 0) / gib
+        limit = int(entry.get("max_bytes") or 0) / gib
+        what = "its disk is nearly full" if entry.get("fs_low") else "over budget"
+        found.append(
+            Alarm(
+                "cache-over-budget", str(name), "cache-over-budget",
+                str(entry.get("clear") or "piceli dev cache clear"),
+                fingerprint="fs-low" if entry.get("fs_low") else "over",
+                since=entry.get("at"),
+                detail=f"cache {name} holds {used:.1f} GiB of a {limit:.1f} GiB "
+                f"budget after eviction ({what})",
+            )
+        )  # fmt: skip
+    return found
 
 
 def version_mismatches(controller: Mapping[str, Any]) -> dict[str, str]:
