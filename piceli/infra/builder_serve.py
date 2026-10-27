@@ -517,7 +517,17 @@ class BuilderServe:
         that publishes no version (before 0.16) is not checked."""
         from piceli.gitops.state import build_host_version_request
 
-        if self.seen_version != self.version and self._version_sent != self.version:
+        wanted = self.controller_version
+        mismatch = bool(wanted) and wanted not in ("unknown", self.version)
+        # Said when the controller last saw another version from this host,
+        # or never saw it and it claims nothing (a mismatch); a host on the
+        # same version shows it with its first claim.
+        unseen = self.seen_version != self.version
+        if (
+            unseen
+            and (mismatch or self.seen_version is not None)
+            and self._version_sent != self.version
+        ):
             try:
                 self.channel.add_request(
                     *build_host_version_request(self.host, self.version)
@@ -525,8 +535,7 @@ class BuilderServe:
                 self._version_sent = self.version
             except Exception as error:  # the claim refusal still stands
                 self.say(f"builder: could not tell the controller ({error})")
-        wanted = self.controller_version
-        if not wanted or wanted in ("unknown", self.version):
+        if not mismatch or wanted is None:
             return
         if self.version_file is not None:
             if write_version_file(self.version_file, wanted):
