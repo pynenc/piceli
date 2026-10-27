@@ -53,6 +53,8 @@ class LocalPort:
         spec = json.loads(env["PICELI_DEV_SPEC"])
         spec["poll_seconds"] = 0.01
         spec["isolation_check"] = False  # no API server here to cut off
+        # The disk floor reads this machine's disk: tests never depend on it.
+        spec.pop("cache_min_free_ratio", None)
         lines: queue.Queue[str | None] = queue.Queue()
         self.lines[run] = lines
 
@@ -69,7 +71,11 @@ class LocalPort:
             self.threads[run].start()
 
     def wait_started(
-        self, run: str, timeout: float, on_wait: Callable[[str], None]
+        self,
+        run: str,
+        timeout: float,
+        on_wait: Callable[[str], None],
+        unschedulable_timeout: float | None = None,  # 0.35.0: no scheduler here
     ) -> str:
         if run in self.cancel_before_start:
             raise DevError("dev-run-cancelled", "cancelled", failed=True)

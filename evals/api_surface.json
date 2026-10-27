@@ -3212,6 +3212,7 @@
     "profiles": "DevProfile"
    },
    "attrs": [
+    "cache_budget",
     "cache_size",
     "describe",
     "from_dict",
@@ -3229,6 +3230,7 @@
     "timeout"
    ],
    "init": [
+    "cache_budget",
     "cache_size",
     "hosts",
     "image",
@@ -12851,6 +12853,7 @@
      "--requester",
      "--source",
      "--transport",
+     "--unschedulable-seconds",
      "--worktree"
     ],
     "subcommands": []
@@ -14984,6 +14987,7 @@
    "dev-run-out-of-memory",
    "dev-run-timed-out",
    "dev-run-unknown",
+   "dev-run-unschedulable",
    "dev-source-invalid",
    "dev-tool-missing",
    "dev-toolchain-checksum",
@@ -17443,6 +17447,7 @@
   "piceli.artifacts.build_context",
   "piceli.artifacts.build_dockerfile",
   "piceli.artifacts.build_spec",
+  "piceli.artifacts.cache_budget",
   "piceli.artifacts.cli",
   "piceli.artifacts.cluster_build",
   "piceli.artifacts.cluster_registry",
@@ -17866,5 +17871,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.34.0"
+ "version": "0.35.0"
 }

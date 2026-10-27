@@ -270,6 +270,13 @@ class HostExecution:
 
     # ---------------------------------------------------------------- run
     def execute(self, output_dir: Path) -> dict[str, Any]:
+        from piceli.artifacts.cache_budget import mark_used
+
+        # 0.35.0: what this build uses is the last evicted over the budget.
+        mark_used(
+            self.cache,
+            [self.stage, self.target, self.shared_target, self.cache / "blobs"],
+        )
         guard = lock_file(self.cache / "stage" / f"{self.spec.name}.lock")
         try:
             changed = self._stage()

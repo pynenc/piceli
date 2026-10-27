@@ -6102,6 +6102,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "dev",
     ),
     _E(
+        "dev-run-unschedulable",
+        "Run's pod cannot be scheduled",
+        "The scheduler found no node for the run's pod for `--unschedulable-seconds` (default 60): the builder node is under disk or memory pressure, tainted, cordoned, or lacks the CPU or memory a run requests. The message carries the scheduler's reason.",
+        "Read the reason: under disk pressure, free the cache (`piceli dev cache clear`); otherwise free or add capacity on the node, or lower `DevBuilds(run_cpu=, run_memory=)`.",
+        True,
+        "dev",
+    ),
+    _E(
         "dev-upload-failed",
         "Upload failed",
         "The archive did not reach the run's pod (exec refused or broken), did not match its SHA-256, held an unsafe path, or did not arrive in time.",

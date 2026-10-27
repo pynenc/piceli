@@ -475,7 +475,11 @@ class DockerPort:
         self.jobs[run] = job
 
     def wait_started(
-        self, run: str, timeout: float, on_wait: Callable[[str], None]
+        self,
+        run: str,
+        timeout: float,
+        on_wait: Callable[[str], None],
+        unschedulable_timeout: float | None = None,  # 0.35.0: no scheduler here
     ) -> str:
         job = self.jobs[run]
         labels = job["metadata"]["labels"]
@@ -597,6 +601,8 @@ class DockerPort:
         spec = json.loads(env["PICELI_DEV_SPEC"])
         # No API server to cut off here; the container is the boundary.
         spec["isolation_check"] = False
+        # 0.35.0: the disk floor is a node's (DiskPressure); a host keeps the budget.
+        spec.pop("cache_min_free_ratio", None)
         container = job["spec"]["template"]["spec"]["containers"][0]
         limits = (container.get("resources") or {}).get("limits") or {}
         memory = self.host.memory or limits.get("memory")
@@ -808,6 +814,7 @@ class NativePort:
 
         spec = json.loads(_env(self.jobs[run])["PICELI_DEV_SPEC"])
         spec["isolation_check"] = False
+        spec.pop("cache_min_free_ratio", None)  # 0.35.0: a node's floor
         # This machine's own rustup honours rust-toolchain.toml itself, and
         # its own ~/.cargo already holds the crates.
         spec["provision_toolchains"] = False
@@ -823,7 +830,11 @@ class NativePort:
         return env
 
     def wait_started(
-        self, run: str, timeout: float, on_wait: Callable[[str], None]
+        self,
+        run: str,
+        timeout: float,
+        on_wait: Callable[[str], None],
+        unschedulable_timeout: float | None = None,  # 0.35.0: no scheduler here
     ) -> str:
         from piceli.dev.jobs import wrapper_source
 

@@ -46,6 +46,37 @@ class RunRequest:
     keep: bool = False
     #: 0.24: the artifacts' size limit (default the wrapper's, 512 MiB).
     artifact_max_bytes: int | None = None
+    #: 0.35.0: how long the run's pod may stay unschedulable before the run
+    #: fails with the scheduler's reason (``None``: the port's default, 60 s).
+    unschedulable_timeout: float | None = None
+
+
+def queue_lines(status: dict[str, Any] | None) -> list[str]:
+    """0.35.0: what a new run waits behind, said at once: the queue, the
+    cache against its budget, and a node under disk pressure."""
+    if not status:
+        return []
+    gib = 2**30
+    lines = [
+        f"queue: {len(status.get('running') or ())} running of "
+        f"{status.get('slots', '?')} slot(s), {len(status.get('queued') or ())} queued"
+    ]
+    cache = status.get("cache") or {}
+    if isinstance(cache.get("used_bytes"), int) and cache.get("max_bytes"):
+        lines.append(
+            f"cache: {cache['used_bytes'] / gib:.1f} GiB of a "
+            f"{cache['max_bytes'] / gib:.1f} GiB budget"
+            + (" (over budget)" if cache.get("over_budget") else "")
+            + (" (its disk is nearly full)" if cache.get("fs_low") else "")
+        )
+    pressure = status.get("node_disk_pressure")
+    if pressure:
+        lines.append(
+            f"node {pressure.get('node')} is under disk pressure since "
+            f"{pressure.get('since')}: runs cannot start there; "
+            "piceli dev cache clear frees the cache"
+        )
+    return lines
 
 
 def new_run_id(now: datetime | None = None) -> str:
@@ -110,6 +141,7 @@ def run(
     if cwd.is_absolute() or ".." in cwd.parts:
         raise DevError("dev-run-invalid", "--cwd is a path inside the root source")
     run_id = run_id or new_run_id()
+    status = None
     if suspend is None:
         # A live scheduler queues the run and records it; without one the
         # run starts at once and this client removes its Job.
@@ -187,6 +219,8 @@ def run(
             f"run {run_id}: {profile.name} on "
             + (host.name if host is not None else str(dev.node))
         )
+        for text in queue_lines(status if suspend else None):
+            say(f"run {run_id}: {text}")
         result: dict[str, Any] | None = None
         # With a scheduler the Job stays until it records the run; a run that
         # never got its result (interrupted, failed to start) goes now.
@@ -205,6 +239,11 @@ def run(
                 run_id,
                 request.queue_timeout,
                 lambda state: say(f"run {run_id}: {state}"),
+                **(
+                    {"unschedulable_timeout": request.unschedulable_timeout}
+                    if request.unschedulable_timeout is not None
+                    else {}
+                ),
             )
             durations["queue"] = round(clock() - step, 3)
             phase("queue", wall)

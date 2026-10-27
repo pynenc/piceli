@@ -66,17 +66,18 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.34
+## What's new in 0.35
 
-- **One chart value adds objects and patches others**: in a client Helm
-  chart, `HelmOptional(description, objects=[...], patches=[(obj, patch)])`
-  installs its objects and patches other objects only when the client sets
-  the value (`intake.expose=true` adds a Service and a NetworkPolicy and
-  makes the app listen on every address).
-- **Optional secret inputs**: `HelmChart(optional_inputs=("privateCa",))`
-  lets the client leave out a `--set-file` input; its Secret keys are then
-  omitted. See the
-  [guide](https://docs.pynenc.org/projects/piceli/en/stable/client_delivery.html).
+- **Cache budgets on any storage class**: the development cache and the
+  build Jobs' cache keep within 80% of their claim (everything in them
+  counts) and keep 15% of the node's disk free, evicting least recently used
+  lineages and targets first, also on k3s `local-path`, which enforces no
+  size.
+- **Disk alarms and no silent waits**: `piceli gitops alarms` raises
+  `node-disk-pressure` and `cache-over-budget`; `piceli dev run` says its
+  queue and cache at once and fails with the scheduler's reason when its pod
+  finds no node for a minute. See the
+  [guide](https://docs.pynenc.org/projects/piceli/en/stable/dev_builds.html).
 
 ## Web UI
 

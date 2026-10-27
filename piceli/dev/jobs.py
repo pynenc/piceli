@@ -25,6 +25,7 @@ from piceli.dev.model import (
     DevProfile,
     parse_seconds,
 )
+from piceli.dev.pod import MIN_FREE_RATIO
 
 MANAGED = {"app.kubernetes.io/managed-by": "piceli"}
 RUN_LABEL = "piceli.io/dev-run"
@@ -221,6 +222,7 @@ def run_job(
         "poll_seconds": 0.5,
         "max_lineages": max_lineages(dev),
         "cache_max_bytes": _cache_budget(dev),
+        "cache_min_free_ratio": MIN_FREE_RATIO,
         "log_tail_lines": 80,
         "prefetch": profile.prefetch,
         "toolchain_probe": None
@@ -330,6 +332,18 @@ def run_job(
 CLEAR_LABEL = "piceli.io/dev-cache-clear"
 
 
+#: 0.35.0: a Job that frees disk space tolerates the taint a node under
+#: disk pressure carries (``piceli dev cache clear``, ``piceli gitops cache
+#: clear``); every other Job keeps off such a node.
+FREES_SPACE_TOLERATIONS: tuple[dict[str, str], ...] = (
+    {
+        "key": "node.kubernetes.io/disk-pressure",
+        "operator": "Exists",
+        "effect": "NoSchedule",
+    },
+)
+
+
 def cache_clear_job(
     dev: DevBuilds, *, name: str, lineage: str | None, crates: list[str]
 ) -> dict[str, Any]:
@@ -353,6 +367,8 @@ def cache_clear_job(
                 "spec": {
                     "restartPolicy": "Never",
                     "nodeSelector": {"kubernetes.io/hostname": dev.node},
+                    # 0.35.0: it frees space, so it runs on a node under disk pressure.
+                    "tolerations": [dict(item) for item in FREES_SPACE_TOLERATIONS],
                     "automountServiceAccountToken": False,
                     "enableServiceLinks": False,
                     "securityContext": {
@@ -428,7 +444,7 @@ def max_lineages(dev: DevBuilds) -> int:
 
 
 def _cache_budget(dev: DevBuilds) -> int:
+    """0.35.0: everything in the cache counts against this share of its claim."""
     from piceli.dev.model import bytes_of
 
-    # The recorded bytes of lineages; the rest of the claim is cargo's home.
-    return int(bytes_of(dev.cache_size) * 0.85)
+    return int(bytes_of(dev.cache_size) * dev.cache_budget)
