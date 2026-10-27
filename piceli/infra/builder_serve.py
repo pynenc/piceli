@@ -56,6 +56,18 @@ the next build and claims it before the in-cluster fallback.
 :func:`check_sources` and :func:`scratch_check` are ``--check``'s
 ``git ls-remote`` of every source and write test inside the container.
 
+0.33.0: the host claims only while it runs the controller's Piceli version
+(``controller.version`` in its status). On a mismatch it claims nothing
+(the controller falls back to its in-cluster build), tells the controller
+its version (``build-host-version``: ``piceli builder status``, ``piceli
+gitops hosts`` and the ``build-host-version`` alarm show it), writes the
+controller's version into ``version_file`` when it has one, and raises
+:class:`VersionMismatch`; ``builder serve`` then exits
+:data:`EXIT_VERSION_MISMATCH` so its service upgrades and restarts it.
+It builds in the controller's builder image (``controller.builder_image``,
+the image of its own build Job), pulled again when it changes, unless
+``--image`` pins another (said once).
+
 Nothing here holds a Tailscale, registry or cluster credential of its own:
 the profile reaches the API, the API reaches the registry; the nodes are
 reached with this host's own SSH access (its keys, its agent).
@@ -78,6 +90,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from piceli import cli_contract
 from piceli.infra import builds
 
 #: The container engine's named volume of the build cache (cargo targets,
@@ -92,6 +105,48 @@ TAIL_CHARS_LINES = 120
 #: to its ownership check, and its stable path keeps the cargo targets valid
 #: from one build to the next.
 SOURCES = "/cache/builder-src"
+
+
+#: ``builder serve``'s exit code when the controller runs another Piceli
+#: version (0.33.0): ``EX_TEMPFAIL`` of ``sysexits.h``, "try again later",
+#: here after installing the controller's version.
+EXIT_VERSION_MISMATCH = cli_contract.EXIT_VERSION_MISMATCH
+
+
+class VersionMismatch(Exception):
+    """The controller runs another Piceli version than this host (0.33.0)."""
+
+    def __init__(self, host: str, version: str, controller: str) -> None:
+        super().__init__(
+            f"build host {host} runs piceli {version}, the controller {controller}"
+        )
+        self.host = host
+        self.version = version
+        self.controller = controller
+
+
+def _piceli_version() -> str:
+    from piceli import __version__
+
+    return str(__version__)
+
+
+def write_version_file(path: Path, version: str) -> bool:
+    """Write ``version`` (one line) into ``path`` unless it already holds it,
+    through a temporary file and a rename; whether it changed (0.33.0)."""
+    try:
+        if path.read_text().strip() == version:
+            return False
+    except OSError:
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    try:
+        temporary.write_text(version + "\n")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return True
 
 
 def _iso(seconds: float) -> str:
@@ -407,6 +462,23 @@ class BuilderServe:
     declared: list[str] = field(default_factory=list)
     blocked: dict[str, Any] = field(default_factory=dict)
     _undeclared_said: bool = False
+    #: 0.33.0: this host's Piceli version (default: the running one), the
+    #: controller's (``controller.version``) and the one the controller last
+    #: saw from this host (``controller.build_hosts``).
+    version: str = field(default_factory=_piceli_version)
+    controller_version: str | None = None
+    seen_version: str | None = None
+    #: 0.33.0: where to write the controller's version on a mismatch (the
+    #: file its service installs Piceli from); ``None``: written nowhere.
+    version_file: Path | None = None
+    _version_sent: str | None = None
+    #: 0.33.0: the controller's builder image (``controller.builder_image``),
+    #: whether ``--image`` fixed this host's, and how to switch to a new one
+    #: (pull it, return its container runner); ``None``: never switched.
+    controller_image: str | None = None
+    image_pinned: bool = False
+    switch_image: Callable[[str], Any] | None = None
+    _image_said: str | None = None
 
     def _skip(self, build: str, why: str) -> None:
         """Say once, plainly, why this host leaves ``build`` (0.27.1)."""
@@ -425,7 +497,50 @@ class BuilderServe:
         self.declared = [str(h) for h in controller.get("build_hosts_declared") or ()]
         blocked = (controller.get("source_quarantine") or {}).get(self.host)
         self.blocked = dict(blocked) if isinstance(blocked, Mapping) else {}
+        version = controller.get("version")
+        self.controller_version = str(version) if version else None
+        image = controller.get("builder_image")
+        self.controller_image = str(image) if image else None
+        seen = (controller.get("build_hosts") or {}).get(self.host)
+        self.seen_version = (
+            str(seen.get("version") or "") or None
+            if isinstance(seen, Mapping)
+            else None
+        )
         return list(controller.get("builds_wanted") or ())
+
+    def check_version(self) -> None:
+        """0.33.0: raise :class:`VersionMismatch` when the controller runs
+        another Piceli version (after the last :meth:`wanted`); first tell
+        the controller this host's version when it last saw another one,
+        and write the controller's into :attr:`version_file`. A controller
+        that publishes no version (before 0.16) is not checked."""
+        from piceli.gitops.state import build_host_version_request
+
+        wanted = self.controller_version
+        mismatch = bool(wanted) and wanted not in ("unknown", self.version)
+        # Said when the controller last saw another version from this host,
+        # or never saw it and it claims nothing (a mismatch); a host on the
+        # same version shows it with its first claim.
+        unseen = self.seen_version != self.version
+        if (
+            unseen
+            and (mismatch or self.seen_version is not None)
+            and self._version_sent != self.version
+        ):
+            try:
+                self.channel.add_request(
+                    *build_host_version_request(self.host, self.version)
+                )
+                self._version_sent = self.version
+            except Exception as error:  # the claim refusal still stands
+                self.say(f"builder: could not tell the controller ({error})")
+        if not mismatch or wanted is None:
+            return
+        if self.version_file is not None:
+            if write_version_file(self.version_file, wanted):
+                self.say(f"builder: wrote {wanted} into {self.version_file}")
+        raise VersionMismatch(self.host, self.version, wanted)
 
     def undeclared(self) -> bool:
         """0.29.0: the controller's composition declares build hosts and not
@@ -445,8 +560,41 @@ class BuilderServe:
             self.say(f"builder: build host {self.host} is declared again")
         return False
 
+    def follow_image(self) -> bool:
+        """0.33.0: use the controller's builder image when it publishes
+        another one (pulled first); ``--image`` keeps its own, said once.
+        Whether this host may claim (``False``: the new image is not usable)."""
+        wanted = self.controller_image
+        if not wanted or wanted == self.image or not self.images:
+            return True
+        if self.image_pinned or self.switch_image is None:
+            if self._image_said != wanted:
+                self._image_said = wanted
+                self.say(
+                    f"builder: --image {self.image} differs from the controller's "
+                    f"builder image {wanted}; builds may fail if their Piceli "
+                    "versions differ (drop --image to follow the controller)"
+                )
+            return True
+        try:
+            container = self.switch_image(wanted)
+        except Exception as error:
+            if self._image_said != wanted:
+                self._image_said = wanted
+                self.say(
+                    f"builder: cannot use the controller's builder image {wanted} "
+                    f"({error}); claiming nothing"
+                )
+            return False
+        self.say(f"builder: builder image {self.image} -> {wanted} (the controller's)")
+        self.image, self.container, self._image_said = wanted, container, None
+        return True
+
     def pick(self) -> dict[str, Any] | None:
         entries = self.wanted()
+        self.check_version()  # 0.33.0: never claim on another version
+        if not self.follow_image():
+            return None
         held = self.controller_health or {}
         if held.get("quarantined"):
             if self._said != held.get("reason"):

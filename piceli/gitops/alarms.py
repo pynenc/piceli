@@ -31,7 +31,10 @@ alarms it already sent and sends what is new (:func:`observe`,
   publish failed, or no build host took it within ``waiting_after``;
 - ``composition-failed``: the composition's own repository did not import
   at its commit, so nothing deploys;
-- ``controller-restarted``: the controller runs a new Piceli version.
+- ``controller-restarted``: the controller runs a new Piceli version;
+- ``build-host-version`` (0.33.0): a build host runs another Piceli version
+  than the controller (its last sighting, ``controller.build_hosts``), so it
+  claims nothing until it is upgraded.
 
 Each alarm is sent once: the alarms already sent are kept in the
 controller's state (they survive a restart). When the condition ends, one
@@ -68,6 +71,7 @@ EVENTS = (
     "nix-release-waiting",
     "composition-failed",
     "controller-restarted",
+    "build-host-version",
 )
 #: The reason code of a failed send.
 FAILED_CODE = "gitops-alarm-failed"
@@ -222,7 +226,11 @@ class Alarm:
     def title(self) -> str:
         if self.state == "resolved":
             return f"piceli: {self.subject} " + (
-                "recovered" if self.event.endswith("failed") else "no longer waiting"
+                "recovered"
+                if self.event.endswith("failed")
+                else "upgraded"
+                if self.event == "build-host-version"
+                else "no longer waiting"
             )
         return {
             "env-failed": f"piceli: {self.subject} failed",
@@ -231,6 +239,7 @@ class Alarm:
             "nix-release-waiting": f"piceli: nix release {self.subject} waiting",
             "composition-failed": "piceli: composition does not import",
             "controller-restarted": "piceli: controller restarted",
+            "build-host-version": f"piceli: build host {self.subject} version",
         }.get(self.event, f"piceli: {self.subject}")
 
     @property
@@ -239,6 +248,8 @@ class Alarm:
         commit = f" at {self.commit[:12]}" if self.commit else ""
         if self.state == "resolved":
             what = "recovered" if self.event.endswith("failed") else "no longer waiting"
+            if self.event == "build-host-version":
+                what = "runs the controller's Piceli version"
             return f"{self.subject} {what} (was {self.reason}). Next: {self.next}"
         detail = f": {self.detail}" if self.detail else ""
         if self.event == "env-failed":
@@ -453,7 +464,39 @@ def observe(status: Mapping[str, Any], now: float, waiting: float) -> dict[str, 
     for name, record in sorted(_dict(status.get("nix_releases")).items()):
         if isinstance(record, Mapping):
             found += _release_alarms(name, record, now, waiting)
+    found += _host_version_alarms(controller)
     return {item.key: item for item in found}
+
+
+def version_mismatches(controller: Mapping[str, Any]) -> dict[str, str]:
+    """0.33.0: ``{host: its Piceli version}`` of the build hosts whose last
+    sighting (``controller.build_hosts``) shows another version than the
+    controller's; only the declared ones when the composition declares
+    hosts (``build_hosts_declared``)."""
+    version = controller.get("version")
+    if not isinstance(version, str) or version in ("", "unknown"):
+        return {}
+    declared = set(controller.get("build_hosts_declared") or ())
+    found: dict[str, str] = {}
+    for name, entry in sorted(_dict(controller.get("build_hosts")).items()):
+        seen = _dict(entry).get("version")
+        if seen and seen != version and (not declared or name in declared):
+            found[str(name)] = str(seen)
+    return found
+
+
+def _host_version_alarms(controller: Mapping[str, Any]) -> list[Alarm]:
+    version = controller.get("version")
+    return [
+        Alarm(
+            "build-host-version", name, "builder-version-mismatch",
+            f"install piceli {version} on {name} and restart its builder serve",
+            fingerprint=f"{seen}:{version}",
+            detail=f"build host {name} runs piceli {seen}, the controller {version}; "
+            "it claims nothing (the cluster builds)",
+        )
+        for name, seen in version_mismatches(controller).items()
+    ]  # fmt: skip
 
 
 def _subjects(status: Mapping[str, Any]) -> set[str]:

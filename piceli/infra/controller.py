@@ -1761,6 +1761,15 @@ class CompositionController:
 
                     self._refuse_undeclared(body)
                     remote_builds.standby(self.state, body, self.clock())
+                elif kind == "build-host-version":  # 0.33.0: builder serve
+                    # Recorded as a sighting (controller.build_hosts) below.
+                    self._refuse_undeclared(body)
+                    if str(body.get("version") or "") != _version():
+                        self.log(
+                            f"build host {body.get('host')} runs piceli "
+                            f"{body.get('version')}, this controller {_version()}: "
+                            "it claims nothing until it runs the same version"
+                        )
                 elif kind == "rebuild":
                     self._rebuild(body)
                 elif kind == "host-release":
@@ -4337,6 +4346,13 @@ class CompositionController:
                 # Added in 0.21.0: what this controller waits for build hosts
                 # to build (piceli builder serve reads it).
                 "builds_wanted": _wanted_builds(self.state, self.clock()),
+                # Added in 0.33.0: the build Job's image; builder serve builds
+                # in it unless --image overrides it.
+                **(
+                    {"builder_image": self.config.builder_image}
+                    if self.config.builder_image
+                    else {}
+                ),
                 # Added in 0.28.0: previews on request, held down, served.
                 **(
                     {"previews": found}

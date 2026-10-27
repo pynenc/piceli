@@ -68,6 +68,9 @@ REQUEST_KINDS = (
     "preview",
     # 0.29.0: a build host waits to take the next build (--take-next)
     "build-standby",
+    # 0.33.0: a build host says its Piceli version (it differs from the
+    # controller's, or from the one the controller last saw)
+    "build-host-version",
 )  # fmt: skip
 #: Env states a status may carry.
 ENV_STATES = (
@@ -437,6 +440,22 @@ def build_standby_request(host: str, seconds: float) -> tuple[str, dict[str, Any
         host=str(host)[:64],
         seconds=float(seconds),
         version=_piceli_version(),
+        at=_now(),
+    )
+
+
+def build_host_version_request(
+    host: str, version: str | None = None
+) -> tuple[str, dict[str, Any]]:
+    """``host`` says which Piceli version it runs (0.33.0, ``piceli builder
+    serve``): sent when it differs from the controller's (the host then
+    claims nothing and exits 75) or from the one the controller last saw,
+    so ``controller.build_hosts`` and the ``build-host-version`` alarm show
+    the version it really runs. ``version``: the running one by default."""
+    return request(
+        "build-host-version",
+        host=str(host)[:64],
+        version=str(version)[:40] if version else _piceli_version(),
         at=_now(),
     )
 

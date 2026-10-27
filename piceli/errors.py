@@ -6038,6 +6038,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "dev",
     ),
     _E(
+        "builder-version-mismatch",
+        "Build host runs another Piceli version",
+        "`piceli builder serve` (0.33.0) runs another Piceli version than the GitOps controller (`controller.version` in its status). A build step may use a command or format only one of them knows, so the host claims nothing; the controller builds in the cluster (its fallback) meanwhile, and `builder serve` exits 75.",
+        "Install the controller's Piceli version on the build host (`builder serve --version-file PATH` writes it into PATH for its service, for example `uv tool install --force \"piceli==$(cat PATH)\"` before it starts) and start `builder serve` again; `piceli builder status` shows each host's version.",
+        True,
+        "dev",
+    ),
+    _E(
         "builder-service-failed",
         "Service manager call failed",
         "`piceli builder install` or `uninstall` (0.28.0) wrote or removed the unit, but `systemctl` or `launchctl` failed. The message holds the command and its output.",

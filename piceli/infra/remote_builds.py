@@ -739,7 +739,9 @@ def seen(
     controller took it) also the build it names and the outcome. A refused
     claim is a sighting, never a build of its own."""
     host = str(body.get("host") or "")[:64]
-    if not host or kind not in (*_OUTCOMES, "build-progress", "build-standby"):
+    if not host or kind not in (
+        *_OUTCOMES, "build-progress", "build-standby", "build-host-version",
+    ):  # fmt: skip
         return
     hosts = state.setdefault(HOSTS_KEY, {})
     entry = dict(hosts.get(host) or {})

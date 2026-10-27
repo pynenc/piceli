@@ -66,15 +66,16 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.32
+## What's new in 0.33
 
-- **Release files in your registry**: `piceli artifacts publish-files`
-  pushes downloads as one OCI artifact, each file addressed by its own
-  sha256, and `fetch-file` gets one back by digest; see the
-  [guide](https://docs.pynenc.org/projects/piceli/en/stable/release_files.html).
-- **Signed with a stored key**: `piceli secrets signing-key` keeps an
-  ssh-ed25519 key in the secret store and `piceli sign-file` writes the
-  signature `ssh-keygen -Y verify` checks (or signs through ssh-agent).
+- **Build hosts follow the controller's version**: `piceli builder serve`
+  claims builds only while it runs the same Piceli version as the GitOps
+  controller. On a mismatch it claims nothing (the cluster builds), exits
+  75 and writes the controller's version into `--version-file`, so its
+  service installs that version without root and starts again; `builder
+  status`, `gitops hosts` and a `build-host-version` alarm show it. It
+  builds in the controller's builder image unless `--image` overrides it. See the
+  [guide](https://docs.pynenc.org/projects/piceli/en/latest/gitops.html#builder-version).
 
 ## Web UI
 
