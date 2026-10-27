@@ -495,7 +495,10 @@ def test_the_new_values_are_declared(tmp_path: Path) -> None:
     out, body = _intake(tmp_path)
     assert body["optional"] == ["intake.expose"]
     assert body["values"] == ["intake.allowNamespaces"]
-    assert body["existing_secret_keys"] == ["api-token", "cluster-key", "intake-token"]
+    assert body["existing_secret_keys"] == [
+        "api-token", "cluster-key", "intake-token", "private-ca",
+    ]  # fmt: skip
+    assert body["optional_inputs"] == ["privateCa"]
     values = yaml.safe_load((out / "values.yaml").read_text())
     assert values["intake"] == {"allowNamespaces": ["workers"], "expose": False}
     assert values["storage"] == {"size": ""} and values["existingSecret"] == ""
@@ -576,3 +579,103 @@ def test_storage_env_and_value_targets_must_exist(tmp_path: Path) -> None:
         result = _run(f"{module}:chart", "--helm", "--out", str(tmp_path / name))
         assert result.exit_code == 2, result.output
         assert json.loads(result.stdout)["reason"] == "bundle-invalid"
+
+
+# ------------------------- 0.34.0: one value adds and patches; optional inputs
+
+
+def _listen(objects: dict[tuple[str, str], dict[str, Any]]) -> str:
+    env = {e["name"]: e.get("value") for e in _pod(objects)["containers"][0]["env"]}
+    return env["INTAKE_LISTEN"]
+
+
+def test_an_optional_value_also_patches_and_an_input_may_be_left_out(
+    tmp_path: Path,
+) -> None:
+    out, body = _intake(tmp_path)
+    assert body["toggles"] == ["relayOnly"] and body["optional"] == ["intake.expose"]
+    template = next(
+        path.read_text()
+        for path in (out / "templates").iterdir()
+        if path.name.startswith("agent_statefulset")
+    )
+    assert template.count("{{- if $.Values.intake.expose }}") == 1
+    assert "0.0.0.0:4318" in template and "127.0.0.1:4318" in template
+    helpers = (out / "templates" / "_helpers.tpl").read_text()
+    assert "apiToken is required on the first install" in helpers
+    assert "privateCa is required" not in helpers
+    values = (out / "values.yaml").read_text()
+    assert "(true installs its objects and patches others)" in values
+    assert "# privateCa: secret input private_ca (optional:" in values
+    readme = (out / "README.md").read_text()
+    assert "and patches StatefulSet/agent" in readme
+    assert "`privateCa` (optional" in readme
+    assert "--set-file privateCa" not in readme.split("```")[1]  # install command
+
+
+def test_both_values_of_a_patching_optional_render(helm: str, tmp_path: Path) -> None:
+    out, _body = _intake(tmp_path)
+    off = _template(helm, out, *BASE, "--set", "apiToken=x")
+    assert off.returncode == 0, off.stderr
+    objects = _objects(off.stdout)
+    assert ("Service", "agent-intake") not in objects
+    assert ("NetworkPolicy", "agent-intake") not in objects
+    assert _listen(objects) == "127.0.0.1:4318"
+    assert "private-ca" not in objects[("Secret", "agent-private")]["data"]
+    on = _template(
+        helm, out, *BASE, "--set", "apiToken=x", "--set", "intake.expose=true",
+        "--set", "privateCa=ca-pem",
+    )  # fmt: skip
+    assert on.returncode == 0, on.stderr
+    objects = _objects(on.stdout)
+    assert ("Service", "agent-intake") in objects
+    assert ("NetworkPolicy", "agent-intake") in objects
+    assert _listen(objects) == "0.0.0.0:4318"
+    data = objects[("Secret", "agent-private")]["data"]
+    assert base64.b64decode(data["private-ca"]) == b"ca-pem"
+    missing = _template(helm, out, *BASE)  # the required input still fails
+    assert missing.returncode != 0 and "apiToken is required" in missing.stderr
+
+
+def _refused(tmp_path: Path, name: str, change: str) -> str:
+    module = tmp_path / f"{name}.py"
+    module.write_text(
+        "import dataclasses\n"
+        "from piceli import HelmOptional, HelmToggle\n"
+        "from tests.unit.bundle.helm_intake_app import (\n"
+        "    LISTEN_EVERYWHERE, agent, chart as base, intake, intake_policy,\n"
+        ")\n"
+        f"chart = dataclasses.replace(base, {change})\n"
+    )
+    result = _run(f"{module}:chart", "--helm", "--out", str(tmp_path / name))
+    assert result.exit_code == 2, result.output
+    body = json.loads(result.stdout)
+    assert body["reason"] == "bundle-invalid"
+    return result.output
+
+
+def test_a_patched_object_is_never_optional_nor_patched_twice(tmp_path: Path) -> None:
+    gated = (
+        "optional={'intake.expose': HelmOptional('x', objects=[intake, intake_policy], "
+        "patches=[(intake_policy, {'metadata': {'labels': {'a': 'b'}}})])}"
+    )
+    assert "also patched" in _refused(tmp_path, "gated", gated)
+    other = (
+        "optional={**base.optional, 'other.on': HelmOptional('y', "
+        "patches=[(intake, {'metadata': {'labels': {'a': 'b'}}})])}"
+    )
+    assert "also patched" in _refused(tmp_path, "other", other)
+    twice = "toggles={'listen': HelmToggle('z', patches=[(agent, LISTEN_EVERYWHERE)])}"
+    assert "two values patch the same" in _refused(tmp_path, "twice", twice)
+    unknown = "optional_inputs=('nope',)"
+    assert "not secret inputs" in _refused(tmp_path, "unknown", unknown)
+
+
+def test_an_optional_value_without_objects_or_patches_is_refused() -> None:
+    from piceli.bundle.helm import HelmOptional
+
+    with pytest.raises(ValueError, match="at least one object"):
+        HelmOptional("x").keys()
+    assert HelmOptional("x", patches=[("Service/a", {})]).keys() == []
+    with pytest.raises(ValueError, match="patched twice"):
+        HelmOptional("x", patches=[("Service/a", {}), ("Service/a", [])]).resolved()

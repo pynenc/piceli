@@ -4,6 +4,33 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.34.0
+
+**Features**
+
+- **Client charts: one value adds objects and patches others.**
+  `HelmOptional(description, objects=[...], patches=[(obj, patch)])`:
+  `patches` (a JSON Patch or a merge patch per object, as for
+  `HelmToggle`) applies only when the value is true, so one value (for
+  example `intake.expose`) both installs a Service and a NetworkPolicy and
+  switches the app's listen address. `objects` may now be empty when
+  `patches` is not. A patched object may not be one of the optional
+  objects of any value, nor patched by another value (`bundle-invalid`),
+  and the patched render passes the safety gate. See {doc}`client_delivery`.
+- **Client charts: optional secret inputs.** `HelmChart(optional_inputs=
+  ("privateCa",))` names `--set-file` inputs the client may leave out: the
+  install no longer fails, and the Secret keys the input fills are omitted
+  while it is empty (once passed, it is kept across upgrades like any
+  input). `piceli bundle --helm` reports them as `optional_inputs`; the
+  README and the install command list them as optional.
+
+**Changes**
+
+- The refusal for two values patching one object now reads `two values
+  patch the same object(s)`; a patch list naming one object twice is
+  refused (`is patched twice; join its patches`) instead of keeping the
+  last one.
+
 ## Version 0.33.0
 
 **Features**

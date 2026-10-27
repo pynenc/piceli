@@ -24,7 +24,12 @@ kustomize base and ``prepare.sh``:
 - **Toggles.** A :class:`HelmToggle` is a boolean value that patches named
   objects when true (``relayOnly: true`` narrowing an egress rule).
 - **Optional objects** (0.31.0). A :class:`HelmOptional` is a boolean value
-  (``intake.expose``) that renders named objects only when true.
+  (``intake.expose``) that renders named objects only when true; since
+  0.34.0 the same value can also patch other objects (``patches``), like a
+  toggle.
+- **Optional inputs** (0.34.0). ``HelmChart(optional_inputs=...)`` names
+  secret inputs the client may leave out: their Secret keys are then
+  omitted instead of failing the install.
 - **Values in objects** (0.31.0). A :class:`HelmValue` is a value (a list,
   a string, a number) written at JSON pointers of named objects
   (``intake.allowNamespaces`` as a NetworkPolicy's namespace list).
@@ -148,20 +153,26 @@ class HelmToggle:
 
     def resolved(self) -> dict[str, Any]:
         """``"Kind/name"`` → patch (plain JSON values)."""
-        result: dict[str, Any] = {}
-        pairs = (
-            list(self.patches.items())
-            if isinstance(self.patches, Mapping)
-            else list(self.patches)
-        )
-        for item, patch in pairs:
-            key = _object_key(item)
-            if not isinstance(patch, Mapping | list | tuple):
-                raise ValueError(f"the patch of {key} must be a mapping or a list")
-            result[key] = json.loads(json.dumps(patch))
+        result = _resolved_patches(self.patches)
         if not result:
             raise ValueError("a toggle patches at least one object")
         return result
+
+
+def _resolved_patches(
+    patches: Sequence[tuple[Any, Any]] | Mapping[str, Any],
+) -> dict[str, Any]:
+    """``"Kind/name"`` → patch (plain JSON values); each object once."""
+    result: dict[str, Any] = {}
+    pairs = list(patches.items()) if isinstance(patches, Mapping) else list(patches)
+    for item, patch in pairs:
+        key = _object_key(item)
+        if not isinstance(patch, Mapping | list | tuple):
+            raise ValueError(f"the patch of {key} must be a mapping or a list")
+        if key in result:
+            raise ValueError(f"{key} is patched twice; join its patches")
+        result[key] = json.loads(json.dumps(patch))
+    return result
 
 
 def _check_path(name: str, what: str) -> tuple[str, ...]:
@@ -187,22 +198,37 @@ class HelmOptional:
     (0.31.0). The objects are part of the app, so the safety gate checks
     them; with the value false (``default``) they are not installed.
 
+    0.34.0: ``patches`` (as for :class:`HelmToggle`: pairs of an object and
+    a JSON Patch or merge patch, or a mapping keyed by ``"Kind/name"``)
+    changes other objects when the value is true, so one value both adds
+    objects and adjusts the ones that use them. A patched object is never
+    one of the optional objects, nor gated or patched by another value; the
+    patched render passes the safety gate too.
+
     Example::
 
         HelmOptional("Expose the intake to other namespaces",
-                     objects=[intake_service, intake_policy])
+                     objects=[intake_service, intake_policy],
+                     patches=[(agent, [{"op": "replace",
+                         "path": "/spec/template/spec/containers/0/env/0/value",
+                         "value": "0.0.0.0:4318"}])])
     """
 
     description: str
-    objects: Sequence[Any]
+    objects: Sequence[Any] = ()
     default: bool = False
+    patches: Sequence[tuple[Any, Any]] | Mapping[str, Any] = ()
 
     def keys(self) -> list[str]:
         """The objects as ``"Kind/name"``."""
         keys = [_object_key(item) for item in self.objects]
-        if not keys:
+        if not keys and not self.patches:
             raise ValueError("an optional value names at least one object")
         return keys
+
+    def resolved(self) -> dict[str, Any]:
+        """0.34.0: ``"Kind/name"`` → patch applied when true (may be empty)."""
+        return _resolved_patches(self.patches)
 
 
 @dataclass(frozen=True)
@@ -259,6 +285,10 @@ class HelmChart:
         client sets ``storage.size``, each container that declares the
         variable gets that percentage of the size, in bytes
         (``{"DISK_LIMIT": 90}``); otherwise it keeps its declared value.
+    :param optional_inputs: 0.34.0: secret inputs (their value names,
+        ``"privateCa"``) the client may leave out. Left out, the Secret keys
+        they fill are omitted instead of failing the install; once passed, a
+        value is kept across upgrades like any input.
     """
 
     target: Any
@@ -269,6 +299,16 @@ class HelmChart:
     optional: Mapping[str, HelmOptional] = field(default_factory=dict)
     values: Mapping[str, HelmValue] = field(default_factory=dict)
     storage_env: Mapping[str, int] = field(default_factory=dict)
+    optional_inputs: Sequence[str] = ()
+
+    def patched_values(self) -> dict[str, HelmToggle | HelmOptional]:
+        """Value name → the toggle or optional value that patches objects:
+        each one needs a patched render (``build_helm``'s ``variants``)."""
+        result: dict[str, HelmToggle | HelmOptional] = dict(self.toggles)
+        for name, item in self.optional.items():
+            if item.patches:
+                result[name] = item
+        return result
 
     def setting_keys(self) -> dict[str, tuple[str, str]] | None:
         """Value name → ``(ConfigMap name, key)``, or ``None`` for the default."""
@@ -357,9 +397,12 @@ def json_patch(document: Any, operations: Sequence[Mapping[str, Any]]) -> Any:
 
 
 def apply_toggle(
-    components: Sequence[Mapping[str, Any]], name: str, toggle: HelmToggle
+    components: Sequence[Mapping[str, Any]],
+    name: str,
+    toggle: HelmToggle | HelmOptional,
 ) -> list[dict[str, Any]]:
-    """The render with ``toggle``'s patches applied (the input is unchanged).
+    """The render with ``toggle``'s patches applied (the input is unchanged);
+    0.34.0: also the patches of a :class:`HelmOptional`.
 
     :raises BundleError: ``bundle-invalid`` when a patch names no rendered
         object or does not apply.
@@ -715,8 +758,15 @@ class _Templater:
 # ------------------------------------------------------------ the secrets
 
 
-def _secret_helper(name: str, bundle: Bundle, inputs: Mapping[str, str]) -> str:
-    """``<name>.secrets``: every generator output as JSON, kept across upgrades."""
+def _secret_helper(
+    name: str,
+    bundle: Bundle,
+    inputs: Mapping[str, str],
+    optional_inputs: frozenset[str] = frozenset(),
+) -> str:
+    """``<name>.secrets``: every generator output as JSON, kept across upgrades.
+
+    An input named in ``optional_inputs`` (value names) may stay empty."""
     from piceli.bundle.prepare import required_generators
     from piceli.k8s.release_secret_spec import (
         ImportSecretSpec,
@@ -799,15 +849,20 @@ def _secret_helper(name: str, bundle: Bundle, inputs: Mapping[str, str]) -> str:
             message = (
                 f"{value} is required on the first install: --set-file {value}=FILE"
             )
-            lines.append(
-                f"{{{{- if not $v -}}}}{{{{- fail {_literal(message)} -}}}}{{{{- end -}}}}"
-            )
+            if value not in optional_inputs:
+                lines.append(
+                    f"{{{{- if not $v -}}}}{{{{- fail {_literal(message)} -}}}}{{{{- end -}}}}"
+                )
         lines.append(f"{{{{- $_ := set $out {out} $v -}}}}")
     lines += ["{{- toJson $out -}}", "{{- end -}}", ""]
     return "\n".join(lines)
 
 
-def _secrets_template(name: str, bundle: Bundle) -> str:
+def _secrets_template(
+    name: str, bundle: Bundle, omissible: frozenset[str] = frozenset()
+) -> str:
+    """The Secrets; a key filled by a generator in ``omissible`` (an optional
+    input) is left out while its value is empty."""
     import yaml
 
     documents = [f'{{{{- $values := include "{name}.secrets" $ | fromJson }}}}']
@@ -831,10 +886,15 @@ def _secrets_template(name: str, bundle: Bundle) -> str:
             '| replace "+" "_") | toJson }}\n',
             1,
         )
-        data = "".join(
-            f"  {json.dumps(key)}: {{{{ get $values {_literal(output)} | b64enc | toJson }}}}\n"
-            for key, output in plan.keys
-        )
+        data = ""
+        for key, output in plan.keys:
+            line = f"  {json.dumps(key)}: {{{{ get $values {_literal(output)} | b64enc | toJson }}}}\n"
+            if output in omissible:
+                line = (
+                    f"{{{{- if get $values {_literal(output)} }}}}\n"
+                    f"{line}{{{{- end }}}}\n"
+                )
+            data += line
         documents.append("---\n" + text + "data:\n" + data)
     return "\n".join(documents)
 
@@ -861,6 +921,8 @@ class HelmBundle:
     optional: tuple[str, ...] = ()
     values: tuple[str, ...] = ()
     existing_secret_keys: tuple[str, ...] = ()
+    #: 0.34.0: the inputs the client may leave out (value names).
+    optional_inputs: tuple[str, ...] = ()
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -912,6 +974,7 @@ class HelmBundle:
             "optional": list(self.optional),
             "values": list(self.values),
             "existing_secret_keys": list(self.existing_secret_keys),
+            "optional_inputs": list(self.optional_inputs),
         }
 
 
@@ -997,12 +1060,21 @@ def build_helm(
             name: (_check_path(name, "optional value"), item, item.keys())
             for name, item in declared.optional.items()
         }
+        patched = {name for name, item in declared.optional.items() if item.resolved()}
         placed_values = {
             name: (_check_path(name, "value"), item, item.resolved())
             for name, item in declared.values.items()
         }
     except ValueError as error:
         raise BundleError("bundle-invalid", str(error)) from None
+    optional_inputs = frozenset(declared.optional_inputs)
+    unknown_inputs = sorted(optional_inputs - set(inputs.values()))
+    if unknown_inputs:
+        raise BundleError(
+            "bundle-invalid",
+            f"optional_inputs names {unknown_inputs}, which are not secret inputs "
+            f"(the inputs: {sorted(inputs.values())})",
+        )
     storage_env = {}
     for env, percent in declared.storage_env.items():
         if (
@@ -1038,8 +1110,11 @@ def build_helm(
             "bundle-invalid",
             f"required names {unknown}, which are not settings or toggles",
         )
-    if set(variants) != set(toggles):
-        raise BundleError("bundle-invalid", "every toggle needs its rendered variant")
+    if set(variants) != set(toggles) | patched:
+        raise BundleError(
+            "bundle-invalid",
+            "every toggle and patching optional value needs its rendered variant",
+        )
     required = {name for name in declared.required if name in settings}
     reverse = {ref: name for name, ref in settings.items()}
     values_at: dict[str, list[tuple[list[str], str]]] = {}
@@ -1081,12 +1156,17 @@ def build_helm(
             mine, theirs = base.get(file), other.get(file)
             if (mine and mine.manifest) != (theirs and theirs.manifest):
                 changed.setdefault(file, []).append(toggle)
-    conflicts = sorted(
-        file for file, owners in changed.items() if len(owners) > 1 or file in gated
-    )
+    conflicts = sorted(file for file, owners in changed.items() if len(owners) > 1)
     if conflicts:
         raise BundleError(
-            "bundle-invalid", f"two toggles change the same object(s): {conflicts}"
+            "bundle-invalid", f"two values patch the same object(s): {conflicts}"
+        )
+    gated_and_patched = sorted(file for file in changed if file in gated)
+    if gated_and_patched:
+        raise BundleError(
+            "bundle-invalid",
+            f"optional object(s) {gated_and_patched} are also patched; patch only "
+            "objects no value makes optional",
         )
 
     files: dict[str, bytes] = {}
@@ -1133,7 +1213,10 @@ def build_helm(
             f"storage_env names {unset}, which no container declares with a value",
         )
     if bundle.secrets:
-        body = _secrets_template(bundle.name, bundle)
+        omissible = frozenset(
+            generator for generator, value in inputs.items() if value in optional_inputs
+        )
+        body = _secrets_template(bundle.name, bundle, omissible)
         if offer_existing:
             body = (
                 f"{{{{- if not $.Values.existingSecret }}}}\n{body}\n{{{{- end }}}}\n"
@@ -1173,7 +1256,9 @@ def build_helm(
         text = descriptions.get(name) or f"secret input {generator}"
         schema[name] = {"type": "string", "description": text}
         comments.append(
-            f"# {name}: {text} (required on the first install: --set-file {name}=FILE)"
+            f"# {name}: {text} (optional: --set-file {name}=FILE; absent leaves its keys out)"
+            if name in optional_inputs
+            else f"# {name}: {text} (required on the first install: --set-file {name}=FILE)"
         )
     for name, toggle in sorted(toggles.items()):
         values[name] = toggle.default
@@ -1200,7 +1285,10 @@ def build_helm(
     for name, (parts, item, _keys) in sorted(optional.items()):
         text = descriptions.get(name) or item.description
         put(parts, item.default, {"type": "boolean", "description": text})
-        comments.append(f"# {name}: {text} (true installs its objects)")
+        comments.append(
+            f"# {name}: {text} (true installs its objects"
+            + (" and patches others)" if name in patched else ")")
+        )
     for name, (parts, item, targets) in sorted(placed_values.items()):
         default = item.default
         if default is None:
@@ -1310,7 +1398,7 @@ def build_helm(
     files["templates/_helpers.tpl"] = _helpers(bundle.name, inputs).encode()
     if bundle.secrets:
         files["templates/_helpers.tpl"] += _secret_helper(
-            bundle.name, bundle, inputs
+            bundle.name, bundle, inputs, optional_inputs
         ).encode()
     chart = HelmBundle(
         name=bundle.name,
@@ -1326,6 +1414,7 @@ def build_helm(
         optional=tuple(sorted(optional)),
         values=tuple(sorted(placed_values)),
         existing_secret_keys=tuple(sorted(secret_keys)) if offer_existing else (),
+        optional_inputs=tuple(sorted(optional_inputs)),
     )
     files["Chart.yaml"] = yaml.safe_dump(chart.metadata(), sort_keys=True).encode()
     files["templates/NOTES.txt"] = _notes(chart).encode()
@@ -1367,7 +1456,11 @@ def _install_command(chart: HelmBundle, source: str = "<chart>") -> str:
     parts = [f"helm install {chart.name} {source} --version {chart.version}"]
     parts.append(f"-n {chart.name} --create-namespace")
     parts += [f"--set {name}=..." for name in chart.required]
-    parts += [f"--set-file {name}=FILE" for name in sorted(chart.inputs.values())]
+    parts += [
+        f"--set-file {name}=FILE"
+        for name in sorted(chart.inputs.values())
+        if name not in chart.optional_inputs
+    ]
     return " ".join(parts)
 
 
@@ -1432,6 +1525,13 @@ def _readme(
         lines.append(f"- `{name}`{flag}: {text}")
     for name in sorted(chart.inputs.values()):
         text = descriptions.get(name) or "a secret input"
+        if name in chart.optional_inputs:
+            lines.append(
+                f"- `{name}` (optional, `--set-file {name}=FILE`): {text}; left "
+                "out, its Secret keys are omitted; once passed, kept across "
+                "upgrades when not passed again"
+            )
+            continue
         lines.append(
             f"- `{name}` (required on the first install, `--set-file {name}=FILE`): "
             f"{text}; kept across upgrades when not passed again"
@@ -1442,7 +1542,11 @@ def _readme(
     for name, item in sorted((optional or {}).items()):
         text = descriptions.get(name) or item.description
         objects = ", ".join(item.keys())
-        lines.append(f"- `{name}` (true or false): {text}; true installs {objects}")
+        effect = f"true installs {objects}" if objects else ""
+        patches = ", ".join(item.resolved())
+        if patches:
+            effect += (" and patches " if effect else "true patches ") + patches
+        lines.append(f"- `{name}` (true or false): {text}; {effect}")
     for name, value in sorted((placed or {}).items()):
         lines.append(f"- `{name}`: {descriptions.get(name) or value.description}")
     if chart.existing_secret_keys:

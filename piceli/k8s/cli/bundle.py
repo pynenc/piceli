@@ -388,7 +388,7 @@ def _helm(
         variants = {
             toggle: bundled(apply_toggle(components, toggle, spec))
             for toggle, spec in (
-                declaration.toggles.items() if declaration is not None else ()
+                declaration.patched_values().items() if declaration is not None else ()
             )
         }
         chart = build_helm(
