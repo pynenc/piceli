@@ -513,7 +513,7 @@ def refresh_in_place(
         return None
     if any((heads.get(s.name) or {}).get("head") != s.head for s in sources):
         return None
-    counts = {"written": 0, "removed": 0, "kept": 0}
+    counts = {"written": 0, "removed": 0, "kept": 0, "removed_dirs": 0}
     for source in sources:
         paths = sorted(
             set((heads.get(source.name) or {}).get("overlay") or ())
@@ -548,7 +548,35 @@ def refresh_in_place(
                 else:
                     dest.unlink()
                 counts["removed"] += 1
+        counts["removed_dirs"] += prune_empty_dirs(dest_root)
     return counts
+
+
+#: Folders a sync never prunes inside: build output and git's own state.
+PRUNE_SKIP = frozenset({"target", ".git"})
+
+
+def prune_empty_dirs(root: Path) -> int:
+    """Remove the folders under ``root`` that hold nothing, bottom-up (0.36.0).
+
+    A file removed from the tree can leave its folder empty, and a cargo glob
+    member (``crates/app/*``) then fails on it. ``root`` itself and anything
+    under ``target/`` or ``.git/`` stay. Also heals folders older versions
+    left empty. Returns how many folders went."""
+    removed = 0
+    if not root.is_dir() or root.is_symlink():
+        return 0
+    for directory, dirs, files in os.walk(root, topdown=False):
+        here = Path(directory)
+        if here == root or PRUNE_SKIP.intersection(here.relative_to(root).parts):
+            continue
+        if not files and not any((here / d).exists() for d in dirs):
+            try:
+                here.rmdir()
+            except OSError:
+                continue
+            removed += 1
+    return removed
 
 
 def materialized(sources: list[DeltaSource], refreshed: int) -> dict[str, Any]:
@@ -963,7 +991,7 @@ def _same(source: Path, dest: Path) -> bool:
 
 def sync_tree(source: Path, dest: Path) -> dict[str, int]:
     """Make ``dest`` hold ``source``; unchanged files keep their mtime."""
-    counts = {"written": 0, "removed": 0, "kept": 0}
+    counts = {"written": 0, "removed": 0, "kept": 0, "removed_dirs": 0}
     dest.mkdir(parents=True, exist_ok=True)
     wanted: set[str] = set()
     for directory, dirs, files in os.walk(source):
@@ -1004,6 +1032,7 @@ def sync_tree(source: Path, dest: Path) -> dict[str, int]:
                 counts["removed"] += 1
         if relative != "." and relative not in wanted:
             shutil.rmtree(directory, ignore_errors=True)
+            counts["removed_dirs"] += 1
     return counts
 
 

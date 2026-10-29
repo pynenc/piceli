@@ -142,3 +142,77 @@ def test_an_old_tree_upload_still_runs(tmp_path: Path) -> None:
     data = _archive({"app/a.txt": "one\n"})
     result, lines = _run(tmp_path, data, _spec(data, ["cat", "a.txt"]))
     assert result["state"] == "passed" and "one" in lines
+
+
+# 0.36.0: a sync into a reused lineage removes the folders it leaves empty
+# (a cargo glob member such as ``crates/app/*`` fails on an empty folder).
+def _lineage_tree(tmp_path: Path, result: dict[str, Any]) -> Path:
+    return tmp_path / "cache" / "lineages" / result["cache"]["lineage"] / "tree"
+
+
+def _crates(tmp_path: Path) -> Path:
+    return repo(
+        tmp_path / "work",
+        {
+            "a.rs": "1",
+            "new.rs": "n",
+            "crates/app/a/Cargo.toml": "a",
+            "crates/app/b/Cargo.toml": "b",
+        },
+    )
+
+
+def test_an_in_place_refresh_removes_the_folders_it_leaves_empty(
+    tmp_path: Path,
+) -> None:
+    work = _crates(tmp_path)
+    first, _ = _run_delta(tmp_path, work, set(), "first")
+    assert first["state"] == "passed", first
+    tree = _lineage_tree(tmp_path, first)
+    assert (tree / "shop/crates/app/b/Cargo.toml").is_file()
+    (tree / "shop/target/debug/deps").mkdir(parents=True)  # a build's output
+    shutil.rmtree(work / "crates/app/b")  # uncommitted: the same head
+    plan = plan_source(SourceRequest("shop", work, None))
+    have = _fetch(tmp_path, [plan.describe()], None)["sources"]["shop"]
+    again, _ = _run_delta(tmp_path, work, set(have["present"]), "again")
+    assert again["state"] == "passed", again
+    assert again["sync"]["mode"] == "in-place"
+    assert _lineage_tree(tmp_path, again) == tree
+    assert (tree / "shop/crates/app/a/Cargo.toml").is_file()
+    assert not (tree / "shop/crates/app/b").exists()
+    assert again["sync"]["removed_dirs"] >= 1
+    assert (tree / "shop/target/debug/deps").is_dir()
+    assert tree.is_dir() and (tree / "shop").is_dir()
+
+
+def test_an_in_place_refresh_heals_folders_older_versions_left_empty(
+    tmp_path: Path,
+) -> None:
+    work = _crates(tmp_path)
+    first, _ = _run_delta(tmp_path, work, set(), "first")
+    tree = _lineage_tree(tmp_path, first)
+    (tree / "shop/crates/app/old/src").mkdir(parents=True)  # left by 0.35
+    plan = plan_source(SourceRequest("shop", work, None))
+    have = _fetch(tmp_path, [plan.describe()], None)["sources"]["shop"]
+    again, _ = _run_delta(tmp_path, work, set(have["present"]), "again")
+    assert again["sync"]["mode"] == "in-place" and again["sync"]["removed"] == 0
+    assert not (tree / "shop/crates/app/old").exists()
+    assert (tree / "shop/crates/app/b/Cargo.toml").is_file()
+
+
+def test_a_full_sync_removes_emptied_and_already_empty_folders(
+    tmp_path: Path,
+) -> None:
+    source, dest = tmp_path / "source", tmp_path / "dest"
+    (source / "crates/app/a").mkdir(parents=True)
+    (source / "crates/app/a/Cargo.toml").write_text("a")
+    (dest / "crates/app/a").mkdir(parents=True)
+    (dest / "crates/app/a/Cargo.toml").write_text("a")
+    (dest / "crates/app/b").mkdir(parents=True)
+    (dest / "crates/app/b/Cargo.toml").write_text("b")
+    (dest / "crates/app/old/src").mkdir(parents=True)  # already empty
+    counts = pod.sync_tree(source, dest)
+    assert not (dest / "crates/app/b").exists()
+    assert not (dest / "crates/app/old").exists()
+    assert (dest / "crates/app/a/Cargo.toml").is_file() and dest.is_dir()
+    assert counts["removed"] == 1 and counts["removed_dirs"] == 3

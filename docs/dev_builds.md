@@ -353,6 +353,10 @@ lineage its ref used last, else the most recently used free one, under an
 exclusive lock: two runs never write one target directory. The upload is
 synced into the lineage **keeping the modification time of every unchanged
 file**, so cargo's own fingerprints rebuild only the crates that changed.
+Folders the sync leaves empty are removed too (0.36.0; `target/` and `.git/`
+stay), so a cargo glob member such as `crates/app/*` never meets an empty
+folder of a crate that is gone; the sync result counts them in
+`removed_dirs`.
 `CARGO_HOME` (the registry and downloaded crates) is shared per toolchain;
 cargo locks it itself.
 

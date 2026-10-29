@@ -63,7 +63,7 @@ def test_a_sibling_branch_reuses_the_warm_lineage(tmp_path: Path) -> None:
     second = run(port, DEV, RunRequest(SourceRequest("shop", app, "wp-b"), ["true"]))
     assert second["cache"]["lineage"] == first["cache"]["lineage"]
     assert second["cache"]["warm"] is True
-    assert second["sync"] == {"written": 1, "removed": 0, "kept": 1}
+    assert second["sync"] == {"written": 1, "removed": 0, "kept": 1, "removed_dirs": 0}
 
 
 def test_artifacts_come_back_to_the_client(tmp_path: Path) -> None:
