@@ -271,6 +271,7 @@ def _kitchen_sink() -> list[dict[str, Any]]:
         {"name": "conf", "mountPath": "/etc/redis/redis.conf", "subPath": "redis.conf"},
         {"name": "auth", "mountPath": "/run/auth", "readOnly": True},
         {"name": "scratch", "mountPath": "/scratch"},
+        {"name": "downloads", "mountPath": "/srv/downloads"},
         {"name": "host", "mountPath": "/host"},
     ]
     pod["volumes"] = [
@@ -288,6 +289,7 @@ def _kitchen_sink() -> list[dict[str, Any]]:
         },
         {"name": "auth", "secret": {"secretName": "cache-auth", "defaultMode": 0o400}},
         {"name": "scratch", "emptyDir": {"medium": "Memory", "sizeLimit": "64Mi"}},
+        {"name": "downloads", "emptyDir": {"sizeLimit": "2Gi"}},
         {"name": "host", "hostPath": {"path": "/var/lib/host"}},
     ]
     service = objects.service()
@@ -329,6 +331,7 @@ def test_kitchen_sink_round_trips(ruff_clean) -> None:
         '"/data": ExistingClaim("cache-data", name="data", read_only=True)',
         'SecretVolume(cache_auth, name="auth", default_mode=0o400)',
         '"/scratch": MemoryVolume(size_limit="64Mi")',
+        '"/srv/downloads": ScratchVolume(name="downloads", size_limit="2Gi")',
         'sub_path="redis.conf"',
         'items={"redis.conf": "redis.conf"}',
         'ServicePort(port=9121, target_port="metrics", name="metrics")',

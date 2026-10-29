@@ -20,6 +20,7 @@ from piceli import (
     NetworkPolicy,
     Probe,
     Resources,
+    ScratchVolume,
     Secret,
     SecretKey,
     SecretVolume,
@@ -171,6 +172,11 @@ def test_volume_sources_and_default_names():
     assert ExistingClaim("state").source() == {
         "persistentVolumeClaim": {"claimName": "state"}
     }
+    assert ScratchVolume(size_limit="2Gi").source() == {
+        "emptyDir": {"sizeLimit": "2Gi"}
+    }
+    assert ScratchVolume().source() == {"emptyDir": {}}
+    assert ScratchVolume().volume_name("/srv/downloads") == "srv-downloads"
     assert ExistingClaim("state", read_only=True).source() == {
         "persistentVolumeClaim": {"claimName": "state", "readOnly": True}
     }
@@ -181,6 +187,8 @@ def test_volume_sources_and_default_names():
     [
         lambda: ExistingClaim("Bad Claim"),
         lambda: MemoryVolume(size_limit="big"),
+        lambda: ScratchVolume(size_limit="big"),
+        lambda: ScratchVolume(size_limit="2Gi", medium="Memory"),
         lambda: ConfigVolume("c", default_mode=0o1000),
         lambda: SecretVolume("s", name="UPPER"),
         lambda: ExistingClaim("state", size="1Gi"),

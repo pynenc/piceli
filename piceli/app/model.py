@@ -449,6 +449,25 @@ class MemoryVolume(_Volume):
         return {"emptyDir": _compact(medium="Memory", sizeLimit=self.size_limit)}
 
 
+class ScratchVolume(_Volume):
+    """A disk-backed scratch directory (``emptyDir`` on the node's disk, 0.36.0).
+
+    For data too large for RAM, such as a downloads folder an init container
+    fills and the app serves. Its content is lost when the pod stops.
+    ``size_limit`` counts against the node's ephemeral storage: a pod that
+    writes more is evicted.
+
+    :param name: Volume name; defaults to one derived from the mount path.
+    :param size_limit: Maximum size, such as ``2Gi``.
+    """
+
+    kind: Literal["scratch"] = "scratch"
+    size_limit: Quantity | None = None
+
+    def source(self) -> dict[str, Any]:
+        return {"emptyDir": _compact(sizeLimit=self.size_limit)}
+
+
 class ExistingClaim(_Volume):
     """Mount a PersistentVolumeClaim that the release never creates, changes or deletes.
 
@@ -630,7 +649,14 @@ class ClaimTemplate(_Volume):
         }
 
 
-Volume = ConfigVolume | SecretVolume | MemoryVolume | ExistingClaim | ClaimTemplate
+Volume = (
+    ConfigVolume
+    | SecretVolume
+    | MemoryVolume
+    | ScratchVolume
+    | ExistingClaim
+    | ClaimTemplate
+)
 
 
 def _items(items: Mapping[str, str] | None) -> list[dict[str, str]] | None:

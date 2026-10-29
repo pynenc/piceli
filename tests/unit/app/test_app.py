@@ -8,7 +8,14 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from piceli import App, ConfigVolume, Container, ExistingClaim, MemoryVolume
+from piceli import (
+    App,
+    ConfigVolume,
+    Container,
+    ExistingClaim,
+    MemoryVolume,
+    ScratchVolume,
+)
 from piceli.app.render import placeholder_inputs, rendered, to_yaml
 from piceli.k8s import templates
 from piceli.k8s.ops.plan import DeploymentComponent, ResourceIntent
@@ -255,3 +262,30 @@ def test_memory_volume_shared_between_containers():
         "template"
     ]["spec"]
     assert pod["volumes"] == [{"name": "scratch", "emptyDir": {"medium": "Memory"}}]
+
+
+def test_scratch_volume_filled_by_an_init_container_and_served_on_disk():
+    app = App("shop")
+    downloads = ScratchVolume(size_limit="2Gi")
+    app.deployment(
+        "web",
+        image="w:1",
+        volumes={"/srv/downloads": downloads},
+        init=[
+            Container(
+                name="fetch",
+                image="tools:1",
+                command=["piceli", "artifacts", "fetch-file"],
+                volumes={"/srv/downloads": downloads},
+            )
+        ],
+    )
+    pod = _by_kind(app.render("demo"))[("Deployment", "web")].manifest["spec"][
+        "template"
+    ]["spec"]
+    assert pod["volumes"] == [
+        {"name": "srv-downloads", "emptyDir": {"sizeLimit": "2Gi"}}
+    ]
+    mount = {"name": "srv-downloads", "mountPath": "/srv/downloads"}
+    assert pod["initContainers"][0]["volumeMounts"] == [mount]
+    assert pod["containers"][0]["volumeMounts"] == [mount]
