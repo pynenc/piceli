@@ -165,6 +165,31 @@ def _no_ambient_cluster(
     yield
 
 
+def _tofu_binary() -> str | None:
+    found = os.environ.get("PICELI_TOFU") or shutil.which("tofu")
+    return found if found and Path(found).is_file() else None
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """``tofu`` tests run the real OpenTofu binary, the slowest in the suite:
+    only with ``PICELI_TOFU_TESTS=1`` (and a ``tofu`` to run)."""
+    if os.environ.get("PICELI_TOFU_TESTS") != "1":
+        reason = "runs the real OpenTofu binary; set PICELI_TOFU_TESTS=1"
+    elif _tofu_binary() is None:
+        reason = (
+            "OpenTofu not found (set PICELI_TOFU or put tofu on PATH, "
+            "e.g. nix shell nixpkgs#opentofu)"
+        )
+    else:
+        return
+    skip = pytest.mark.skip(reason=reason)
+    for item in items:
+        if item.get_closest_marker("tofu") is not None:
+            item.add_marker(skip)
+
+
 def pytest_assertrepr_compare(op: str, left: Any, right: Any) -> list[str] | None:
     if isinstance(left, dict) and isinstance(right, dict) and op == "==":
         # Serialize the dictionaries to JSON formatted strings, sorted to ensure consistency

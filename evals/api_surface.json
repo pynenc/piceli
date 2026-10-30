@@ -12308,6 +12308,8 @@
      "--docker-config",
      "--move-tag",
      "--out",
+     "--output-dir",
+     "--receipt",
      "--tag",
      "--timeout",
      "--to"
@@ -17954,5 +17956,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.38.1"
+ "version": "0.39.0"
 }

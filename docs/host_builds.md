@@ -218,6 +218,41 @@ labels = { "org.opencontainers.image.licenses" = "MIT", "org.opencontainers.imag
 
 A full example: `examples/builds/rust-hello/host-build.toml`.
 
+## Plain files, without an image (0.39.0)
+
+To ship binaries as release downloads, declare `[[output.files]]` instead
+of (or beside) `[[output.image]]`. No image is assembled for them:
+
+```toml
+[build]
+tools = ["cargo", "cargo-zigbuild", "zig"]
+platforms = ["linux/amd64", "linux/arm64"]
+commands = [["cargo", "zigbuild", "--release", "--locked",
+             "--target", "{rust_arch}-unknown-linux-gnu.2.36"]]
+
+[[output.files]]
+name = "bin"
+target_files = { "{rust_arch}-unknown-linux-gnu/release/app-cli" = "app-cli-{arch}",
+                 "{rust_arch}-unknown-linux-gnu/release/app-agent" = "app-agent-{arch}" }
+```
+
+- Keys are paths under the target directory, as an image's `target_files`;
+  each must be a regular file. Values are file names (one path segment,
+  placeholders allowed). Put `{arch}` in the name when you build several
+  platforms, so the files keep different names when published together.
+- Each file is copied to `files/<name>/<file name>` in the output
+  directory (`<platform>/files/…` for several platforms, for example
+  `linux-arm64/files/bin/app-cli-arm64`).
+- The receipt lists each file (see [Receipts](#receipts)).
+  `piceli artifacts publish-files --receipt receipt.json --to … --tag …
+  --artifact-type …` publishes them (see {doc}`release_files`).
+- A spec with only files is for `piceli artifacts build-spec run`. A deploy
+  (`Build.spec(…, builder="host")`, `piceli build job`) needs at least one
+  image and refuses it (`pipeline-invalid`); a composition controller builds
+  images only and refuses any `[[output.files]]` (`composition-invalid`).
+- Adding the section changes the spec digest and the plan hash only of a
+  spec that declares it.
+
 ## Steps that are the same for every platform
 
 Some steps give the same result whatever the node: a browser bundle compiled
@@ -430,6 +465,13 @@ tools: {name: sha256}}`, `node_facts`, and for each image its config digest
 (`image_id`), manifest digest, platform, archive path (relative to the
 outputs), every layer (`digest`, `diff_id`, `size`, `origin`: `base` or
 `build`) and every file the build put in it (`path`, `sha256`, `size`).
+
+With `[[output.files]]` (0.39.0), `outputs.files` maps each file's path
+(relative to the output directory) to its sha256, the shape a Docker
+`build.toml` receipt has, and `outputs.file_details` gives, per path,
+`output` (the `[[output.files]]` name), `file` (the file name), `platform`,
+`sha256` and `size`. A spec without files keeps `outputs.files = {}` and has
+no `file_details`.
 
 ## SBOM and provenance
 

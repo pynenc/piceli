@@ -122,6 +122,12 @@ def _retention(capsys: pytest.CaptureFixture[str], *extra: str) -> tuple[int, An
 
 
 def _rolled_out(namespace: str, revision: str) -> None:
+    """Wait until ``revision`` is rolled out, as ``kubectl rollout status`` does.
+
+    The controller writes the new revision annotation before it updates the
+    status, so the status counts are only current once ``observedGeneration``
+    reaches ``generation`` (#88: the old status passed for the new revision).
+    """
     deadline = time.monotonic() + 240
     while time.monotonic() < deadline:
         found = json.loads(
@@ -129,8 +135,11 @@ def _rolled_out(namespace: str, revision: str) -> None:
         )
         status = found.get("status") or {}
         annotations = found["metadata"].get("annotations") or {}
+        generation = found["metadata"].get("generation")
         if (
             annotations.get("deployment.kubernetes.io/revision") == revision
+            and generation is not None
+            and status.get("observedGeneration", 0) >= generation
             and status.get("updatedReplicas") == 1
             and status.get("readyReplicas") == 1
             and status.get("replicas") == 1

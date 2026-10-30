@@ -597,7 +597,9 @@ Publish local files as one OCI artifact (each file one layer, by its sha256).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `FILES` | path | required |  |
+| `FILES` | path |  |  |
+| `--receipt` | path |  | publish the [[output.files]] a host build receipt lists (0.39) |
+| `--output-dir` | path |  | where the receipt's files are (default: the receipt's directory) |
 | `--to` | text | required | oci://host[:port]/repository |
 | `--tag` | text | required | the artifact's tag |
 | `--artifact-type` | text | required | the manifest's artifactType, e.g. application/vnd.example.downloads.v1 |
@@ -613,14 +615,14 @@ Mutually exclusive: `credentials` / `docker_config`.
 
 **Contract**
 
-- **Reads:** the files, credentials file or Docker config
+- **Reads:** the files, or a host build receipt's files (--receipt), credentials file or Docker config
 - **Writes:** OCI registry (blobs, manifest, tag), --out receipt
 - **Cluster:** none
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** 0.32.0. Without --approve it prints the plan (every file's name, size and digest, the manifest digest) and its digest (exit 3) and contacts nothing. Each file is stored as it is, so its blob digest is its sha256; a file changed since the plan is refused (publish-input-changed). A tag that names another manifest is refused unless --move-tag. Never prints a credential.
+- **Notes:** 0.32.0. Without --approve it prints the plan (every file's name, size and digest, the manifest digest) and its digest (exit 3) and contacts nothing. Each file is stored as it is, so its blob digest is its sha256; a file changed since the plan is refused (publish-input-changed). A tag that names another manifest is refused unless --move-tag. Never prints a credential. 0.39: --receipt publishes the [[output.files]] of a host build receipt (each must still match the receipt's sha256 and size).
 
 (cli-artifacts-retention)=
 ### `piceli artifacts retention`

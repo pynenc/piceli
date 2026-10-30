@@ -36,7 +36,7 @@ from piceli.infra.machines.state import write_record
 from piceli.infra.machines.tofu import TofuResult, redact
 from piceli.testing.infra import FakeProvider
 
-from .machines_support import PASSPHRASE, last_json, needs_tofu, planned
+from .machines_support import PASSPHRASE, last_json, planned
 
 KEY = "tskey-auth-kExample-" + "q" * 40
 CLOUD_CONFIG = f'#cloud-config\nruncmd:\n  - [tailscale, up, "--auth-key={KEY}"]\n'
@@ -276,7 +276,7 @@ def test_secrets_user_data_command(homes: Path, tmp_path: Path) -> None:
 # ------------------------------------------------------------ real OpenTofu
 
 
-@needs_tofu
+@pytest.mark.tofu
 @pytest.mark.timeout(240)
 def test_real_tofu_loads_user_data_only_to_create(homes: Path) -> None:
     """Created with the value; then planned without it, nothing changes."""

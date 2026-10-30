@@ -28,12 +28,11 @@ from piceli.k8s.cli import app as cli
 from .machines_support import (
     PASSPHRASE,
     last_json,
-    needs_tofu,
     tofu_binary,
     write_module,
 )
 
-pytestmark = [needs_tofu, pytest.mark.timeout(240)]
+pytestmark = [pytest.mark.tofu, pytest.mark.timeout(240)]
 runner = CliRunner()
 OURS = [
     "terraform_data.firewall-edge-1",

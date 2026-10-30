@@ -896,7 +896,15 @@ def load_host_spec(path: Path) -> HostBuildSpec:
     from piceli.artifacts.host_build import HostBuildSpec
 
     check_builder(path, "host")
-    return HostBuildSpec.from_toml(path)
+    spec = HostBuildSpec.from_toml(path)
+    if not spec.images:
+        # 0.39: a spec with only [[output.files]] has nothing to deploy.
+        raise PipelineError(
+            "pipeline-invalid",
+            f"host build {spec.name!r} declares no [[output.image]]; a pipeline "
+            "deploys images. Build its files with `piceli artifacts build-spec run`",
+        )
+    return spec
 
 
 # ---------------------------------------------------------------- delivery

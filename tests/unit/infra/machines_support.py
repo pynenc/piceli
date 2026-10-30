@@ -9,8 +9,6 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 #: A state passphrase and a provider token used only by these tests.
 PASSPHRASE = 'test-passphrase-$${not}-"quoted"-\\x'
 TOKEN = "hcloud-test-token-" + "z" * 46
@@ -20,12 +18,6 @@ def tofu_binary() -> str | None:
     """``$PICELI_TOFU`` or ``tofu`` on PATH (real OpenTofu tests skip without it)."""
     found = os.environ.get("PICELI_TOFU") or shutil.which("tofu")
     return found if found and Path(found).is_file() else None
-
-
-needs_tofu = pytest.mark.skipif(
-    tofu_binary() is None,
-    reason="OpenTofu not found (set PICELI_TOFU or put tofu on PATH, e.g. nix shell nixpkgs#opentofu)",
-)
 
 
 MODULE = """

@@ -22,6 +22,23 @@ piceli artifacts publish-files dist/* \
 piceli artifacts publish-files dist/* … --approve sha256:<plan digest> --out receipt.json
 ```
 
+## Files from a host build (0.39.0)
+
+A host build's `[[output.files]]` ({doc}`host_builds`) need no carrier
+image. Give `publish-files` the build receipt instead of the files:
+
+```sh
+piceli artifacts build-spec run --spec host-build.toml --approve-plan sha256:<plan> --out out/receipt.json
+piceli artifacts publish-files --receipt out/receipt.json \
+    --to oci://ghcr.io/example/tool --tag 1.4.0-bin \
+    --artifact-type application/vnd.example.tool.bin.v1
+```
+
+Every file in the receipt's `outputs.file_details` is published under its
+file name. The files are read from the receipt's directory (or
+`--output-dir`) and must still have the receipt's sha256 and size
+(`publish-input-changed`). Give either files or `--receipt`, not both.
+
 ## What `publish-files` pushes
 
 - **One layer per file, stored as it is** (no tar, no compression), with

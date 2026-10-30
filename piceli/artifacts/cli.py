@@ -169,7 +169,17 @@ def add_publish_files_commands(sub: Any) -> None:
         "publish-files",
         help="push local files as one OCI artifact (each file one layer, by its sha256)",
     )
-    cmd.add_argument("files", nargs="+", type=Path, metavar="FILE")
+    cmd.add_argument("files", nargs="*", type=Path, metavar="FILE")
+    cmd.add_argument(
+        "--receipt",
+        type=Path,
+        help="publish the [[output.files]] a host build receipt lists (0.39)",
+    )
+    cmd.add_argument(
+        "--output-dir",
+        type=Path,
+        help="where the receipt's files are (default: the receipt's directory)",
+    )
     cmd.add_argument("--to", required=True, help="oci://host[:port]/repository")
     cmd.add_argument("--tag", required=True, help="the artifact's tag")
     cmd.add_argument(
@@ -575,9 +585,28 @@ def run_publish_files_command(args: argparse.Namespace, **seams: Any) -> int:
     from piceli.cli_contract import EXIT_APPROVAL, emit_json, say
 
     try:
-        plan = FilesPlan.from_paths(
-            args.files, args.to, args.tag, args.artifact_type, move_tag=args.move_tag
-        )
+        receipt = getattr(args, "receipt", None)
+        if (receipt is None) == (not args.files):
+            raise PublishError(
+                "publish-invalid", "give the files or --receipt, not both"
+            )
+        if receipt is not None:
+            plan = FilesPlan.from_receipt(
+                receipt,
+                args.to,
+                args.tag,
+                args.artifact_type,
+                output_dir=getattr(args, "output_dir", None),
+                move_tag=args.move_tag,
+            )
+        else:
+            plan = FilesPlan.from_paths(
+                args.files,
+                args.to,
+                args.tag,
+                args.artifact_type,
+                move_tag=args.move_tag,
+            )
         if args.approve is None or args.approve != plan.digest:
             if args.approve is not None:
                 raise PublishError("publish-not-approved")

@@ -4,6 +4,43 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.39.0
+
+**Features**
+
+- **Plain file outputs for host builds**: `[[output.files]]` in a
+  `host-build.toml` (`name`, and `target_files` mapping a path under the
+  target directory to a file name, placeholders such as `{arch}` allowed)
+  copies each file to `files/<name>/<file name>` in the output directory
+  (`<platform>/files/…` for several platforms). A spec may declare files
+  only, with no image. The receipt (`piceli.build-receipt.v1`) lists them in
+  `outputs.files` (`{path: sha256}`, as a Docker build's receipt does) and in
+  the new `outputs.file_details` (per path: `output`, `file`, `platform`,
+  `sha256`, `size`). Specs without the section keep their digests and plan
+  hashes. See {doc}`host_builds`.
+- **`piceli artifacts publish-files --receipt RECEIPT`** publishes the files
+  a host build receipt lists (each must still have the receipt's sha256 and
+  size; `--output-dir` when they are not next to the receipt). See
+  {doc}`release_files`.
+- A deploy pipeline and `piceli build job` refuse a host build with no
+  image (`pipeline-invalid`), and a composition controller refuses
+  `[[output.files]]` (`composition-invalid`): they deliver images only.
+
+**Fixes**
+
+- The nightly retention test on kind waits for the Deployment's observed
+  generation before it trusts the rollout status (#88): the controller
+  writes the new revision before it updates the status, so the old status
+  could pass for the new revision.
+
+**CI**
+
+- The tests that run the real OpenTofu binary (marker `tofu`, the slowest
+  of the suite) run only with `PICELI_TOFU_TESTS=1`: a local `pytest -n
+  auto` skips them. CI installs OpenTofu and runs them nightly, by hand and
+  on pull requests that touch machine code (before, CI had no OpenTofu and
+  always skipped them).
+
 ## Version 0.38.1
 
 **Fixes**

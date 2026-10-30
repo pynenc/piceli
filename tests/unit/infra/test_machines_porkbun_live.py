@@ -19,11 +19,11 @@ import pytest
 from piceli.infra import DnsRecord, Infrastructure, Porkbun
 from piceli.infra.machines import credentials
 
-from .machines_support import PASSPHRASE, needs_tofu
+from .machines_support import PASSPHRASE
 
 LIVE = os.environ.get("PICELI_PORKBUN_LIVE") == "1"
 pytestmark = [
-    needs_tofu,
+    pytest.mark.tofu,
     pytest.mark.skipif(not LIVE, reason="set PICELI_PORKBUN_LIVE=1 (creates a record)"),
     pytest.mark.timeout(600),
 ]
