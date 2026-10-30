@@ -468,6 +468,93 @@ class ScratchVolume(_Volume):
         return {"emptyDir": _compact(sizeLimit=self.size_limit)}
 
 
+#: Where the init container of a :class:`FilesImage` mounts its volume.
+FILES_TARGET = "/piceli-files"
+
+
+class FilesImage(_Volume):
+    """A directory of an image, copied into the pod and mounted read-only (0.40.0).
+
+    For content-keyed files that a build puts in an image, such as a folder
+    of build outputs an app serves. It renders a disk ``emptyDir`` (as
+    :class:`ScratchVolume`) and an init container named ``files-<volume>``
+    that runs ``cp -a <path>/. /piceli-files/`` with ``image``. That init
+    container runs before the workload's own init containers, so they can
+    read the files too. Every container mounts the volume read-only. Give it
+    a ``name=`` to share one copy between mounts at different paths.
+
+    The image goes through the same steps as any container image: a build
+    handle (``images["site-builds"]``) is replaced by the delivered
+    reference, a mirrored image by its copy, and a new digest changes the
+    pod template, so the pods roll.
+
+    The image needs a ``cp`` (a pinned busybox base is enough), and the copy
+    runs once per pod start. Kubernetes image volumes (``volumes[].image``,
+    on by default only from Kubernetes 1.35) would avoid the copy; they may
+    become an option later.
+
+    :param image: Image holding the files: a build handle, ``ctx.image(...)``
+        or a reference pinned by digest.
+    :param path: Directory inside the image whose content is copied.
+    :param size_limit: Maximum size of the copy, such as ``2Gi``; counts
+        against the node's ephemeral storage.
+    :param name: Volume name; defaults to one derived from the mount path.
+    :param resources: Resources of the init container. Unset, it gets small
+        ones (:attr:`DEFAULT_RESOURCES`) when a container of the pod declares
+        resources, and none otherwise.
+
+    Example::
+
+        volumes={"/srv/builds": FilesImage(images["site-builds"], size_limit="2Gi")}
+    """
+
+    #: Resources of the init container when the pod declares any.
+    DEFAULT_RESOURCES: ClassVar[Resources] = Resources(
+        cpu="10m", memory="32Mi", cpu_limit="500m", memory_limit="128Mi"
+    )
+
+    kind: Literal["files-image"] = "files-image"
+    image: str = Field(min_length=1, pattern=r"^\S+$")
+    path: AbsolutePath = "/data"
+    size_limit: Quantity | None = None
+    resources: Resources | None = None
+
+    def __init__(self, image: str, /, **data: Any) -> None:
+        super().__init__(**{"image": image, **data})
+
+    @field_validator("path")
+    @classmethod
+    def _not_root(cls, value: str) -> str:
+        if value.rstrip("/") == "":
+            raise ValueError(
+                "path must be a directory of the image, not '/' (the whole file system)"
+            )
+        return value.rstrip("/")
+
+    def source(self) -> dict[str, Any]:
+        return {"emptyDir": _compact(sizeLimit=self.size_limit)}
+
+    @staticmethod
+    def container_name(volume_name: str) -> str:
+        """The init container's name for the volume ``volume_name``."""
+        return f"files-{volume_name}"[:63].rstrip("-")
+
+    def init_container(self, volume_name: str, resources: bool) -> dict[str, Any]:
+        """The init container that copies the files into the volume.
+
+        :param resources: Whether the pod declares resources (then the init
+            container gets :attr:`DEFAULT_RESOURCES` unless ``resources`` is set).
+        """
+        chosen = self.resources or (self.DEFAULT_RESOURCES if resources else None)
+        return _compact(
+            name=self.container_name(volume_name),
+            image=self.image,
+            command=["cp", "-a", f"{self.path}/.", f"{FILES_TARGET}/"],
+            resources=(chosen.manifest() or None) if chosen else None,
+            volumeMounts=[{"name": volume_name, "mountPath": FILES_TARGET}],
+        )
+
+
 class ExistingClaim(_Volume):
     """Mount a PersistentVolumeClaim that the release never creates, changes or deletes.
 
@@ -654,6 +741,7 @@ Volume = (
     | SecretVolume
     | MemoryVolume
     | ScratchVolume
+    | FilesImage
     | ExistingClaim
     | ClaimTemplate
 )
@@ -759,8 +847,13 @@ class Container(_Model):
             volume = item.volume if isinstance(item, Mount) else item
             name = volume.volume_name(path)
             read_only = (
-                isinstance(volume, ExistingClaim | ClaimTemplate) and volume.read_only
-            ) or (mount is not None and mount.read_only)
+                isinstance(volume, FilesImage)
+                or (
+                    isinstance(volume, ExistingClaim | ClaimTemplate)
+                    and volume.read_only
+                )
+                or (mount is not None and mount.read_only)
+            )
             result.append(
                 (
                     name,
@@ -962,6 +1055,14 @@ class Security(_Model):
         )
 
 
+#: Container settings of a :class:`FilesImage` copy, under the workload's own.
+_FILES_SECURITY = Security(
+    allow_privilege_escalation=False,
+    read_only_root_filesystem=True,
+    drop_capabilities=("ALL",),
+)
+
+
 class PodDefaults(_Model):
     """Pod settings an :class:`~piceli.app.App` applies to every workload it declares.
 
@@ -1073,7 +1174,10 @@ class Workload(_Model):
     @model_validator(mode="after")
     def _pod(self) -> Workload:
         self.check_defaults(None)
-        names = [item.name for item in (*self.init_containers, *self.containers)]
+        names = [
+            *(FilesImage.container_name(name) for name in self.files_images()),
+            *(item.name for item in (*self.init_containers, *self.containers)),
+        ]
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
             raise ValueError(f"container names must be unique in a pod: {duplicates}")
@@ -1151,11 +1255,23 @@ class Workload(_Model):
                 if isinstance(volume, ClaimTemplate):
                     continue
                 existing = result.setdefault(name, volume)
-                if existing.source() != volume.source():
+                if existing.source() != volume.source() or (
+                    isinstance(existing, FilesImage) != isinstance(volume, FilesImage)
+                    or (isinstance(volume, FilesImage) and existing != volume)
+                ):
                     raise ValueError(
                         f"volume name {name!r} is used for two different volumes; "
                         "give one of them another name="
                     )
+        return result
+
+    def files_images(self) -> dict[str, FilesImage]:
+        """:class:`FilesImage` volumes by name, in first-mount order."""
+        result: dict[str, FilesImage] = {}
+        for container in self.all_containers:
+            for name, volume, _ in container.mounts():
+                if isinstance(volume, FilesImage):
+                    result.setdefault(name, volume)
         return result
 
     def claim_templates(self) -> dict[str, ClaimTemplate]:
@@ -1227,6 +1343,18 @@ class Workload(_Model):
                 rendered["securityContext"] = dict(container_security)
             return rendered
 
+        # A FilesImage copy runs first, locked down unless the workload says
+        # otherwise field by field.
+        files_security = Security.layered(_FILES_SECURITY, security) or _FILES_SECURITY
+        declares_resources = any(item.resources for item in self.all_containers)
+        files = [
+            {
+                **volume.init_container(name, declares_resources),
+                "securityContext": files_security.container_manifest(),
+            }
+            for name, volume in self.files_images().items()
+        ]
+
         node_selector = self.node_labels(defaults)
         if node_name:
             node_selector[HOSTNAME_LABEL] = node_name
@@ -1250,7 +1378,11 @@ class Workload(_Model):
             terminationGracePeriodSeconds=grace,
             restartPolicy=restart_policy,
             nodeSelector=node_selector or None,
-            initContainers=[container(item) for item in self.init_containers] or None,
+            initContainers=[
+                *files,
+                *(container(item) for item in self.init_containers),
+            ]
+            or None,
             containers=[container(item) for item in self.containers],
             volumes=[
                 {"name": name, **volume.source()}

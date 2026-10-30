@@ -446,6 +446,63 @@ The init container fills the folder by digest and the app serves it. It renders
 `emptyDir: {sizeLimit: 2Gi}`. On disk, `size_limit` counts against the node's
 ephemeral storage: a pod that writes more is evicted.
 
+## Files from an image
+
+`FilesImage` (0.40.0) gives a pod a folder of files that a build put in an
+image, such as site builds an app serves. The files are part of the image,
+so they are keyed by its digest: a new build is a new digest, and the pods
+roll.
+
+The image only carries the files. A host build can make it from a pinned
+busybox base (see {doc}`host_builds`):
+
+```toml
+[[output.image]]
+name = "site-builds"
+repository = "shop/site-builds"
+base = { image = "docker.io/library/busybox:1.37", digest = "sha256:…" }
+shared_files = { "site" = "/data" }
+```
+
+Mount it like any volume:
+
+```python
+from piceli import Build, FilesImage
+
+images = Build.spec("host-build.toml", builder="host")
+app.deployment(
+    "web",
+    image=images["server"],
+    volumes={"/srv/builds": FilesImage(images["site-builds"], size_limit="2Gi")},
+)
+```
+
+This renders:
+
+- a disk `emptyDir` (with `sizeLimit` when `size_limit` is set), as
+  `ScratchVolume` does;
+- an init container `files-<volume>` with that image, running
+  `cp -a /data/. /piceli-files/` (`path=` picks another folder of the image).
+  It runs before the workload's own init containers, so they can read the
+  files too;
+- a read-only mount in every container that mounts the volume.
+
+The image takes the same path as any container image: a build handle becomes
+the delivered reference, a mirrored image its copy, and both are pinned by
+digest. The init container gets the workload's security settings, under
+locked-down defaults (no privilege escalation, every capability dropped,
+read-only root filesystem); when a container of the pod declares resources,
+it gets small ones too (`resources=` sets others). Give the volume a `name=`
+to share one copy between mounts at different paths.
+
+Two things to know:
+
+- The image needs a `cp`: a pinned busybox base is enough.
+- The copy runs once per pod start, so large folders slow the start.
+  Kubernetes image volumes (`volumes[].image`, on by default only from
+  Kubernetes 1.35) mount an image without a copy; they may become an option
+  later.
+
 ## Stateful workloads
 
 `app.stateful_set(...)` takes the same pod and container arguments as
@@ -752,7 +809,7 @@ documented in the API docs.
 | Containers | {py:class}`~piceli.app.model.Container`, {py:class}`~piceli.app.model.ContainerPort`, {py:class}`~piceli.app.model.Resources` |
 | Health checks | {py:class}`~piceli.app.model.Probe` (`http`, `tcp`, `exec`; also `app.probe`) |
 | Environment | `str`, {py:class}`~piceli.app.model.SecretKey`, {py:class}`~piceli.app.model.ConfigKey`, {py:class}`~piceli.app.model.FieldRef` |
-| Volumes | {py:class}`~piceli.app.model.ConfigVolume`, {py:class}`~piceli.app.model.SecretVolume`, {py:class}`~piceli.app.model.MemoryVolume`, {py:class}`~piceli.app.model.ScratchVolume`, {py:class}`~piceli.app.model.ExistingClaim`, {py:class}`~piceli.app.model.ClaimTemplate`, {py:class}`~piceli.app.model.Mount` |
+| Volumes | {py:class}`~piceli.app.model.ConfigVolume`, {py:class}`~piceli.app.model.SecretVolume`, {py:class}`~piceli.app.model.MemoryVolume`, {py:class}`~piceli.app.model.ScratchVolume`, {py:class}`~piceli.app.model.FilesImage`, {py:class}`~piceli.app.model.ExistingClaim`, {py:class}`~piceli.app.model.ClaimTemplate`, {py:class}`~piceli.app.model.Mount` |
 | HTTP routing | {py:class}`~piceli.app.kinds.Route`, {py:class}`~piceli.app.kinds.GatewayRef` |
 | Declared objects (returned handles) | {py:class}`~piceli.app.model.Deployment`, {py:class}`~piceli.app.kinds.StatefulSet`, {py:class}`~piceli.app.kinds.DaemonSet`, {py:class}`~piceli.app.kinds.Job`, {py:class}`~piceli.app.kinds.CronJob` (all {py:class}`~piceli.app.model.Workload`), {py:class}`~piceli.app.model.Service`, {py:class}`~piceli.app.model.ServicePort`, {py:class}`~piceli.app.model.Config`, {py:class}`~piceli.app.model.Secret`, {py:class}`~piceli.app.model.ServiceAccount`, {py:class}`~piceli.app.model.NetworkPolicy`, {py:class}`~piceli.app.model.NetworkRule`, {py:class}`~piceli.app.model.NetworkPeer`, {py:class}`~piceli.app.model.NetworkPort`, {py:class}`~piceli.app.kinds.Autoscaler`, {py:class}`~piceli.app.kinds.DisruptionBudget`, {py:class}`~piceli.app.kinds.Ingress`, {py:class}`~piceli.app.kinds.HttpRoute` |
 

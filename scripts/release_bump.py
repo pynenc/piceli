@@ -66,10 +66,10 @@ def main(version: str) -> int:
     )
     run = [sys.executable, "evals/run.py"]
     subprocess.run(["uv", "lock", "--offline"], cwd=ROOT, check=False)
-    subprocess.run(["uv", "run", "--frozen", "python", *run[1:], "api-surface", "--write"],
+    subprocess.run(["uv", "run", "--no-sync", "python", *run[1:], "api-surface", "--write"],
                    cwd=ROOT, check=True)  # fmt: skip
     subprocess.run(
-        ["uv", "run", "--frozen", "python", "evals/run.py", "run", "--model",
+        ["uv", "run", "--no-sync", "python", "evals/run.py", "run", "--model",
          "mock:reference", "--model", "mock:naive", "--execute", "--out",
          "evals/baselines"],
         cwd=ROOT, check=True,

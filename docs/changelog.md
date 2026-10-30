@@ -4,6 +4,33 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.40.0
+
+**Features**
+
+- **`FilesImage`, a folder of an image mounted read-only.** A content-keyed
+  folder of files (site builds, for example) can now come from an image in
+  one declaration:
+  `volumes={"/srv/builds": FilesImage(images["site-builds"], size_limit="2Gi")}`.
+  It renders a disk `emptyDir`, an init container `files-<volume>` that runs
+  `cp -a /data/. /piceli-files/` with that image (before the workload's own
+  init containers), and a read-only mount in every container. The image is
+  resolved, mirrored and pinned like any container image, so a new digest
+  rolls the pods. The init container gets the workload's security settings
+  over locked-down defaults, and small resources when the pod declares
+  resources. The image needs a `cp` (a pinned busybox base is enough); the
+  copy runs once per pod start. See {doc}`typed_apps` ("Files from an
+  image").
+
+**CI**
+
+- Pull requests that touch machine code run the OpenTofu tests again: the
+  checkout fetched one commit, so the comparison with the base failed and
+  the tests were skipped. The check now diffs the pull request's merge
+  commit against its base, and runs the tests when the diff itself fails.
+- Tool downloads in CI (OpenTofu, sops, Helm, kustomize) retry 5 times, so
+  a dropped connection no longer fails a run.
+
 ## Version 0.39.0
 
 **Features**

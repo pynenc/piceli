@@ -72,7 +72,7 @@ docs-fresh: ## Build the documentation from scratch (no cache; what CI sees)
 .PHONY: release-bump
 release-bump: ## Pin VERSION=X.Y.Z everywhere (pyproject, uv.lock, skill, snapshot, baselines)
 	@test -n "$(VERSION)" || (echo "make release-bump VERSION=X.Y.Z" >&2; exit 2)
-	uv run --frozen python scripts/release_bump.py $(VERSION)
+	uv sync --frozen --all-extras --quiet && uv run --no-sync python scripts/release_bump.py $(VERSION)
 
 .PHONY: docs-inventories
 docs-inventories: ## Refresh the committed intersphinx fallbacks in docs/_inventories

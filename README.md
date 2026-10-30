@@ -66,17 +66,15 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.39
+## What's new in 0.40
 
-- **Plain files from a host build**: `[[output.files]]` in a
-  `host-build.toml` copies binaries out of the build, per platform, with no
-  image to build and unpack. The receipt lists each file's sha256 and size,
-  and `piceli artifacts publish-files --receipt` publishes them as release
-  downloads. See the
-  [guide](https://docs.pynenc.org/projects/piceli/en/stable/host_builds.html).
-- **Faster local tests**: the tests that run the real OpenTofu binary run
-  only with `PICELI_TOFU_TESTS=1`; CI runs them nightly, on `main` and on
-  machine changes.
+- **Files from an image**: `FilesImage(images["site-builds"])` mounts a
+  folder of an image read-only in every container of a pod: an init
+  container copies it into a disk volume when the pod starts, and a new
+  image digest rolls the pods. See the
+  [guide](https://docs.pynenc.org/projects/piceli/en/stable/typed_apps.html).
+- **CI**: pull requests that touch machine code run the OpenTofu tests
+  again, and tool downloads retry.
 
 ## Web UI
 
