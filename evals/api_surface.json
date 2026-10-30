@@ -13046,12 +13046,15 @@
      "builds",
      "cache",
      "cancel",
+     "compare",
      "disable",
      "enable",
+     "history",
      "hosts",
      "rebuild",
      "release-host",
      "run",
+     "show",
      "status",
      "suspects",
      "sync",
@@ -13153,6 +13156,22 @@
     ],
     "subcommands": []
    },
+   "gitops compare": {
+    "arguments": [
+     "env",
+     "before",
+     "after"
+    ],
+    "flags": [
+     "--context",
+     "--json",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
    "gitops disable": {
     "arguments": [],
     "flags": [
@@ -13208,6 +13227,21 @@
     ],
     "subcommands": []
    },
+   "gitops history": {
+    "arguments": [
+     "env"
+    ],
+    "flags": [
+     "--context",
+     "--json",
+     "--kubeconfig",
+     "--limit",
+     "--namespace",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
    "gitops hosts": {
     "arguments": [],
     "flags": [
@@ -13257,6 +13291,22 @@
      "--namespace",
      "--once",
      "--service-account",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops show": {
+    "arguments": [
+     "run"
+    ],
+    "flags": [
+     "--context",
+     "--env",
+     "--json",
+     "--kubeconfig",
+     "--logs",
+     "--namespace",
      "--state-dir",
      "--transport"
     ],
@@ -15103,6 +15153,7 @@
    "gitops-empty",
    "gitops-env-stop-declared",
    "gitops-git-failed",
+   "gitops-history-unavailable",
    "gitops-image-unpinned",
    "gitops-image-unresolved",
    "gitops-nix-release-failed",
@@ -15116,6 +15167,7 @@
    "gitops-repo-invalid",
    "gitops-request-invalid",
    "gitops-run-interrupted",
+   "gitops-run-unknown",
    "gitops-secret-value",
    "gitops-secrets-present",
    "gitops-state-invalid",
@@ -17572,6 +17624,7 @@
   "piceli.gitops.otlp_spool",
   "piceli.gitops.ports",
   "piceli.gitops.recovery",
+  "piceli.gitops.releases",
   "piceli.gitops.repo",
   "piceli.gitops.state",
   "piceli.gitops.token_expiry",
@@ -17654,6 +17707,7 @@
   "piceli.k8s.cli.env_push",
   "piceli.k8s.cli.env_stop",
   "piceli.k8s.cli.gitops",
+  "piceli.k8s.cli.gitops_history",
   "piceli.k8s.cli.gitops_watch",
   "piceli.k8s.cli.heavy",
   "piceli.k8s.cli.host",
@@ -17899,5 +17953,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.37.1"
+ "version": "0.38.0"
 }

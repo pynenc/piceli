@@ -66,16 +66,21 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.37
+## What's new in 0.38
 
-- **Build status tells the truth about hosts**: a NixHost shows as running a
-  release only once its own agent reports it with its checks passed; until
-  then the build says "published, host not switched yet". See the
-  [guide](https://docs.pynenc.org/projects/piceli/en/latest/gitops.html).
-- **The source commit in a host build**: `{source_rev:shop}` in a
-  `build.env` value passes the full commit of a context's source to the
-  build, without changing the plan hash when only the commit moves. See the
-  [guide](https://docs.pynenc.org/projects/piceli/en/stable/host_builds.html).
+- **Deployment history on the command line**: `piceli gitops history`,
+  `gitops show RUN --logs` and `gitops compare ENV` give an agent or a
+  terminal what the web UI's Deployment history shows (runs, commits,
+  digests, checks, time windows; two releases side by side), with `--json`.
+  See the [guide](https://docs.pynenc.org/projects/piceli/en/latest/gitops.html).
+- **Release markers in your telemetry**: each finished release, from the
+  GitOps controller and from each Nix host's agent, sends one
+  `piceli.release` record with OpenTelemetry `deployment.*` names, its time
+  window and the release before it, so any backend can compare before and
+  after. See the
+  [guide](https://docs.pynenc.org/projects/piceli/en/latest/deploy_events.html).
+- **Recovery from a full node disk**: cache-clear Jobs are admitted under
+  DiskPressure, and the controller evicts a cache on such a node by itself.
 
 ## Web UI
 

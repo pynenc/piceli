@@ -6,6 +6,32 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.38.0
 
+**Features**
+
+- **`piceli gitops history`, `gitops show` and `gitops compare`**: the
+  controller's deployment history on the command line, read-only, from the
+  document the UI's Deployment history reads. `history [ENV] [--limit N]`
+  lists each environment's runs, newest first, each with `window` and
+  `release_window`; `show RUN [--logs]` is one run and the log tail it kept;
+  `compare ENV [A] [B]` puts two runs side by side (default: the running
+  release and the one before): source commits, components whose image
+  changed, objects added, removed and changed, and both windows. `--json`
+  prints `piceli.gitops-runs.v1`, `piceli.gitops-run.v1` and
+  `piceli.gitops-compare.v1`. New codes: `gitops-history-unavailable`,
+  `gitops-run-unknown`. See {doc}`gitops`.
+- **Release markers**: each finished release sends one OpenTelemetry log
+  record named `piceli.release`, from the controller (an environment deploy
+  that applied a release, a published `NixRelease`) and from each Nix host's
+  agent to the host's own `HostReport` endpoint. It carries
+  `deployment.environment.name`, `deployment.id`, `deployment.status`
+  (`succeeded`, `failed`, `rolled_back`), `service.version`,
+  `vcs.ref.head.revision`, the components it changed, its window
+  (`piceli.release.started_at`, `.finished_at`, `.seconds`) and the previous
+  release (`piceli.release.previous.*`). A rollback that ends a release
+  sends one with `rolled_back`. Existing events and attributes are
+  unchanged; the host agent's resource adds `deployment.environment.name`.
+  See {doc}`deploy_events`.
+
 **Fixes**
 
 - **A node under disk pressure that holds a Piceli cache recovers.**
