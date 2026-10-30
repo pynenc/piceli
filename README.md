@@ -66,15 +66,16 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.36
+## What's new in 0.37
 
-- **Disk-backed scratch volumes**: `ScratchVolume(size_limit="2Gi")` gives a
-  pod a scratch folder on the node's disk instead of in RAM, for example a
-  downloads folder an init container fills and the app serves. See the
-  [guide](https://docs.pynenc.org/projects/piceli/en/stable/typed_apps.html).
-- **Reused build lineages stay clean**: `piceli dev run` now removes the
-  folders a sync leaves empty, so a cargo glob member such as
-  `crates/app/*` no longer fails on a crate that was deleted.
+- **Build status tells the truth about hosts**: a NixHost shows as running a
+  release only once its own agent reports it with its checks passed; until
+  then the build says "published, host not switched yet". See the
+  [guide](https://docs.pynenc.org/projects/piceli/en/latest/gitops.html).
+- **The source commit in a host build**: `{source_rev:shop}` in a
+  `build.env` value passes the full commit of a context's source to the
+  build, without changing the plan hash when only the commit moves. See the
+  [guide](https://docs.pynenc.org/projects/piceli/en/stable/host_builds.html).
 
 ## Web UI
 
