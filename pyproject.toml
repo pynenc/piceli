@@ -1,6 +1,6 @@
 [project]
 name = "piceli"
-version = "0.38.1"
+version = "0.39.0"
 description = "Kubernetes infrastructure as typed Python: model, plan, apply and observe"
 authors = [{ name = "Luis Diaz", email = "code.luis.diaz@proton.me" }]
 license = "MIT"

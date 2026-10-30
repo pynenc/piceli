@@ -66,21 +66,17 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.38
+## What's new in 0.39
 
-- **Deployment history on the command line**: `piceli gitops history`,
-  `gitops show RUN --logs` and `gitops compare ENV` give an agent or a
-  terminal what the web UI's Deployment history shows (runs, commits,
-  digests, checks, time windows; two releases side by side), with `--json`.
-  See the [guide](https://docs.pynenc.org/projects/piceli/en/latest/gitops.html).
-- **Release markers in your telemetry**: each finished release, from the
-  GitOps controller and from each Nix host's agent, sends one
-  `piceli.release` record with OpenTelemetry `deployment.*` names, its time
-  window and the release before it, so any backend can compare before and
-  after. See the
-  [guide](https://docs.pynenc.org/projects/piceli/en/latest/deploy_events.html).
-- **Recovery from a full node disk**: cache-clear Jobs are admitted under
-  DiskPressure, and the controller evicts a cache on such a node by itself.
+- **Plain files from a host build**: `[[output.files]]` in a
+  `host-build.toml` copies binaries out of the build, per platform, with no
+  image to build and unpack. The receipt lists each file's sha256 and size,
+  and `piceli artifacts publish-files --receipt` publishes them as release
+  downloads. See the
+  [guide](https://docs.pynenc.org/projects/piceli/en/stable/host_builds.html).
+- **Faster local tests**: the tests that run the real OpenTofu binary run
+  only with `PICELI_TOFU_TESTS=1`; CI runs them nightly, on `main` and on
+  machine changes.
 
 ## Web UI
 
