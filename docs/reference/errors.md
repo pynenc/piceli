@@ -193,6 +193,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`deploy-ref-unknown`](#error-deploy-ref-unknown) | pipeline | yes |
 | [`deploy-stage-unknown`](#error-deploy-stage-unknown) | cli | no |
 | [`dev-cache-clear-failed`](#error-dev-cache-clear-failed) | dev | yes |
+| [`dev-cache-over-cap`](#error-dev-cache-over-cap) | dev | yes |
 | [`dev-command-failed`](#error-dev-command-failed) | dev | yes |
 | [`dev-host-publish-only`](#error-dev-host-publish-only) | dev | no |
 | [`dev-host-unavailable`](#error-dev-host-unavailable) | dev | no |
@@ -5251,6 +5252,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Cache clear did not finish.** The cache-clear Job of `piceli dev cache clear` ended without a result (it could not start on the builder node, or ran out of time).
 
 - **Fix:** Check `kubectl -n piceli-dev get pods` on the builder node and run it again.
+- **Retry-safe:** yes
+
+(error-dev-cache-over-cap)=
+### `dev-cache-over-cap`
+
+**Run's cache lineage over its cap.** 0.38.1: while the command ran, its lineage (the run's tree and cargo target in the shared cache) grew past its cap, the cache's budget (`cache_budget` of `cache_size`) less what the rest of the cache holds, or the cache's disk fell under 15% free while the lineage grew. The run was stopped and the lineage evicted, so the next run builds it cold. On `local-path` storage a claim's size is never enforced: without this stop one run could fill the node's disk.
+
+- **Fix:** Run again (it builds cold). If it stops again, the build needs more room than the budget gives: raise `DevBuilds(cache_size=)` or `cache_budget`, or build less at once (fewer targets or features).
 - **Retry-safe:** yes
 
 (error-dev-command-failed)=

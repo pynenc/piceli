@@ -19,9 +19,11 @@ shared cache is ``/cache`` (the ``piceli-dev-cache`` claim).
    so cargo's fingerprints rebuild only what changed.
 4. Optionally ``cargo fetch --locked``, then run the command with a deadline,
    streaming its output; parse cargo's output (crates compiled, build and
-   test phases, test counts).
-5. Print one ``PICELI-DEV-RESULT {json}`` line, copy requested artifacts
-   to ``/work/out/artifacts.tar.gz`` and wait for the client to take them.
+   test phases, test counts). 0.38.1: a lineage that grows past its cap
+   while it runs stops the run (``dev-cache-over-cap``) and is evicted.
+5. Evict to the budget again (0.38.1), print one ``PICELI-DEV-RESULT
+   {json}`` line, copy requested artifacts to ``/work/out/artifacts.tar.gz``
+   and wait for the client to take them.
 
 Importing this module is side-effect free.
 """
@@ -885,6 +887,92 @@ def evict(
     return report
 
 
+#: 0.38.1: how often a running command's cache disk is checked (statvfs),
+#: and the least time between two measurements of its lineage (``du``).
+WATCH_SECONDS = 15.0
+MEASURE_SECONDS = 60.0
+#: A lineage on a disk that looks fine is still measured this many
+#: :data:`MEASURE_SECONDS` apart (a filesystem statvfs cannot see).
+REMEASURE_FACTOR = 10
+#: Under the disk floor a run stops once its lineage grew this much.
+GROWTH_SLACK_BYTES = 1 << 30
+
+
+class CacheWatch:
+    """0.38.1: holds a run's lineage to its cap while the command runs.
+
+    ``cap`` is the budget minus what the rest of the cache held when the run
+    took its lineage. Every :data:`WATCH_SECONDS` it reads the cache's disk
+    (statvfs, cheap): the lineage's size is its last measurement plus what
+    the disk lost since. Only when that estimate passes the cap, or the disk
+    is under its floor, is the lineage measured (``du``, at most every
+    :data:`MEASURE_SECONDS`). Calling it says whether the run must stop:
+    ``stopped`` is then ``"over-cap"`` (the lineage passed its cap) or
+    ``"filesystem-low"`` (the disk is under its floor and the lineage grew
+    by :data:`GROWTH_SLACK_BYTES` in this run).
+    """
+
+    def __init__(
+        self,
+        lineage: Path,
+        cap: int,
+        start_bytes: int,
+        *,
+        min_free_ratio: float = 0.0,
+        every: float = WATCH_SECONDS,
+        measure_every: float = MEASURE_SECONDS,
+        slack: int = GROWTH_SLACK_BYTES,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.lineage = lineage
+        self.cap = cap
+        self.start_bytes = self.bytes = start_bytes
+        self.min_free_ratio = min_free_ratio
+        self.every = every
+        self.measure_every = measure_every
+        self.slack = slack
+        self.clock = clock
+        self.stopped: str | None = None
+        self.measured = 0
+        now = clock()
+        self.checked_at = self.measured_at = now
+        free, total = filesystem(lineage)
+        self.disk_used = total - free if total else None
+
+    def __call__(self) -> bool:
+        if self.stopped:
+            return True
+        now = self.clock()
+        if now - self.checked_at < self.every:
+            return False
+        self.checked_at = now
+        free, total = filesystem(self.lineage)
+        used = total - free if total else None
+        low = bool(
+            self.min_free_ratio > 0 and total and free < total * self.min_free_ratio
+        )
+        grown = (
+            max(0, used - self.disk_used)
+            if used is not None and self.disk_used is not None
+            else None
+        )
+        suspect = low or grown is None or self.bytes + grown > self.cap
+        wait = self.measure_every * (1 if suspect else REMEASURE_FACTOR)
+        if now - self.measured_at < wait:
+            return False
+        self.bytes, self.measured_at, self.disk_used = du(self.lineage), now, used
+        self.measured += 1
+        try:  # so a start-time eviction elsewhere counts its real size
+            _write_meta(self.lineage, {**_read_meta(self.lineage), "bytes": self.bytes})
+        except OSError:
+            pass
+        if self.bytes > self.cap:
+            self.stopped = "over-cap"
+        elif low and self.bytes > self.start_bytes + self.slack:
+            self.stopped = "filesystem-low"
+        return self.stopped is not None
+
+
 class Lineage:
     """A taken lineage: its directory, lock and whether it was built before."""
 
@@ -907,6 +995,16 @@ class Lineage:
         partial.write_text(json.dumps(meta))
         os.replace(partial, self.path / "meta.json")
         os.close(self.descriptor)
+
+    def drop(self) -> int:
+        """0.38.1: remove the lineage (it went over its cap) while still
+        holding it; the bytes it held."""
+        size = du(self.path)
+        try:
+            _remove_tree(self.path)
+        finally:
+            os.close(self.descriptor)
+        return size
 
 
 def take_lineage(
@@ -1314,9 +1412,10 @@ def run_command(
     timeout: float,
     emit: Callable[[str], None],
     on_line: Callable[[str], None],
+    stop: Callable[[], bool] | None = None,
 ) -> tuple[int | None, bool]:
     """Run ``command``; ``(exit code, timed out)``. Its whole group is killed
-    at the deadline."""
+    at the deadline, or (0.38.1) once ``stop()`` says so."""
     process = subprocess.Popen(
         command,
         cwd=cwd,
@@ -1349,8 +1448,9 @@ def run_command(
             if line:
                 emit(line)
                 on_line(line)
-        if time.monotonic() >= deadline and process.poll() is None:
-            timed_out = True
+        late = time.monotonic() >= deadline
+        if (late or (stop is not None and stop())) and process.poll() is None:
+            timed_out = late
             for sig in (signal.SIGTERM, signal.SIGKILL):
                 try:
                     os.killpg(process.pid, sig)
@@ -1562,6 +1662,9 @@ def main(
     )
     lineage: Lineage | None = None
     first: FirstError | None = None
+    limit: int | None = None
+    watch: CacheWatch | None = None
+    min_free = float(spec.get("cache_min_free_ratio") or 0)
     tree = work / "tree"
     collected = False
     for scratch in ("home", "tmp"):
@@ -1613,9 +1716,7 @@ def main(
         toolchain = _toolchain(spec, {**os.environ, **selected} if selected else None)
         timeline.phase("lineage")
         limit = int(spec.get("cache_max_bytes") or 1 << 62)
-        budget = evict(
-            cache, limit, min_free_ratio=float(spec.get("cache_min_free_ratio") or 0)
-        )
+        budget = evict(cache, limit, min_free_ratio=min_free)
         if budget["evicted"]:
             emit(
                 f"[piceli-dev] cache budget: evicted {len(budget['evicted'])} "
@@ -1632,6 +1733,10 @@ def main(
         if toolchain != "none":
             spec = {**spec, "lineage_key": f"{spec['lineage_key']}-{toolchain}"}
         lineage = take_lineage(cache, spec, clock)
+        # 0.38.1: the lineage's cap is the budget less what the rest of the
+        # cache held (other lineages, toolchains, cargo's home, mirrors).
+        taken_bytes = int(_read_meta(lineage.path).get("bytes") or 0)
+        cap = max(0, limit - (int(budget["used_bytes"]) - taken_bytes))
         result["cache"] = {
             "lineage": f"{lineage.path.parent.name}/{lineage.path.name}",
             "lineage_dir": str(lineage.path),
@@ -1639,6 +1744,8 @@ def main(
             "evicted": budget["evicted"],
             "used_bytes": budget["used_bytes"],
             "max_bytes": limit,
+            "cap_bytes": cap,
+            "lineage_bytes": taken_bytes,
             # 0.35.0: the whole cache counts; what eviction freed and
             # whether the cache or its disk is still over its limit.
             **{
@@ -1768,9 +1875,20 @@ def main(
         command = [str(part) for part in spec["command"]]
         emit("[piceli-dev] running " + " ".join(command))
         timeout = float(spec.get("timeout_seconds") or 3600)
-        code, timed_out = run_command(command, cwd, env, timeout, emit, seen)
+        watch = CacheWatch(
+            lineage.path,
+            cap,
+            taken_bytes,
+            min_free_ratio=min_free,
+            every=float(spec.get("cache_watch_seconds") or WATCH_SECONDS),
+            measure_every=float(spec.get("cache_measure_seconds") or MEASURE_SECONDS),
+            slack=int(spec.get("cache_growth_slack_bytes") or GROWTH_SLACK_BYTES),
+        )
+        code, timed_out = run_command(command, cwd, env, timeout, emit, seen, watch)
         crates, damage = (
-            corrupt_crates(list(building)) if code and not timed_out else ([], None)
+            corrupt_crates(list(building))
+            if code and not timed_out and not watch.stopped
+            else ([], None)
         )
         if crates or damage == "incremental":
             # 0.19: a damaged cached artifact, not the code: clear those
@@ -1800,7 +1918,7 @@ def main(
             left = max(1.0, timeout - (clock() - step))
             timeline.phase("command")
             attempt_step = clock()
-            code, timed_out = run_command(command, cwd, env, left, emit, seen)
+            code, timed_out = run_command(command, cwd, env, left, emit, seen, watch)
         elif damage:
             result["cache"]["suspect"] = {"kind": damage}
         ended = clock()
@@ -1843,7 +1961,26 @@ def main(
                     "line": next(iter(repaired.get("first_error") or ()), ""),
                     "repaired": True,
                 }
-        if timed_out:
+        result["cache"]["lineage_bytes"] = watch.bytes
+        if watch.stopped:
+            gib = 2**30
+            result["cache"].update(over_cap=True, stopped_for=watch.stopped)
+            why = (
+                f"its lineage held {watch.bytes / gib:.1f} GiB, over its cap of "
+                f"{cap / gib:.1f} GiB (the cache's budget less the rest of the cache)"
+                if watch.stopped == "over-cap"
+                else f"the cache's disk fell under {min_free:.0%} free while its "
+                f"lineage grew to {watch.bytes / gib:.1f} GiB"
+            )
+            emit(f"[piceli-dev] run stopped: {why}; the lineage is evicted")
+            result.update(
+                {
+                    "state": "error",
+                    "reason": "dev-cache-over-cap",
+                    "message": f"run stopped: {why}",
+                }
+            )
+        elif timed_out:
             result.update(state="timed-out", reason="dev-run-timed-out")
         elif code == 0:
             result["state"] = "passed"
@@ -1866,11 +2003,43 @@ def main(
         shutil.rmtree(tree, ignore_errors=True)
         shutil.rmtree(work / "in", ignore_errors=True)
         (work / "upload" / "tree.tar.gz").unlink(missing_ok=True)
+        dropped = None
         if lineage is not None:
             try:
-                lineage.release(spec.get("lineage_hint"), str(spec.get("run")))
+                if watch is not None and watch.stopped:
+                    dropped = lineage.drop()
+                else:
+                    lineage.release(spec.get("lineage_hint"), str(spec.get("run")))
             except OSError:
                 pass
+        if limit is not None and lineage is not None:
+            # 0.38.1: trim at the end of every run too, so the cache never
+            # sits over its budget until the next run starts.
+            try:
+                trim = evict(cache, limit, min_free_ratio=min_free)
+            except OSError:
+                trim = None
+            if trim is not None:
+                result["cache"]["trim"] = {
+                    key: trim[key]
+                    for key in (
+                        "evicted",
+                        "freed_bytes",
+                        "used_bytes",
+                        "over_budget",
+                        "fs_free_bytes",
+                        "fs_low",
+                    )
+                }
+                if dropped is not None:
+                    result["cache"]["trim"]["dropped_bytes"] = dropped
+                if trim["evicted"]:
+                    emit(
+                        f"[piceli-dev] cache budget after the run: evicted "
+                        f"{len(trim['evicted'])} lineage(s), "
+                        f"{trim['freed_bytes'] / 2**30:.1f} GiB "
+                        f"({trim.get('evicted_for')})"
+                    )
     if result["state"] != "passed":
         result["log_tail"] = list(tail)
         if first is not None and first.lines:

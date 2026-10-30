@@ -76,6 +76,9 @@ def queue_lines(status: dict[str, Any] | None) -> list[str]:
             f"{pressure.get('since')}: runs cannot start there; "
             "piceli dev cache clear frees the cache"
         )
+    held = status.get("held")
+    if held and held.get("cause") != "node-disk-pressure":
+        lines.append(f"runs held: {held.get('message')}")  # 0.38.1
     return lines
 
 

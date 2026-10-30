@@ -412,3 +412,151 @@ def test_a_new_run_says_the_queue_cache_and_node_state_at_once() -> None:
         "cannot start there; piceli dev cache clear frees the cache",
     ]
     assert queue_lines(None) == []
+
+
+# ------------------------------------------------------- 0.38.1: during a run
+
+
+def test_a_lineage_growing_past_its_cap_stops_the_run_and_is_evicted(
+    tmp_path: Path,
+) -> None:
+    import time
+
+    from tests.unit.dev.test_pod import _archive, _run, _spec
+
+    data = _archive({"app/a.txt": "x"})
+    grow = 'head -c 4000000 /dev/zero > "$CARGO_TARGET_DIR/blob"; sleep 30'
+    spec = _spec(
+        data,
+        ["sh", "-c", grow],
+        cache_max_bytes=1_000_000,
+        cache_watch_seconds=0.05,
+        cache_measure_seconds=0.05,
+    )
+    began = time.monotonic()
+    result, lines = _run(tmp_path, data, spec)
+    assert time.monotonic() - began < 20  # stopped, not the 30 s sleep
+    assert result["state"] == "error" and result["reason"] == "dev-cache-over-cap"
+    cache = result["cache"]
+    assert cache["over_cap"] is True and cache["stopped_for"] == "over-cap"
+    assert cache["cap_bytes"] <= 1_000_000 < cache["lineage_bytes"]
+    assert not Path(cache["lineage_dir"]).exists()  # evicted right after
+    assert cache["trim"]["dropped_bytes"] > cache["cap_bytes"]
+    assert cache["trim"]["over_budget"] is False
+    assert any(line.startswith("[piceli-dev] run stopped") for line in lines)
+
+
+def test_the_watch_measures_only_when_the_disk_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lineage = _lineage(tmp_path / "cache", "app-rust/0", 4096)
+    disk = {"used": 1000}
+    clock = {"now": 0.0}
+    monkeypatch.setattr(pod, "filesystem", lambda _p: (10**9 - disk["used"], 10**9))
+    watch = pod.CacheWatch(
+        lineage, 100_000, 4096, every=1, measure_every=5, clock=lambda: clock["now"]
+    )
+    for now in (1, 2, 3):  # the disk does not move: no du
+        clock["now"] = now
+        assert watch() is False
+    disk["used"] += 200_000  # the disk lost more than the cap leaves
+    clock["now"] = 4
+    assert watch() is False and watch.measured == 0  # du at most every 5 s
+    clock["now"] = 6
+    # du: another run used that disk, this lineage still fits.
+    assert watch() is False and watch.measured == 1 and watch.bytes < 100_000
+    (lineage / "target" / "more").write_bytes(b"x" * 200_000)
+    disk["used"] += 200_000
+    clock["now"] = 12
+    assert watch() is True and watch.stopped == "over-cap" and watch.bytes > 100_000
+    assert json.loads((lineage / "meta.json").read_text())["bytes"] == watch.bytes
+
+
+def test_every_run_trims_the_cache_to_its_budget_when_it_ends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.unit.dev.test_pod import _archive, _run, _spec
+
+    old = _lineage(tmp_path / "cache", "other-rust/0", 4096, last_used=1, bytes=4096)
+    full = tmp_path / "full"  # the command fills the disk
+    monkeypatch.setattr(
+        pod, "filesystem", lambda _p: (10 if full.exists() else 90, 100)
+    )
+    original = pod._remove_tree
+
+    def remove(path: Path) -> None:
+        original(path)
+        full.unlink(missing_ok=True)  # evicting frees it again
+
+    monkeypatch.setattr(pod, "_remove_tree", remove)
+    data = _archive({"app/a.txt": "x"})
+    spec = _spec(data, ["touch", str(full)], cache_min_free_ratio=0.15)
+    result, lines = _run(tmp_path, data, spec)
+    assert result["state"] == "passed" and result["cache"]["evicted"] == []
+    trim = result["cache"]["trim"]
+    assert trim["evicted"] == ["other-rust/0"] and not old.exists()
+    assert trim["fs_low"] is False and Path(result["cache"]["lineage_dir"]).exists()
+    assert any("cache budget after the run" in line for line in lines)
+
+
+def test_the_scheduler_holds_runs_while_the_cache_is_over_budget() -> None:
+    from piceli.dev.client import queue_lines
+    from piceli.dev.scheduler import Scheduler
+    from tests.unit.dev.test_scheduler import FakePort, _dev, job
+
+    def over(flag: bool) -> dict[str, Any]:
+        trim = {"used_bytes": 70 * GiB if flag else 40 * GiB, "over_budget": flag}
+        return {
+            "state": "passed",
+            "cache": {"used_bytes": 50 * GiB, "max_bytes": 64 * GiB, "trim": trim},
+        }
+
+    def finish(port: FakePort, run: str) -> None:
+        for item in port.items:
+            if item["metadata"]["labels"]["piceli.io/dev-run"] == run:
+                item["status"]["conditions"] = [{"type": "Complete", "status": "True"}]
+
+    port = FakePort(
+        [
+            job("done", suspend=False, done="Complete"),
+            job("busy", suspend=False),
+            job("q1", created="2026-10-08T07:00:01Z"),
+            job("q2", created="2026-10-08T07:00:02Z"),
+        ],
+        {"done": over(True), "busy": over(True), "q1": over(False)},
+    )
+    said: list[str] = []
+    scheduler = Scheduler(port, _dev(4), clock=lambda: 1000.0, say=said.append)
+    status = scheduler.tick()
+    # Over budget after the last run's trim: nothing starts beside "busy".
+    assert port.unsuspended == [] and status["held"]["cause"] == "cache-over-budget"
+    assert status["cache"]["used_bytes"] == 70 * GiB
+    assert any(line.startswith("dev scheduler: runs held") for line in said)
+    assert queue_lines(status)[-1].startswith("runs held: the cache holds 70.0 GiB")
+    finish(port, "busy")
+    scheduler.tick()  # none running: one run starts and trims at its start
+    assert port.unsuspended == ["q1"]
+    scheduler.tick()
+    assert port.unsuspended == ["q1"]  # one at a time
+    finish(port, "q1")
+    status = scheduler.tick()  # q1 left the cache under budget
+    assert port.unsuspended == ["q1", "q2"] and "held" not in status
+
+
+def test_the_scheduler_starts_nothing_on_a_node_under_disk_pressure() -> None:
+    from piceli.dev.scheduler import Scheduler
+    from tests.unit.dev.test_scheduler import FakePort, _dev, job
+
+    class Pressed(FakePort):
+        def node(self, name: str) -> dict[str, Any]:
+            return {
+                "metadata": {"name": name},
+                "status": {
+                    "allocatable": {"cpu": "8", "memory": "16Gi"},
+                    "conditions": [{"type": "DiskPressure", "status": "True"}],
+                },
+            }
+
+    port = Pressed([job("q1")])
+    status = Scheduler(port, _dev(2), clock=lambda: 1000.0).tick()
+    assert port.unsuspended == [] and status["held"]["cause"] == "node-disk-pressure"

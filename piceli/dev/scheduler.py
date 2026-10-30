@@ -15,6 +15,12 @@ tick the scheduler:
    and the cache use, plus ``scheduler_at`` (clients suspend their Jobs only
    while it is recent).
 
+0.38.1: while the last reported cache use is over its budget or its disk
+under the floor, the queue starts one run at a time and only when none is
+running (its start-time eviction trims the cache, which only free lineages
+allow); while the builder node is under disk pressure it starts none. The
+status says so in ``held``. The scheduler never creates a Job.
+
 It runs as a thread of the GitOps controller (``piceli gitops run``), or as
 ``piceli dev schedule``. Importing this module is side-effect free.
 """
@@ -177,10 +183,15 @@ class Scheduler:
         self._slots: tuple[float, int] | None = None
         #: 0.35.0: the node's DiskPressure condition while it holds.
         self.node_pressure: dict[str, Any] | None = None
+        self._held: dict[str, Any] | None = None
 
     def record(self, entry: dict[str, Any]) -> None:
         self.recent.appendleft(entry)
-        cache = entry.get("cache") or {}
+        cache = dict(entry.get("cache") or {})
+        # 0.38.1: what the run left after its end-of-run trim, when it has it.
+        trim = cache.get("trim")
+        if isinstance(trim, Mapping) and isinstance(trim.get("used_bytes"), int):
+            cache.update(trim)
         used = cache.get("used_bytes")
         if isinstance(used, int):
             self.cache = {
@@ -199,6 +210,29 @@ class Scheduler:
                     if key in cache
                 },
             }
+
+    def held(self) -> dict[str, Any] | None:
+        """0.38.1: why new runs are held back (``cause``, ``message``), or
+        ``None``: the node under disk pressure, else the last reported cache
+        use over its budget or its disk under the floor."""
+        if self.node_pressure:
+            return {
+                "cause": "node-disk-pressure",
+                "message": f"node {self.node_pressure.get('node')} is under disk "
+                "pressure; piceli dev cache clear frees the cache",
+            }
+        if self.cache.get("over_budget") or self.cache.get("fs_low"):
+            gib = 2**30
+            used = int(self.cache.get("used_bytes") or 0)
+            limit = int(self.cache.get("max_bytes") or 0)
+            return {
+                "cause": "cache-over-budget",
+                "message": f"the cache holds {used / gib:.1f} GiB of a "
+                f"{limit / gib:.1f} GiB budget"
+                + (", its disk is nearly full" if self.cache.get("fs_low") else "")
+                + "; one run at a time until a run's eviction trims it",
+            }
+        return None
 
     def slots(self) -> int:
         now = self.clock()
@@ -288,7 +322,15 @@ class Scheduler:
                 running.append(job)
         slots = self.slots()
         waiting = order(queued, running)
-        for job in waiting[: max(0, slots - len(running))]:
+        held = self.held()
+        free = max(0, slots - len(running))
+        if held is not None:
+            # 0.38.1: one run at a time, none under disk pressure.
+            free = 0 if held["cause"] == "node-disk-pressure" or running else 1
+            if waiting and held != self._held:
+                self.say(f"dev scheduler: runs held: {held['message']}")
+        self._held = held
+        for job in waiting[:free]:
             self.port.unsuspend(run_of(job))
             job["spec"]["suspend"] = False
             running.append(job)
@@ -314,6 +356,7 @@ class Scheduler:
             **(
                 {"node_disk_pressure": self.node_pressure} if self.node_pressure else {}
             ),
+            **({"held": held} if held else {}),
         }
         self.port.publish(document)
         return document
