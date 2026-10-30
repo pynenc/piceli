@@ -1777,6 +1777,46 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(cycle-options-invalid). Without --kubeconfig/--context or "
             "--state-dir the controller is not read.",
         ),
+        "gitops history": _C(
+            "List each environment's deploy runs from the controller's "
+            "deployment history, newest first: outcome, trigger, commits, "
+            "digests per component, checks, stage and cycle times, and the "
+            "run's and the release's time windows.",
+            reads=("kubeconfig or --state-dir", "the controller's history"),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.38.0. Read-only; the document the UI's Deployment history "
+            "reads. --json prints piceli.gitops-runs.v1 (each run is the "
+            "piceli.gitops-history.v1 entry with window and release_window). "
+            "No history yet: gitops-history-unavailable; an unknown ENV: "
+            "gitops-run-unknown.",
+        ),
+        "gitops show": _C(
+            "Show one deploy run of the controller's history (its id or "
+            "run_id, or a unique prefix); --logs adds the log tail it kept.",
+            reads=("kubeconfig or --state-dir", "the controller's history"),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.38.0. Read-only. --json prints piceli.gitops-run.v1 (env, "
+            "run; logs and logs_note with --logs). The controller keeps only "
+            "the redacted log tail of a failed build. An unknown or ambiguous "
+            "run: gitops-run-unknown.",
+        ),
+        "gitops compare": _C(
+            "Compare two deploy runs of an environment, by default the running "
+            "release and the one before it: source commits, components whose "
+            "image changed, objects added, removed and changed, and both time "
+            "windows.",
+            reads=("kubeconfig or --state-dir", "the controller's history"),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.38.0. Read-only. --json prints piceli.gitops-compare.v1. "
+            "Field values are not in the controller's history (fields.available "
+            "false); fewer than two runs: gitops-run-unknown.",
+        ),
         "gitops suspects": _C(
             "List the deployed images a build host (or the builder node) built, "
             "in every environment and component, from the provenance the "

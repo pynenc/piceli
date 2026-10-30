@@ -4651,6 +4651,22 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "gitops",
     ),
     _E(
+        "gitops-history-unavailable",
+        "No deployment history",
+        "`piceli gitops history`, `show` or `compare` found no `piceli.gitops-history.v1` document: the controller has not published its history yet (the ConfigMap `piceli-gitops-history`, or `history.json` in `--state-dir`), or it is not a composition controller.",
+        "Wait for the controller's next poll and check `piceli gitops status`; the history is published after each step.",
+        True,
+        "gitops",
+    ),
+    _E(
+        "gitops-run-unknown",
+        "Run or environment not in the history",
+        "The environment, run id or revision is not in the controller's published history (it keeps the newest 20 runs per environment), or `compare` found fewer than two runs to compare.",
+        "List what the history holds with `piceli gitops history [ENV]` and pass a run's `id` or `run_id` (a unique prefix works).",
+        False,
+        "gitops",
+    ),
+    _E(
         "gitops-alarm-failed",
         "Controller alarm not sent",
         "A target of `Controller(alarms=Alarms(...))` (ntfy or a webhook) refused the alarm, timed out, or its URL or token variable is unset (the key is missing from the `Alarms(secret=)` Secret). The poll and the deploys go on; the failure is listed under `controller.alarms.failures` in the status.",

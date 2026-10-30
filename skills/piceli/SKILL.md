@@ -201,6 +201,13 @@ owner), `pipeline-registry-takeover-required` (ask the owner),
 `exec-auth-not-allowed` (ask the owner), `check-failed` (report the failed
 checks; an automatic rollback may already have run).
 
+With the GitOps controller, read what its deploys did (read-only):
+`piceli gitops history [ENV] --json` (each run's outcome, commits, digests,
+checks and `release_window`), `piceli gitops show RUN --logs --json` (one
+run and the log tail it kept) and `piceli gitops compare ENV --json` (the
+running release against the one before: commits, changed images, objects).
+To check telemetry before and after a release, use its `release_window`.
+
 ## 7. Resume an interrupted or failed run
 
 ```sh
@@ -282,7 +289,7 @@ tell the owner, do not retry. A failed check's reason is in `failed_checks`.
 `python scripts/diagnose.py …`, `python scripts/rollback.py …` without
 `--approve` (it only plans), `piceli infra status|plan` (plan never changes a
 resource), `piceli bundle … [--helm] --out DIR` (local files only, no secret value),
-`piceli dev status|logs`, and `piceli dev run` where the owner declared
+`piceli dev status|logs`, `piceli gitops status|history|show|compare`, and `piceli dev run` where the owner declared
 `dev=DevBuilds(...)` (section 9).
 
 ## Never do without the owner's approval

@@ -14,6 +14,8 @@
 - ``promote [ENV] BRANCH@SHA`` asks the controller to deploy that commit to
   main, or to the named environment ENV (it then waits for ``gitops
   approve`` unless the owner allowed otherwise).
+- ``gitops history [ENV]``, ``gitops show RUN`` and ``gitops compare ENV``
+  (0.38.0, :mod:`piceli.k8s.cli.gitops_history`) read the deployment history.
 - ``gitops run`` is the controller itself (the Deployment's entrypoint), or
   one poll locally with ``--once``.
 
@@ -2715,6 +2717,7 @@ def _pause(
 
 def register(root: typer.Typer) -> None:
     """Add ``gitops`` and ``promote`` to the root application."""
+    import piceli.k8s.cli.gitops_history
     import piceli.k8s.cli.gitops_watch  # noqa: F401 - adds `gitops alarms`
 
     root.add_typer(app, name="gitops")

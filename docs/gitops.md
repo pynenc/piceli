@@ -1769,6 +1769,53 @@ the runs: `kind` (`stop`, `start`, `teardown`), `action` (the same), `state`
 `via`, `at`). A torn-down branch environment keeps its entries in the
 history (the newest 20 such environments).
 
+#### The history on the command line: `gitops history`, `show`, `compare` (0.38.0)
+
+The same history, from a terminal or an agent. Each command reads it as
+`gitops status` reads the status (`--kubeconfig` and `--context`, or
+`--state-dir`), changes nothing, and prints one JSON object with `--json`:
+
+```console
+$ piceli gitops history main --limit 2 --kubeconfig kc --context prod
+main: 2 run(s)
+  20261030T100000Z-1a2b  deployed; rolled web  2026-10-30T10:00:00Z .. 2026-10-30T10:06:10Z (6m 10s)
+    trigger push shop/main
+    sources shop@3f2a91c07d4e
+    components web sha256:9b1e0c2d3f, worker sha256:77ab01c2d3
+    checks 6/6 passed
+  ...
+$ piceli gitops show 20261030T1000 --logs --kubeconfig kc --context prod
+$ piceli gitops compare main --kubeconfig kc --context prod
+```
+
+| Command | JSON (`schema`) | Top-level fields |
+| --- | --- | --- |
+| `gitops history [ENV] [--limit N]` | `piceli.gitops-runs.v1` | `history_schema`, `generated_at`, `truncated`, `environments` (`name`, `runs`) |
+| `gitops show RUN [--env ENV] [--logs]` | `piceli.gitops-run.v1` | `env`, `run`; with `--logs` also `logs` (`source`, `attempt`, `at`, `reason`, `text`) and `logs_note` |
+| `gitops compare ENV [A] [B]` | `piceli.gitops-compare.v1` | `env`, `before`, `after`, `sources`, `components`, `images_changed`, `resources` (`added`, `removed`, `changed`, `partial`), `fields` |
+
+- A run is the history's own entry (`piceli.gitops-history.v1`, above) with
+  two windows added, each `started_at`, `finished_at` and `seconds`:
+  `window` (the run, from its first step to its end) and `release_window`
+  (from the start of its apply to its end, its checks settled; the run's
+  start when it applied nothing). The release marker the controller sends
+  over OpenTelemetry carries the same window ({doc}`deploy_events`).
+- `RUN` is a run's `id` or `run_id`, or a unique start of one.
+- `compare` without runs takes the running release and the one before it.
+  With one run, it compares that run with the running release. `before` and
+  `after` hold each run's identity, release, plan hashes, both windows and
+  `checks_passed`. `resources` adds up the plans of the runs after `before`
+  up to `after` (an object added and then removed is in neither list;
+  `partial` when a plan was longer than the history keeps).
+- `--logs` prints what the controller keeps: the redacted log tail of a
+  failed build and of the revision's earlier failed attempts. The output of
+  running workloads is in `piceli logs`.
+- The history keeps object kinds and names, never field values, so
+  `compare` lists no before/after values (`fields.available` is `false`);
+  the UI's Compare revisions shows them for plans the UI saved.
+- No history yet: `gitops-history-unavailable`. An environment or run the
+  history does not hold, or fewer than two runs: `gitops-run-unknown`.
+
 (gitops-cycle-report)=
 
 #### Cycle report (0.28.0)
@@ -1823,7 +1870,9 @@ controller's release of the same commit when the report has it.
 
 #### Compatibility of the documents
 
-`piceli.gitops-status.v1` and `piceli.gitops-history.v1` change only
+`piceli.gitops-status.v1` and `piceli.gitops-history.v1` (and, from
+0.38.0, `piceli.gitops-runs.v1`, `piceli.gitops-run.v1` and
+`piceli.gitops-compare.v1`) change only
 **additively** within v1: a release adds fields, and never removes, renames
 or changes the type or meaning of one. A tool that reads them keeps working
 across Piceli releases as long as it ignores fields it does not know. A test

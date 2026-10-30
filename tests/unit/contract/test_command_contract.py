@@ -729,6 +729,15 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["gitops", "rebuild", "--host", "Not_A_Host", "--state-dir", str(p)],
         "gitops-request-invalid",
     ),
+    "gitops history": (
+        lambda p: ["gitops", "history", "--state-dir", str(p)],
+        "gitops-history-unavailable",
+    ),
+    "gitops show": (lambda p: ["gitops", "show", "r-1"], "gitops-target-required"),
+    "gitops compare": (
+        lambda p: ["gitops", "compare", "main", "--state-dir", str(p)],
+        "gitops-history-unavailable",
+    ),
     "gitops hosts": (lambda p: ["gitops", "hosts"], "gitops-target-required"),
     "gitops alarms": (lambda p: ["gitops", "alarms"], "gitops-target-required"),
     "gitops release-host": (

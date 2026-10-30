@@ -645,7 +645,8 @@ registered codes, check names and their short detail and timings: never a
 field value, a Secret, a kubeconfig or process output beyond the build log
 tail the status already shows. The JSON is available at
 `GET /api/v1/composition/history` and
-`GET /api/v1/composition/environments/ENV/history`.
+`GET /api/v1/composition/environments/ENV/history`. On the command line, `piceli gitops history`, `gitops show` and
+`gitops compare` (0.38.0) read the same document ({doc}`gitops`).
 
 ```{image} _static/ui/named-environment-approve.png
 :alt: Approval review of an exact pending plan hash in a named environment

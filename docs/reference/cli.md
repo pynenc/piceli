@@ -83,12 +83,15 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli gitops builds`](#cli-gitops-builds) | List every build the controller knows (NixRelease publishes, image builds, train handoffs): trigger, commit, host, stage, log tail, targets. | reads | no |
 | [`piceli gitops cache clear`](#cli-gitops-cache-clear) | Ask the controller to empty its build cache (a corrupted cargo cache). | writes | no |
 | [`piceli gitops cancel`](#cli-gitops-cancel) | Cancel NAME's queued or running build: unclaimed it is dropped, claimed the build host stops at its next stage. | writes | no |
+| [`piceli gitops compare`](#cli-gitops-compare) | Two runs side by side: commits, changed images, objects, time windows. | reads | no |
 | [`piceli gitops disable`](#cli-gitops-disable) | Remove the controller (plan first; --approve HASH removes). Never an environment. | writes | yes |
 | [`piceli gitops enable`](#cli-gitops-enable) | Install the GitOps controller (plan first; --approve HASH installs). | writes | yes |
+| [`piceli gitops history`](#cli-gitops-history) | Each environment's deploy runs, newest first, with their time windows. | reads | no |
 | [`piceli gitops hosts`](#cli-gitops-hosts) | The health events and quarantine the controller recorded per build host. | reads | no |
 | [`piceli gitops rebuild`](#cli-gitops-rebuild) | Ask the controller to rebuild the images a host built and deploy them. | writes | no |
 | [`piceli gitops release-host`](#cli-gitops-release-host) | Ask the controller to forget a build host's health events (end its quarantine). | writes | no |
 | [`piceli gitops run`](#cli-gitops-run) | Run the controller loop (the Deployment's entrypoint); --once for one poll. | writes | no |
+| [`piceli gitops show`](#cli-gitops-show) | One deploy run: outcome, commits, digests, checks, stages, failure. | reads | no |
 | [`piceli gitops status`](#cli-gitops-status) | Controller health, repository, last poll and every branch's state. | reads | no |
 | [`piceli gitops suspects`](#cli-gitops-suspects) | List the deployed images a build host (or node) built, in every environment. | reads | no |
 | [`piceli gitops sync`](#cli-gitops-sync) | Ask the controller to deploy ENV now at its revision (--component: rebuild one). | writes | no |
@@ -1870,6 +1873,34 @@ Cancel NAME's queued or running build: unclaimed it is dropped, claimed the buil
 - **Output contract:** conforms
 - **Notes:** 0.26.0. Unclaimed, the build is dropped; claimed, the build host stops at its next stage and its answer is refused. A cancelled image build fails its step until piceli gitops sync; a cancelled publish waits for a newer tag, a sync or a build. Nothing running: gitops-build-not-running in gitops status.
 
+(cli-gitops-compare)=
+### `piceli gitops compare`
+
+Two runs side by side: commits, changed images, objects, time windows.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `ENV` | text | required |  |
+| `BEFORE` | text |  |  |
+| `AFTER` | text |  |  |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir, the controller's history
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.38.0. Read-only. --json prints piceli.gitops-compare.v1. Field values are not in the controller's history (fields.available false); fewer than two runs: gitops-run-unknown.
+
 (cli-gitops-disable)=
 ### `piceli gitops disable`
 
@@ -1949,6 +1980,33 @@ Install the GitOps controller (plan first; --approve HASH installs).
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
 - **Notes:** Reads the pipeline's named environments and idle_stop from the working tree (--root, default .) into the controller config (gitops-pipeline-invalid when the file is there and does not load). Without --approve prints the install plan (Namespace, ServiceAccount, scoped Role/ClusterRole and bindings, state PersistentVolumeClaim, config ConfigMap, one-replica Deployment) and its hash, exit 3. --image must be pinned by digest (gitops-image-unpinned); --repo must carry no credentials (gitops-repo-invalid): they come from the Secret named by --credentials-secret, which is mounted and never read or printed. A changed plan is refused (gitops-plan-changed). Given a composition module (infra.py, no :ATTR) the controller config holds every source, component and environment of it instead (composition-invalid when it does not load); without --kubeconfig the composition's Cluster credentials profile is used. 0.28.0, --wait: after the install, waits until every environment runs its revision with its checks passed (exit 0), reports the first failure (environment, stage, reason code, log tail; a composition that does not import; exit 1) or the timeout (gitops-wait-timeout, exit 2); progress lines on stderr, the result under wait in the JSON. 0.28.0, --canary (with --approve, a composition): before the plan replaces a running controller, runs the new image once as a Job (gitops canary: scratch state, its own ConfigMap, plan only) that imports the composition, resolves every environment, loads its builds and plans it; a failure refuses the replacement (gitops-canary-failed, exit 2) unless --force; the Job and its ConfigMap are removed when it ends; the result under canary in the JSON. `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
+
+(cli-gitops-history)=
+### `piceli gitops history`
+
+Each environment's deploy runs, newest first, with their time windows.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `ENV` | text |  |  |
+| `--limit` | integer | `20` | Runs per environment (newest) |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir, the controller's history
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.38.0. Read-only; the document the UI's Deployment history reads. --json prints piceli.gitops-runs.v1 (each run is the piceli.gitops-history.v1 entry with window and release_window). No history yet: gitops-history-unavailable; an unknown ENV: gitops-run-unknown.
 
 (cli-gitops-hosts)=
 ### `piceli gitops hosts`
@@ -2054,6 +2112,34 @@ Run the controller loop (the Deployment's entrypoint); --once for one poll.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Deploys branch environments without a per-run approval: only inside the pipeline's auto_approve policy, or a plan hash approved with gitops approve; main only on a new tag or a promotion, and only with an approved hash unless the owner enabled --main-auto-approve; a named environment by its own trigger (Branch, Tag, Promote) and with an approved hash unless it declares auto_approve=True. Scales a branch environment idle for EnvConfig(idle_stop=...) to zero. One step at a time, bounded retries with backoff; a failing branch never stops the others. Git output and credentials are never printed. A composition controller polls every source, builds only the components whose source digest changed (a build Job, or this machine with --local-build) and rolls only those.
+
+(cli-gitops-show)=
+### `piceli gitops show`
+
+One deploy run: outcome, commits, digests, checks, stages, failure.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `RUN` | text | required |  |
+| `--env` | text |  | Look in this environment only |
+| `--logs` | boolean | `False` | Also print the log tail the run kept |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir, the controller's history
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.38.0. Read-only. --json prints piceli.gitops-run.v1 (env, run; logs and logs_note with --logs). The controller keeps only the redacted log tail of a failed build. An unknown or ambiguous run: gitops-run-unknown.
 
 (cli-gitops-status)=
 ### `piceli gitops status`
