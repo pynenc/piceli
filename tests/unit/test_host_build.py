@@ -481,3 +481,62 @@ def test_buildx_images_take_their_labels(tmp_path: Path) -> None:
     (image,) = spec.images
     argv = spec.invocation("linux/arm64", "image", image=image)
     assert argv[argv.index("--label") + 1] == "org.opencontainers.image.licenses=MIT"
+
+
+def _source_rev_project(project: Path) -> Path:
+    """``project`` as a git source ``shop`` whose context ``shop`` stages
+    ``src``, with ``APP_BUILD_REV = "{source_rev:shop}"`` (0.37)."""
+    from tests.unit.test_source_identity import git
+
+    root = project.parent
+    (root / "inputs.toml").write_text('[[source]]\nname = "shop"\npath = "."\n')
+    text = project.read_text()
+    text = text.replace(
+        '[context.src]\npath = "src"',
+        '[context.shop]\nsource = "shop"\npath = "src"\ninto = "src"',
+    )
+    text = text.replace(
+        'env = { LG_PAGE = "{page_size_log2}" }',
+        'env = { LG_PAGE = "{page_size_log2}", APP_BUILD_REV = "{source_rev:shop}" }',
+    )
+    text = text.replace('name = "shop"\n', 'name = "shop"\ninputs = "inputs.toml"\n', 1)
+    project.write_text(text)
+    git(root, "init", "-q", "-b", "main")
+    git(root, "add", ".")
+    git(root, "commit", "-q", "-m", "one")
+    return project
+
+
+def test_source_rev_reaches_the_env_but_not_the_plan_hash(
+    project: Path, tmp_path: Path
+) -> None:
+    from tests.unit.test_source_identity import git
+
+    path = _source_rev_project(project)
+    root = path.parent
+    first = spec(path, tmp_path / "cache").plan()
+    assert first.env["APP_BUILD_REV"] == "{source_rev:shop}"
+    (root / "README.md").write_text("notes\n")  # outside the staged context
+    git(root, "add", ".")
+    git(root, "commit", "-q", "-m", "two")
+    commit = git(root, "rev-parse", "HEAD")
+    item = spec(path, tmp_path / "cache")
+    second = item.plan()
+    assert second.plan_hash == first.plan_hash  # only the commit changed
+    runner = Recorder()
+    grant = HostBuildGrant(second.plan_hash, time.time() + 600)
+    item.run(grant, tmp_path / "out", runner=runner)
+    assert runner.env[0]["APP_BUILD_REV"] == commit and len(commit) == 40
+
+
+def test_source_rev_must_name_a_context_with_a_source(project: Path) -> None:
+    text = project.read_text()
+    project.write_text(text.replace('"{page_size_log2}"', '"{source_rev:api}"'))
+    with pytest.raises(BuildSpecError, match="unknown context; declared: src"):
+        HostBuildSpec.from_toml(project)
+    project.write_text(text.replace('"{page_size_log2}"', '"{source_rev:src}"'))
+    with pytest.raises(BuildSpecError, match="names no source"):
+        HostBuildSpec.from_toml(project)
+    project.write_text(text.replace('"{page_size_log2}"', '"{source_revision}"'))
+    with pytest.raises(BuildSpecError, match="may be in braces"):
+        HostBuildSpec.from_toml(project)

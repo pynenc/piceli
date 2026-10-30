@@ -134,6 +134,29 @@ time:
 env = { JEMALLOC_SYS_WITH_LG_PAGE = "{page_size_log2}" }
 ```
 
+(host-builds-source-rev)=
+### The source commit in `build.env` (0.37.0)
+
+A `build.env` value may also use `{source_rev:<context>}`: the full commit
+of the source the named context reads (its `source`, from `inputs`). It
+lets a program know the commit it was built from:
+
+```toml
+env = { APP_BUILD_REV = "{source_rev:shop}" }
+
+[context.shop]
+source = "shop"
+path = "."
+include = ["src/**"]
+```
+
+Piceli fills it in when the build runs, after the plan hash: a new commit
+that changes none of the staged files keeps the same plan hash, so it needs
+no new approval. The plan and its preview
+show the placeholder, not the commit. The name must be a declared context
+that names a source; anything else fails when the file is loaded. Only
+`build.env` values accept it.
+
 ## `host-build.toml`
 
 ```toml

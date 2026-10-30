@@ -16,6 +16,15 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `not-switched-yet` (the CLI prints "published, host not switched yet");
   after it, `switched`.
 
+**Features**
+
+- **`{source_rev:<context>}` in a host build's `env`.** A `build.env`
+  value can carry the full commit of the source a context reads, for
+  example `APP_BUILD_REV = "{source_rev:shop}"`. It is filled in when the
+  build runs, after the plan hash, so a commit that changes no staged file
+  keeps the same plan. An unknown context, or one without a source, fails
+  when the file is loaded. See {ref}`host builds <host-builds-source-rev>`.
+
 ## Version 0.36.0
 
 **Fixes**
