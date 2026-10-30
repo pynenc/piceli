@@ -41,7 +41,7 @@ them at a shared cluster.
 
 Tests marked `tofu` run the real OpenTofu binary and are the slowest: they are
 skipped unless `PICELI_TOFU_TESTS=1` (with `tofu` on `PATH` or `$PICELI_TOFU`).
-CI runs them nightly, by hand, on `main` and on pull requests that touch machine code.
+CI runs them nightly, by hand and on pull requests that touch machine code.
 
 ## Working on the web UI
 

@@ -53,8 +53,8 @@ jobs:
           cache-dependency-glob: uv.lock
       - run: uv sync --all-extras --python ${{ matrix.python }}
       # The real OpenTofu tests (marker `tofu`, the slowest) run on 3.12, the
-      # coverage run: nightly, by hand, on main, and on pull requests that
-      # touch machine code.
+      # coverage run: nightly, by hand, and on pull requests that touch
+      # machine code; not on pushes to main, whose CI gates the release.
       - name: Decide on the OpenTofu tests
         if: matrix.python == '3.12'
         env:
@@ -62,8 +62,10 @@ jobs:
           BASE: ${{ github.base_ref }}
         run: |
           run=0
-          if [ "$EVENT" != pull_request ]; then
+          if [ "$EVENT" = schedule ] || [ "$EVENT" = workflow_dispatch ]; then
             run=1
+          elif [ "$EVENT" != pull_request ]; then
+            run=0
           elif git diff --name-only "origin/$BASE...HEAD" | grep -qE \
               '^(piceli/infra/machines/|piceli/services/machines\.py|piceli/k8s/cli/infra\.py|piceli/testing/infra\.py|tests/unit/infra/(test_machines_|machines_support\.py|test_secrets_unset_key\.py)|tests/conftest\.py|pyproject\.toml|uv\.lock|\.github/workflows/ci\.yml)'; then
             run=1

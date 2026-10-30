@@ -37,9 +37,9 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 - The tests that run the real OpenTofu binary (marker `tofu`, the slowest
   of the suite) run only with `PICELI_TOFU_TESTS=1`: a local `pytest -n
-  auto` skips them. CI installs OpenTofu and runs them nightly, by hand, on
-  pushes to `main` and on pull requests that touch machine code (before,
-  CI had no OpenTofu and always skipped them).
+  auto` skips them. CI installs OpenTofu and runs them nightly, by hand and
+  on pull requests that touch machine code (before, CI had no OpenTofu and
+  always skipped them).
 
 ## Version 0.38.1
 
