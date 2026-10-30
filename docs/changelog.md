@@ -4,6 +4,30 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.38.1
+
+**Fixes**
+
+- **A development run can no longer fill its node's disk.** On storage that
+  never enforces a claim's size (k3s `local-path`), a lineage in use was
+  counted but never evicted, and the cache's budget was checked only before
+  a run: one lineage could grow far past the claim until the node was under
+  disk pressure, and then no run started to trim it. Now the wrapper
+  watches the cache's disk while the command runs (statvfs every 15
+  seconds, a measurement of the lineage only when needed). A lineage over
+  its cap (the budget less the rest of the cache), or one that grows by
+  1 GiB while the disk is under 15% free, stops the run with the new code
+  `dev-cache-over-cap` and is evicted at once. The result's `cache` has
+  `cap_bytes`, `lineage_bytes` and `over_cap`.
+- Every development run evicts the cache to its budget again when it ends,
+  passed or not (`cache.trim` in its result), so the cache never sits over
+  its budget between runs.
+- While the last run left the cache over its budget or its disk low, the
+  queue starts one run at a time, and only when none is running; while the
+  builder node is under disk pressure it starts none. `dev status` and a
+  waiting `dev run` say so (`held`). The controller still creates no Job
+  in `piceli-dev`.
+
 ## Version 0.38.0
 
 **Features**
