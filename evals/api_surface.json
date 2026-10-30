@@ -2581,6 +2581,7 @@
     "containers",
     "existing_claims",
     "failed_jobs_history",
+    "files_images",
     "init_containers",
     "job_spec",
     "kind",
@@ -2647,6 +2648,7 @@
     ],
     "claim_templates": [],
     "existing_claims": [],
+    "files_images": [],
     "job_spec": [
      "app_labels",
      "automount_token",
@@ -2679,6 +2681,7 @@
    "pydantic": true,
    "returns": {
     "claim_templates": "ClaimTemplate",
+    "files_images": "FilesImage",
     "volumes": "Volume"
    }
   },
@@ -2696,6 +2699,7 @@
     "component_name",
     "containers",
     "existing_claims",
+    "files_images",
     "init_containers",
     "kind",
     "label",
@@ -2744,6 +2748,7 @@
     ],
     "claim_templates": [],
     "existing_claims": [],
+    "files_images": [],
     "manifest": [
      "app_labels",
      "automount_token",
@@ -2770,6 +2775,7 @@
    "pydantic": true,
    "returns": {
     "claim_templates": "ClaimTemplate",
+    "files_images": "FilesImage",
     "volumes": "Volume"
    }
   },
@@ -2843,6 +2849,7 @@
     "component_name",
     "containers",
     "existing_claims",
+    "files_images",
     "init_containers",
     "kind",
     "label",
@@ -2894,6 +2901,7 @@
     ],
     "claim_templates": [],
     "existing_claims": [],
+    "files_images": [],
     "manifest": [
      "app_labels",
      "automount_token",
@@ -2920,6 +2928,7 @@
    "pydantic": true,
    "returns": {
     "claim_templates": "ClaimTemplate",
+    "files_images": "FilesImage",
     "volumes": "Volume"
    }
   },
@@ -4556,6 +4565,47 @@
     ]
    }
   },
+  "FilesImage": {
+   "attr_types": {
+    "DEFAULT_RESOURCES": "Resources",
+    "resources": "Resources"
+   },
+   "attrs": [
+    "DEFAULT_RESOURCES",
+    "container_name",
+    "image",
+    "init_container",
+    "kind",
+    "name",
+    "path",
+    "resources",
+    "size_limit",
+    "source",
+    "volume_name"
+   ],
+   "init": [
+    "image",
+    "kind",
+    "name",
+    "path",
+    "resources",
+    "size_limit"
+   ],
+   "methods": {
+    "container_name": [
+     "volume_name"
+    ],
+    "init_container": [
+     "resources",
+     "volume_name"
+    ],
+    "source": [],
+    "volume_name": [
+     "mount_path"
+    ]
+   },
+   "pydantic": true
+  },
   "Firewall": {
    "attrs": [
     "describe",
@@ -6014,6 +6064,7 @@
     "component_name",
     "containers",
     "existing_claims",
+    "files_images",
     "init_containers",
     "job_spec",
     "kind",
@@ -6068,6 +6119,7 @@
     ],
     "claim_templates": [],
     "existing_claims": [],
+    "files_images": [],
     "job_spec": [
      "app_labels",
      "automount_token",
@@ -6100,6 +6152,7 @@
    "pydantic": true,
    "returns": {
     "claim_templates": "ClaimTemplate",
+    "files_images": "FilesImage",
     "volumes": "Volume"
    }
   },
@@ -10966,6 +11019,7 @@
     "component_name",
     "containers",
     "existing_claims",
+    "files_images",
     "init_containers",
     "kind",
     "label",
@@ -11020,6 +11074,7 @@
     ],
     "claim_templates": [],
     "existing_claims": [],
+    "files_images": [],
     "manifest": [
      "app_labels",
      "automount_token",
@@ -11046,6 +11101,7 @@
    "pydantic": true,
    "returns": {
     "claim_templates": "ClaimTemplate",
+    "files_images": "FilesImage",
     "volumes": "Volume"
    }
   },
@@ -11955,6 +12011,7 @@
     "component_name",
     "containers",
     "existing_claims",
+    "files_images",
     "init_containers",
     "kind",
     "label",
@@ -11999,6 +12056,7 @@
     ],
     "claim_templates": [],
     "existing_claims": [],
+    "files_images": [],
     "manifest": [
      "app_labels",
      "automount_token",
@@ -12025,6 +12083,7 @@
    "pydantic": true,
    "returns": {
     "claim_templates": "ClaimTemplate",
+    "files_images": "FilesImage",
     "volumes": "Volume"
    }
   }
@@ -15773,6 +15832,9 @@
    "FieldRef": {
     "class": "FieldRef"
    },
+   "FilesImage": {
+    "class": "FilesImage"
+   },
    "Forward": {
     "class": "Forward"
    },
@@ -16065,6 +16127,9 @@
    },
    "FieldRef": {
     "class": "FieldRef"
+   },
+   "FilesImage": {
+    "class": "FilesImage"
    },
    "Forward": {
     "class": "Forward"
@@ -17956,5 +18021,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.39.0"
+ "version": "0.40.0"
 }
