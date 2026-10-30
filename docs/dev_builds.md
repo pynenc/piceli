@@ -340,7 +340,8 @@ piceli dev cancel 20261008t071900-ab12 --cluster infra.py:my_cluster
 
 `dev status --json` prints `piceli.dev-status.v1`: `node`, `slots`,
 `scheduler {alive, at}`, `running[]`, `queued[]` (with `position`),
-`recent[]` and `cache {used_bytes, max_bytes}`. `dev logs` streams a
+`recent[]`, `cache {used_bytes, max_bytes}` and, while runs are held
+(0.38.1), `held {cause, message}`. `dev logs` streams a
 running run (`--follow`) or prints the recorded tail of a finished one.
 `dev cancel` ends a queued or running run (`dev-run-cancelled`).
 
@@ -360,20 +361,46 @@ folder of a crate that is gone; the sync result counts them in
 `CARGO_HOME` (the registry and downloaded crates) is shared per toolchain;
 cargo locks it itself.
 
-**The cache's budget** (0.35.0). Before each run the wrapper measures the
-whole cache (the lineages, the toolchains, cargo's home and the Git
-mirrors) and evicts free lineages, least recently used first, while it
-holds more than `cache_budget` (default `0.8`) of `cache_size`, or while
-the cache's disk has less than 15% free. A lineage in use is counted, never
-evicted. A lineage whose run was killed before it released it, or that
-never recorded its size, is measured again first, so it can no longer grow
-unseen. This matters on a storage class without quotas (k3s `local-path`):
-there a claim is a directory on the node's disk, its size is not enforced,
-and a full cache is a node under `DiskPressure`. The run says what went
-(`[piceli-dev] cache budget: evicted 2 lineage(s), 41.3 GiB (over-budget)`),
-and its result's `cache` carries `used_bytes`, `max_bytes`, `other_bytes`,
-`freed_bytes`, `over_budget`, `fs_free_bytes` and `fs_low`. A cache still
-over its budget after eviction raises the controller's `cache-over-budget`
+**The cache's budget** (0.35.0, held during a run since 0.38.1). On k3s
+`local-path` storage a claim is a directory on the node's disk: its
+declared size is **never enforced**, and a full cache is a node under
+`DiskPressure`. So piceli enforces the budget itself, at three moments:
+
+1. **Before a run.** The wrapper measures the whole cache (the lineages,
+   the toolchains, cargo's home and the Git mirrors) and evicts free
+   lineages, least recently used first, while it holds more than
+   `cache_budget` (default `0.8`) of `cache_size`, or while the cache's disk
+   has less than 15% free. A lineage in use is counted, never evicted. A
+   lineage whose run was killed before it released it, or that never
+   recorded its size, is measured again first.
+2. **During a run** (0.38.1). The run's lineage has a **cap**: the budget
+   less what the rest of the cache held when the run took it. Every 15
+   seconds the wrapper reads the cache's disk (cheap); only when the disk
+   says the lineage may be over its cap, or the disk is under 15% free, it
+   measures the lineage (at most once a minute; every 10 minutes anyway).
+   A lineage over its cap, or one that grew by 1 GiB in this run while the
+   disk is under the floor, stops the run with `dev-cache-over-cap` and is
+   evicted at once. Run again: it builds cold.
+3. **After a run** (0.38.1). Every run, passed or not, evicts free
+   lineages to the budget again when it ends, so the cache never sits over
+   its budget until the next run.
+
+The run says what went (`[piceli-dev] cache budget: evicted 2 lineage(s),
+41.3 GiB (over-budget)`). Its result's `cache` carries the start-time check
+(`used_bytes`, `max_bytes`, `other_bytes`, `freed_bytes`, `over_budget`,
+`fs_free_bytes`, `fs_low`), the lineage's `cap_bytes` and last measured
+`lineage_bytes` (with `over_cap` and `stopped_for` when it was stopped), and
+`trim`, the end-of-run check (`evicted`, `freed_bytes`, `used_bytes`,
+`over_budget`, `fs_free_bytes`, `fs_low`, and `dropped_bytes` for an
+evicted over-cap lineage).
+
+While the last run's `trim` is over budget or its disk low, the queue
+(0.38.1) starts one run at a time, and only when none is running, so that
+run's start-time eviction can trim the cache; while the builder node is
+under disk pressure it starts none. `dev status` and a waiting `dev run`
+say so (`held`). The controller never creates a Job in `piceli-dev`.
+
+A cache still over its budget raises the controller's `cache-over-budget`
 alarm, a node under disk pressure `node-disk-pressure` ({doc}`gitops`). On
 a docker or native build host only the budget applies, not the disk floor.
 
@@ -774,6 +801,7 @@ push another's out. The plan lists them under `tag_patterns`.
 | `dev-command-failed` | The command exited non-zero | Read `first_error` and `log_tail`, fix, run again; with `cache.suspect`, `piceli dev cache clear --lineage NAME` |
 | `dev-cache-clear-failed` | `dev cache clear`'s Job ended without a result | Check its pod in `piceli-dev`; run it again |
 | `dev-run-timed-out` | Over the profile's `timeout` (process group killed) | Split the command or find what hangs |
+| `dev-cache-over-cap` | The run's lineage grew past its cap (the budget less the rest of the cache), or grew while the cache's disk was under 15% free; the run was stopped and the lineage evicted | Run again (cold); if it repeats, raise `cache_size` or `cache_budget` |
 | `dev-run-out-of-memory` | Killed at the memory limit | Lower `CARGO_BUILD_JOBS` or ask for a bigger profile |
 | `dev-run-failed` | The pod ended without a result or could not start | Check the image; report it |
 | `dev-run-cancelled` | The Job was deleted (Ctrl-C) | Run again when wanted |

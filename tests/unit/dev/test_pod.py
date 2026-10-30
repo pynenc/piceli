@@ -252,8 +252,10 @@ def test_old_free_lineages_are_evicted_over_the_cache_size(tmp_path: Path) -> No
     data = _archive({"app/a.txt": "x"})
     result, _ = _run(tmp_path, data, _spec(data, ["true"], cache_max_bytes=6000))
     assert not (cache / "lineages" / "old-key" / "0").exists()
-    assert (cache / "lineages" / "new-key" / "0").exists()
     assert result["cache"]["evicted"] == ["old-key/0"]
+    # 0.38.1: still over that tiny budget after the run, the run's end trims
+    # the least recently used lineage next.
+    assert result["cache"]["trim"]["evicted"][0] == "new-key/0"
 
 
 def test_the_wrapper_imports_nothing_but_the_standard_library() -> None:

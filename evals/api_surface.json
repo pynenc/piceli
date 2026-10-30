@@ -15032,6 +15032,7 @@
    "deploy-ref-unknown",
    "deploy-stage-unknown",
    "dev-cache-clear-failed",
+   "dev-cache-over-cap",
    "dev-command-failed",
    "dev-host-publish-only",
    "dev-host-unavailable",
@@ -17953,5 +17954,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.38.0"
+ "version": "0.38.1"
 }
