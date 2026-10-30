@@ -83,7 +83,7 @@ from piceli.infra.machines import credentials
 from piceli.infra.machines.model import InfraError
 from piceli.infra.machines.openstack import INFOMANIAK_AUTH_URL, INFOMANIAK_FLAVORS
 
-from .machines_support import PASSPHRASE, needs_tofu
+from .machines_support import PASSPHRASE
 
 LIVE = os.environ.get("PICELI_OPENSTACK_LIVE") == "1"
 #: The real credentials directory, read before the test's fixtures move it.
@@ -91,7 +91,7 @@ STORE = credentials.credentials_dir()
 CIRROS = "https://download.cirros-cloud.net/0.6.2/"
 CIRROS_FILE = "cirros-0.6.2-x86_64-disk.img"
 pytestmark = [
-    needs_tofu,
+    pytest.mark.tofu,
     pytest.mark.skipif(
         not LIVE, reason="set PICELI_OPENSTACK_LIVE=1 (creates resources)"
     ),

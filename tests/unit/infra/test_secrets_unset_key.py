@@ -25,7 +25,7 @@ from piceli.infra.machines import credentials
 from piceli.infra.nix_releases import NixRelease, cache_keys
 from piceli.k8s.cli import app
 
-from .machines_support import last_json, needs_tofu
+from .machines_support import last_json
 
 UNSET = "dev-nix-cache-key-unset"
 
@@ -178,7 +178,7 @@ def test_host_module_and_gc_refuse_until_the_key_is_declared(homes: Path) -> Non
         assert json.loads(result.stdout)["reason"] == UNSET, args
 
 
-@needs_tofu
+@pytest.mark.tofu
 def test_infra_plan_of_the_bucket_needs_no_signing_key(homes: Path) -> None:
     credentials.save_credential("web-1-state", "state-key", "p" * 32)
     ref = _module(homes)

@@ -31,7 +31,7 @@ from piceli.infra.machines.plan import INVENTORY, Workspace, changes_of, estimat
 from piceli.infra.machines.render import render
 from piceli.infra.machines.state import write_record
 
-from .machines_support import PASSPHRASE, needs_tofu
+from .machines_support import PASSPHRASE
 
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests owner@example"
 CRED_ID = "0123456789abcdef0123456789abcdef"
@@ -514,7 +514,7 @@ def test_rendering_is_deterministic(tmp_path: Path) -> None:
     assert render(build()).config_text == render(build()).config_text
 
 
-@needs_tofu
+@pytest.mark.tofu
 @pytest.mark.skipif(
     __import__("os").environ.get("PICELI_TOFU_NETWORK") != "1",
     reason="downloads the pinned openstack provider (set PICELI_TOFU_NETWORK=1)",

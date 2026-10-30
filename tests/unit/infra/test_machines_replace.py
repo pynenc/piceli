@@ -27,7 +27,7 @@ from piceli.infra.machines.state import write_record
 from piceli.infra.machines.tofu import TofuResult
 from piceli.testing.infra import FakeProvider
 
-from .machines_support import PASSPHRASE, needs_tofu
+from .machines_support import PASSPHRASE
 
 OS = OpenStack(
     credentials="cloud",
@@ -234,7 +234,7 @@ def test_replacing_an_unknown_server_is_refused(homes: Path, tmp_path: Path) -> 
 # ------------------------------------------------------------ real OpenTofu
 
 
-@needs_tofu
+@pytest.mark.tofu
 @pytest.mark.timeout(600)  # about 12 OpenTofu runs; slow under load
 def test_real_tofu_rebuilds_or_replaces_on_a_new_image(homes: Path) -> None:
     """terraform_data updates its input in place, as Nova rebuilds a server."""

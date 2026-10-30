@@ -159,6 +159,7 @@ timeout = 120
 markers = [
     "integration: needs a real disposable cluster (kind) via kubeconfig",
     "maintainer: needs the private companion workspace; skipped by default",
+    "tofu: runs the real OpenTofu binary; skipped unless PICELI_TOFU_TESTS=1",
 ]
 filterwarnings = [
     "ignore:Running in a secondary thread. Signal handling will be skipped.:UserWarning",

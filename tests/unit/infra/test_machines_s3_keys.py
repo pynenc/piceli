@@ -27,7 +27,7 @@ from piceli.infra.machines.state import encryption_env
 from piceli.infra.machines.tofu import TofuResult
 from piceli.testing.infra import FakeProvider
 
-from .machines_support import PASSPHRASE, last_json, needs_tofu
+from .machines_support import PASSPHRASE, last_json
 
 PUBLIC = "cache-1:" + "A" * 43 + "="
 OS = OpenStack(
@@ -162,7 +162,7 @@ def test_needed_secrets_lists_who_creates_each() -> None:
         needed_secrets("not a declaration")
 
 
-@needs_tofu
+@pytest.mark.tofu
 # A hang guard sized for its work, not a speed check: 43 real tofu runs in
 # sequence (7 plans, 4 applies, one state read each), each deriving the
 # state key with pbkdf2: about 35 s alone, 58 s beside the parallel suite
@@ -267,7 +267,7 @@ def test_apply_stores_the_pairs_reapply_is_a_noop_removal_deletes(
     assert not credentials.credential_present("cache-write")
 
 
-@needs_tofu
+@pytest.mark.tofu
 def test_a_credential_piceli_did_not_store_is_never_replaced(homes: Path) -> None:
     credentials.save_credential("web-state", "state-key", PASSPHRASE)
     credentials.save_credential("cache-read", "s3-keys", "MINE:typed-by-hand")

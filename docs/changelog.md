@@ -4,6 +4,16 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.39.0
+
+**CI**
+
+- The tests that run the real OpenTofu binary (marker `tofu`, the slowest
+  of the suite) run only with `PICELI_TOFU_TESTS=1`: a local `pytest -n
+  auto` skips them. CI installs OpenTofu and runs them nightly, by hand, on
+  pushes to `main` and on pull requests that touch machine code (before,
+  CI had no OpenTofu and always skipped them).
+
 ## Version 0.38.1
 
 **Fixes**

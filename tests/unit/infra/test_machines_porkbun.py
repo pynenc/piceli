@@ -35,7 +35,7 @@ from piceli.infra.machines.render import render
 from piceli.infra.machines.state import write_record
 from piceli.infra.machines.tofu import TofuResult, _secret_name
 
-from .machines_support import PASSPHRASE, needs_tofu
+from .machines_support import PASSPHRASE
 
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests owner@example"
 API_KEY = "pk1_" + "a" * 60
@@ -331,7 +331,7 @@ def test_pin_has_every_platform() -> None:
     assert 'provider "registry.opentofu.org/marcfrederick/porkbun"' in lock
 
 
-@needs_tofu
+@pytest.mark.tofu
 @pytest.mark.skipif(
     os.environ.get("PICELI_TOFU_NETWORK") != "1",
     reason="downloads the pinned providers (set PICELI_TOFU_NETWORK=1)",
