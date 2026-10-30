@@ -486,7 +486,7 @@ class HostBuildSpec:
         inputs = document.get("inputs")
         if inputs is not None and (not isinstance(inputs, str) or "\x00" in inputs):
             raise _fail("inputs must be a path to an inputs.toml")
-        return cls(
+        spec = cls(
             name=document["name"] if isinstance(document["name"], str) else "",
             contexts=tuple(context_specs),
             images=tuple(_image(item) for item in output.get("image", [])),
@@ -506,6 +506,11 @@ class HostBuildSpec:
             if "toolchains" in build
             else (),
         )
+        # 0.41.0: a command naming a path its context does not stage.
+        from piceli.artifacts.staged_paths import check
+
+        check(spec)
+        return spec
 
     def to_dict(self) -> dict[str, Any]:
         return {

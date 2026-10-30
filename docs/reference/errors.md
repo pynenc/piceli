@@ -346,6 +346,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`host-address-unknown`](#error-host-address-unknown) | hosts | no |
 | [`host-build-bad`](#error-host-build-bad) | hosts | no |
 | [`host-build-invalid`](#error-host-build-invalid) | host-build | no |
+| [`host-build-path-not-staged`](#error-host-build-path-not-staged) | build-spec | no |
 | [`host-busy`](#error-host-busy) | hosts | yes |
 | [`host-cache-unreachable`](#error-host-cache-unreachable) | hosts | yes |
 | [`host-check-failed`](#error-host-check-failed) | hosts | no |
@@ -1523,6 +1524,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Retry with a larger `--max-seconds`.
 - **Retry-safe:** yes
+
+(error-host-build-path-not-staged)=
+### `host-build-path-not-staged`
+
+**Command names a path its context does not stage.** A host build command names a path inside a context's staging directory (`<context>/...`) that the context's `include` globs do not select (or its `exclude` globs remove), so the file would be missing when the command runs. The message names the command, the path and the context's include list.
+
+- **Fix:** Add the path to `context.<name>.include`, or fix the path in the command.
+- **Retry-safe:** no
 
 (error-image-invalid)=
 ### `image-invalid`

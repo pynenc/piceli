@@ -118,6 +118,8 @@ def failure_detail(error: BaseException) -> dict[str, Any] | None:
     (verb, resource, namespace, HTTP status), as Piceli asked for it;
     ``writers_started`` (0.17.0): the workloads a failed restore point
     stopped and started again on the running release before any retry.
+    0.41.0: ``stage`` and ``host``, where a build host failed (``fetch``,
+    ``build``, ``push``); ``change_key``, the hash of the build's inputs.
     """
     details = getattr(error, "details", None)
     if not isinstance(details, Mapping):
@@ -128,6 +130,12 @@ def failure_detail(error: BaseException) -> dict[str, Any] | None:
     if isinstance(tail, str) and tail:
         lines = tail.rstrip("\n").splitlines()[-FAILURE_TAIL_LINES:]
         found["log_tail"] = "\n".join(lines)[-FAILURE_TAIL_CHARS:]
+    stage = outcome.get("stage") if isinstance(outcome, Mapping) else None
+    if isinstance(stage, str) and stage:
+        found["stage"] = stage[:16]
+    for key, size in (("host", 64), ("change_key", 80)):
+        if isinstance(details.get(key), str) and details[key]:
+            found[key] = details[key][:size]
     if isinstance(details.get("kept_job"), str):
         found["kept_job"] = details["kept_job"]
     started = details.get("writers_started")
@@ -140,6 +148,80 @@ def failure_detail(error: BaseException) -> dict[str, Any] | None:
                 k: value.get(k) for k in ("verb", "resource", "namespace", "status")
             }
     return found or None
+
+
+#: 0.41.0: codes whose failure may pass on its own (a host or network that
+#: comes back, a timeout, disk freed): always retried, never fingerprinted.
+TRANSIENT_CODES = frozenset(
+    {
+        "build-waiting",
+        "build-host-quarantined",
+        "gitops-git-failed",
+        "gitops-cluster-failed",
+        "registry-unreachable",
+        "base-image-unavailable",
+        "grant-expired",
+        "build-timed-out",
+        "docker-unavailable",
+    }
+)
+_TRANSIENT_CODE = re.compile(
+    r"unreachable|unavailable|timed-out|timeout|network|quarantin|disk|pressure"
+    r"|evicted|interrupted|conflict|throttl"
+)
+#: Output that says the failure came from outside the build's inputs.
+_TRANSIENT_OUTPUT = re.compile(
+    r"(?i)connection (?:refused|reset|timed out)|timed? ?out\b|temporary failure"
+    r"|could not resolve|name resolution|network is unreachable|no route to host"
+    r"|tls handshake|no space left|disk (?:quota|full)|out of memory|oom|killed"
+    r"|\b(?:429|5\d\d) (?:too many|internal|bad gateway|service unavailable"
+    r"|gateway timeout)|rate limit|too many requests"
+)
+_NORMALIZE = (
+    # ISO times and dates, clock times, durations, temporary paths, hex ids.
+    re.compile(
+        r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?"
+    ),
+    re.compile(r"\b\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\b"),
+    re.compile(r"\b\d+(?:\.\d+)?\s?(?:ms|us|µs|ns|s|sec|secs|seconds|m|min|h)\b"),
+    re.compile(r"(?:/tmp|/var/folders|/private/var|/run/user)/\S*|\btmp[\w.-]*"),
+    re.compile(r"\b(?:sha256:)?[0-9a-f]{12,}\b"),
+)
+
+
+def transient_failure(reason: str, failure: Mapping[str, Any] | None) -> bool:
+    """Whether a failed step may pass on a retry with the same inputs (0.41.0):
+    an unreachable host or network, a timeout, a quarantined host, disk or
+    memory pressure; by its code or by its output."""
+    if reason in TRANSIENT_CODES or _TRANSIENT_CODE.search(reason):
+        return True
+    tail = (failure or {}).get("log_tail")
+    if not isinstance(tail, str) or not tail.strip():
+        return True  # nothing to compare: never stopped on a guess
+    from piceli.dev.pod import health_signal
+
+    lines = tail.splitlines()
+    return bool(_TRANSIENT_OUTPUT.search(tail)) or health_signal(lines) is not None
+
+
+def failure_fingerprint(
+    reason: str, failure: Mapping[str, Any] | None, inputs: str
+) -> str | None:
+    """A hash of a failure (0.41.0): its code, its output's tail with times,
+    durations, temporary paths and hex ids taken out, and ``inputs`` (the
+    revision plus the build's change key or plan hash). ``None`` without an
+    output tail."""
+    import hashlib
+
+    tail = (failure or {}).get("log_tail")
+    if not isinstance(tail, str) or not tail.strip():
+        return None
+    text = tail
+    for pattern in _NORMALIZE:
+        text = pattern.sub("#", text)
+    lines = [" ".join(line.split()) for line in text.splitlines() if line.strip()]
+    body = "\n".join([reason, inputs, *lines])
+    return "sha256:" + hashlib.sha256(body.encode()).hexdigest()
 
 
 #: How much of a failing check's detail line a status keeps (characters).

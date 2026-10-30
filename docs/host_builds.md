@@ -215,6 +215,19 @@ labels = { "org.opencontainers.image.licenses" = "MIT", "org.opencontainers.imag
   {doc}`compositions`); a local build still builds every image.
 - There is no smoke check: nothing can run a `linux/arm64` binary on the
   build machine without a VM. Use {doc}`checks` after the rollout.
+- **A command that names a file its context does not stage is refused when
+  the spec is loaded** (0.41.0, `host-build-path-not-staged`). A context is
+  staged as `<stage>/<into or name>/` with only the files its `include`
+  selects, so `["bash", "app/scripts/build.sh"]` with
+  `include = ["src/**"]` would fail on the build host with `No such file or
+  directory`. The error names the command, the path and the include list.
+  The check is careful not to refuse a good spec: it looks only at plain
+  relative paths whose first directory is a context's (taking `workdir`
+  into account), and in a `sh -c` / `bash -c` script only at the programs it
+  runs. It skips paths with a placeholder (`{rust_arch}`), paths after an
+  output option (`-o`, `--out-dir` …), commands that write files (`cp`,
+  `mkdir` …), directories that hold staged files and an image's `files`
+  paths.
 
 A full example: `examples/builds/rust-hello/host-build.toml`.
 
@@ -502,5 +515,6 @@ provenance records the build's start and end times.
 | `host-toolchain-failed` | A pinned tool could not be installed |
 | `base-image-unavailable`, `base-image-invalid`, `base-platform-unavailable`, `base-layer-unsupported` | The base image cannot be used |
 | `build-builder-mismatch` | The spec was written for the other builder |
+| `host-build-path-not-staged` | A command names a path inside a context that its `include` does not stage |
 
 `piceli explain <code>` prints the cause and the fix of each.

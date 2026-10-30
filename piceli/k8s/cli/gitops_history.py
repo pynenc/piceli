@@ -113,9 +113,17 @@ def _say_run(run: Mapping[str, Any], *, detail: bool = False) -> None:
             say(f"    cycle {name}: {_seconds(value)}")
         failure = run.get("failure") or {}
         if failure.get("reason") or failure.get("stage"):
+            # 0.41.0: no "in stage None" when the stage is not known.
             say(
-                f"    failure {failure.get('reason')} in stage {failure.get('stage')}"
+                f"    failure {failure.get('reason') or '?'}"
+                + (f" in stage {failure['stage']}" if failure.get("stage") else "")
+                + (f" on build host {failure['host']}" if failure.get("host") else "")
                 + (f": {failure['message']}" if failure.get("message") else "")
+            )
+        if run.get("stopped") == "same-failure":
+            say(
+                "    not retried: the same failure as the attempt before, on the "
+                "same inputs (a new revision or piceli gitops sync tries again)"
             )
 
 
@@ -176,8 +184,11 @@ def show(
     _say_run(body["run"], detail=True)
     if with_logs:
         for item in body["logs"]:
+            where = f" (stage {item['stage']})" if item.get("stage") else ""
+            number = f" {item['attempt']}" if item.get("attempt") else ""
             say(
-                f"--- {item['source']} {item.get('reason') or ''} {item.get('at') or ''}"
+                f"--- {item['source']}{number} {item.get('reason') or ''}{where} "
+                f"{item.get('at') or ''}"
             )
             say(item["text"].rstrip("\n"))
         if not body["logs"]:

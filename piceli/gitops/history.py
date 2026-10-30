@@ -256,16 +256,28 @@ def event(
         # Failed attempts of this revision before this step (0.14.7): a retry
         # that succeeded keeps the earlier build's log tail.
         found["failed_attempts"] = attempts
+    elif state == "failed" and len(attempts) > 1:
+        # 0.41.0: the step that failed for good also keeps the attempts
+        # before it (the last one is this step's ``failure``).
+        found["failed_attempts"] = attempts[:-1]
     failure = _dict(record.get("failure"))
-    if state in {"failed", "retrying"} and failure:
+    if state in {"failed", "retrying"} and (failure or record.get("failed_stage")):
         found["failure"] = {
             key: failure[key]
-            for key in ("kept_job", "denied", "refused")
+            for key in ("kept_job", "denied", "refused", "host")
             if key in failure
         }
+        # 0.41.0: the stage it failed in: a build host's (fetch, build,
+        # push), else the step's (gitops show printed "stage None").
+        stage = failure.get("stage") or record.get("failed_stage")
+        if isinstance(stage, str) and stage:
+            found["failure"]["stage"] = _text(stage, 32)
         tail = failure.get("log_tail")
         if isinstance(tail, str) and tail:
             found["failure"]["log_tail"] = tail[-MAX_TAIL:]
+    if state == "failed" and record.get("stopped"):
+        # 0.41.0: why it was not retried (``same-failure``).
+        found["stopped"] = _text(record.get("stopped"), 32)
     return found
 
 
@@ -291,6 +303,8 @@ def _attempts(value: Any) -> list[dict[str, Any]]:
             entry["log_tail"] = tail[-MAX_TAIL:]
         if isinstance(item.get("kept_job"), str):
             entry["kept_job"] = _text(item["kept_job"], 253)
+        if isinstance(item.get("stage"), str):
+            entry["stage"] = _text(item["stage"], 32)  # 0.41.0
         found.append(entry)
     return found[-MAX_ATTEMPTS:]
 
@@ -657,6 +671,8 @@ def _entry(
         "run_state": run_state,
         "action": event_.get("action"),
         "reason": reason,
+        # Added in 0.41.0: why a failed run was not retried (same-failure).
+        **({"stopped": event_["stopped"]} if event_.get("stopped") else {}),
         "trigger": event_.get("trigger"),
         "sources": sources,
         "namespace": event_.get("namespace"),

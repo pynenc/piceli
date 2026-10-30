@@ -365,7 +365,7 @@ class HostBuilds:
         if failure is not None:
             # 0.22.0: the same inputs failed on a host: not offered again
             # until they change or `piceli gitops sync` retries them.
-            raise _failure_error(failure)
+            raise _failure_error(failure, found)
         if owner is not None:
             # 0.22.0: a newer build of this environment replaces the older
             # one (a new commit, or the environment moved on).
@@ -409,7 +409,7 @@ class HostBuilds:
             failures[found] = {**failure, "owner": owner, "at": _iso(now)}
             for key in sorted(failures, key=lambda k: str(failures[k].get("at")))[:-50]:
                 del failures[key]
-            raise _failure_error(failure)
+            raise _failure_error(failure, found)
         return entry
 
     def _eligible(self, entry: Mapping[str, Any]) -> list[str] | None:
@@ -567,11 +567,21 @@ class HostBuilds:
         )
 
 
-def _failure_error(failure: Mapping[str, Any]) -> CompositionError:
+def _failure_error(failure: Mapping[str, Any], build: str = "") -> CompositionError:
+    """``component-build-failed`` with the host's output tail, its stage and
+    (0.41.0) the wanted build's id: a hash of its inputs, the change key the
+    controller compares to tell an identical failure."""
+    outcome: dict[str, Any] = {"log_tail": str(failure.get("log_tail") or "")}
+    if failure.get("stage"):
+        outcome["stage"] = str(failure["stage"])[:16]
     error = CompositionError(
         "component-build-failed",
         f"build host {failure.get('host')}: {failure.get('reason')}",
-        details={"outcome": {"log_tail": str(failure.get("log_tail") or "")}},
+        details={
+            "outcome": outcome,
+            "host": str(failure.get("host") or "?")[:64],
+            **({"change_key": build} if build else {}),
+        },
     )
     error.output_tail = str(failure.get("log_tail") or "")  # type: ignore[attr-defined]
     error.from_host = str(failure.get("host") or "?")  # type: ignore[attr-defined]
@@ -639,6 +649,7 @@ def public(state: Mapping[str, Any], now: float) -> list[dict[str, Any]]:
                 "host": failure.get("host"),
                 "reason": failure.get("reason"),
                 "log_tail": str(failure.get("log_tail") or "")[-2000:],
+                **({"stage": failure["stage"]} if failure.get("stage") else {}),
             }
         found.append(item)
     return found
@@ -709,6 +720,11 @@ def failed(
         "host": str(body.get("host") or "?"),
         "reason": str(body.get("reason") or "the build failed")[:300],
         "log_tail": str(body.get("log_tail") or "")[-8000:],
+        # 0.41.0: the host's stage (its answer's, else its last report's).
+        "stage": str(
+            body.get("stage") or (entry.get("progress") or {}).get("stage") or ""
+        )[:16]
+        or None,
     }
     return False
 

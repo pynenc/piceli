@@ -89,7 +89,13 @@ The controller works **one step at a time**: teardowns first, then deploys,
 oldest push first. A failed step is retried with exponential backoff (30s,
 60s, … capped at 1h) and, after five attempts, left `failed` until the next
 push; a failing branch never blocks the others, and a teardown is retried
-until it succeeds. `piceli gitops status [--json]` shows everything:
+until it succeeds. Since 0.41.0 a failure that repeats the attempt before it
+(the same code, and the same output on the same revision and inputs) is not
+retried again: the environment is `failed` at once, with `stopped:
+"same-failure"` in its status and history entry. Failures that may pass on
+their own (an unreachable host or network, a timeout, a quarantined host,
+disk or memory pressure) are still retried. A new push or `piceli gitops
+sync` tries again. `piceli gitops status [--json]` shows everything:
 
 ```sh
 piceli gitops status --kubeconfig cluster.kubeconfig --context my-cluster
@@ -1814,10 +1820,27 @@ $ piceli gitops show 20261030T1000 --logs --kubeconfig kc --context prod
 $ piceli gitops compare main --kubeconfig kc --context prod
 ```
 
+A build that failed on a build host shows the host's stage and the failing
+command's last lines (0.41.0):
+
+```console
+$ piceli gitops show main@2026-10-30T10:09:00Z --logs --state-dir state
+main:
+  main@2026-10-30T10:09:00Z  failed (component-build-failed)  ...
+    failure component-build-failed in stage build on build host builder-1
+    not retried: the same failure as the attempt before, on the same inputs (a new revision or piceli gitops sync tries again)
+--- failed-attempt 1 component-build-failed (stage build) 2026-10-30T10:08:00Z
+[piceli] linux/amd64 command 1/1 (bash): failed in 0.1s
+[piceli] the failing command's last 1 line(s) of output:
+  | bash: site/scripts/build.sh: No such file or directory
+--- failure component-build-failed (stage build) 2026-10-30T10:09:00Z
+...
+```
+
 | Command | JSON (`schema`) | Top-level fields |
 | --- | --- | --- |
 | `gitops history [ENV] [--limit N]` | `piceli.gitops-runs.v1` | `history_schema`, `generated_at`, `truncated`, `environments` (`name`, `runs`) |
-| `gitops show RUN [--env ENV] [--logs]` | `piceli.gitops-run.v1` | `env`, `run`; with `--logs` also `logs` (`source`, `attempt`, `at`, `reason`, `text`) and `logs_note` |
+| `gitops show RUN [--env ENV] [--logs]` | `piceli.gitops-run.v1` | `env`, `run`; with `--logs` also `logs` (`source`, `attempt`, `at`, `reason`, `stage`, `host`, `text`) and `logs_note` |
 | `gitops compare ENV [A] [B]` | `piceli.gitops-compare.v1` | `env`, `before`, `after`, `sources`, `components`, `images_changed`, `resources` (`added`, `removed`, `changed`, `partial`), `fields` |
 
 - A run is the history's own entry (`piceli.gitops-history.v1`, above) with

@@ -66,6 +66,11 @@ def main(version: str) -> int:
     )
     run = [sys.executable, "evals/run.py"]
     subprocess.run(["uv", "lock", "--offline"], cwd=ROOT, check=False)
+    # Reinstall the project at the new version (all extras) before the
+    # snapshot and baselines read it.
+    subprocess.run(
+        ["uv", "sync", "--frozen", "--all-extras", "--quiet"], cwd=ROOT, check=True
+    )
     subprocess.run(["uv", "run", "--no-sync", "python", *run[1:], "api-surface", "--write"],
                    cwd=ROOT, check=True)  # fmt: skip
     subprocess.run(

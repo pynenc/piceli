@@ -66,15 +66,17 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.40
+## What's new in 0.41
 
-- **Files from an image**: `FilesImage(images["site-builds"])` mounts a
-  folder of an image read-only in every container of a pod: an init
-  container copies it into a disk volume when the pod starts, and a new
-  image digest rolls the pods. See the
-  [guide](https://docs.pynenc.org/projects/piceli/en/stable/typed_apps.html).
-- **CI**: pull requests that touch machine code run the OpenTofu tests
-  again, and tool downloads retry.
+- **Failed host builds explain themselves**: the failing command's last
+  lines and the build host's stage reach the run record, and
+  `piceli gitops show RUN --logs` prints them.
+- **Unstaged paths refused early**: a host build command that names a file
+  its context does not include is refused when the spec is loaded
+  (`host-build-path-not-staged`), not on the build host. See the
+  [guide](https://docs.pynenc.org/projects/piceli/en/stable/host_builds.html).
+- **No retries of an identical failure**: the same failure on the same
+  inputs is marked failed at once; transient failures are still retried.
 
 ## Web UI
 

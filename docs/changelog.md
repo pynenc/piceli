@@ -4,6 +4,40 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.41.0
+
+**Features**
+
+- **A failed host build's output reaches the run record.** A build host
+  that answers build-failed now sends the failing command's own block (the
+  failed step, the first error, then the command's last lines) and its
+  stage (`fetch`, `build` or `push`). Before, it sent the end of the whole
+  build output, bounded from the end in three places (the host's 120 lines,
+  the status' 80 lines, the history's 2000 characters), so lines printed
+  after the failing command pushed the command's own output out, and the
+  stage was never sent. The controller keeps both in `failure` (`log_tail`,
+  `stage`, `host`) and in each `failed_attempts` entry. `piceli gitops show
+  RUN --logs` prints them (text and `--json`), a failed run now also keeps
+  the attempts before it, and the text no longer says "in stage None": a
+  run without a host stage shows the step's stage. The output is redacted
+  by the build, as before, and stays bounded.
+- **A command that names a file its context does not stage is refused when
+  the spec is loaded** (`host-build-path-not-staged`). For example
+  `["bash", "site/scripts/build.sh"]` with `[context.site] include =
+  ["src/**"]` used to fail on the build host with `No such file or
+  directory`. The error names the command, the path and the include list.
+  The check is conservative: plain relative paths only, the programs of a
+  `sh -c` script only, placeholders, outputs and directories skipped. See
+  {doc}`host_builds`.
+- **An identical failure is not retried.** When a step fails with the same
+  code and the same output (times, durations, temporary paths and hex ids
+  taken out) on the same revision and inputs as the attempt before, the
+  environment is `failed` at once, with `stopped: "same-failure"` in its
+  status and history entry, instead of four more attempts over about nine
+  minutes. Failures that may pass on their own (unreachable, timeouts,
+  network errors, quarantined hosts, disk or memory pressure) are still
+  retried. A new revision or `piceli gitops sync` tries again.
+
 ## Version 0.40.0
 
 **Features**

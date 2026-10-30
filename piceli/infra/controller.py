@@ -102,11 +102,13 @@ from piceli.gitops.controller import (
     error_code,
     failed_verification,
     failure_detail,
+    failure_fingerprint,
     owner_approved,
     pruned_fields,
     pruned_line,
     replan_stale,
     step_reason,
+    transient_failure,
     verified,
 )
 from piceli.gitops.heartbeat import HEARTBEAT_SECONDS
@@ -1069,6 +1071,7 @@ class CompositionController:
             "approved_hash": (record or {}).get("approved_hash"),
             "reason": None,
             "failure": None,
+            "stopped": None,  # 0.41.0: a new revision or a sync tries again
             # Failed attempts of the previous revision belong to its runs.
             "failed_attempts": [],
             "pushed_at": _iso(now),
@@ -1098,12 +1101,15 @@ class CompositionController:
         attempts = int(record.get("attempts") or 0) + 1
         deleting = record.get("state") == "deleting"
         record["failure"] = None if error is None else failure_detail(error)
+        same = None if deleting else self._same_failure(record, reason)
         if not deleting:
             self._remember_attempt(record, reason, attempts)
         # What runs after a failed step is uncertain: the next plan asks.
         record["deployed_plan_hash"] = None
         if not deleting and (
-            reason in FINAL_CODES or attempts >= self.config.max_attempts
+            reason in FINAL_CODES
+            or attempts >= self.config.max_attempts
+            or same is not None
         ):
             self._set(
                 record,
@@ -1112,6 +1118,16 @@ class CompositionController:
                 reason=reason,
                 next_attempt_at=None,
             )
+            if same is not None:
+                # 0.41.0: the same code and output on the same inputs as the
+                # attempt before: a retry would fail the same way.
+                record["stopped"] = "same-failure"
+                self.log(
+                    f"{record['branch']}: failed ({reason}); the same failure as "
+                    f"attempt {same} on the same inputs, not retried; waiting for "
+                    "a new revision or piceli gitops sync"
+                )
+                return
             self.log(
                 f"{record['branch']}: failed ({reason}){_failing(record, reason)}; "
                 "waiting for a new revision"
@@ -1128,6 +1144,40 @@ class CompositionController:
         self.log(
             f"{record['branch']}: {reason}{_failing(record, reason)}; retry in {delay}s"
         )
+
+    @staticmethod
+    def _inputs(record: Mapping[str, Any]) -> str:
+        """What a failure fingerprint covers besides the output: the
+        revision and the build's change key (else the plan hash)."""
+        failure = record.get("failure") or {}
+        revision = record.get("revision") or {}
+        key = (failure.get("change_key") if isinstance(failure, Mapping) else None) or (
+            record.get("plan_hash") or ""
+        )
+        return ",".join(f"{k}@{v}" for k, v in sorted(revision.items())) + f";{key}"
+
+    def _same_failure(self, record: dict[str, Any], reason: str) -> int | None:
+        """The attempt this failure repeats (same code, same fingerprint, same
+        revision and inputs), else ``None`` (0.41.0). Transient failures
+        (unreachable, timeouts, quarantine, disk pressure) never repeat."""
+        failure = record.get("failure")
+        if transient_failure(reason, failure):
+            return None
+        mark = failure_fingerprint(reason, failure, self._inputs(record))
+        record["failure_fingerprint"] = mark
+        kept = [
+            i for i in record.get("failed_attempts") or () if isinstance(i, Mapping)
+        ]
+        last = kept[-1] if kept else None
+        if (
+            mark is None
+            or last is None
+            or last.get("reason") != reason
+            or last.get("fingerprint") != mark
+        ):
+            return None
+        attempt = last.get("attempt")
+        return attempt if isinstance(attempt, int) else 0
 
     def _remember_attempt(
         self, record: dict[str, Any], reason: str, attempt: int
@@ -1151,6 +1201,11 @@ class CompositionController:
             entry["kept_job"] = failure["kept_job"]
         if isinstance(failure, Mapping) and failure.get("writers_started"):
             entry["writers_started"] = list(failure["writers_started"])
+        if isinstance(failure, Mapping) and failure.get("stage"):
+            entry["stage"] = failure["stage"]  # 0.41.0: a build host's stage
+        mark = record.pop("failure_fingerprint", None)
+        if mark:
+            entry["fingerprint"] = mark  # 0.41.0: compared by _same_failure
         kept = [
             item
             for item in record.get("failed_attempts") or []
@@ -3710,6 +3765,7 @@ class CompositionController:
         record.setdefault("first_step_at", started[0])
         record.pop("interrupted", None)  # a new step of it runs
         record.pop("failed_stage", None)
+        record.pop("stopped", None)  # 0.41.0: this step may pass
         # Added in 0.15.0: the step shows in the status while it runs, not
         # only when the whole poll ends (a long rollout left it minutes stale).
         record["in_progress"] = {
