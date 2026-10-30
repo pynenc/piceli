@@ -57,6 +57,38 @@ def unschedulable(pod: dict[str, Any] | None) -> str | None:
     return None
 
 
+def pod_refusal(pod: dict[str, Any] | None) -> str | None:
+    """Why the node refused or evicted ``pod`` (0.38.0): its failed status's
+    reason and message (``Evicted: The node had condition: [DiskPressure].``),
+    shortened; ``None`` when the pod did not fail that way."""
+    status = (pod or {}).get("status") or {}
+    if status.get("phase") != "Failed" or not (
+        status.get("reason") or status.get("message")
+    ):
+        return None
+    text = " ".join(
+        f"{status.get('reason') or ''}: {status.get('message') or ''}".split()
+    ).strip(": ")
+    return (text[:300] + "...") if len(text) > 300 else text
+
+
+def job_refusal(api: Any, namespace: str, job: str) -> str | None:
+    """Why the Job controller could not create ``job``'s pod (0.38.0): the
+    newest ``FailedCreate`` event's message (a ResourceQuota that forbids
+    the priority class, an admission webhook); ``None`` when none."""
+    query = f"?fieldSelector={quote(f'involvedObject.name={job}')}"
+    try:
+        found = api.call(f"/api/v1/namespaces/{namespace}/events{query}", "GET")
+    except Exception:
+        return None
+    messages = [
+        " ".join(str(item.get("message") or "").split())
+        for item in (found or {}).get("items") or ()
+        if isinstance(item, dict) and item.get("reason") == "FailedCreate"
+    ]
+    return messages[-1][:300] if messages else None
+
+
 class DevCluster:
     """Runs in ``piceli-dev`` through an :class:`piceli.gitops.install.Api`."""
 
@@ -470,6 +502,23 @@ class DevCluster:
                     i for i in (found or {}).get("items") or () if isinstance(i, dict)
                 ]
                 phase = ((pods[-1].get("status") or {}).get("phase")) if pods else None
+                # 0.38.0: the node refused or evicted it (DiskPressure before
+                # it was critical): say why, not "printed no result".
+                refused = pod_refusal(pods[-1]) if pods else None
+                if refused is not None:
+                    raise DevError(
+                        "dev-cache-clear-failed",
+                        f"the cache-clear pod was rejected by the node: {refused}",
+                        failed=True,
+                    )
+                if not pods:
+                    refused = job_refusal(self.api, NAMESPACE, job["metadata"]["name"])
+                    if refused is not None:
+                        raise DevError(
+                            "dev-cache-clear-failed",
+                            f"the cache-clear pod was not created: {refused}",
+                            failed=True,
+                        )
                 # 0.35.0: it tolerates disk pressure; any other reason it
                 # cannot be placed fails it in a minute, with the reason.
                 reason = unschedulable(pods[-1]) if pods else None

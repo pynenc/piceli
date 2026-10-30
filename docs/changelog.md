@@ -4,6 +4,29 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.38.0
+
+**Fixes**
+
+- **A node under disk pressure that holds a Piceli cache recovers.**
+  - `piceli dev cache clear` and `piceli gitops cache clear` run their Job
+    with the priority class `system-node-critical`. Under DiskPressure the
+    kubelet admits only critical pods: the toleration of 0.35.0 got the pod
+    scheduled, then the node evicted it. A ResourceQuota that limits that
+    class in the namespace stops it; the refusal says so.
+  - A pod the node refuses or evicts fails the command with the node's
+    reason (`the cache-clear pod was rejected by the node: Evicted: The
+    node had condition: [DiskPressure].`), not "the cache-clear Job printed
+    no result". `controller.cache_clear` adds `reason` and `message`.
+  - No run or build starts on such a node, so their budget eviction never
+    ran there. The controller now evicts the cache to its budget itself,
+    at most once per poll window, and records it in `storage.relief`.
+  - `storage.caches` carries each cache's last measured use (used, budget,
+    free disk), and the controller is `degraded` with a plain reason
+    (`storage.problem`, `controller.storage_problem`) while a node under
+    disk pressure holds a Piceli cache. `gitops status` shows
+    `health: degraded`.
+
 ## Version 0.37.1
 
 **Fixes**

@@ -47,6 +47,19 @@ class Unreadable(Exception):
     """The API refused a read (for example RBAC): the caller skips that check."""
 
 
+def _pod_refusal(pod: Mapping[str, Any] | None) -> dict[str, Any]:
+    """A pod the node refused or evicted (0.38.0): its status ``reason`` and
+    ``message`` as ``pod_reason`` and ``pod_message`` (bounded)."""
+    status = (pod or {}).get("status") or {}
+    if status.get("phase") != "Failed":
+        return {}
+    return {
+        f"pod_{key}": " ".join(str(status[key]).split())[:300]
+        for key in ("reason", "message")
+        if status.get(key)
+    }
+
+
 @dataclass
 class Outcome:
     """How a check Job ended (never holds a secret value)."""
@@ -380,7 +393,10 @@ class PreRolloutCluster:
                     if condition.get("reason") == "DeadlineExceeded":
                         return Outcome("timeout", reason="job-deadline-exceeded")
                     return Outcome(
-                        "failed", exit_code=code, reason=condition.get("reason")
+                        "failed",
+                        exit_code=code,
+                        reason=condition.get("reason"),
+                        extra=_pod_refusal(pod),
                     )
             pod = self._pod(name)
             fatal = _fatal_waiting(pod)

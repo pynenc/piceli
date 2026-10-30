@@ -344,16 +344,37 @@ FREES_SPACE_TOLERATIONS: tuple[dict[str, str], ...] = (
 )
 
 
+#: 0.38.0: under DiskPressure the kubelet admits only critical pods; a Job
+#: that frees space has this priority class. Since Kubernetes 1.17 it is
+#: usable outside ``kube-system`` unless a ResourceQuota of the namespace
+#: limits it (the Job's pods are then refused, with the quota's message).
+FREES_SPACE_PRIORITY = "system-node-critical"
+
+
 def cache_clear_job(
-    dev: DevBuilds, *, name: str, lineage: str | None, crates: list[str]
+    dev: DevBuilds,
+    *,
+    name: str,
+    lineage: str | None,
+    crates: list[str],
+    evict: bool = False,
 ) -> dict[str, Any]:
     """A short Job that empties free lineages' cargo targets (0.19.0).
 
     Same node, user and cache claim as a run; no network need, no Secret,
     no repository code: it runs the wrapper with ``PICELI_DEV_ROLE=clear``.
+    ``evict`` (0.38.0): instead, evict least recently used free lineages to
+    the cache's budget, as a run does before it starts (the controller's
+    answer to a node under disk pressure); its result has the ``budget``.
     """
     labels = {**MANAGED, CLEAR_LABEL: name}
-    spec = {"lineage": lineage, "crates": list(crates)}
+    spec: dict[str, Any] = {"lineage": lineage, "crates": list(crates)}
+    if evict:
+        spec.update(
+            evict=True,
+            cache_max_bytes=_cache_budget(dev),
+            cache_min_free_ratio=MIN_FREE_RATIO,
+        )
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -369,6 +390,8 @@ def cache_clear_job(
                     "nodeSelector": {"kubernetes.io/hostname": dev.node},
                     # 0.35.0: it frees space, so it runs on a node under disk pressure.
                     "tolerations": [dict(item) for item in FREES_SPACE_TOLERATIONS],
+                    # 0.38.0: and the kubelet admits it there.
+                    "priorityClassName": FREES_SPACE_PRIORITY,
                     "automountServiceAccountToken": False,
                     "enableServiceLinks": False,
                     "securityContext": {

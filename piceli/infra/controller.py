@@ -154,6 +154,10 @@ REGISTRY_USAGE_SECONDS = 600
 STORAGE_SECONDS = 60
 
 
+def _dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
 def _storage_view(state: Mapping[str, Any]) -> dict[str, Any] | None:
     record = state.get("storage")
     if not isinstance(record, Mapping):
@@ -162,7 +166,19 @@ def _storage_view(state: Mapping[str, Any]) -> dict[str, Any] | None:
     caches = dict(record.get("caches") or {})
     if not nodes and not caches:
         return None
-    return {"nodes": nodes, "caches": caches, "checked_at": record.get("checked_at")}
+    return {
+        "nodes": nodes,
+        "caches": caches,
+        "checked_at": record.get("checked_at"),
+        # Added in 0.38.0: a node under disk pressure holds a Piceli cache
+        # (``problem``) and the controller's eviction of it (``relief``).
+        **({"problem": record["problem"]} if record.get("problem") else {}),
+        **(
+            {"relief": {k: v for k, v in record["relief"].items() if k != "epoch"}}
+            if isinstance(record.get("relief"), Mapping)
+            else {}
+        ),
+    }
 
 
 def _cache_view(report: Mapping[str, Any]) -> dict[str, Any]:
@@ -690,6 +706,31 @@ class DefaultCompositionPorts:
             "used_bytes": used,
             "used_source": "du",
             "claim": cr.claim_name(registry),
+        }
+
+    def evict_dev_cache(self, dev: Any) -> dict[str, Any]:
+        """0.38.0: evict the development cache to its budget now (the dev
+        cache-clear Job in evict mode, critical priority), for a node under
+        disk pressure. ``state``, the refusal and the budget ``report``.
+        :raises DevError: the node refused the pod (with its reason)."""
+        import secrets
+
+        from piceli.dev.cluster import DevCluster
+        from piceli.dev.jobs import cache_clear_job
+        from piceli.gitops.install import connect
+
+        job = cache_clear_job(
+            dev, name=secrets.token_hex(4), lineage=None, crates=[], evict=True
+        )
+        with connect(self.kubeconfig, self.context, transport=self.transport) as api:
+            result = DevCluster(api, poll_seconds=2.0).clear_cache(job, timeout=600.0)
+        if result is None:
+            return {"state": "failed", "reason": "dev-cache-clear-failed",
+                    "job": job["metadata"]["name"]}  # fmt: skip
+        return {
+            "state": "passed",
+            "job": job["metadata"]["name"],
+            "report": result.get("budget"),
         }
 
     def storage(self) -> dict[str, Any]:
@@ -1591,6 +1632,8 @@ class CompositionController:
             "at": _iso(self.clock()),
             "crates": crates,
             "state": outcome.get("state"),
+            # 0.38.0: why the node refused or evicted the Job's pod.
+            **{k: outcome[k] for k in ("reason", "message") if outcome.get(k)},
         }
         self.log(
             "build cache cleared"
@@ -4162,6 +4205,108 @@ class CompositionController:
                 "clear": "piceli dev cache clear",
             }
         record["checked_at"] = _iso(now)
+        self._relieve(record, now)
+
+    def _dev_builds(self) -> Any:
+        """The composition's ``Cluster(dev=DevBuilds(...))`` with an
+        in-cluster node, or ``None``."""
+        cluster = getattr(self._composition, "cluster", None)
+        dev = getattr(cluster, "dev", None)
+        return dev if getattr(dev, "node", None) else None
+
+    def _held_caches(self, nodes: Mapping[str, Any]) -> dict[str, tuple[str, Any]]:
+        """The Piceli caches on a node under disk pressure (0.38.0): by cache,
+        the node and how to evict it to its budget. A cache whose node is
+        not pinned (``None``) counts when any node is under pressure."""
+        from piceli.dev.model import CACHE_CLAIM, NAMESPACE
+
+        pressed = {
+            name for name, item in nodes.items() if _dict(item).get("disk_pressure")
+        }
+        if not pressed:
+            return {}
+        found: dict[str, tuple[str, Any]] = {}
+        builder = self.ports.builder
+        evict = getattr(builder, "evict_cache", None)
+        if callable(evict):
+            node = getattr(builder, "cache_node", None)
+            if node is None or node in pressed:
+                key = str(getattr(builder, "cache_key", "build-cache"))
+                found[key] = (str(node or sorted(pressed)[0]), evict)
+        dev = self._dev_builds()
+        relieve = getattr(self.ports, "evict_dev_cache", None)
+        if dev is not None and dev.node in pressed and callable(relieve):
+            found[f"{NAMESPACE}/{CACHE_CLAIM}"] = (str(dev.node), lambda: relieve(dev))
+        return found
+
+    def _relieve(self, record: dict[str, Any], now: float) -> None:
+        """0.38.0: a node under disk pressure that holds a Piceli cache.
+
+        No run or build starts there, so the budget eviction they do never
+        runs: the controller starts it itself (a critical-priority Job), at
+        most once per poll window (:data:`STORAGE_SECONDS` or the poll, the
+        longer), and records the result under ``storage.relief``. While the
+        pressure lasts, ``storage.problem`` says so and the controller is
+        ``degraded``."""
+        from piceli.dev.model import CACHE_CLAIM, NAMESPACE
+
+        held = self._held_caches(_dict(record.get("nodes")))
+        if not held:
+            record.pop("problem", None)
+            return
+        nodes = sorted({node for node, _evict in held.values()})
+        record["problem"] = (
+            f"node {', '.join(nodes)} is under disk pressure and holds the Piceli "
+            f"cache {', '.join(sorted(held))}; nothing new runs there until it has "
+            "space (Piceli evicts the cache to its budget; `piceli dev cache clear` "
+            "or `piceli gitops cache clear` empties it)"
+        )
+        relief = _dict(record.get("relief"))
+        window = max(float(STORAGE_SECONDS), float(self.config.poll_seconds))
+        if now - float(relief.get("epoch") or 0) < window:
+            return
+        results: dict[str, Any] = {}
+        caches = record.setdefault("caches", {})
+        for key, (node, evict) in sorted(held.items()):
+            try:
+                outcome = dict(evict() or {})
+            except Exception as error:  # never fail a poll on it
+                code = getattr(error, "code", None) or type(error).__name__
+                outcome = {
+                    "state": "failed",
+                    "reason": code,
+                    "message": str(error)[:300],
+                }
+            report = outcome.pop("report", None) or outcome.pop("budget", None)
+            entry: dict[str, Any] = {
+                "node": node,
+                "state": outcome.get("state"),
+                **{
+                    k: outcome[k]
+                    for k in ("reason", "message", "job")
+                    if outcome.get(k)
+                },
+            }
+            if isinstance(report, Mapping):
+                entry.update(
+                    evicted=list(report.get("evicted") or ()),
+                    freed_bytes=report.get("freed_bytes"),
+                )
+                if isinstance(report.get("used_bytes"), int):
+                    view = _cache_view({**report, "at": report.get("at") or now})
+                    clear = (
+                        "piceli dev cache clear"
+                        if key == f"{NAMESPACE}/{CACHE_CLAIM}"
+                        else "piceli gitops cache clear"
+                    )
+                    caches[key] = {"clear": clear, **_dict(caches.get(key)), **view}
+            results[key] = entry
+            self.log(
+                f"disk pressure on {node}: evicted cache {key} to its budget: "
+                f"{entry.get('state')}"
+                + (f" ({entry['reason']})" if entry.get("reason") else "")
+            )
+        record["relief"] = {"epoch": now, "at": _iso(now), "caches": results}
 
     def _check_tokens(self, now: float) -> None:
         """Warn before a GitHub token expires (0.19.0, best effort)."""
@@ -4395,6 +4540,7 @@ class CompositionController:
             if preview:
                 record["preview"] = preview
         problem = self._composition_problem()
+        storage_problem = _dict(self.state.get("storage")).get("problem")
         if problem is not None and self._composition is None:
             # 0.27.1: nothing steps while no composition is loaded; each
             # environment says so instead of its last (stale) state alone.
@@ -4412,8 +4558,13 @@ class CompositionController:
             "schema": STATUS_SCHEMA,
             "controller": {
                 "state": "degraded"
-                if self.state.get("last_error") or problem is not None
+                if self.state.get("last_error")
+                or problem is not None
+                or storage_problem
                 else "running",
+                # Added in 0.38.0: a node under disk pressure holds a Piceli
+                # cache (gitops status: degraded, with this reason).
+                **({"storage_problem": storage_problem} if storage_problem else {}),
                 # Added in 0.27.1: the composition's head failed to import
                 # (what deploys instead, or that nothing does).
                 **({"composition_problem": problem} if problem else {}),

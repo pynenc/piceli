@@ -361,9 +361,13 @@ piceli gitops cache clear --crate geometry     # only these crates' artifacts
 
 The controller runs it between steps, as a short Job on the builder node
 (the build Job's image and claim, no Secret), and records
-`controller.cache_clear` (`at`, `crates`, `state`). Since 0.35.0 the Job
-tolerates the `node.kubernetes.io/disk-pressure` taint: it frees space, so
-it runs on a node whose disk is full.
+`controller.cache_clear` (`at`, `crates`, `state`; from 0.38.0 also
+`reason` and `message` when the node refused or evicted the Job's pod).
+Since 0.35.0 the Job tolerates the `node.kubernetes.io/disk-pressure`
+taint: it frees space, so it runs on a node whose disk is full. Since
+0.38.0 it has the priority class `system-node-critical` too, because under
+DiskPressure the kubelet admits only critical pods (a ResourceQuota of the
+namespace that limits that class stops it; the refusal says so).
 
 **The build cache's budget** (0.35.0). On a storage class without quotas
 (k3s `local-path`) a claim is a directory on the node's disk, and nothing
@@ -384,6 +388,24 @@ report `DiskPressure` and the development cache's last budget check
 `caches`, `checked_at`). A node under pressure raises `node-disk-pressure`
 and a cache still over its budget raises `cache-over-budget`, each resolved
 once the condition ends (`piceli gitops alarms`).
+
+**Recovering from disk pressure** (0.38.0). No run or build starts on a
+node under disk pressure, so the budget eviction they do before they start
+never runs there. When such a node holds a Piceli cache (the build cache,
+or the development cache of `DevBuilds(node=...)`), the controller starts
+that eviction itself: the cache-clear Job in its evict-to-budget mode, with
+the critical priority above, at most once per poll window (a minute, or
+the poll interval when longer). It publishes:
+
+- `storage.relief` (`at`, and per cache: `node`, `state`, `evicted`,
+  `freed_bytes`, the `job`, and the node's `reason` and `message` when it
+  refused the pod);
+- `storage.caches`: each cache's last measured use (`used_bytes`,
+  `max_bytes`, `fs_free_bytes`, …) from the runs', the builds' or this
+  Job's report;
+- `storage.problem` and `controller.storage_problem`: a plain sentence
+  naming the node and the cache. While it is there the controller's state
+  is `degraded` and `gitops status` reports `health: degraded` with it.
 
 **Why a check failed** (0.19.0). A failed check's own reason (the string a
 `Checks.python` entry returns, an HTTP status, an exit code) is kept in

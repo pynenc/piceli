@@ -416,6 +416,14 @@ cache directory instead. A lineage a run holds is skipped and
 listed under `busy`. The next run on a cleared lineage is cold.
 Since 0.35.0 the Job tolerates the `node.kubernetes.io/disk-pressure`
 taint: it frees space, so it runs on a node whose disk is full.
+Since 0.38.0 it also has the priority class `system-node-critical`:
+under DiskPressure the kubelet admits only critical pods, and the toleration
+alone got the pod scheduled and then evicted. Kubernetes allows that class
+outside `kube-system` unless a ResourceQuota of the namespace limits it; the
+Job's pod is then not created and the command says so with the quota's
+message. A pod the node refuses or evicts fails the command with the node's
+reason (`the cache-clear pod was rejected by the node: Evicted: The node had
+condition: [DiskPressure].`, `dev-cache-clear-failed`, exit 1).
 
 A failed run's result also carries `first_error`: the first `error` line
 of the output and the 19 lines after it, so the cause survives a long log

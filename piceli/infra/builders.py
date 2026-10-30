@@ -588,12 +588,32 @@ print("PICELI-CACHE-CLEAR " + json.dumps(cleared, sort_keys=True), flush=True)
 """
 
 
+#: 0.38.0: evicts the build cache to its budget, as a build Job does before
+#: it builds, and prints the report as a receipt (``cache``).
+_EVICT = """from pathlib import Path
+from piceli.artifacts.cache_budget import from_environment
+from piceli.artifacts.cluster_build import encode_receipt
+report = from_environment(Path("/cache")) or {}
+print(encode_receipt({"cache": report}), flush=True)
+"""
+
+
 def cache_clear_job(
-    settings: JobSettings, crates: Sequence[str], name: str
+    settings: JobSettings, crates: Sequence[str], name: str, *, evict: bool = False
 ) -> dict[str, Any]:
     """The Job that empties the build cache claim's cargo targets: the build
-    Job's node, image, user and claim; no Secret, no source."""
-    from piceli.dev.jobs import FREES_SPACE_TOLERATIONS
+    Job's node, image, user and claim; no Secret, no source. ``evict``
+    (0.38.0): evict to the cache's budget instead (the controller's answer
+    to a node under disk pressure)."""
+    from piceli.artifacts.cache_budget import job_env
+    from piceli.dev.jobs import FREES_SPACE_PRIORITY, FREES_SPACE_TOLERATIONS
+
+    command = (
+        ["python", "-I", "-c", _EVICT]
+        if evict
+        else ["python", "-I", "-c", _CLEAR, *crates]
+    )
+    env = job_env(settings.storage, settings.cache_budget) if evict else []
 
     labels = {
         "app.kubernetes.io/managed-by": "piceli",
@@ -618,6 +638,8 @@ def cache_clear_job(
                     "nodeSelector": dict(settings.selector),
                     # 0.35.0: it frees space, so it runs on a node under disk pressure.
                     "tolerations": [dict(item) for item in FREES_SPACE_TOLERATIONS],
+                    # 0.38.0: and the kubelet admits it there.
+                    "priorityClassName": FREES_SPACE_PRIORITY,
                     "automountServiceAccountToken": False,
                     "securityContext": {
                         "runAsNonRoot": True,
@@ -630,7 +652,8 @@ def cache_clear_job(
                         {
                             "name": "build",
                             "image": settings.image,
-                            "command": ["python", "-I", "-c", _CLEAR, *crates],
+                            "command": command,
+                            **({"env": env} if env else {}),
                             "volumeMounts": [{"name": "cache", "mountPath": "/cache"}],
                             "securityContext": {
                                 "allowPrivilegeEscalation": False,
@@ -648,6 +671,20 @@ def cache_clear_job(
             },
         },
     }  # fmt: skip
+
+
+def _refused(outcome: Any) -> dict[str, Any]:
+    """The pod's refusal of a Job outcome (0.38.0: ``Evicted: The node had
+    condition: [DiskPressure].``), as ``reason`` and ``message``."""
+    extra = getattr(outcome, "extra", None) or {}
+    found = {
+        key: extra[f"pod_{key}"]
+        for key in ("reason", "message")
+        if isinstance(extra.get(f"pod_{key}"), str)
+    }
+    if not found and getattr(outcome, "state", "passed") != "passed":
+        found = {"reason": getattr(outcome, "reason", None)}
+    return {k: v for k, v in found.items() if v}
 
 
 #: The environment a build Job was for (removed with the environment).
@@ -1076,7 +1113,48 @@ class JobBuilder:
 
         job = cache_clear_job(self.settings, list(crates), secrets.token_hex(4))
         outcome = self.cluster.run_job(job)
-        return {"state": outcome.state, "job": job["metadata"]["name"]}
+        return {
+            "state": outcome.state,
+            "job": job["metadata"]["name"],
+            **_refused(outcome),
+        }
+
+    @property
+    def cache_node(self) -> str | None:
+        """The node that holds the build cache (0.38.0): the build Jobs'
+        ``kubernetes.io/hostname``; ``None`` when they may run on any node."""
+        return self.settings.selector.get("kubernetes.io/hostname")
+
+    @property
+    def cache_key(self) -> str:
+        return f"{self.settings.namespace}/{self.settings.cache_claim}"
+
+    def evict_cache(self) -> dict[str, Any]:
+        """Evict the build cache to its budget now (0.38.0): the controller
+        runs it when the node that holds the cache is under disk pressure.
+        ``state``, the Job, the refusal and the budget ``report``."""
+        import secrets
+
+        from piceli.artifacts.cluster_build import decode_receipt
+
+        job = cache_clear_job(self.settings, [], secrets.token_hex(4), evict=True)
+        outcome = self.cluster.run_job(job)
+        found: dict[str, Any] = {
+            "state": outcome.state,
+            "job": job["metadata"]["name"],
+            **_refused(outcome),
+        }
+        text = getattr(self.cluster, "receipt_text", None)
+        if outcome.state == "passed" and text:
+            try:
+                receipt = decode_receipt(text)
+            except (ValueError, OSError):
+                return found
+            report = receipt.get("cache")
+            if isinstance(report, Mapping) and report:
+                found["report"] = dict(report)
+                self._keep_cache_report(receipt)
+        return found
 
     def _for_environment(self, job: dict[str, Any]) -> dict[str, Any]:
         if self.environment:

@@ -1233,7 +1233,17 @@ def clear_cache(
 def clear_main(
     spec: dict[str, Any], cache: Path, emit: Callable[[str], None] = print
 ) -> dict[str, Any]:
-    """The cache-clear Job's entry (``PICELI_DEV_ROLE=clear``)."""
+    """The cache-clear Job's entry (``PICELI_DEV_ROLE=clear``); with
+    ``evict`` (0.38.0) the budget eviction a run does, its report as ``budget``."""
+    if spec.get("evict"):
+        budget = evict(
+            cache,
+            int(spec.get("cache_max_bytes") or 1 << 62),
+            min_free_ratio=float(spec.get("cache_min_free_ratio") or 0),
+        )
+        result = {"schema": CLEAR_SCHEMA, "cleared": [], "busy": [], "budget": budget}
+        emit(RESULT_MARKER + json.dumps(result, sort_keys=True))
+        return result
     result = clear_cache(
         cache, spec.get("lineage"), [str(c) for c in spec.get("crates") or ()]
     )
