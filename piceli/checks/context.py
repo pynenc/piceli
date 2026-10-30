@@ -524,18 +524,18 @@ def _open_port_forward(
     """
     import ssl
 
-    from kubernetes.stream.ws_client import (
-        V4_CHANNEL_PROTOCOL,
-        PortForward,
-        get_websocket_url,
-    )
+    from kubernetes.stream import ws_client
+    from kubernetes.stream.ws_client import PortForward, get_websocket_url
+
+    # Older clients (29.x) have no constant for the channel protocol.
+    channel_protocol = getattr(ws_client, "V4_CHANNEL_PROTOCOL", "v4.channel.k8s.io")
     from websocket import WebSocket, WebSocketBadStatusException
 
     configuration = client.configuration
     headers: dict[str, str] = {}
     # Refreshes an exec-plugin credential (and its TLS context) when stale.
     client.update_params_for_auth(headers, [], ["BearerToken"])
-    header = [f"sec-websocket-protocol: {V4_CHANNEL_PROTOCOL}"]
+    header = [f"sec-websocket-protocol: {channel_protocol}"]
     if "authorization" in {key.lower() for key in headers}:
         value = next(v for k, v in headers.items() if k.lower() == "authorization")
         header.append(f"authorization: {value}")

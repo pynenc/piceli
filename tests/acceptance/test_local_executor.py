@@ -251,15 +251,44 @@ def test_ambiguous_absence_blocks_retry(local_api, tmp_path):
     assert len(mutations(api)) == 1
 
 
+def bound_only_the_write(provider, path_suffix: str, seconds: float) -> None:
+    """Give the real POST to ``path_suffix`` ``seconds``; other requests keep theirs.
+
+    Its target check runs first, on its own budget, so only the held write
+    itself can time out. One budget for every request (0.5 s) let a slow read
+    on a loaded runner time out, and the run then ended "failed".
+    """
+    call, verify = provider._call, provider.verify_target
+    checked = threading.local()
+
+    def verify_once(*, deadline=None):
+        if not getattr(checked, "done", False):
+            verify(deadline=deadline)
+
+    def bounded(method, path, **kwargs):
+        query = kwargs.get("query") or {}
+        if method != "POST" or not path.endswith(path_suffix) or query.get("dryRun"):
+            return call(method, path, **kwargs)
+        verify()
+        checked.done = True
+        try:
+            kwargs["deadline"] = time.monotonic() + seconds
+            return call(method, path, **kwargs)
+        finally:
+            checked.done = False
+
+    provider._call = bounded
+    provider.verify_target = verify_once
+
+
 def test_delayed_mutation_is_bounded_and_detached_work_not_retried(local_api, tmp_path):
     api, original_provider = local_api
-    # Every request gets 0.5 s: the held write never answers in time, and the
-    # other requests still do on a loaded runner (0.05 s timed some out).
-    provider = provider_at(original_provider.host, request_seconds=0.5)
+    provider = provider_at(original_provider.host)
+    bound_only_the_write(provider, "/configmaps", 0.5)
     run = executor(provider, tmp_path)
     plan, snapshot, grant = prepare(provider, [manifest()])
     # The server holds the write until the test releases it; the client gives
-    # up after 0.5 s. "In flight" and "applied" are states the test sets,
+    # up on it after 0.5 s. "In flight" and "applied" are states the test sets,
     # not wall-clock windows: a resume while the write is held stays blocked
     # (it never writes twice); once the server has applied it, a resume is
     # ready.

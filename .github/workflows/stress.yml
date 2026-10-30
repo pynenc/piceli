@@ -36,3 +36,23 @@ jobs:
           echo "79b0f844237bd4b0446e4dc884dbc1765fc7dedc3968f743d5949c6f2e701739  /tmp/sops" | sha256sum -c -
           sudo install -m 0755 /tmp/sops /usr/local/bin/sops
       - run: python3 scripts/test_stress.py --rounds 3
+
+  nightly-issue:
+    # A failed nightly opens (or comments on) one issue labelled
+    # nightly-failure; the next passing nightly closes it.
+    if: always() && github.event_name == 'schedule'
+    needs: [stress]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v5
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.stress.result }}
+        run: |
+          case "$RESULT" in
+            failure) scripts/nightly_issue.sh Stress failed ;;
+            success) scripts/nightly_issue.sh Stress passed ;;
+          esac

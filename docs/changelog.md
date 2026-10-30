@@ -4,6 +4,28 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.37.1
+
+**Fixes**
+
+- **Piceli works again with the oldest `kubernetes` client it allows
+  (29.0).** Clients before 36.0 have no `V4_CHANNEL_PROTOCOL` constant
+  (port-forward checks failed with an import error), read the bearer token
+  from another key (exec-plugin and `tokenFile` credentials were not sent)
+  and cannot choose a patch type per call (branch environments and claim
+  growth sent a strategic merge patch). All three now work on 29.0 to 36.x.
+
+**CI**
+
+- A failed nightly run (CI or Stress) opens one issue labelled
+  `nightly-failure`, comments on it while the failures go on, and closes it
+  when the nightly passes again.
+- Coverage uses the `sysmon` core (Python's `sys.monitoring`): the test job
+  with coverage was twice as slow as the others and the longest job of a
+  pull request.
+- The delayed-write executor test no longer fails when a read is slow on a
+  busy runner: only the held write has the short time limit.
+
 ## Version 0.37.0
 
 **Fixes**

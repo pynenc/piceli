@@ -48,6 +48,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from piceli.k8s.ops.client_compat import set_bearer_token
+
 if TYPE_CHECKING:
     import ssl
 
@@ -678,10 +680,7 @@ class ExecCredentialSource:
         return self._clock() >= credential.expires_at - skew
 
     def _apply_token(self, credential: ExecCredential) -> None:
-        if credential.token:
-            self.configuration.api_key["BearerToken"] = "Bearer " + credential.token
-        else:
-            self.configuration.api_key.pop("BearerToken", None)
+        set_bearer_token(self.configuration, credential.token or None)
 
     def ensure_fresh(self) -> None:
         """Re-run the pinned plugin when the credential is (nearly) expired."""
@@ -755,9 +754,9 @@ class TokenFileCredentialSource:
             if not token or len(token) > 16_384 or any(c.isspace() for c in token):
                 raise ValueError("invalid token")
         except (OSError, UnicodeError, ValueError):
-            configuration.api_key.pop("BearerToken", None)
+            set_bearer_token(configuration, None)
             raise ProviderFactoryError("tokenFile is unavailable or invalid") from None
-        configuration.api_key["BearerToken"] = "Bearer " + token
+        set_bearer_token(configuration, token)
 
 
 def approved_refresh(api_client: Any) -> bool:

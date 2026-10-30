@@ -17698,6 +17698,7 @@
   "piceli.k8s.operator_state",
   "piceli.k8s.ops",
   "piceli.k8s.ops.bounds",
+  "piceli.k8s.ops.client_compat",
   "piceli.k8s.ops.content_digest",
   "piceli.k8s.ops.diagnosis",
   "piceli.k8s.ops.discovery",
@@ -17898,5 +17899,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.37.0"
+ "version": "0.37.1"
 }

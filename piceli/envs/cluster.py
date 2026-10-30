@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from functools import partial, update_wrapper
 from typing import Any
 
 from piceli.envs.model import ENV_OF_LABEL, MANAGED_BY, RECORD_NAME, EnvError
+from piceli.k8s.ops.client_compat import merge_patch
 
 _WORKLOADS = (
     ("Deployment", "list_namespaced_deployment"),
@@ -163,13 +165,9 @@ class EnvCluster:
                 "resourceVersion": metadata.get("resourceVersion"),
             },
         }
-        self._call(
-            patch,
-            *names,
-            body,
-            field_manager=FIELD_MANAGER,
-            _content_type="application/merge-patch+json",
-        )
+        # Named like ``patch`` so a refusal still names the request.
+        call = update_wrapper(partial(merge_patch, patch), patch)
+        self._call(call, *names, body, field_manager=FIELD_MANAGER)
 
     # --------------------------------------------------------- namespaces
     def namespaces(self, app: str) -> list[dict[str, Any]]:
