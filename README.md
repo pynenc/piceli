@@ -66,18 +66,15 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.35
+## What's new in 0.36
 
-- **Cache budgets on any storage class**: the development cache and the
-  build Jobs' cache keep within 80% of their claim (everything in them
-  counts) and keep 15% of the node's disk free, evicting least recently used
-  lineages and targets first, also on k3s `local-path`, which enforces no
-  size.
-- **Disk alarms and no silent waits**: `piceli gitops alarms` raises
-  `node-disk-pressure` and `cache-over-budget`; `piceli dev run` says its
-  queue and cache at once and fails with the scheduler's reason when its pod
-  finds no node for a minute. See the
-  [guide](https://docs.pynenc.org/projects/piceli/en/stable/dev_builds.html).
+- **Disk-backed scratch volumes**: `ScratchVolume(size_limit="2Gi")` gives a
+  pod a scratch folder on the node's disk instead of in RAM, for example a
+  downloads folder an init container fills and the app serves. See the
+  [guide](https://docs.pynenc.org/projects/piceli/en/stable/typed_apps.html).
+- **Reused build lineages stay clean**: `piceli dev run` now removes the
+  folders a sync leaves empty, so a cargo glob member such as
+  `crates/app/*` no longer fails on a crate that was deleted.
 
 ## Web UI
 

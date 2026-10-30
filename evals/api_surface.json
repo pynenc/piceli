@@ -10196,6 +10196,27 @@
    },
    "pydantic": true
   },
+  "ScratchVolume": {
+   "attrs": [
+    "kind",
+    "name",
+    "size_limit",
+    "source",
+    "volume_name"
+   ],
+   "init": [
+    "kind",
+    "name",
+    "size_limit"
+   ],
+   "methods": {
+    "source": [],
+    "volume_name": [
+     "mount_path"
+    ]
+   },
+   "pydantic": true
+  },
   "Secret": {
    "attr_types": {
     "data": "SecretVersionRef"
@@ -15800,6 +15821,9 @@
    "Scaling": {
     "class": "Scaling"
    },
+   "ScratchVolume": {
+    "class": "ScratchVolume"
+   },
    "Secret": {
     "class": "Secret"
    },
@@ -16046,6 +16070,9 @@
    },
    "Scaling": {
     "class": "Scaling"
+   },
+   "ScratchVolume": {
+    "class": "ScratchVolume"
    },
    "Secret": {
     "class": "Secret"
@@ -17871,5 +17898,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.35.0"
+ "version": "0.36.0"
 }

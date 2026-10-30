@@ -105,7 +105,7 @@ def test_a_second_run_keeps_the_mtime_of_unchanged_files(tmp_path: Path) -> None
     assert (tree / "b.txt").read_text() == "TWO\n"
     assert (tree / "b.txt").stat().st_mtime_ns > before
     assert not (tree / "gone.txt").exists()
-    assert again["sync"] == {"written": 1, "removed": 1, "kept": 1}
+    assert again["sync"] == {"written": 1, "removed": 1, "kept": 1, "removed_dirs": 0}
 
 
 def test_a_failing_command_reports_its_exit_code_and_log_tail(tmp_path: Path) -> None:

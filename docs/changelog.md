@@ -4,6 +4,28 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.36.0
+
+**Fixes**
+
+- **A reused lineage no longer keeps emptied folders.** `piceli dev run`
+  removed the files of a deleted folder but kept the folder. A Rust
+  workspace with a glob member (`members = ["crates/app/*"]`) then failed on
+  every later build of that lineage: cargo found a crate folder without
+  `Cargo.toml`. The sync now removes folders it leaves empty (never the
+  lineage root, never under `target/` or `.git/`), also those left by older
+  versions. The sync result counts them in `removed_dirs`.
+
+**Features**
+
+- **`ScratchVolume`, a scratch folder on disk.** `MemoryVolume` keeps its
+  data in RAM, which costs the node's memory for large files.
+  `ScratchVolume(size_limit="2Gi")` renders an `emptyDir` on the node's disk
+  and is accepted wherever `MemoryVolume` is (containers, init containers,
+  sidecars). Its `size_limit` counts against the node's ephemeral storage:
+  a pod that writes more is evicted. `piceli import` now types a plain
+  `emptyDir` as `ScratchVolume`.
+
 ## Version 0.35.0
 
 **Features**

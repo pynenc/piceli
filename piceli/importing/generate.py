@@ -69,6 +69,7 @@ _PICELI = frozenset(
         "MemoryVolume",
         "Mount",
         "Resources",
+        "ScratchVolume",
         "SecretKey",
         "SecretVolume",
         "ServicePort",
@@ -744,7 +745,7 @@ class _Generator:
                 else None,
             ), False
         if source_key == "emptyDir":
-            if source.get("medium") != "Memory" or set(source) - {
+            if source.get("medium") not in (None, "", "Memory") or set(source) - {
                 "medium",
                 "sizeLimit",
             }:
@@ -753,7 +754,7 @@ class _Generator:
                 re.sub(r"[^a-z0-9]+", "-", mount_path.lower()).strip("-")[:63] or "root"
             )
             return call(
-                "MemoryVolume",
+                "MemoryVolume" if source.get("medium") == "Memory" else "ScratchVolume",
                 name=explicit(default),
                 size_limit=literal(str(source["sizeLimit"]))
                 if "sizeLimit" in source
