@@ -21,6 +21,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Any
 
+from piceli.k8s.ops.client_compat import merge_patch
 from piceli.restore.model import FIELD_MANAGER, RestorePointError
 from piceli.restore.plan import writer_pods
 
@@ -445,12 +446,12 @@ class RestoreCluster:
         patch.setdefault("metadata", {}).update(
             uid=metadata.get("uid"), resourceVersion=metadata.get("resourceVersion")
         )
-        CoreV1Api(self.client).patch_namespaced_persistent_volume_claim(
+        merge_patch(
+            CoreV1Api(self.client).patch_namespaced_persistent_volume_claim,
             name,
             self.namespace,
             patch,
             field_manager=FIELD_MANAGER,
-            _content_type="application/merge-patch+json",
             _request_timeout=self.request_seconds,
         )
 

@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
+from piceli.k8s.ops.client_compat import set_bearer_token
 from piceli.k8s.ops.discovery import EvidenceSource, PlanTarget
 from piceli.k8s.ops.exec_credentials import (
     ClusterInfo,
@@ -455,7 +456,7 @@ def _static_client(path: Path, entries: _Entries) -> Any:
     if token is not None:
         if not isinstance(token, str) or not token or "\n" in token:
             raise ProviderFactoryError("kubeconfig token is invalid")
-        configuration.api_key["BearerToken"] = "Bearer " + token
+        set_bearer_token(configuration, token)
     cert = _pem_data(user, "client-certificate-data")
     key = _pem_data(user, "client-key-data")
     cert_file = key_file = None
