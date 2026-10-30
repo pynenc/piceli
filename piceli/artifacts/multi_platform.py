@@ -17,7 +17,9 @@ and each node pulls the manifest of its own platform.
   --target {rust_arch}-…` keeps each platform's output apart). The receipt
   lists each image once per platform (``<image>/<platform-slug>``, as a
   multi-platform ``build.toml`` does) and each image's index under
-  ``outputs.indexes``.
+  ``outputs.indexes``; ``[[output.files]]`` (0.39) are listed under
+  ``outputs.files`` and ``outputs.file_details`` as
+  ``<platform-slug>/files/<name>/<file name>``.
 * ``build.shared_commands`` (0.23) run once, with the first platform, into
   the shared target directory; the later platforms skip them and their images
   copy the same outputs. The receipt's ``shared_commands`` holds their steps.
@@ -304,6 +306,15 @@ def combine_receipts(
             "repository": image.repository,
             "path": f"indexes/{image.name}.index.json",
         }
+    files: dict[str, str] = {}
+    details: dict[str, Any] = {}
+    for platform, receipt in receipts.items():
+        slug = platform_slug(platform)
+        outputs = receipt["outputs"]
+        for path, sha in outputs.get("files", {}).items():
+            files[f"{slug}/{path}"] = sha
+        for path, entry in outputs.get("file_details", {}).items():
+            details[f"{slug}/{path}"] = entry
     first = next(iter(receipts.values()))
     return {
         "revision": BUILD_RECEIPT_REVISION,
@@ -323,7 +334,12 @@ def combine_receipts(
         "contexts": first["contexts"],
         "network": "host",
         "source_date_epoch": spec.source_date_epoch,
-        "outputs": {"files": {}, "images": images, "indexes": indexes},
+        "outputs": {
+            "files": files,
+            "images": images,
+            "indexes": indexes,
+            **({"file_details": details} if details else {}),
+        },
         "builds": {
             platform: {
                 "plan_hash": receipt["plan_hash"],

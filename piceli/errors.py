@@ -4012,8 +4012,8 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "host-output-missing",
         "Host build output missing",
-        "A path named by an image's `files` or `target_files` does not exist after the build, is not a file or directory tree, or holds a symlink that leaves it.",
-        "Check the build commands and the paths in `[[output.image]]` (`target_files` are relative to the shared target directory; placeholders such as `{rust_arch}` are substituted).",
+        "A path named by an image's `files` or `target_files` (or an `[[output.files]]` entry's `target_files`) does not exist after the build, is not a file or directory tree (a regular file for `[[output.files]]`), or holds a symlink that leaves it.",
+        "Check the build commands and the paths in `[[output.image]]` or `[[output.files]]` (`target_files` are relative to the shared target directory; placeholders such as `{rust_arch}` are substituted).",
         False,
         "host-build",
     ),

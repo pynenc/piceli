@@ -297,6 +297,7 @@ class HostExecution:
             for index, command in enumerate(self.plan.commands, start=1):
                 self._command(index, command, cwd, environment)
             self._verify_consumed()
+            files, details = self._files(output_dir)
             images_dir = output_dir / "images"
             if images_dir.exists():
                 shutil.rmtree(images_dir)
@@ -321,7 +322,64 @@ class HostExecution:
             ) from None
         finally:
             guard.close()
-        return {"files": {}, "images": images}
+        if not details:
+            return {"files": files, "images": images}
+        return {"files": files, "images": images, "file_details": details}
+
+    def _files(
+        self, output_dir: Path
+    ) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+        """0.39: copy ``[[output.files]]`` to ``files/<name>/<file name>``.
+
+        Returns ``outputs.files`` (``{path: sha256}``, the shape a Docker
+        build's receipt has) and ``outputs.file_details`` (per path: the
+        output's name, the file name, platform, sha256 and size).
+        """
+        files: dict[str, str] = {}
+        details: dict[str, dict[str, Any]] = {}
+        files_dir = output_dir / "files"
+        if files_dir.exists():
+            shutil.rmtree(files_dir)
+        for item in self.plan.files:
+            began = time.monotonic()
+            directory = files_dir / item.name
+            directory.mkdir(parents=True)
+            for src, name in item.target_files:
+                source = self._source(self.target, src)
+                if source.is_symlink() or not source.is_file():
+                    raise BuildSpecError(
+                        "host-output-missing",
+                        f"{src!r} is not a regular file (output.files {item.name!r})",
+                        steps=tuple(self.steps),
+                    )
+                target = directory / name
+                shutil.copyfile(source, target, follow_symlinks=False)
+                os.chmod(target, 0o755 if os.access(source, os.X_OK) else 0o644)
+                hasher = hashlib.sha256()
+                size = 0
+                with target.open("rb") as stream:
+                    while block := stream.read(1024 * 1024):
+                        hasher.update(block)
+                        size += len(block)
+                sha = "sha256:" + hasher.hexdigest()
+                path = f"files/{item.name}/{name}"
+                files[path] = sha
+                details[path] = {
+                    "output": item.name,
+                    "file": name,
+                    "platform": self.plan.platform,
+                    "sha256": sha,
+                    "size": size,
+                }
+            self.steps.append(
+                {
+                    "platform": self.plan.platform,
+                    "kind": f"files-{item.name}",
+                    "state": "succeeded",
+                    "seconds": round(time.monotonic() - began, 3),
+                }
+            )
+        return files, details
 
     def _stage(self) -> int:
         self.stage.mkdir(parents=True, exist_ok=True)
@@ -535,7 +593,7 @@ class HostExecution:
         except OSError:
             raise BuildSpecError(
                 "host-output-missing",
-                f"the build produced no {path!r} for its image",
+                f"the build produced no {path!r} for its outputs",
                 steps=tuple(self.steps),
             ) from None
         if not resolved.is_relative_to(root.resolve()):

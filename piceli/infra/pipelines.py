@@ -273,6 +273,12 @@ def load_spec(
         spec = HostBuildSpec.from_dict(document, Path("/") / directory)
     except BuildSpecError as error:
         raise _invalid(f"the build spec {path} is invalid ({error.code})") from None
+    if spec.files:
+        # 0.39: the controller builds and delivers images only.
+        raise _invalid(
+            f"the build spec {path} declares [[output.files]]; the controller "
+            "builds images only. Build files with `piceli artifacts build-spec run`"
+        )
     contexts: dict[str, tuple[str, str]] = {}
     for context in spec.contexts:
         if context.source is None:

@@ -235,6 +235,26 @@ class HostImage:
 
 
 @dataclass(frozen=True)
+class HostFileOutput:
+    """0.39: plain files of the build, written to ``files/<name>/<file name>``.
+
+    ``target_files`` maps a path under the target directory (as an image's
+    ``target_files`` does) to the file's name in the output: one path
+    segment, which may use a placeholder (``app-cli-{arch}``) so the files of
+    several platforms keep different names.
+    """
+
+    name: str
+    target_files: tuple[tuple[str, str], ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "target_files": [list(item) for item in self.target_files],
+        }
+
+
+@dataclass(frozen=True)
 class HostBuildGrant:
     """Authority to run exactly one host build plan on this machine."""
 
@@ -278,6 +298,8 @@ class HostBuildSpec:
     (:mod:`piceli.artifacts.host_toolchains`)."""
     shared_commands: tuple[tuple[str, ...], ...] = ()
     """``build.shared_commands`` (0.23): run once for every platform, first."""
+    files: tuple[HostFileOutput, ...] = ()
+    """``[[output.files]]`` (0.39): plain files, no image needed."""
 
     builder_kind: ClassVar[str] = "host"
     network: ClassVar[str] = "host"
@@ -297,10 +319,12 @@ class HostBuildSpec:
                     "build.platforms must list linux/amd64 and/or linux/arm64, "
                     "each once"
                 )
-        if not self.images:
-            raise _fail("declare at least one [[output.image]]")
+        if not self.images and not self.files:
+            raise _fail("declare at least one [[output.image]] or [[output.files]]")
         if len({item.name for item in self.images}) != len(self.images):
             raise _fail("output image names must be unique")
+        if len({item.name for item in self.files}) != len(self.files):
+            raise _fail("output files names must be unique")
         names = [item.name for item in self.contexts]
         if not names or len(set(names)) != len(names):
             raise _fail("declare uniquely named contexts")
@@ -453,16 +477,20 @@ class HostBuildSpec:
             raise _fail("declare 1-32 [context.<name>] tables")
         context_specs = [_context(name, item) for name, item in contexts.items()]
         output = document["output"]
-        _keys(output, {"image"}, set(), "output")
-        if not isinstance(output["image"], list) or not 0 < len(output["image"]) <= 32:
-            raise _fail("declare 1-32 [[output.image]] tables")
+        _keys(output, set(), {"image", "files"}, "output")
+        for key in ("image", "files"):
+            if key in output and (
+                not isinstance(output[key], list) or not 0 < len(output[key]) <= 32
+            ):
+                raise _fail(f"declare 1-32 [[output.{key}]] tables")
         inputs = document.get("inputs")
         if inputs is not None and (not isinstance(inputs, str) or "\x00" in inputs):
             raise _fail("inputs must be a path to an inputs.toml")
         return cls(
             name=document["name"] if isinstance(document["name"], str) else "",
             contexts=tuple(context_specs),
-            images=tuple(_image(item) for item in output["image"]),
+            images=tuple(_image(item) for item in output.get("image", [])),
+            files=tuple(_file_output(item) for item in output.get("files", [])),
             commands=commands,
             shared_commands=shared_commands,
             tools=tuple(tools),
@@ -504,6 +532,9 @@ class HostBuildSpec:
                 {"shared_commands": [list(item) for item in self.shared_commands]}
                 if self.shared_commands
                 else {}
+            ),
+            **(
+                {"files": [item.to_dict() for item in self.files]} if self.files else {}
             ),
         }
 
@@ -625,6 +656,23 @@ class HostBuildSpec:
             )
             for image in self.images
         )
+        files = tuple(
+            HostFileOutput(
+                item.name,
+                tuple(
+                    (
+                        _rel_path(substitute(src, facts), "target_files key"),
+                        _file_name(substitute(dest, facts)),
+                    )
+                    for src, dest in item.target_files
+                ),
+            )
+            for item in self.files
+        )
+        for item in files:
+            names = [dest for _, dest in item.target_files]
+            if len(set(names)) != len(names):
+                raise _fail(f"output.files {item.name!r}: two files with one name")
         pins = resolve_toolchains(self, manifests, roots)
         rust = pins.get("rust")
         if rust is not None:
@@ -646,6 +694,7 @@ class HostBuildSpec:
             pins,
             self.shared_commands,
             shared_env,
+            files,
         )
 
     # --- execution -------------------------------------------------------
@@ -968,6 +1017,38 @@ def _image(item: Any) -> HostImage:
     )
 
 
+#: A file name in ``[[output.files]]``: one path segment (as ``publish-files``
+#: names its layers), placeholders allowed.
+_FILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,254}")
+
+
+def _file_name(value: Any, what: str = "output.files file name") -> str:
+    return _match(_FILE_NAME, value, what)
+
+
+def _file_output(item: Any) -> HostFileOutput:
+    _keys(item, {"name", "target_files"}, set(), "output.files")
+    name = _match(_NAME, item["name"], "output.files.name")
+    table = item["target_files"]
+    if not isinstance(table, dict) or not 0 < len(table) <= 256:
+        raise _fail("output.files.target_files must map 1-256 paths to file names")
+    for dest in table.values():
+        if not isinstance(dest, str):
+            raise _fail("invalid output.files file name")
+        _template(dest, "output.files file name", _file_name)
+    if len(set(table.values())) != len(table):
+        raise _fail(f"output.files {name!r}: two files with one name")
+    return HostFileOutput(
+        name,
+        tuple(
+            sorted(
+                (_template(key, "output.files.target_files key", _rel_path), value)
+                for key, value in table.items()
+            )
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class HostBuildPlan:
     """Everything a host build will do, computed without running anything."""
@@ -986,6 +1067,8 @@ class HostBuildPlan:
     #: values without a placeholder).
     shared_commands: tuple[tuple[str, ...], ...] = ()
     shared_env: Mapping[str, str] = field(default_factory=dict)
+    #: 0.39: ``[[output.files]]`` with the node's facts substituted.
+    files: tuple[HostFileOutput, ...] = ()
 
     @property
     def platform(self) -> str:
@@ -1020,6 +1103,12 @@ class HostBuildPlan:
                         else {}
                     ),
                     **self._shared(),
+                    # Only when declared: every other plan hash is unchanged.
+                    **(
+                        {"files": [item.to_dict() for item in self.files]}
+                        if self.files
+                        else {}
+                    ),
                 }
             )
         )
@@ -1067,6 +1156,18 @@ class HostBuildPlan:
                 else {}
             ),
             **self._shared(),
+            **(
+                {
+                    "files": {
+                        item.name: [
+                            f"files/{item.name}/{dest}" for _, dest in item.target_files
+                        ]
+                        for item in self.files
+                    }
+                }
+                if self.files
+                else {}
+            ),
             "executes_code": True,
             "uses_container_engine": False,
             "push": False,

@@ -880,7 +880,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "artifacts publish-files": _C(
             "Publish local files as one OCI artifact (each file one layer, by its sha256).",
             contract="conforms",
-            reads=("the files", "credentials file or Docker config"),
+            reads=(
+                "the files, or a host build receipt's files (--receipt)",
+                "credentials file or Docker config",
+            ),
             writes=("OCI registry (blobs, manifest, tag)", "--out receipt"),
             approval_required=True,
             safe_to_retry=True,
@@ -891,7 +894,9 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "and contacts nothing. Each file is stored as it is, so its blob "
             "digest is its sha256; a file changed since the plan is refused "
             "(publish-input-changed). A tag that names another manifest is "
-            "refused unless --move-tag. Never prints a credential.",
+            "refused unless --move-tag. Never prints a credential. 0.39: "
+            "--receipt publishes the [[output.files]] of a host build receipt "
+            "(each must still match the receipt's sha256 and size).",
         ),
         "artifacts fetch-file": _C(
             "Download one published file (a blob) by its digest and check it.",

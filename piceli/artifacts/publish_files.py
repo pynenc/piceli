@@ -159,22 +159,70 @@ class FilesPlan:
         artifact_type: str,
         *,
         move_tag: bool = False,
+        names: Sequence[str] | None = None,
     ) -> FilesPlan:
-        """The plan for ``paths`` (each named by its file name). No network."""
+        """The plan for ``paths`` (each named by its file name, or by
+        ``names``). No network."""
         try:
             target = RegistryTarget.parse(to)
         except ValueError as error:
             code = getattr(error, "code", "publish-invalid")
             raise PublishError(code, "invalid --to registry target") from None
         files = []
-        for path in paths:
+        for position, path in enumerate(paths):
             path = Path(path).absolute()
             if path.is_symlink() or not path.is_file():
                 raise PublishError("publish-invalid", "every input is a regular file")
             size, sha = _hash_file(path)
-            files.append(PublishedFile(path.name, path, size, sha))
+            name = names[position] if names is not None else path.name
+            files.append(PublishedFile(name, path, size, sha))
         files.sort(key=lambda item: item.name)
         return cls(target, tag, artifact_type, tuple(files), move_tag)
+
+    @classmethod
+    def from_receipt(
+        cls,
+        receipt: Path,
+        to: str,
+        tag: str,
+        artifact_type: str,
+        *,
+        output_dir: Path | None = None,
+        move_tag: bool = False,
+    ) -> FilesPlan:
+        """0.39: the plan for the ``[[output.files]]`` a host build receipt lists.
+
+        Each file is read from ``output_dir`` (default: the receipt's
+        directory, where ``build-spec run --out`` puts the outputs) and must
+        still have the size and sha256 the receipt recorded
+        (``publish-input-changed``). No network.
+        """
+        from piceli.artifacts.build_spec import BuildReceipt, BuildSpecError
+
+        try:
+            data = BuildReceipt.from_json(Path(receipt).read_text()).data
+        except (OSError, UnicodeDecodeError, BuildSpecError):
+            raise PublishError("publish-invalid", "not a build receipt") from None
+        details = (data.get("outputs") or {}).get("file_details") or {}
+        if not isinstance(details, dict) or not details:
+            raise PublishError(
+                "publish-invalid", "the receipt lists no [[output.files]]"
+            )
+        root = (output_dir or Path(receipt).absolute().parent).absolute()
+        plan = cls.from_paths(
+            [root.joinpath(*Path(path).parts) for path in sorted(details)],
+            to,
+            tag,
+            artifact_type,
+            move_tag=move_tag,
+            names=[str(details[path]["file"]) for path in sorted(details)],
+        )
+        by_name = {str(entry["file"]): entry for entry in details.values()}
+        for item in plan.files:
+            entry = by_name[item.name]
+            if item.sha256 != entry.get("sha256") or item.size != entry.get("size"):
+                raise PublishError("publish-input-changed", item.name)
+        return plan
 
     @property
     def manifest(self) -> bytes:

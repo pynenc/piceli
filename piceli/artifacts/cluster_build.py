@@ -827,6 +827,13 @@ def job_run(
         merged: dict[str, Any] | None = None
         for relative in specs:
             spec = HostBuildSpec.from_toml(source / relative)
+            if not spec.images:
+                # 0.39: [[output.files]] alone: nothing to push or deploy.
+                raise PipelineError(
+                    "cluster-build-failed",
+                    f"host build {spec.name!r} declares no [[output.image]]",
+                    failed=True,
+                )
             spec = spec.for_node(node).with_cache_dir(cache)
             plan = spec.plan()
             grant = HostBuildGrant(plan.plan_hash, time.time() + timeout_seconds + 600)
