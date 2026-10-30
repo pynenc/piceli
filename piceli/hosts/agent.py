@@ -293,7 +293,81 @@ class Cache:
 # ------------------------------------------------------------------ OTLP
 
 
+#: The event name of a release marker (0.38.0), from the host agent and the
+#: controller alike.
+MARKER_EVENT = "piceli.release"
+#: ``deployment.status`` of a marker: the conventions' ``succeeded`` and
+#: ``failed``, and ``rolled_back`` when a rollback ended the release.
+MARKER_STATUSES = ("succeeded", "failed", "rolled_back")
+
+
+def _seconds_between(started: Any, finished: Any) -> float | None:
+    try:
+        begin = _dt.datetime.fromisoformat(str(started).replace("Z", "+00:00"))
+        end = _dt.datetime.fromisoformat(str(finished).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return round(max(0.0, (end - begin).total_seconds()), 3)
+
+
+def release_marker(
+    *,
+    environment: str,
+    deployment_id: str,
+    status: str,
+    version: str | None,
+    revision: str | None,
+    started_at: str | None,
+    finished_at: str | None,
+    components: list[str] | tuple[str, ...] = (),
+    previous: Mapping[str, Any] | None = None,
+    repository_url: str | None = None,
+    release_id: str | None = None,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    """The attributes of a release marker (0.38.0): one per finished release.
+
+    OpenTelemetry semantic-convention names where they exist
+    (``deployment.*``, ``service.version``, ``vcs.*``); the time window, the
+    components and the previous release under ``piceli.release.*``, so a
+    backend can compare the hour before with the hour after. ``previous``
+    is ``{"id", "version", "revision", "finished_at"}`` of the release that
+    ran before (``None`` for the first one). Standard library only: the host
+    agent and the controller share it. ``None`` values are left out."""
+    if status not in MARKER_STATUSES:
+        raise ValueError(f"unknown release status {status!r}")
+    before = dict(previous or {})
+    found: dict[str, Any] = {
+        "deployment.environment.name": environment,
+        "deployment.id": deployment_id,
+        "deployment.status": status,
+        "service.version": version,
+        "vcs.ref.head.revision": revision,
+        "vcs.repository.url.full": repository_url,
+        "piceli.release.id": release_id,
+        "piceli.run.id": run_id,
+        "piceli.release.components": sorted({str(c) for c in components if c}),
+        "piceli.release.started_at": started_at,
+        "piceli.release.finished_at": finished_at,
+        "piceli.release.seconds": _seconds_between(started_at, finished_at)
+        if started_at and finished_at
+        else None,
+        "piceli.release.previous.id": before.get("id"),
+        "piceli.release.previous.version": before.get("version"),
+        "piceli.release.previous.revision": before.get("revision"),
+        "piceli.release.previous.finished_at": before.get("finished_at"),
+    }
+    return {k: v for k, v in found.items() if v is not None and v != "" and v != []}
+
+
 def _attribute(key: str, value: Any) -> dict[str, Any]:
+    if isinstance(value, list | tuple):  # 0.38.0: list attributes
+        return {
+            "key": key,
+            "value": {
+                "arrayValue": {"values": [_attribute(key, v)["value"] for v in value]}
+            },
+        }
     if isinstance(value, bool):
         return {"key": key, "value": {"boolValue": value}}
     if isinstance(value, int):
@@ -335,9 +409,28 @@ class Reporter:
     def event(
         self, name: str, body: str, trace: str, error: bool = False, **attrs: Any
     ) -> None:
+        self._queue(name, body, trace, error, attrs)
+
+    def marker(
+        self, body: str, trace: str, error: bool, attrs: Mapping[str, Any]
+    ) -> None:
+        """A release marker (0.38.0): also sets the record's OTLP
+        ``eventName`` field."""
+        self._queue(MARKER_EVENT, body, trace, error, attrs, event_name=True)
+
+    def _queue(
+        self,
+        name: str,
+        body: str,
+        trace: str,
+        error: bool,
+        attrs: Mapping[str, Any],
+        *,
+        event_name: bool = False,
+    ) -> None:
         if not self.report:
             return
-        record = {
+        record: dict[str, Any] = {
             "timeUnixNano": str(time.time_ns()),
             "severityNumber": 17 if error else 9,
             "severityText": "ERROR" if error else "INFO",
@@ -346,6 +439,8 @@ class Reporter:
             "attributes": [_attribute("event.name", name)]
             + [_attribute(k, v) for k, v in sorted(attrs.items()) if v is not None],
         }
+        if event_name:
+            record["eventName"] = name
         self.queue = (self.queue + [record])[-QUEUE_MAX:]
         self.flush()
 
@@ -377,6 +472,8 @@ class Reporter:
                         "attributes": [
                             _attribute("service.name", "piceli-host-agent"),
                             _attribute("host.name", self.host),
+                            # 0.38.0: the host is the environment of its releases.
+                            _attribute("deployment.environment.name", self.host),
                         ]
                     },
                     "scopeLogs": [
@@ -1120,6 +1217,8 @@ class Agent:
                 "tag": attempt["tag"], "ref": pointer.get("ref"),
                 "published_at": pointer.get("published_at"),
                 "since": now_text(self.clock()), "pinned": attempt["pinned"],
+                # 0.38.0: the release marker's id, the next one's previous.
+                "deployment_id": f"{self.config['host']}/{attempt['id']}",
             }  # fmt: skip
         attempt.pop("phase", None)
         self.state.pop("pending", None)
@@ -1135,10 +1234,56 @@ class Agent:
                 "piceli.seconds": attempt["seconds"],
             },
         )  # fmt: skip
+        self._marker(attempt, current)
         if attempt["state"] == "deployed":
             attempt["prune"] = self.status["prune"] = self.prune(trace)
         self._record(attempt)
         return attempt
+
+    def _marker(self, attempt: Mapping[str, Any], before: Mapping[str, Any]) -> None:
+        """The release marker of a finished attempt (0.38.0): ``succeeded``
+        when it runs, ``rolled_back`` when a rollback ended it (a failed
+        switch or check, an interrupted run, or ``piceli host rollback``).
+        An attempt refused or failed before its switch released nothing."""
+        state = attempt.get("state")
+        if state == "deployed":
+            status = (
+                "rolled_back" if attempt.get("trigger") == "rollback" else "succeeded"
+            )
+        elif state == "rolled-back":
+            status = "rolled_back"
+        else:
+            return
+        host = str(self.config["host"])
+        previous = {
+            "id": before.get("deployment_id"),
+            "version": before.get("tag") or before.get("commit"),
+            "revision": before.get("commit"),
+            "finished_at": before.get("since"),
+        }
+        attributes = release_marker(
+            environment=host,
+            deployment_id=f"{host}/{attempt.get('id')}",
+            status=status,
+            version=attempt.get("tag") or attempt.get("commit"),
+            revision=attempt.get("commit"),
+            started_at=attempt.get("started_at"),
+            finished_at=attempt.get("ended_at"),
+            components=[self.build],
+            previous=previous if any(previous.values()) else None,
+        )
+        self.reporter.marker(
+            f"release {attributes.get('service.version', '?')}: {status}",
+            str(attempt.get("trace_id")),
+            status != "succeeded",
+            {
+                "piceli.trigger": attempt.get("trigger"),
+                "host.name": host,
+                "piceli.state": state,
+                "piceli.reason": attempt.get("reason"),
+                **attributes,
+            },
+        )
 
     # ---------------------------------------------------------- prune
 
@@ -1297,6 +1442,8 @@ class Agent:
                            "piceli.rollback": record["state"]},
         )  # fmt: skip
         self.state.pop("pending", None)
+        current = self.state.get("current") or {}
+        self._marker(attempt, current)
         self._record(attempt)
         self._save()
 

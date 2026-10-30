@@ -198,6 +198,7 @@ belong to. Severity is `INFO`, or `ERROR` for failures.
 | `piceli.environment.stopped` | `STOP …` | `piceli.stop.reason` (`declared`, `requested`, `idle-stop`), `piceli.stop.via` |
 | `piceli.environment.started` | `START …` | — |
 | `piceli.deploy.interrupted` | root | `error.type = controller-restarted` |
+| `piceli.release` (0.38.0) | root | The release marker of a deploy that applied a release (and of a published `NixRelease`): `deployment.id`, `deployment.status`, `service.version`, the window and the previous release; see {doc}`deploy_events` |
 
 Common attributes: `piceli.event.id`, `cicd.pipeline.name`,
 `cicd.pipeline.run.id`, `deployment.environment.name`,
@@ -265,7 +266,8 @@ with `piceli.nix.release`, `piceli.nix.tag`, `vcs.ref.head.revision`,
 `piceli.nix.state`, `piceli.nix.builder`, `piceli.nix.build_host`,
 `piceli.nix.trigger`, `piceli.nix.manifest_sha256` and `error.type`; a child
 span per stage (`approval`, `queue`, `fetch`, `build`, `publish`); and the
-event `piceli.nix.release.finished` on the root span.
+event `piceli.nix.release.finished` on the root span. A published release also sends
+the release marker `piceli.release` (0.38.0, {doc}`deploy_events`).
 
 ## A controller restart
 

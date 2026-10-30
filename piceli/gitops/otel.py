@@ -531,6 +531,12 @@ def _stamp(ns: int) -> str:
     return datetime.fromtimestamp(ns / 1e9, UTC).strftime("%Y%m%dT%H%M%S%fZ")[:-4] + "Z"
 
 
+def _stamp_iso(ns: int) -> str:
+    """An ISO 8601 UTC time of a nanosecond timestamp (milliseconds)."""
+    moment = datetime.fromtimestamp(ns / 1e9, tz=UTC)
+    return moment.strftime("%Y-%m-%dT%H:%M:%S.") + f"{moment.microsecond // 1000:03d}Z"
+
+
 def trace_id_of(cluster: str, env: str, run: str) -> int:
     """The run's trace id: derived, so a restart continues the same trace."""
     digest = hashlib.sha256(f"piceli:{cluster}:{env}/{run}".encode()).digest()
@@ -999,6 +1005,58 @@ class ControllerTelemetry:
                 context=self._span_context(run, "root"),
                 error=state != "published",
             )
+            if state == "published":  # 0.38.0: the release marker
+                self._nix_marker(name, attempt, event, run)
+
+    def _nix_marker(
+        self,
+        name: str,
+        attempt: str,
+        event: Mapping[str, Any],
+        run: Mapping[str, Any],
+    ) -> None:
+        """The ``piceli.release`` event of a published NixRelease (0.38.0);
+        each host that runs it sends its own from its agent."""
+        from piceli.hosts.agent import MARKER_EVENT, release_marker
+
+        last = self._data.setdefault("last_release", {})
+        key = f"nix/{name}"
+        before = _dict(last.get(key))
+        version = _text(event.get("tag"), 200) or _text(event.get("commit"), 64)
+        identity = f"nix/{attempt}"
+        attributes = release_marker(
+            environment=_text(name, 63) or "release",
+            deployment_id=identity,
+            status="succeeded",
+            version=version,
+            revision=_text(event.get("commit"), 64),
+            started_at=_text(event.get("requested_at"), 40),
+            finished_at=_text(event.get("finished_at"), 40),
+            components=[name],
+            previous={k: before.get(k) for k in ("id", "version", "revision",
+                                                  "finished_at")}
+            if before
+            else None,
+        )  # fmt: skip
+        self._event(
+            MARKER_EVENT,
+            f"{self.cluster}:nix/{attempt}:release",
+            _iso_ns(event.get("finished_at")) or self._now(),
+            body=f"nix release {name} {version or '?'} succeeded",
+            attributes={
+                **attributes,
+                "piceli.nix.release": _text(name, 63),
+                "k8s.cluster.name": self.cluster,
+            },
+            context=self._span_context(run, "root"),
+        )
+        last[key] = {
+            "id": identity,
+            "version": version,
+            "revision": attributes.get("vcs.ref.head.revision"),
+            "finished_at": attributes.get("piceli.release.finished_at"),
+        }
+        self.store.save(self._data)
 
     def _last_success_age(self, _options: Any) -> Iterator[Any]:
         from opentelemetry.metrics import Observation
@@ -1783,10 +1841,142 @@ class ControllerTelemetry:
                 },
                 error=result != "success",
             )
+            self._release_marker(run, result, end, record)
         self._spans(run, result, end, reason, record)
         self._metrics(run, result, end, reason)
         if result == "success" and run.get("kind") == "deploy":
             self._data.setdefault("last_success", {})[run["env"]] = end
+
+    def _release_marker(
+        self,
+        run: dict[str, Any],
+        result: str,
+        end: int,
+        record: Mapping[str, Any] | None,
+    ) -> None:
+        """One ``piceli.release`` event per finished release (0.38.0).
+
+        A run that applied a release sends it: ``succeeded``, ``failed``
+        (applied, its checks failed and nothing rolled back) or
+        ``rolled_back`` (failed checks rolled it back). A run that applied
+        nothing (a failed build, a verification, an unchanged release) is
+        not a release and sends none. It carries the previous release of
+        the environment and the time window, so a backend can compare the
+        hour before with the hour after."""
+        from piceli.hosts.agent import MARKER_EVENT, release_marker
+
+        record = _dict(record)
+        views = [_dict(item.get("data")) for item in run.get("journals") or []]
+        applied = any(
+            _dict(_dict(view.get("stages")).get("apply")).get("state") == "done"
+            for view in views
+        )
+        if result == "rolled-back":
+            status = "rolled_back"
+        elif result == "success" and record.get("last_action") == "deployed":
+            status = "succeeded"
+        elif result == "failure" and applied:
+            status = "failed"
+        else:
+            return
+        names = sorted(run.get("revision") or {})
+        primary = names[0] if names else None
+        revision = _dict(run.get("revision")).get(primary) if primary else None
+        ref_name, ref_kind = (
+            _ref_name(_dict(run.get("refs")).get(primary)) if primary else (None, None)
+        )
+        releases = [r for r in (_journal_release(v) for v in views) if r]
+        digests = {
+            str(name): _dict(value).get("digest")
+            for name, value in _dict(record.get("components")).items()
+            if _dict(value).get("digest")
+        }
+        last = self._data.setdefault("last_release", {})
+        before = _dict(last.get(run["env"]))
+        old = _dict(before.get("digests"))
+        touched = [name for name, digest in digests.items() if old.get(name) != digest]
+        rolled = [
+            str(name)
+            for name, value in _dict(record.get("components")).items()
+            if _dict(value).get("state") in {"synced", "rolling"}
+        ]
+        # The window: from the apply's start (the run's, without one) to the
+        # end of the run, its checks settled.
+        applies = [
+            at
+            for at in (
+                _iso_ns(_dict(_dict(v.get("stages")).get("apply")).get("started_at"))
+                for v in views
+            )
+            if at is not None
+        ]
+        started = _stamp_iso(min(applies) if applies else int(run["started_ns"]))
+        finished = _stamp_iso(end)
+        identity = f"{run['record']}/{run['run']}"
+        version = (ref_name if ref_kind == "tag" else None) or revision
+        run_id = next(
+            (str(v["run_id"]) for v in reversed(views) if v.get("run_id")), None
+        )
+        attributes = release_marker(
+            environment=str(run["env"]),
+            deployment_id=identity,
+            status=status,
+            version=_text(version, 128),
+            revision=_text(revision, 64),
+            started_at=started,
+            finished_at=finished,
+            components=sorted(set(touched or rolled)),
+            previous={k: before.get(k) for k in ("id", "version", "revision",
+                                                  "finished_at")}
+            if before
+            else None,
+            repository_url=self._repository_url(primary),
+            release_id=releases[-1] if releases else None,
+            run_id=_text(run_id, 64),
+        )  # fmt: skip
+        self._run_event(
+            run,
+            MARKER_EVENT,
+            "release",
+            end,
+            body=f"{run['env']}: release {version or '?'} {status}",
+            attributes={
+                **attributes,
+                "piceli.deploy.result": result,
+                "vcs.ref.head.name": ref_name,
+                "vcs.ref.head.type": ref_kind,
+                "vcs.repository.name": primary,
+            },
+            error=status != "succeeded",
+        )
+        if status != "rolled_back":  # a rolled-back release no longer runs
+            last[run["env"]] = {
+                "id": identity,
+                "version": _text(version, 128),
+                "revision": _text(revision, 64),
+                "finished_at": finished,
+                "digests": digests,
+            }
+
+    def _repository_url(self, source: str | None) -> str | None:
+        """The source's repository URL, without credentials (``None`` when
+        the controller does not know it)."""
+        import urllib.parse
+
+        state = getattr(self.controller, "state", None)
+        if not source or not isinstance(state, Mapping):
+            return None
+        url = _dict(_dict(state.get("sources")).get(source)).get("url")
+        if not isinstance(url, str) or not url:
+            return None
+        try:
+            parts = urllib.parse.urlsplit(url)
+        except ValueError:
+            return None
+        if parts.scheme not in {"https", "http", "ssh"} or not parts.hostname:
+            return None
+        netloc = parts.hostname + (f":{parts.port}" if parts.port else "")
+        return urllib.parse.urlunsplit((parts.scheme, netloc, parts.path, "", ""))
 
     def _approval_event(
         self, run: dict[str, Any], record: Mapping[str, Any] | None, end: int

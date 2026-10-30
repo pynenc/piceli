@@ -619,7 +619,13 @@ With `report=`, the agent sends OTLP/HTTP JSON logs to `ENDPOINT/v1/logs`
 (`service.name` `piceli-host-agent`, `host.name` the host's name): the
 events `piceli.host.deploy.start`, `piceli.host.stage`,
 `piceli.host.check`, `piceli.host.deploy.result`, `piceli.host.rollback`,
-`piceli.host.rejected`, `piceli.host.pin` and `piceli.host.unpin`. They
+`piceli.host.rejected`, `piceli.host.pin` and `piceli.host.unpin`. From
+0.38.0 each switch also sends a release marker, `piceli.release`
+(`deployment.status` `succeeded`, or `rolled_back` after a failed switch or
+check, an interrupted run or `piceli host rollback`), with the build's tag,
+its commit, the attempt's window and the release before it: see
+{doc}`deploy_events`. The resource adds `deployment.environment.name` (the
+host's name). They
 carry the commit, the state, the reason, the seconds and the deploy's
 `piceli.trigger` (`poll`, `pin` or `rollback`); one deploy or command
 shares one trace id. A collector that is down never
