@@ -45,8 +45,11 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
     node had condition: [DiskPressure].`), not "the cache-clear Job printed
     no result". `controller.cache_clear` adds `reason` and `message`.
   - No run or build starts on such a node, so their budget eviction never
-    ran there. The controller now evicts the cache to its budget itself,
-    at most once per poll window, and records it in `storage.relief`.
+    ran there. The controller now evicts the build cache to its budget
+    itself, at most once per poll window, and records it in
+    `storage.relief`. It does not create Jobs in the development namespace,
+    where untrusted code runs, so for the development cache `storage.relief`
+    records the refusal and the status says to run `piceli dev cache clear`.
   - `storage.caches` carries each cache's last measured use (used, budget,
     free disk), and the controller is `degraded` with a plain reason
     (`storage.problem`, `controller.storage_problem`) while a node under

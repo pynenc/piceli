@@ -165,6 +165,12 @@ def install_objects(cluster: Any) -> list[dict[str, Any]]:
                         "resources": ["pods"],
                         "verbs": ["get", "list"],
                     },
+                    # 0.38.0: why the node or a quota refused a cache-clear pod.
+                    {
+                        "apiGroups": [""],
+                        "resources": ["events"],
+                        "verbs": ["get", "list"],
+                    },
                     {"apiGroups": [""], "resources": ["pods/log"], "verbs": ["get"]},
                     {
                         "apiGroups": [""],

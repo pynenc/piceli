@@ -395,7 +395,11 @@ never runs there. When such a node holds a Piceli cache (the build cache,
 or the development cache of `DevBuilds(node=...)`), the controller starts
 that eviction itself: the cache-clear Job in its evict-to-budget mode, with
 the critical priority above, at most once per poll window (a minute, or
-the poll interval when longer). It publishes:
+the poll interval when longer). The controller's role in the development
+namespace cannot create Jobs (untrusted code runs there), so for the
+development cache `storage.relief` records the refusal and the problem
+says to run `piceli dev cache clear`, which runs with your rights. It
+publishes:
 
 - `storage.relief` (`at`, and per cache: `node`, `state`, `evicted`,
   `freed_bytes`, the `job`, and the node's `reason` and `message` when it
