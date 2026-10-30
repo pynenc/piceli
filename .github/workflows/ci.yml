@@ -54,7 +54,8 @@ jobs:
           curl -sSfL -o /tmp/sops https://github.com/getsops/sops/releases/download/v3.10.2/sops-v3.10.2.linux.amd64
           echo "79b0f844237bd4b0446e4dc884dbc1765fc7dedc3968f743d5949c6f2e701739  /tmp/sops" | sha256sum -c -
           sudo install -m 0755 /tmp/sops /usr/local/bin/sops
-      # Coverage only on 3.12, the run whose data is combined (a third slower).
+      # Coverage only on 3.12, the run whose data is combined (sysmon core,
+      # see pyproject; the C tracer made this job twice as slow as the others).
       - name: Unit and acceptance tests
         env:
           COV: ${{ matrix.python == '3.12' && '--cov --cov-report=term' || '' }}

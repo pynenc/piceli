@@ -168,6 +168,8 @@ filterwarnings = [
 [tool.coverage.run]
 source = ["piceli"]
 relative_files = true
+# sys.monitoring (Python 3.12+): far less overhead than the C tracer.
+core = "sysmon"
 
 [tool.coverage.report]
 exclude_lines = [
