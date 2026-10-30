@@ -272,7 +272,11 @@ def load_spec(
     try:
         spec = HostBuildSpec.from_dict(document, Path("/") / directory)
     except BuildSpecError as error:
-        raise _invalid(f"the build spec {path} is invalid ({error.code})") from None
+        # 0.41.0: a command naming an unstaged path says which one.
+        detail = f": {error}" if error.code == "host-build-path-not-staged" else ""
+        raise _invalid(
+            f"the build spec {path} is invalid ({error.code}){detail}"
+        ) from None
     if spec.files:
         # 0.39: the controller builds and delivers images only.
         raise _invalid(
@@ -514,7 +518,12 @@ def run_spec_build(
 
             # 0.26.3: a context error names the context and its path (in the
             # Job: /work/src/<source>/...); the code alone said too little.
-            detail = f": {error}" if error.code.startswith("context-") else ""
+            detail = (
+                f": {error}"
+                if error.code.startswith("context-")
+                or error.code == "host-build-path-not-staged"
+                else ""
+            )
             raise build_failed(
                 f"build {request.spec}: host build failed ({error.code}){detail}",
                 error,

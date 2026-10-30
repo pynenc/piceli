@@ -303,7 +303,10 @@ class LocalBuilder:
                         ).to_dict()
                     except BuildSpecError as error:
                         detail = (
-                            f": {error}" if error.code.startswith("context-") else ""
+                            f": {error}"
+                            if error.code.startswith("context-")
+                            or error.code == "host-build-path-not-staged"
+                            else ""
                         )
                         raise build_failed(
                             f"component {item.component!r}: host build failed "

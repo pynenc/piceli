@@ -990,6 +990,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "build-spec",
     ),
     _E(
+        "host-build-path-not-staged",
+        "Command names a path its context does not stage",
+        "A host build command names a path inside a context's staging directory (`<context>/...`) that the context's `include` globs do not select (or its `exclude` globs remove), so the file would be missing when the command runs. The message names the command, the path and the context's include list.",
+        "Add the path to `context.<name>.include`, or fix the path in the command.",
+        False,
+        "build-spec",
+    ),
+    _E(
         "context-budget-exceeded",
         "Build context over budget",
         "A context has more files or bytes than its budget.",

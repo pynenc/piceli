@@ -15246,6 +15246,7 @@
    "host-address-unknown",
    "host-build-bad",
    "host-build-invalid",
+   "host-build-path-not-staged",
    "host-busy",
    "host-cache-unreachable",
    "host-check-failed",
@@ -17626,6 +17627,7 @@
   "piceli.artifacts.runnable",
   "piceli.artifacts.signing",
   "piceli.artifacts.source_identity",
+  "piceli.artifacts.staged_paths",
   "piceli.bounds",
   "piceli.bundle",
   "piceli.bundle.build",
@@ -18021,5 +18023,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.40.0"
+ "version": "0.41.0"
 }

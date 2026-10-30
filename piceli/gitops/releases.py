@@ -162,6 +162,7 @@ def logs(entry: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "attempt": item.get("attempt"),
                     "at": item.get("at"),
                     "reason": item.get("reason"),
+                    **({"stage": item["stage"]} if item.get("stage") else {}),
                     "text": item["log_tail"],
                 }
             )
@@ -172,6 +173,8 @@ def logs(entry: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "source": "failure",
                 "at": entry.get("finished_at"),
                 "reason": failure.get("reason"),
+                # 0.41.0: where it failed (a build host's stage) and on which host.
+                **{k: failure[k] for k in ("stage", "host") if failure.get(k)},
                 "text": failure["log_tail"],
             }
         )

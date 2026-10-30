@@ -96,7 +96,15 @@ from piceli.infra import builds
 #: The container engine's named volume of the build cache (cargo targets,
 #: blobs, stage), per build host.
 CACHE_VOLUME = "piceli-build-cache"
-TAIL_LINES = 120
+#: Lines of the build's output kept for its answer (120 before 0.41.0: a
+#: failing command's block, up to 200 lines, did not fit).
+TAIL_LINES = 300
+#: 0.41.0: how ``piceli build job-run`` introduces a failing command's output.
+_FAILING_MARK = "[piceli] the failing command's last "
+_FIRST_ERROR_MARK = "[piceli] the first error:"
+_FAILED_STEP = re.compile(
+    r"\[piceli\] .*command \d+/\d+ \(.*\): (?:failed|timed-out|output-limit)"
+)
 #: Lines of a failed publish's output kept for its answer.
 TAIL_CHARS_LINES = 120
 #: Where the builder container finds the sources: its own copy of the
@@ -173,6 +181,35 @@ class BuildFailed(Exception):
 
 #: ``docker run``'s own failure (the engine could not start the container).
 ENGINE_FAILED = 125
+
+
+def failing_output(lines: Sequence[str]) -> str:
+    """What a build-failed answer carries of the build's output (0.41.0).
+
+    When ``piceli build job-run`` printed a failing command's block, only
+    that: the line naming the failed step, the first error, then the
+    command's last lines, so the end of the text (what a status keeps when
+    it bounds it) is the command's own last output. Else the whole tail.
+    The block is already redacted by the build (secrets never reach it).
+    """
+    items = list(lines)
+    marks = [i for i, line in enumerate(items) if _FAILING_MARK in line]
+    if not marks:
+        return "\n".join(items)
+    start = marks[-1]
+    step = [line for line in items[:start] if _FAILED_STEP.search(line)][-1:]
+    command: list[str] = [items[start]]
+    first: list[str] = []
+    into = command
+    for line in items[start + 1 :]:
+        if _FIRST_ERROR_MARK in line:
+            into = first
+            into.append(line)
+        elif "  | " in line or line.startswith("| "):
+            into.append(line)
+        else:
+            break
+    return "\n".join([*step, *first, *command])
 
 
 def _slug(url: str) -> str:
@@ -874,11 +911,13 @@ class BuilderServe:
             from piceli.dev.pod import health_signal
             from piceli.gitops.state import build_failed_request
 
-            text = error.tail or "\n".join(tail)
+            text = failing_output((error.tail or "\n".join(tail)).splitlines())
+            stage = self._progress.current if self._progress is not None else None
             self.channel.add_request(
                 *build_failed_request(
                     build, self.host, str(error), text,
                     early=error.early, source=error.source,
+                    stage=stage,  # 0.41.0: fetch, build or push
                 )
             )  # fmt: skip
             self.answered.add(build)
@@ -1019,8 +1058,11 @@ class BuilderServe:
                 str(error) if isinstance(error, BuildFailed | ValueError) else
                 f"the publish failed ({type(error).__name__})"
             )  # fmt: skip
+            at = self._progress.current if self._progress is not None else None
             self.channel.add_request(
-                *build_failed_request(build, self.host, reason, "\n".join(tail))
+                *build_failed_request(
+                    build, self.host, reason, "\n".join(tail), stage=at
+                )
             )
             self.answered.add(build)
             self.say(f"builder: {build} failed: {reason}")
