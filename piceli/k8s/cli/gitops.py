@@ -14,6 +14,8 @@
 - ``promote [ENV] BRANCH@SHA`` asks the controller to deploy that commit to
   main, or to the named environment ENV (it then waits for ``gitops
   approve`` unless the owner allowed otherwise).
+- ``gitops history [ENV]``, ``gitops show RUN`` and ``gitops compare ENV``
+  (0.38.0, :mod:`piceli.k8s.cli.gitops_history`) read the deployment history.
 - ``gitops run`` is the controller itself (the Deployment's entrypoint), or
   one poll locally with ``--once``.
 
@@ -1154,7 +1156,12 @@ def _health(status: dict[str, Any] | None, ready: bool | None, now: float) -> st
     if quiet["age"] is not None and quiet["age"] > quiet["limit"]:
         return "stale"
     # 0.27.1: a composition head that failed to import is not healthy.
-    problem = controller.get("last_error") or controller.get("composition_problem")
+    problem = (
+        controller.get("last_error")
+        or controller.get("composition_problem")
+        # 0.38.0: a node under disk pressure holds a Piceli cache.
+        or controller.get("storage_problem")
+    )
     return "degraded" if problem else "healthy"
 
 
@@ -1236,6 +1243,8 @@ def status(
             )
         if controller.get("composition_problem"):  # 0.27.1
             say(f"  {controller['composition_problem']}")
+        if controller.get("storage_problem"):  # 0.38.0
+            say(f"  {controller['storage_problem']}")
     for key, source in (body.get("sources") or {}).items():
         if source.get("error"):
             # 0.19: Git's masked message (an expired token, a wrong URL).
@@ -2715,6 +2724,7 @@ def _pause(
 
 def register(root: typer.Typer) -> None:
     """Add ``gitops`` and ``promote`` to the root application."""
+    import piceli.k8s.cli.gitops_history
     import piceli.k8s.cli.gitops_watch  # noqa: F401 - adds `gitops alarms`
 
     root.add_typer(app, name="gitops")

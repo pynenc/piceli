@@ -314,6 +314,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`gitops-empty`](#error-gitops-empty) | gitops | no |
 | [`gitops-env-stop-declared`](#error-gitops-env-stop-declared) | gitops | no |
 | [`gitops-git-failed`](#error-gitops-git-failed) | gitops | yes |
+| [`gitops-history-unavailable`](#error-gitops-history-unavailable) | gitops | yes |
 | [`gitops-image-unpinned`](#error-gitops-image-unpinned) | gitops | no |
 | [`gitops-image-unresolved`](#error-gitops-image-unresolved) | gitops | no |
 | [`gitops-nix-release-failed`](#error-gitops-nix-release-failed) | gitops | yes |
@@ -327,6 +328,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`gitops-repo-invalid`](#error-gitops-repo-invalid) | gitops | no |
 | [`gitops-request-invalid`](#error-gitops-request-invalid) | gitops | no |
 | [`gitops-run-interrupted`](#error-gitops-run-interrupted) | gitops | yes |
+| [`gitops-run-unknown`](#error-gitops-run-unknown) | gitops | no |
 | [`gitops-secret-value`](#error-gitops-secret-value) | gitops | no |
 | [`gitops-secrets-present`](#error-gitops-secrets-present) | gitops | no |
 | [`gitops-state-invalid`](#error-gitops-state-invalid) | gitops | no |
@@ -4474,6 +4476,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Read the message (for example `Invalid username or token`: renew the token in the credentials Secret); otherwise check the URL, `known_hosts` for SSH and the network from the cluster. The controller retries on its next poll.
 - **Retry-safe:** yes
 
+(error-gitops-history-unavailable)=
+### `gitops-history-unavailable`
+
+**No deployment history.** `piceli gitops history`, `show` or `compare` found no `piceli.gitops-history.v1` document: the controller has not published its history yet (the ConfigMap `piceli-gitops-history`, or `history.json` in `--state-dir`), or it is not a composition controller.
+
+- **Fix:** Wait for the controller's next poll and check `piceli gitops status`; the history is published after each step.
+- **Retry-safe:** yes
+
 (error-gitops-image-unpinned)=
 ### `gitops-image-unpinned`
 
@@ -4577,6 +4587,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Nothing to do: the controller retries the environment. Read `piceli gitops status` and the controller's last exit (`controller_live`) for why it stopped.
 - **Retry-safe:** yes
+
+(error-gitops-run-unknown)=
+### `gitops-run-unknown`
+
+**Run or environment not in the history.** The environment, run id or revision is not in the controller's published history (it keeps the newest 20 runs per environment), or `compare` found fewer than two runs to compare.
+
+- **Fix:** List what the history holds with `piceli gitops history [ENV]` and pass a run's `id` or `run_id` (a unique prefix works).
+- **Retry-safe:** no
 
 (error-gitops-secret-value)=
 ### `gitops-secret-value`

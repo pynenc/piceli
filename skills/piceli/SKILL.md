@@ -3,7 +3,7 @@ name: piceli
 description: Deploy and operate Kubernetes apps described as typed Python with Piceli, safely, from an agent. Covers installing piceli, describing an App and a Pipeline, rendering without a cluster, planning and showing the plan to the owner, deploying only with the hash the owner approved (or inside the owner's declared auto_approve policy), checking status and access, diagnosing failures with `piceli explain` and the JSON output contract, resuming interrupted runs and rolling back. Use when a project imports piceli or has a Pipeline or release.toml, or when asked to deploy, plan, roll back or debug a Piceli release.
 license: MIT
 metadata:
-  piceli-version: "0.37"
+  piceli-version: "0.38"
 ---
 
 # Piceli
@@ -38,7 +38,7 @@ exist in the version below.
 
 ## Requirements
 
-- `piceli` **0.37.x**, CPython 3.12+: `pip install "piceli>=0.37,<0.38"`.
+- `piceli` **0.38.x**, CPython 3.12+: `pip install "piceli>=0.38,<0.39"`.
 - The owner gives you a kubeconfig **file** and a **context** (here through
   `SHOP_KUBECONFIG` and `SHOP_CONTEXT`). A pipeline with `Build` objects also
   needs Docker; the example below uses pinned images only.
@@ -201,6 +201,13 @@ owner), `pipeline-registry-takeover-required` (ask the owner),
 `exec-auth-not-allowed` (ask the owner), `check-failed` (report the failed
 checks; an automatic rollback may already have run).
 
+With the GitOps controller, read what its deploys did (read-only):
+`piceli gitops history [ENV] --json` (each run's outcome, commits, digests,
+checks and `release_window`), `piceli gitops show RUN --logs --json` (one
+run and the log tail it kept) and `piceli gitops compare ENV --json` (the
+running release against the one before: commits, changed images, objects).
+To check telemetry before and after a release, use its `release_window`.
+
 ## 7. Resume an interrupted or failed run
 
 ```sh
@@ -282,7 +289,7 @@ tell the owner, do not retry. A failed check's reason is in `failed_checks`.
 `python scripts/diagnose.py …`, `python scripts/rollback.py …` without
 `--approve` (it only plans), `piceli infra status|plan` (plan never changes a
 resource), `piceli bundle … [--helm] --out DIR` (local files only, no secret value),
-`piceli dev status|logs`, and `piceli dev run` where the owner declared
+`piceli dev status|logs`, `piceli gitops status|history|show|compare`, and `piceli dev run` where the owner declared
 `dev=DevBuilds(...)` (section 9).
 
 ## Never do without the owner's approval

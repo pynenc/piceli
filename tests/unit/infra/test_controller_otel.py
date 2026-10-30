@@ -925,3 +925,106 @@ def test_a_failed_step_records_the_stage_it_failed_in(world: dict[str, Any]) -> 
     world["ports"].builder.fail = "error"
     status = world["controller"].poll_once()
     assert status["envs"]["main"]["failed_stage"] == "build"
+
+
+# ------------------------------------------------------------ release markers
+
+
+def test_each_release_sends_one_marker_naming_the_previous(
+    world: dict[str, Any],
+) -> None:
+    """0.38.0: one ``piceli.release`` event per release, with the semantic
+    convention names, the window, the touched components and the previous."""
+    controller, signals = world["controller"], world["signals"]
+    status = controller.poll_once()
+    world["clock"]["now"] += 100
+    controller.poll_once()  # nothing new: no release, no marker
+    assert len(signals.events("piceli.release")) == 1
+    world["shop"].commit({"web/index.html": "<h1>v2</h1>\n"})
+    world["clock"]["now"] += 100
+    second_status = controller.poll_once()
+    first, second = signals.events("piceli.release")
+    one, two = dict(first.attributes), dict(second.attributes)
+    revision = status["envs"]["main"]["revision"]
+    assert one["deployment.environment.name"] == "main"
+    assert one["deployment.status"] == "succeeded"
+    assert one["deployment.id"].startswith("main/")
+    assert one["vcs.ref.head.revision"] == revision["catalog"]
+    assert one["service.version"] == revision["catalog"]  # a branch: the commit
+    assert one["vcs.repository.name"] == "catalog"
+    assert one["piceli.release.id"] == "shop-r2"
+    assert one["piceli.run.id"]
+    assert set(one["piceli.release.components"]) >= {"web", "api"}
+    assert one["piceli.release.started_at"] < one["piceli.release.finished_at"]
+    assert one["piceli.release.seconds"] > 0
+    assert "piceli.release.previous.id" not in one
+    root = [r for r in signals.roots() if r.name == "SYNC shop/main"][0]
+    assert first.trace_id == root.context.trace_id
+    assert one["deployment.id"] == root.attributes["deployment.id"]
+    assert two["piceli.release.previous.id"] == one["deployment.id"]
+    assert two["piceli.release.previous.revision"] == one["vcs.ref.head.revision"]
+    assert (
+        two["piceli.release.previous.finished_at"]
+        == (one["piceli.release.finished_at"])
+    )
+    # Only the component whose image changed is listed.
+    assert second_status["envs"]["main"]["state"] == "deployed"
+    assert list(two["piceli.release.components"]) == ["web"]
+
+
+def test_a_rollback_ends_the_release_with_a_rolled_back_marker(
+    world: dict[str, Any],
+) -> None:
+    controller, signals = world["controller"], world["signals"]
+    controller.poll_once()
+    world["ports"].checks = "fail"
+    world["shop"].commit({"web/index.html": "<h1>v2</h1>\n"})
+    world["clock"]["now"] += 100
+    controller.poll_once()
+    first, rolled = signals.events("piceli.release")
+    attrs = dict(rolled.attributes)
+    assert attrs["deployment.status"] == "rolled_back"
+    assert attrs["piceli.deploy.result"] == "rolled-back"
+    assert attrs["piceli.release.previous.id"] == first.attributes["deployment.id"]
+    assert rolled.severity_text == "ERROR"
+    # The rolled-back release no longer runs: the next one's previous is the first.
+    world["ports"].checks = "pass"
+    world["shop"].commit({"web/index.html": "<h1>v3</h1>\n"})
+    world["clock"]["now"] += 100
+    controller.poll_once()
+    third = signals.events("piceli.release")[-1]
+    assert third.attributes["deployment.status"] == "succeeded"
+    assert (
+        third.attributes["piceli.release.previous.id"]
+        == (first.attributes["deployment.id"])
+    )
+
+
+def test_a_failed_build_is_no_release(world: dict[str, Any]) -> None:
+    world["ports"].builder.fail = "error"
+    world["controller"].poll_once()
+    assert world["signals"].events("piceli.release") == []
+
+
+def test_a_published_nix_release_sends_a_marker(world: dict[str, Any]) -> None:
+    telemetry = world["controller"].telemetry
+    event = {
+        "release": "web-1",
+        "id": "web-1-v1.0.0-1",
+        "state": "published",
+        "tag": "v1.0.0",
+        "commit": "a" * 40,
+        "requested_at": "2026-10-30T10:00:00Z",
+        "finished_at": "2026-10-30T10:06:00Z",
+    }
+    telemetry.nix_release(event)
+    telemetry.nix_release({**event, "id": "web-1-v1.1.0-1", "tag": "v1.1.0",
+                           "commit": "b" * 40, "finished_at": "2026-10-30T11:00:00Z"})  # fmt: skip
+    telemetry.nix_release({**event, "id": "web-1-v1.2.0-1", "state": "failed"})
+    first, second = world["signals"].events("piceli.release")
+    assert first.attributes["deployment.environment.name"] == "web-1"
+    assert first.attributes["deployment.status"] == "succeeded"
+    assert first.attributes["service.version"] == "v1.0.0"
+    assert first.attributes["piceli.release.seconds"] == 360.0
+    assert second.attributes["piceli.release.previous.version"] == "v1.0.0"
+    assert second.attributes["piceli.release.previous.id"] == "nix/web-1-v1.0.0-1"

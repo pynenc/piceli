@@ -4,6 +4,58 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.38.0
+
+**Features**
+
+- **`piceli gitops history`, `gitops show` and `gitops compare`**: the
+  controller's deployment history on the command line, read-only, from the
+  document the UI's Deployment history reads. `history [ENV] [--limit N]`
+  lists each environment's runs, newest first, each with `window` and
+  `release_window`; `show RUN [--logs]` is one run and the log tail it kept;
+  `compare ENV [A] [B]` puts two runs side by side (default: the running
+  release and the one before): source commits, components whose image
+  changed, objects added, removed and changed, and both windows. `--json`
+  prints `piceli.gitops-runs.v1`, `piceli.gitops-run.v1` and
+  `piceli.gitops-compare.v1`. New codes: `gitops-history-unavailable`,
+  `gitops-run-unknown`. See {doc}`gitops`.
+- **Release markers**: each finished release sends one OpenTelemetry log
+  record named `piceli.release`, from the controller (an environment deploy
+  that applied a release, a published `NixRelease`) and from each Nix host's
+  agent to the host's own `HostReport` endpoint. It carries
+  `deployment.environment.name`, `deployment.id`, `deployment.status`
+  (`succeeded`, `failed`, `rolled_back`), `service.version`,
+  `vcs.ref.head.revision`, the components it changed, its window
+  (`piceli.release.started_at`, `.finished_at`, `.seconds`) and the previous
+  release (`piceli.release.previous.*`). A rollback that ends a release
+  sends one with `rolled_back`. Existing events and attributes are
+  unchanged; the host agent's resource adds `deployment.environment.name`.
+  See {doc}`deploy_events`.
+
+**Fixes**
+
+- **A node under disk pressure that holds a Piceli cache recovers.**
+  - `piceli dev cache clear` and `piceli gitops cache clear` run their Job
+    with the priority class `system-node-critical`. Under DiskPressure the
+    kubelet admits only critical pods: the toleration of 0.35.0 got the pod
+    scheduled, then the node evicted it. A ResourceQuota that limits that
+    class in the namespace stops it; the refusal says so.
+  - A pod the node refuses or evicts fails the command with the node's
+    reason (`the cache-clear pod was rejected by the node: Evicted: The
+    node had condition: [DiskPressure].`), not "the cache-clear Job printed
+    no result". `controller.cache_clear` adds `reason` and `message`.
+  - No run or build starts on such a node, so their budget eviction never
+    ran there. The controller now evicts the build cache to its budget
+    itself, at most once per poll window, and records it in
+    `storage.relief`. It does not create Jobs in the development namespace,
+    where untrusted code runs, so for the development cache `storage.relief`
+    records the refusal and the status says to run `piceli dev cache clear`.
+  - `storage.caches` carries each cache's last measured use (used, budget,
+    free disk), and the controller is `degraded` with a plain reason
+    (`storage.problem`, `controller.storage_problem`) while a node under
+    disk pressure holds a Piceli cache. `gitops status` shows
+    `health: degraded`.
+
 ## Version 0.37.1
 
 **Fixes**

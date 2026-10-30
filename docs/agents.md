@@ -181,6 +181,16 @@ noted.
   `cache-over-budget`) and its failed sends. Read-only. On either disk
   alarm, report it with the node or cache it names; emptying a cache is
   in the approval table below.
+- `piceli gitops history [ENV] [--limit N] [--json]`, `piceli gitops show
+  RUN [--logs] [--json]` and `piceli gitops compare ENV [A] [B] [--json]`
+  (0.38.0): the controller's deployment history, read-only, as the UI's
+  Deployment history shows it. `history` lists each environment's runs,
+  newest first, with `window` and `release_window` (the time a release
+  changed the cluster, the same as its `piceli.release` telemetry marker);
+  `show` is one run (`--logs`: the log tail it kept); `compare` puts two
+  runs side by side (default: the running release and the one before):
+  commits, images that changed, objects added, removed and changed. To
+  look at telemetry before and after a release, take its `release_window`.
 - `piceli gitops suspects --host NAME [--since ISO] [--json]` and `piceli
   gitops hosts [--json]` (0.22.0): the deployed images a build host (or the
   builder node) built, from the provenance the controller recorded, and the

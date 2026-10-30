@@ -361,9 +361,13 @@ piceli gitops cache clear --crate geometry     # only these crates' artifacts
 
 The controller runs it between steps, as a short Job on the builder node
 (the build Job's image and claim, no Secret), and records
-`controller.cache_clear` (`at`, `crates`, `state`). Since 0.35.0 the Job
-tolerates the `node.kubernetes.io/disk-pressure` taint: it frees space, so
-it runs on a node whose disk is full.
+`controller.cache_clear` (`at`, `crates`, `state`; from 0.38.0 also
+`reason` and `message` when the node refused or evicted the Job's pod).
+Since 0.35.0 the Job tolerates the `node.kubernetes.io/disk-pressure`
+taint: it frees space, so it runs on a node whose disk is full. Since
+0.38.0 it has the priority class `system-node-critical` too, because under
+DiskPressure the kubelet admits only critical pods (a ResourceQuota of the
+namespace that limits that class stops it; the refusal says so).
 
 **The build cache's budget** (0.35.0). On a storage class without quotas
 (k3s `local-path`) a claim is a directory on the node's disk, and nothing
@@ -384,6 +388,28 @@ report `DiskPressure` and the development cache's last budget check
 `caches`, `checked_at`). A node under pressure raises `node-disk-pressure`
 and a cache still over its budget raises `cache-over-budget`, each resolved
 once the condition ends (`piceli gitops alarms`).
+
+**Recovering from disk pressure** (0.38.0). No run or build starts on a
+node under disk pressure, so the budget eviction they do before they start
+never runs there. When such a node holds a Piceli cache (the build cache,
+or the development cache of `DevBuilds(node=...)`), the controller starts
+that eviction itself: the cache-clear Job in its evict-to-budget mode, with
+the critical priority above, at most once per poll window (a minute, or
+the poll interval when longer). The controller's role in the development
+namespace cannot create Jobs (untrusted code runs there), so for the
+development cache `storage.relief` records the refusal and the problem
+says to run `piceli dev cache clear`, which runs with your rights. It
+publishes:
+
+- `storage.relief` (`at`, and per cache: `node`, `state`, `evicted`,
+  `freed_bytes`, the `job`, and the node's `reason` and `message` when it
+  refused the pod);
+- `storage.caches`: each cache's last measured use (`used_bytes`,
+  `max_bytes`, `fs_free_bytes`, …) from the runs', the builds' or this
+  Job's report;
+- `storage.problem` and `controller.storage_problem`: a plain sentence
+  naming the node and the cache. While it is there the controller's state
+  is `degraded` and `gitops status` reports `health: degraded` with it.
 
 **Why a check failed** (0.19.0). A failed check's own reason (the string a
 `Checks.python` entry returns, an HTTP status, an exit code) is kept in
@@ -1769,6 +1795,53 @@ the runs: `kind` (`stop`, `start`, `teardown`), `action` (the same), `state`
 `via`, `at`). A torn-down branch environment keeps its entries in the
 history (the newest 20 such environments).
 
+#### The history on the command line: `gitops history`, `show`, `compare` (0.38.0)
+
+The same history, from a terminal or an agent. Each command reads it as
+`gitops status` reads the status (`--kubeconfig` and `--context`, or
+`--state-dir`), changes nothing, and prints one JSON object with `--json`:
+
+```console
+$ piceli gitops history main --limit 2 --kubeconfig kc --context prod
+main: 2 run(s)
+  20261030T100000Z-1a2b  deployed; rolled web  2026-10-30T10:00:00Z .. 2026-10-30T10:06:10Z (6m 10s)
+    trigger push shop/main
+    sources shop@3f2a91c07d4e
+    components web sha256:9b1e0c2d3f, worker sha256:77ab01c2d3
+    checks 6/6 passed
+  ...
+$ piceli gitops show 20261030T1000 --logs --kubeconfig kc --context prod
+$ piceli gitops compare main --kubeconfig kc --context prod
+```
+
+| Command | JSON (`schema`) | Top-level fields |
+| --- | --- | --- |
+| `gitops history [ENV] [--limit N]` | `piceli.gitops-runs.v1` | `history_schema`, `generated_at`, `truncated`, `environments` (`name`, `runs`) |
+| `gitops show RUN [--env ENV] [--logs]` | `piceli.gitops-run.v1` | `env`, `run`; with `--logs` also `logs` (`source`, `attempt`, `at`, `reason`, `text`) and `logs_note` |
+| `gitops compare ENV [A] [B]` | `piceli.gitops-compare.v1` | `env`, `before`, `after`, `sources`, `components`, `images_changed`, `resources` (`added`, `removed`, `changed`, `partial`), `fields` |
+
+- A run is the history's own entry (`piceli.gitops-history.v1`, above) with
+  two windows added, each `started_at`, `finished_at` and `seconds`:
+  `window` (the run, from its first step to its end) and `release_window`
+  (from the start of its apply to its end, its checks settled; the run's
+  start when it applied nothing). The release marker the controller sends
+  over OpenTelemetry carries the same window ({doc}`deploy_events`).
+- `RUN` is a run's `id` or `run_id`, or a unique start of one.
+- `compare` without runs takes the running release and the one before it.
+  With one run, it compares that run with the running release. `before` and
+  `after` hold each run's identity, release, plan hashes, both windows and
+  `checks_passed`. `resources` adds up the plans of the runs after `before`
+  up to `after` (an object added and then removed is in neither list;
+  `partial` when a plan was longer than the history keeps).
+- `--logs` prints what the controller keeps: the redacted log tail of a
+  failed build and of the revision's earlier failed attempts. The output of
+  running workloads is in `piceli logs`.
+- The history keeps object kinds and names, never field values, so
+  `compare` lists no before/after values (`fields.available` is `false`);
+  the UI's Compare revisions shows them for plans the UI saved.
+- No history yet: `gitops-history-unavailable`. An environment or run the
+  history does not hold, or fewer than two runs: `gitops-run-unknown`.
+
 (gitops-cycle-report)=
 
 #### Cycle report (0.28.0)
@@ -1823,7 +1896,9 @@ controller's release of the same commit when the report has it.
 
 #### Compatibility of the documents
 
-`piceli.gitops-status.v1` and `piceli.gitops-history.v1` change only
+`piceli.gitops-status.v1` and `piceli.gitops-history.v1` (and, from
+0.38.0, `piceli.gitops-runs.v1`, `piceli.gitops-run.v1` and
+`piceli.gitops-compare.v1`) change only
 **additively** within v1: a release adds fields, and never removes, renames
 or changes the type or meaning of one. A tool that reads them keeps working
 across Piceli releases as long as it ignores fields it does not know. A test

@@ -105,3 +105,65 @@ Key a deploy marker on the log records with `event.name = piceli.deploy`
 (annotation query for your backend), label it with `piceli.release.id`,
 `piceli.commit` and `piceli.outcome`, and filter by `piceli.app` and
 `k8s.namespace.name`. `piceli.image.digests` links a marker to the images.
+
+## Release markers
+
+From 0.38.0 every finished release sends one **release marker**: an
+OpenTelemetry log record with the event name `piceli.release`. Any
+OpenTelemetry backend can draw it on graphs and compare release N with
+release N-1. Two senders, each to the endpoint you already configured:
+
+- the GitOps controller, for each environment deploy that applied a
+  release and for each published `NixRelease`, through
+  `Controller(telemetry=Otlp(...))` ({doc}`opentelemetry`);
+- the host agent of each Nix host, for each switch it made, through the
+  host's own `NixHost(report=HostReport(endpoint))` ({doc}`nix_hosts`).
+
+A run that applied nothing (a failed build, a verification, an unchanged
+release) sends no marker. A rollback that ends a release sends one with
+`deployment.status = rolled_back`: failed checks the controller rolled
+back, a host whose switch or checks failed, an interrupted host run, or
+`piceli host rollback`.
+
+| Attribute | Value |
+| --- | --- |
+| `deployment.environment.name` | The environment; for a Nix host, the host's name; for a `NixRelease`, its name. |
+| `deployment.id` | This release: `<env>/<run>` (the same as the controller's root span), `<host>/<attempt>` or `nix/<attempt>`. |
+| `deployment.status` | `succeeded`, `failed` (applied, checks failed, nothing rolled back) or `rolled_back`. |
+| `service.version` | The tag the first source follows when it is a tag, else its commit (a host: the build's tag, else its commit). |
+| `vcs.ref.head.revision` | The commit released (the first source, by name). |
+| `vcs.repository.url.full` | That source's repository, without credentials, when the controller knows it. |
+| `piceli.release.components` | The components the release changed (their image digest differs from the previous release); a host: its build. |
+| `piceli.release.started_at`, `piceli.release.finished_at`, `piceli.release.seconds` | The window: from the start of the apply (a host: of the attempt) to the end, checks settled. |
+| `piceli.release.previous.id`, `.previous.version`, `.previous.revision`, `.previous.finished_at` | The release that ran before (absent for the first one). A rolled-back release never becomes the previous one. |
+| `piceli.release.id`, `piceli.run.id` | Controller only: the release applied and the run journal (the `run_id` of `piceli gitops history`). |
+
+The controller's marker also carries `piceli.deploy.result`,
+`vcs.ref.head.name`, `vcs.ref.head.type`, `vcs.repository.name` and the
+common attributes of its events (`cicd.pipeline.name`,
+`cicd.pipeline.run.id`, `k8s.namespace.name`, `piceli.event.id`), and is
+linked to the run's trace. The host agent's carries `host.name`,
+`piceli.trigger`, `piceli.state` and `piceli.reason`, and its resource now
+has `deployment.environment.name` too. `deployment.*`, `service.version`
+and `vcs.*` follow the OpenTelemetry semantic conventions; `rolled_back` is
+Piceli's value next to their `succeeded` and `failed`. Release attributes
+change with each release, so they are on the record, not on the resource
+(the controller's resource stays `service.name = piceli-controller`).
+
+**Before and after.** Take a marker's `piceli.release.finished_at` and
+compare the hour before `piceli.release.started_at` with the hour after
+`piceli.release.finished_at`, for example the error rate of the services
+in `piceli.release.components`:
+
+```text
+errors / requests  where time in [started_at - 1h, started_at)   -> release N-1
+errors / requests  where time in (finished_at, finished_at + 1h] -> release N
+```
+
+An agent without access to the backend gets the same windows from
+`piceli gitops history --json` (each run's `release_window`, see
+{doc}`gitops`) and `piceli gitops compare ENV --json` (`before` and
+`after`).
+
+`piceli deploy` and `piceli release` (this page) keep their own marker,
+the `piceli.deploy` log record described above.
