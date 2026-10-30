@@ -4,6 +4,18 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.37.0
+
+**Fixes**
+
+- **A NixHost runs a release only once it says so.** `piceli gitops builds`
+  and the Builds page named a host in `running_on` as soon as the release
+  was published, before the host switched to it. A NixHost now counts only
+  when its own agent reports the revision as its current system with its
+  checks passed. Until then the build's new field `host_switch` is
+  `not-switched-yet` (the CLI prints "published, host not switched yet");
+  after it, `switched`.
+
 ## Version 0.36.0
 
 **Fixes**

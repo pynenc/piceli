@@ -221,10 +221,48 @@ def test_every_build_has_one_record_with_its_trigger_stages_and_targets(
     assert [s["stage"] for s in done["stages"]] == [
         "approval-required", "queued", "fetching-inputs", "building", "uploading",
     ]  # fmt: skip
-    assert done["running_on"] == ["web-1"]  # the controller's view of the host
+    # Published is not switched: the controller's view never says a host runs it.
+    assert done["running_on"] == [] and done["host_switch"] == "not-switched-yet"
     assert done["actions"] == {"approve": False, "retry": True, "cancel": False}
     assert builds.records(status, history, now=0, target="api")["builds"] == []
     assert builds.records(status, history, now=0, state="active")["builds"] == []
+
+
+def _host(commit: str, tag: str | None, checks: str = "passed") -> dict[str, Any]:
+    return {"status": {
+        "current": {"commit": commit, "tag": tag},
+        "last_attempt": {"commit": commit, "state": "deployed",
+                         "ended_at": "2026-10-24T10:05:00Z",
+                         "checks": [{"name": "http", "state": checks}]},
+    }}  # fmt: skip
+
+
+def test_a_nix_host_runs_a_publish_only_once_it_reports_it_with_checks_passed(
+    world: dict[str, Any], tmp_path: Path
+) -> None:
+    controller, channel, repo = world["controller"], world["channel"], world["repo"]
+    controller.poll_once()
+    commit = repo.commit({"a": "1"})
+    repo.tag("web-v1.1.0")
+    record = _release(controller.poll_once())
+    channel.add_request(*approve_request("web-1", record["plan_digest"], via="ui"))
+    controller.poll_once()
+    worker, _ = _worker(world, tmp_path)
+    assert worker.once() is not None
+    status = controller.poll_once()
+
+    def done(hosts: dict[str, Any]) -> dict[str, Any]:
+        (item,) = builds.records(status, None, now=0, hosts=hosts)["builds"]
+        assert item["stage"] == "published"
+        return item
+
+    previous = done({"web-1": _host("0" * 40, "web-v1.0.0")})
+    assert previous["running_on"] == []
+    assert previous["host_switch"] == "not-switched-yet"
+    failing = done({"web-1": _host(commit, "web-v1.1.0", checks="failed")})
+    assert failing["running_on"] == [] and failing["host_switch"] == "not-switched-yet"
+    switched = done({"web-1": _host(commit, "web-v1.1.0")})
+    assert switched["running_on"] == ["web-1"] and switched["host_switch"] == "switched"
 
 
 def test_image_builds_and_train_handoffs_are_records_too() -> None:

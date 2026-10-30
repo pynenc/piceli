@@ -1064,7 +1064,7 @@ prints `piceli.builds.v1`, the document the UI's Builds page shows:
              {"stage": "building", "…": "…"}, {"stage": "uploading", "…": "…"}],
   "log_tail": null, "requested_at": "…", "started_at": "…", "finished_at": "…",
   "seconds": 312.4, "plan_digest": "sha256:…", "reason": null, "images": [],
-  "running_on": ["web-1"],
+  "running_on": ["web-1"], "host_switch": "switched",
   "actions": {"approve": false, "retry": true, "cancel": false}}]}
 ```
 
@@ -1074,7 +1074,12 @@ The trigger's `kind` is `tag`, `branch`, `schedule`, `push`, `sync`, `cli`,
 `failed`, `cancelled` or `rejected` (the promotion gate); a NixRelease's
 signing and upload run as one step on the build host and show as
 `uploading`. `running_on` names the targets (`piceli targets`) whose
-deployed revision is the build's commit (or tag).
+deployed revision is the build's commit (or tag). A NixHost counts only
+when its own agent reports the revision as its current system with its
+checks passed (0.37.0); the controller alone knows only what it published.
+A published NixRelease's `host_switch` says `switched` then, and
+`not-switched-yet` before (the CLI prints "published, host not switched
+yet"); it is `null` for other builds.
 
 While a build host builds, it reports its stage and the last 4000
 characters of its log (`build-progress`, at each stage and at most every
