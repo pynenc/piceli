@@ -369,8 +369,8 @@ def _record(**fields: Any) -> dict[str, Any]:
         "stage": "queued", "stages": [], "log_tail": None, "log_complete": False,
         "requested_at": None, "started_at": None, "finished_at": None,
         "seconds": None, "plan_digest": None, "plan": None, "reason": None,
-        "images": [], "running_on": [], "actions": {"approve": False, "retry": False,
-                                      "cancel": False},
+        "images": [], "running_on": [], "host_switch": None,
+        "actions": {"approve": False, "retry": False, "cancel": False},
     }  # fmt: skip
     return base | fields
 
@@ -634,7 +634,12 @@ def _train_records(status: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 def _running(build: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> list[str]:
-    """The targets (``piceli targets`` rows) that run ``build`` now."""
+    """The targets (``piceli targets`` rows) that run ``build`` now.
+
+    A NixHost runs a publish only once its own agent reports the revision
+    as its current generation with its checks passed: the controller's
+    view of a host is only what it published, not what the host switched
+    to (ops#42)."""
     commit, tag = build.get("commit"), build.get("tag")
     if build.get("stage") != "published" or not commit:
         return []
@@ -645,6 +650,8 @@ def _running(build: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> lis
         if build.get("kind") == "nix-publish":
             if row.get("kind") != "nix-host" or row.get("name") != build.get("target"):
                 continue
+            if not _switched(row):
+                continue
             if revision.get("commit") == commit or (tag and revision.get("tag") == tag):
                 found.append(str(row.get("name")))
         elif row.get("kind") == "environment" and (
@@ -654,6 +661,24 @@ def _running(build: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> lis
     return found
 
 
+def _switched(row: Mapping[str, Any]) -> bool:
+    """A NixHost row told by the host's agent: deployed, checks passed."""
+    facts = _dict(row.get("facts"))
+    return (
+        facts.get("revision") == "host-agent"
+        and row.get("state") == "deployed"
+        and _dict(row.get("checks")).get("state") == "passed"
+    )
+
+
+def _host_switch(build: Mapping[str, Any]) -> str | None:
+    """A published NixRelease's place on its host: ``switched`` once the
+    host reports it (checks passed), else ``not-switched-yet``."""
+    if build.get("kind") != "nix-publish" or build.get("stage") != "published":
+        return None
+    return "switched" if build.get("running_on") else "not-switched-yet"
+
+
 def records(
     status: Mapping[str, Any] | None,
     history: Mapping[str, Any] | None = None,
@@ -661,17 +686,22 @@ def records(
     now: float,
     target: str | None = None,
     state: str | None = None,
+    hosts: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """``piceli.builds.v1``: every build the controller's ``status`` and
     ``history`` know, newest first, each joined with the targets that run
     it now; only ``target``'s, or those in ``state`` (a stage, ``active``
-    for the unfinished ones), when given."""
+    for the unfinished ones), when given.
+
+    ``hosts`` is :func:`piceli.targets.read_hosts`'s result: a NixHost
+    runs a publish only when its own agent says so; without it, every
+    published NixRelease is ``not-switched-yet``."""
     from piceli.targets import build as targets
 
     if not isinstance(status, Mapping):
         return {"schema": SCHEMA, "builds": [], "stages": list(STAGES)}
     history = history if isinstance(history, Mapping) else {}
-    rows = targets(dict(status)).get("targets") or []
+    rows = targets(dict(status), hosts=hosts).get("targets") or []
     items = [
         *_nix_records(status, history, now),
         *_image_records(status, history, now),
@@ -679,6 +709,7 @@ def records(
     ]
     for item in items:
         item["running_on"] = _running(item, rows)
+        item["host_switch"] = _host_switch(item)
     if target is not None:
         items = [item for item in items if item.get("target") == target]
     if state is not None:

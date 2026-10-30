@@ -107,6 +107,10 @@ HOST_PREVIEW_REVISION = "piceli.host-build-preview.v1"
 DEFAULT_TIMEOUT = 1800.0
 _TOOL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")
 _PLACEHOLDER = re.compile(r"\{(" + "|".join(PLACEHOLDERS) + r")\}")
+#: 0.37: ``{source_rev:<context>}`` in a ``build.env`` value, the full commit
+#: of the source the named context reads; substituted when the build runs,
+#: after the plan hash, so a new commit alone does not change the plan.
+SOURCE_REV = re.compile(r"\{source_rev:([^{}]*)\}")
 _DIR_SPEC = re.compile(r"([0-9]{1,10}):([0-9]{1,10}):(0?[0-7]{3,4})")
 #: Variables passed from the caller's environment when set: locators only.
 _PASSTHROUGH = (
@@ -127,11 +131,21 @@ _RESERVED = frozenset(
 )
 
 
-def _template(value: str, what: str, check: Callable[[Any, str], Any]) -> str:
-    """Validate ``value`` with placeholders standing in for plain text."""
+def _template(
+    value: str,
+    what: str,
+    check: Callable[[Any, str], Any],
+    *,
+    source_rev: bool = False,
+) -> str:
+    """Validate ``value`` with placeholders standing in for plain text;
+    ``source_rev`` also allows ``{source_rev:<context>}``."""
     rendered = _PLACEHOLDER.sub("x", value)
+    if source_rev:
+        rendered = SOURCE_REV.sub("x", rendered)
     if "{" in rendered or "}" in rendered:
-        raise _fail(f"{what}: only {{{'}, {'.join(PLACEHOLDERS)}}} may be in braces")
+        allowed = [*PLACEHOLDERS, *(["source_rev:<context>"] if source_rev else [])]
+        raise _fail(f"{what}: only {{{'}, {'.join(allowed)}}} may be in braces")
     check(rendered, what)
     return value
 
@@ -145,6 +159,11 @@ def uses_placeholder(value: str) -> str | None:
 def substitute(value: str, facts: NodeFacts) -> str:
     values = facts.placeholders()
     return _PLACEHOLDER.sub(lambda match: values[match.group(1)], value)
+
+
+def substitute_source_revs(value: str, revs: Mapping[str, str]) -> str:
+    """``value`` with each ``{source_rev:<context>}`` replaced by ``revs``."""
+    return SOURCE_REV.sub(lambda match: revs[match.group(1)], value)
 
 
 def default_cache_dir() -> Path:
@@ -319,6 +338,20 @@ class HostBuildSpec:
                     f"image {image.name!r} copies shared_files; declare "
                     "build.shared_commands"
                 )
+        by_name = {item.name: item for item in self.contexts}
+        for key, value in self.env.items():
+            for name in SOURCE_REV.findall(value):
+                if name not in by_name:
+                    raise _fail(
+                        f"build.env {key}: {{source_rev:{name}}} names an unknown "
+                        f"context; declared: {', '.join(sorted(by_name))}"
+                    )
+                if by_name[name].source is None:
+                    raise _fail(
+                        f"build.env {key}: {{source_rev:{name}}}: context "
+                        f"{name!r} names no source; set its source to an "
+                        "inputs source"
+                    )
         if _RESERVED & set(self.env):
             raise _fail(f"build.env cannot set {sorted(_RESERVED & set(self.env))}")
         if dict(self.toolchains).get("rust") and RUST_ENV & set(self.env):
@@ -406,7 +439,12 @@ class HostBuildSpec:
             raise _fail("build.env must be a table")
         for key, item in env.items():
             _match(_ENV_KEY, key, "build.env name")
-            _template(item, "build.env value", lambda v, w: _match(_ENV_VALUE, v, w))
+            _template(
+                item,
+                "build.env value",
+                lambda v, w: _match(_ENV_VALUE, v, w),
+                source_rev=True,
+            )
         workdir = build.get("workdir", ".")
         if workdir != ".":
             _rel_path(workdir, "build.workdir")
@@ -655,7 +693,7 @@ class HostBuildSpec:
         with _BuildLog(log, progress, raw_output) as build_log:
             build_log.line(f"### host run {self.name} {started_at}")
             execution = HostExecution(
-                plan,
+                self._with_source_revs(plan, start),
                 grant,
                 cache,
                 runner or _default_runner,
@@ -702,6 +740,31 @@ class HostBuildSpec:
             "finished_at": finished_at,
         }
         return BuildReceipt(receipt)
+
+    def _with_source_revs(
+        self, plan: HostBuildPlan, start: InputsLock | None
+    ) -> HostBuildPlan:
+        """``plan`` with ``{source_rev:<context>}`` in ``build.env`` replaced
+        by the commits the run opened (after the plan hash: the grant
+        covers the declaration, not the commit)."""
+        names = {
+            name for value in self.env.values() for name in SOURCE_REV.findall(value)
+        }
+        if not names:
+            return plan
+        if start is None:
+            raise _fail("{source_rev:...} in build.env needs declared inputs")
+        revs = {}
+        for context in self.contexts:
+            if context.name in names and context.source is not None:
+                revs[context.name] = start.source(context.source).commit
+        return dataclasses.replace(
+            plan,
+            env={k: substitute_source_revs(v, revs) for k, v in plan.env.items()},
+            shared_env={
+                k: substitute_source_revs(v, revs) for k, v in plan.shared_env.items()
+            },
+        )
 
     def _attest(
         self,

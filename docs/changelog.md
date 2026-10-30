@@ -4,6 +4,27 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.37.0
+
+**Fixes**
+
+- **A NixHost runs a release only once it says so.** `piceli gitops builds`
+  and the Builds page named a host in `running_on` as soon as the release
+  was published, before the host switched to it. A NixHost now counts only
+  when its own agent reports the revision as its current system with its
+  checks passed. Until then the build's new field `host_switch` is
+  `not-switched-yet` (the CLI prints "published, host not switched yet");
+  after it, `switched`.
+
+**Features**
+
+- **`{source_rev:<context>}` in a host build's `env`.** A `build.env`
+  value can carry the full commit of the source a context reads, for
+  example `APP_BUILD_REV = "{source_rev:shop}"`. It is filled in when the
+  build runs, after the plan hash, so a commit that changes no staged file
+  keeps the same plan. An unknown context, or one without a source, fails
+  when the file is loaded. See {ref}`host builds <host-builds-source-rev>`.
+
 ## Version 0.36.0
 
 **Fixes**

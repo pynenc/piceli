@@ -1680,6 +1680,11 @@ def builds(
                 if item["running_on"]
                 else ""
             )
+            + (
+                "; published, host not switched yet"
+                if item.get("host_switch") == "not-switched-yet"
+                else ""
+            )
         )
     if as_json:
         emit_json(document)
