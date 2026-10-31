@@ -66,12 +66,14 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.43
+## What's new in 0.44
 
-- **Parallel Nix builds on docker hosts**: a `DevProfile.for_nix` run asks
-  the host's Nix daemon for `max-jobs = auto`, so independent derivations
-  build together instead of one at a time. See the
-  [guide](https://docs.pynenc.org/projects/piceli/en/stable/dev_builds.html).
+- **Test tags stay tests**: a tag with build metadata
+  (`v1.2.3+rollbacktest`) is never the release a host follows or
+  `piceli promote` bumps from.
+- **Checks that must hold**: `HostCheck.unit(..., stable=10)` rolls back a
+  unit that starts and dies a few seconds later. See the
+  [guide](https://docs.pynenc.org/projects/piceli/en/stable/nix_hosts.html).
 
 ## Web UI
 

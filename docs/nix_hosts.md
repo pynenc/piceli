@@ -53,7 +53,7 @@ web = NixHost(
     follow=Tag("v*"),  # or Branch("main")
     cache=cache,
     checks=[
-        HostCheck.unit("nginx.service"),
+        HostCheck.unit("nginx.service", stable=10),
         HostCheck.http("http://127.0.0.1/healthz", timeout=90),
         HostCheck.command("test", "-s", "/var/lib/app/ready"),
     ],
@@ -71,7 +71,7 @@ web = NixHost(
 | `flake=` | `.#NAME` (the system of `nixosConfigurations.NAME`) or a full `.#ATTR`; the agent switches only to a build of this attribute |
 | `follow=` | `Tag(pattern="v*", prereleases=False)` or `Branch(name="main")` |
 | `cache=` | The `NixCache` the builds were published to; an `https://` cache can follow a `Branch` only (tags are listed) |
-| `checks=` | `HostCheck.unit(UNIT)`, `HostCheck.http(URL)` (2xx), `HostCheck.command(ARG, ...)` (exit 0); each tried every 2 s until its `timeout=` (60 s) |
+| `checks=` | `HostCheck.unit(UNIT)`, `HostCheck.http(URL)` (2xx), `HostCheck.command(ARG, ...)` (exit 0); each tried every 2 s until its `timeout=` (60 s). With `stable=N` it must keep passing for N seconds, so a unit that starts and dies a few seconds later is rolled back (0.44.0) |
 | `report=` | `HostReport(endpoint, headers_file=None, insecure=False)`: OTLP/HTTP logs |
 | `build=` | The manifests' name, `--name` of the publish (`NAME` of `.#NAME`, else the host's name) |
 | `read_credentials_file=` | The host's file with the cache's read S3 keys. When the cache's bucket declares `S3Key(access="read")` (0.25.0) or the cache names a pair you made, `NixCache(read_credentials=)` (0.25.3): `/var/lib/piceli-host/cache.env`, which `piceli host secrets` writes. Otherwise a sops-nix secret (`/run/secrets/piceli/cache.env` for an `s3://` cache, none otherwise). A path you give is your own file: `host secrets` leaves it alone |
@@ -80,9 +80,12 @@ web = NixHost(
 | `age_identity=`, `age_key_file=` | The local credential with the host's age identity, and where `piceli host secrets` puts it (`/var/lib/sops-nix/key.txt`, sops-nix's `sops.age.keyFile`) |
 
 `Tag("v*")` follows the highest semantic version among the matching tags (an
-optional `v`, `MAJOR.MINOR.PATCH`, `-prerelease`, `+build`). A matching tag
+optional `v`, `MAJOR.MINOR.PATCH`, `-prerelease`). A matching tag
 that is not a version is ignored, and the status lists it under
-`ignored_tags`. Pre-releases count only with `prereleases=True`. A
+`ignored_tags`. Pre-releases count only with `prereleases=True`. A tag
+with build metadata (`v1.2.3+rollbacktest`) is a test tag: the host never
+follows it, `piceli promote` never bumps from it, and a host still running
+one goes back to the newest release at its next poll (0.44.0). A
 declaration that does not hold is refused with `host-invalid` or
 `host-check-invalid`.
 

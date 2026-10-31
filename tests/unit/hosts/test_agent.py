@@ -111,6 +111,7 @@ class FakeHost:
         self.envs: list[Mapping[str, str]] = []
         self.timeouts: list[float | None] = []
         self.unit_active = unit_active
+        self.unit_states: list[bool] = []  # one per check try, then unit_active
         self.fail_switch: set[str] = set()
         self.fail_copy = False
         self.fail_delete = False
@@ -197,7 +198,8 @@ class FakeHost:
                 if verb in ("boot", "switch"):
                     self.boot = path
         elif argv[0] == "fake-systemctl":
-            code = 0 if self.unit_active else 3
+            active = self.unit_states.pop(0) if self.unit_states else self.unit_active
+            code = 0 if active else 3
         return subprocess.CompletedProcess(argv, code, out, b"")
 
     def commands(self, word: str) -> list[list[str]]:
@@ -425,6 +427,31 @@ def test_a_failing_check_rolls_back_and_marks_the_build_bad(
     assert len(status(tmp_path)["history"]) == 2
 
 
+def test_a_unit_that_starts_and_dies_later_fails_a_stable_check(
+    tmp_path: Path, cache_dir: Path, fake: FakeHost
+) -> None:
+    publish(cache_dir, commit_of(1), tag="v1.0.0")
+    checks = [HostCheck.unit("nginx.service", timeout=20, stable=6)]
+    fake.unit_states = [True, True]  # up for one interval, then dead
+    fake.unit_active = False
+    poll = make_agent(tmp_path, host(cache_dir, checks=checks), fake).run_once()
+    assert poll["state"] == "rolled-back" and poll["reason"] == "host-check-failed"
+    assert status(tmp_path)["last_attempt"]["checks"][0]["state"] == "failed"
+    assert os.readlink(fake.current) == OLD
+
+
+def test_a_stable_check_passes_once_the_unit_stays_up(
+    tmp_path: Path, cache_dir: Path, fake: FakeHost
+) -> None:
+    publish(cache_dir, commit_of(1), tag="v1.0.0")
+    checks = [HostCheck.unit("nginx.service", timeout=20, stable=6)]
+    fake.unit_states = [False, True, False]  # still starting, a restart, then up
+    poll = make_agent(tmp_path, host(cache_dir, checks=checks), fake).run_once()
+    assert poll["state"] == "deployed"
+    check = status(tmp_path)["last_attempt"]["checks"][0]
+    assert check["state"] == "passed" and check["tries"] == 7  # up at 6 s, held to 12 s
+
+
 def test_a_failed_switch_rolls_back(
     tmp_path: Path, cache_dir: Path, fake: FakeHost
 ) -> None:
@@ -479,6 +506,30 @@ def test_a_tag_host_never_moves_to_an_older_version(
     publish(cache_dir, commit_of(2), tag="v1.0.5")
     poll = make_agent(tmp_path, host(cache_dir), fake).run_once()
     assert poll == {"at": poll["at"], "state": "idle", "reason": "older"}
+
+
+def test_a_test_tag_with_build_metadata_is_never_followed(
+    tmp_path: Path, cache_dir: Path, fake: FakeHost
+) -> None:
+    publish(cache_dir, commit_of(1), tag="v1.1.0")
+    publish(cache_dir, commit_of(2), tag="v1.2.0+rollbacktest")
+    assert make_agent(tmp_path, host(cache_dir), fake).run_once()["state"] == "deployed"
+    assert status(tmp_path)["current"]["tag"] == "v1.1.0"
+    assert status(tmp_path)["ignored_tags"] == ["v1.2.0+rollbacktest"]
+
+
+def test_a_host_left_on_a_test_tag_goes_back_to_the_newest_release(
+    tmp_path: Path, cache_dir: Path, fake: FakeHost
+) -> None:
+    publish(cache_dir, commit_of(1), tag="v1.0.0")
+    assert make_agent(tmp_path, host(cache_dir), fake).run_once()["state"] == "deployed"
+    state_file = tmp_path / "state" / "state.json"
+    state = json.loads(state_file.read_text())
+    state["current"]["tag"] = "v1.2.0+rollbacktest"  # what an older agent followed
+    state_file.write_text(json.dumps(state))
+    publish(cache_dir, commit_of(2), tag="v1.0.1")
+    assert make_agent(tmp_path, host(cache_dir), fake).run_once()["state"] == "deployed"
+    assert status(tmp_path)["current"]["tag"] == "v1.0.1"
 
 
 def test_a_system_built_from_the_same_commit_is_adopted(
@@ -649,6 +700,8 @@ def test_declarations_are_checked(cache_dir: Path) -> None:
         lambda: HostCheck.http("http://user:pw@x/"),
         lambda: HostCheck.command(),
         lambda: HostCheck.unit("a", timeout=0),
+        lambda: HostCheck.unit("a", timeout=10, stable=10),
+        lambda: HostCheck.unit("a", stable=-1),
     ):
         with pytest.raises(HostError) as raised:
             bad()

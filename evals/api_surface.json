@@ -5071,6 +5071,7 @@
     "http",
     "kind",
     "name",
+    "stable",
     "target",
     "timeout",
     "unit"
@@ -5078,12 +5079,14 @@
    "init": [
     "kind",
     "name",
+    "stable",
     "target",
     "timeout"
    ],
    "methods": {
     "command": [
      "name",
+     "stable",
      "timeout"
     ],
     "describe": [
@@ -5091,11 +5094,13 @@
     ],
     "http": [
      "name",
+     "stable",
      "timeout",
      "url"
     ],
     "unit": [
      "name",
+     "stable",
      "timeout",
      "unit"
     ]
@@ -18024,5 +18029,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.43.0"
+ "version": "0.44.0"
 }

@@ -157,11 +157,15 @@ def tag_version(pattern: str, tag: str) -> tuple[Any, ...] | None:
     """The sort key of ``tag`` under ``pattern``: the tag matches the glob and
     what follows the pattern's :func:`tag_prefix` is a semantic version
     (:func:`semver`); ``None`` otherwise. ``Tag("v*")`` never matches
-    ``web-v1.2.3``, and ``Tag("web-*")`` never takes ``web-api-1.2.3``."""
+    ``web-v1.2.3``, and ``Tag("web-*")`` never takes ``web-api-1.2.3``.
+    A tag with build metadata (``v1.2.3+test``) is a test tag, never a
+    release: it is ``None`` too, so no follower, plan or bump counts it."""
     if not fnmatch.fnmatchcase(tag, pattern):
         return None
     prefix = tag_prefix(pattern)
-    return semver(tag[len(prefix) :]) if tag.startswith(prefix) else None
+    if not tag.startswith(prefix) or "+" in tag[len(prefix) :]:
+        return None
+    return semver(tag[len(prefix) :])
 
 
 def read_env_file(path: str) -> dict[str, str]:
@@ -872,11 +876,15 @@ class Agent:
         for check in self.config.get("checks") or ():
             start = self.monotonic()
             deadline = start + float(check["timeout"])
-            tries, passed = 0, False
+            stable = float(check.get("stable") or 0)
+            tries, passed, since = 0, False, None
             while True:
                 tries += 1
-                passed = self._check_once(check, deadline - self.monotonic())
-                if passed or self.monotonic() >= deadline:
+                ok = self._check_once(check, deadline - self.monotonic())
+                now = self.monotonic()
+                since = (now if since is None else since) if ok else None
+                passed = since is not None and now - since >= stable
+                if passed or now >= deadline:
                     break
                 self.sleep(self.check_interval)
             results.append(

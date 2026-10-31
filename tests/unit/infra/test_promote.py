@@ -106,6 +106,7 @@ def test_a_pinned_commit_without_a_tag_is_offered_a_tag(found: dict[str, Any]) -
 
     found["hosts"].commit({"README.md": "hosts\n"})
     git(found["work"], "pull", "-q")
+    git(found["work"], "tag", "web-v1.0.2+rollbacktest")  # a test tag is no release
     code, body, said = _promote(found)
     assert code == 0 and body["state"] == "current", body
     assert body["plan"]["change"] is None and body["plan"]["tag"] == "web-v1.0.1"
@@ -183,6 +184,8 @@ def test_next_tag_bumps_the_highest_release_of_the_pattern() -> None:
     assert promote.next_tag(tags, "web-v*", "major")[0] == "web-v2.0.0"
     assert promote.next_tag([], "web-v*", "patch") == ("web-v0.1.0", None)
     assert promote.next_tag(["web-v1.2.3"], "web-*", "patch")[0] == "web-v1.2.4"
+    test = ["web-v0.1.1", "web-v0.1.2+rollbacktest"]
+    assert promote.next_tag(test, "web-v*", "patch") == ("web-v0.1.2", "web-v0.1.1")
 
 
 def test_override_urls() -> None:
