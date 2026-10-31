@@ -975,6 +975,17 @@ class Agent:
         self.status.setdefault("history", [])
         self.status.pop("in_progress", None)
         self.status.pop("pending", None)
+        # 0.45.0: what was recorded under another scope (the system before a
+        # move to service mode, or another profile) is not this one's: its
+        # current, previous, hold, pending attempt and bad builds are dropped.
+        scope = self.services["profile"] if self.services else "system"
+        if self.state.get("scope", "system") != scope:
+            for key in ("current", "previous", "hold", "pending", "bad"):
+                self.state.pop(key, None)
+            self.status.pop("previous", None)
+            self.status.pop("hold", None)
+            self.status.pop("current", None)
+        self.state["scope"] = scope
         pending = self.state.get("pending")
         if isinstance(pending, dict):
             self._recover(pending)

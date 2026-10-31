@@ -3,6 +3,7 @@ its units; the system, its profile and its boot entry are never touched."""
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -185,3 +186,21 @@ def test_the_module_leaves_the_boot_menu_alone(cache_dir: Path) -> None:
         "configurationLimit" not in text
         and '\\"kind\\":\\"services\\"' in text.replace(" ", "")
     )
+
+
+def test_a_move_to_service_mode_forgets_the_systems_records(
+    tmp_path: Path, cache_dir: Path, fake: FakeHost, profile: Path
+) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    system = os.readlink(fake.current)
+    held = {"store_path": system, "commit": commit_of(9), "tag": "v9.0.0"}
+    (state_dir / "state.json").write_text(json.dumps({
+        "current": held, "previous": held, "hold": {"kind": "pin", **held},
+    }))  # fmt: skip
+    poll = deploy(tmp_path, cache_dir, fake, profile, 1)
+    assert poll["state"] == "deployed", poll  # the system's pin does not hold it
+    state = json.loads((state_dir / "state.json").read_text())
+    assert state["scope"] == "/nix/var/nix/profiles/shop"
+    assert (state.get("previous") or {}).get("store_path") != system
+    assert "hold" not in state or not state["hold"]
