@@ -19,7 +19,7 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   tail are read as before. A restarted controller looks at the same Job.
   `piceli gitops cancel` deletes it (before, it ran to its end), and a
   commit with other inputs replaces it. `piceli gitops run --once` still
-  waits for its build. See {ref}`cluster-build-jobs`.
+  waits for its build. See {ref}`in-cluster build Jobs <cluster-build-jobs>`.
 - **A commit that changes no input keeps the running build.** A wanted
   build is now named by each image's change key and the platforms, not by
   the commits it is fetched at. A commit that changes only a file no image
@@ -28,7 +28,7 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   images serve the new revision. A build not yet claimed is handed the
   newest commits. A host's failure now stands for the same inputs, not the
   same commit: a commit that changes none of them does not retry it (`piceli
-  gitops sync` does). See {ref}`build-identity`.
+  gitops sync` does). See {ref}`build identity <build-identity>`.
 - **A replacement build goes to the live host first.** When inputs really
   change while a host builds them, the new build is offered first to that
   host, and the in-cluster fallback waits while the host still reports
@@ -36,7 +36,7 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   past `host_wait`. Before, the fallback took it after `host_wait` although
   the host was alive and idle. `host_wait` still applies when no host is
   alive. A build that replaces one the cluster was building goes back to the
-  cluster at once. See {ref}`build-replacement`.
+  cluster at once. See {ref}`replacement builds <build-replacement>`.
 
 ## Version 0.41.0
 
