@@ -4,6 +4,32 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.44.0
+
+**Fixes**
+
+- **A test tag never becomes the release a host follows.** A tag with
+  build metadata (`web-v1.2.3+rollbacktest`) used to count as a normal
+  release, so it outranked the real ones: a host followed it, and
+  `piceli promote` bumped from it or reported `current` without a new tag.
+  Such a tag is now a test tag: hosts, Nix releases and `promote` ignore
+  it (the host status lists it under `ignored_tags`), and a host still
+  running one goes back to the newest release at its next poll.
+
+**Features**
+
+- **Checks that must hold.** `HostCheck.unit(..., stable=N)` (also `http`
+  and `command`) must keep passing for N seconds after a switch; a failed
+  try within that window starts it again. A unit that starts and dies a
+  few seconds later now fails its check, and the host rolls back. The
+  default (0) passes on the first success, as before.
+
+**Development**
+
+- The release images build each platform on its own runner (arm64 on
+  `ubuntu-24.04-arm`) instead of emulating arm64, and join the two
+  digests under the version tag.
+
 ## Version 0.43.0
 
 **Fixes**

@@ -90,7 +90,9 @@ class Tag:
     the pattern's literal :attr:`prefix`: ``Tag("web-v*")`` orders
     ``web-v1.10.0`` above ``web-v1.9.0`` and never sees ``api-v2.0.0`` or
     ``v3.0.0``. A matching tag whose rest is not a version is ignored (the
-    status lists it). Pre-releases count only with ``prereleases=True``.
+    status lists it). Pre-releases count only with ``prereleases=True``; a
+    tag with build metadata (``web-v1.2.3+test``) is a test tag and never
+    counts.
     """
 
     pattern: str = "v*"
@@ -145,18 +147,27 @@ def _check_error(message: str) -> HostError:
 class HostCheck:
     """A check that must pass after a switch; tried every 2 s until ``timeout``.
 
-    Build them with :meth:`unit`, :meth:`http` or :meth:`command`.
+    Build them with :meth:`unit`, :meth:`http` or :meth:`command`. With
+    ``stable`` seconds, it must keep passing that long: a failed try within
+    the window starts it again, so a unit that starts and dies a few seconds
+    later fails the check and the switch is rolled back (0.44.0).
     """
 
     kind: Literal["unit", "http", "command"]
     target: tuple[str, ...]
     timeout: float = CHECK_TIMEOUT
     name: str | None = None
+    stable: float = 0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "target", tuple(self.target))
         if not isinstance(self.timeout, (int, float)) or not 1 <= self.timeout <= 3600:
             raise _check_error("HostCheck(timeout=) is 1 to 3600 seconds")
+        if (
+            not isinstance(self.stable, (int, float))
+            or not 0 <= self.stable < self.timeout
+        ):
+            raise _check_error("HostCheck(stable=) is 0 to less than timeout seconds")
         if self.kind == "unit":
             if len(self.target) != 1 or not _UNIT.fullmatch(self.target[0]):
                 raise _check_error("HostCheck.unit() takes a systemd unit name")
@@ -186,24 +197,39 @@ class HostCheck:
 
     @classmethod
     def unit(
-        cls, unit: str, *, timeout: float = CHECK_TIMEOUT, name: str | None = None
+        cls,
+        unit: str,
+        *,
+        timeout: float = CHECK_TIMEOUT,
+        name: str | None = None,
+        stable: float = 0,
     ) -> HostCheck:
-        """The systemd unit is ``active``."""
-        return cls("unit", (unit,), timeout, name)
+        """The systemd unit is ``active`` (for ``stable`` seconds)."""
+        return cls("unit", (unit,), timeout, name, stable)
 
     @classmethod
     def http(
-        cls, url: str, *, timeout: float = CHECK_TIMEOUT, name: str | None = None
+        cls,
+        url: str,
+        *,
+        timeout: float = CHECK_TIMEOUT,
+        name: str | None = None,
+        stable: float = 0,
     ) -> HostCheck:
-        """A GET of ``url`` from the host answers 2xx."""
-        return cls("http", (url,), timeout, name)
+        """A GET of ``url`` from the host answers 2xx (for ``stable`` seconds)."""
+        return cls("http", (url,), timeout, name, stable)
 
     @classmethod
     def command(
-        cls, *argv: str, timeout: float = CHECK_TIMEOUT, name: str | None = None
+        cls,
+        *argv: str,
+        timeout: float = CHECK_TIMEOUT,
+        name: str | None = None,
+        stable: float = 0,
     ) -> HostCheck:
-        """The command exits 0 (run as root, with the new system's PATH)."""
-        return cls("command", tuple(argv), timeout, name)
+        """The command exits 0 (run as root, with the new system's PATH; for
+        ``stable`` seconds)."""
+        return cls("command", tuple(argv), timeout, name, stable)
 
     def describe(self, index: int) -> dict[str, Any]:
         return {
@@ -211,6 +237,7 @@ class HostCheck:
             "kind": self.kind,
             "target": list(self.target),
             "timeout": float(self.timeout),
+            **({"stable": float(self.stable)} if self.stable else {}),
         }
 
 
