@@ -377,43 +377,52 @@ class PreRolloutCluster:
                 outcome.cleaned = gone
 
     def _wait(self, name: str, allowed: float, started: float) -> Outcome:
-        job_path = f"/apis/batch/v1/namespaces/{self.namespace}/jobs/{name}"
-        stuck_since: float | None = None
+        memo: dict[str, Any] = {}
         while True:
-            job = self._get(job_path)
-            status = (job or {}).get("status") or {}
-            for condition in status.get("conditions") or []:
-                if condition.get("status") != "True":
-                    continue
-                if condition.get("type") == "Complete":
-                    return Outcome("passed", exit_code=0)
-                if condition.get("type") == "Failed":
-                    pod = self._pod(name)
-                    code = _exit_code(pod)
-                    if condition.get("reason") == "DeadlineExceeded":
-                        return Outcome("timeout", reason="job-deadline-exceeded")
-                    return Outcome(
-                        "failed",
-                        exit_code=code,
-                        reason=condition.get("reason"),
-                        extra=_pod_refusal(pod),
-                    )
-            pod = self._pod(name)
-            fatal = _fatal_waiting(pod)
-            if fatal is not None:
-                return Outcome("not-startable", reason=fatal[0], category=fatal[1])
-            event = self._stuck_event(pod) if pod is not None else None
-            if event is not None:
-                stuck_since = stuck_since if stuck_since is not None else self.clock()
-                if self.clock() - stuck_since >= self.mount_grace_seconds:
-                    return Outcome(
-                        "not-startable", reason=event, category=_category(event)
-                    )
-            else:
-                stuck_since = None
+            outcome = self._check(name, memo)
+            if outcome is not None:
+                return outcome
             if self.clock() - started >= allowed:
                 return Outcome("timeout", reason="deadline")
             self.sleep(self.poll_seconds)
+
+    def _check(self, name: str, memo: dict[str, Any]) -> Outcome | None:
+        """One look at Job ``name``: how it ended, or ``None`` while it runs.
+
+        ``memo`` keeps what one look leaves for the next (since when a pod
+        is stuck); 0.42.0 split it from :meth:`_wait` so a caller can look
+        once per poll instead of waiting."""
+        job_path = f"/apis/batch/v1/namespaces/{self.namespace}/jobs/{name}"
+        job = self._get(job_path)
+        status = (job or {}).get("status") or {}
+        for condition in status.get("conditions") or []:
+            if condition.get("status") != "True":
+                continue
+            if condition.get("type") == "Complete":
+                return Outcome("passed", exit_code=0)
+            if condition.get("type") == "Failed":
+                pod = self._pod(name)
+                code = _exit_code(pod)
+                if condition.get("reason") == "DeadlineExceeded":
+                    return Outcome("timeout", reason="job-deadline-exceeded")
+                return Outcome(
+                    "failed",
+                    exit_code=code,
+                    reason=condition.get("reason"),
+                    extra=_pod_refusal(pod),
+                )
+        pod = self._pod(name)
+        fatal = _fatal_waiting(pod)
+        if fatal is not None:
+            return Outcome("not-startable", reason=fatal[0], category=fatal[1])
+        event = self._stuck_event(pod) if pod is not None else None
+        if event is not None:
+            memo.setdefault("stuck_since", self.clock())
+            if self.clock() - memo["stuck_since"] >= self.mount_grace_seconds:
+                return Outcome("not-startable", reason=event, category=_category(event))
+        else:
+            memo.pop("stuck_since", None)
+        return None
 
     def _pod(self, job: str) -> dict[str, Any] | None:
         for label in ("batch.kubernetes.io/job-name", "job-name"):

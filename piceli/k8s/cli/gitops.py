@@ -2258,6 +2258,7 @@ def _run_composition(
                 transport,
                 local_build=local_build,
                 private=Path(private),
+                asynchronous=not once,
             )
             telemetry = _controller_telemetry(
                 config, state_dir, target, namespace, transport
@@ -2414,6 +2415,7 @@ def _composition_ports(
     *,
     local_build: bool,
     private: Path | None = None,
+    asynchronous: bool = False,
 ) -> Any:
     from piceli.gitops.ports import DefaultPorts
     from piceli.infra import CompositionError
@@ -2497,6 +2499,9 @@ def _composition_ports(
                 cluster,
                 mirror_route=route,
                 say=say,
+                # 0.42.0: the controller's loop never waits for a build Job
+                # (`gitops run --once` and a dry run still wait).
+                asynchronous=asynchronous,
             )
     remote = None
     if private is not None:

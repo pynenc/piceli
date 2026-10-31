@@ -17717,6 +17717,7 @@
   "piceli.infra.builders",
   "piceli.infra.builds",
   "piceli.infra.cluster",
+  "piceli.infra.cluster_builds",
   "piceli.infra.cluster_init",
   "piceli.infra.composition",
   "piceli.infra.contract",
@@ -18023,5 +18024,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.41.0"
+ "version": "0.42.0"
 }

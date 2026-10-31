@@ -569,6 +569,44 @@ the builder node is quarantined, `no in-cluster builder image`, or
 that sent no claim or progress report for 10 minutes is taken for dead, so
 the fallback may take the build and another host may claim it.
 
+(build-identity)=
+**A build is named by its inputs, not its commit (0.42.0).** A wanted build
+is named by each image's change key (see {doc}`compositions`, "change
+key") and the platforms. A commit that changes nothing an image reads (for
+example a `flake.lock` no image includes) asks for the same build: a host's
+claim or an in-cluster Job that is running continues, nothing is cancelled
+or offered again, and its images serve the new revision. Before 0.42.0 such
+a commit cancelled the host's running build and offered a new one.
+
+(build-replacement)=
+**A replacement goes to the host that held the build (0.42.0).** When an
+environment's inputs really change while a host builds them, the new build
+is offered first to that host. The in-cluster fallback waits while the host
+is alive (it sent a report in the last 10 minutes, the same rule as a
+claim), even past `host_wait`; the waiting environment says `offered first
+to build host <host>, which held the build these inputs replace`. When the
+host stops reporting, or claims another build, the usual rules apply
+(`host_wait` when no host is alive). A build that replaces one the cluster
+was building goes back to the cluster at once.
+
+(cluster-build-jobs)=
+**An in-cluster build never stops the controller (0.42.0).** The controller
+starts the build Job, records it (`controller.cluster_builds` in its
+status) and looks at it once per poll. While it runs, other environments,
+approvals, NixRelease publishes and `piceli gitops builds` go on as usual;
+the environment waits (`build-waiting`) and says, for example:
+
+```text
+main: retrying 1a2b3c4d5e6f (build-waiting); building web in the cluster:
+  Job piceli-image-build-0a1b2c3d4e since 2026-01-01T10:00:20Z (running)
+```
+
+A passed Job's receipt is read as before; a failed one fails the step with
+its log tail and is kept until the next build of its key. A restarted
+controller looks at the same Job again (it is named after the build's
+inputs). `piceli gitops cancel ENV` deletes the Job, and a commit with other
+inputs replaces it. `piceli gitops run --once` still waits for its build.
+
 On a build host, with the cluster's credential profile:
 
 ```sh
@@ -1124,9 +1162,9 @@ NixRelease plans the ref ({ref}`below <gitops-nix-releases>`), an
 environment rebuilds every image at the commit it follows and deploys it
 with its usual plan and approval (`--ref` may only name that commit or
 ref). `piceli gitops cancel NAME` drops a NixRelease's publish, or the
-image builds an environment waits for on build hosts: the step fails with
-`cancelled` until `piceli gitops sync` (an in-cluster build Job runs to its
-end). Retry is `piceli gitops sync NAME`.
+image builds an environment waits for on build hosts or in the cluster
+(0.42.0: its build Job is deleted): the step fails with `cancelled` until
+`piceli gitops sync`. Retry is `piceli gitops sync NAME`.
 
 ### Faulty build hosts and nodes: quarantine (0.22.0)
 
