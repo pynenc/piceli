@@ -40,19 +40,24 @@ repos:
     hooks:
       - id: mypy
         name: mypy
-        entry: uv run --frozen mypy
+        entry: uv run --frozen --all-extras mypy
         language: system
         types: [python]
         pass_filenames: false
       - id: readme-examples
         name: README quick start matches examples/readme
-        entry: uv run --frozen python scripts/readme_examples.py check
+        entry: uv run --frozen --all-extras python scripts/readme_examples.py check
         language: system
         files: ^(README\.md|examples/readme/.*)$
         pass_filenames: false
       - id: public-links
         name: public docs links name a published version
-        entry: uv run --frozen pytest -q -p no:cacheprovider tests/unit/test_public_links.py
+        entry: uv run --frozen --all-extras pytest -q -p no:cacheprovider tests/unit/test_public_links.py
         language: system
         files: ^(README\.md|docs/.*\.md|skills/.*\.md|tests/unit/test_public_links\.py)$
         pass_filenames: false
+      - id: doc-refs
+        name: docs references to labels without a heading have a title
+        entry: python3 -I scripts/check_doc_refs.py
+        language: system
+        files: ^docs/.*\.md$

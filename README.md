@@ -66,19 +66,12 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.42
+## What's new in 0.43
 
-- **In-cluster builds no longer block the controller**: the build Job is
-  started and looked at once per poll, so other environments, approvals and
-  `piceli gitops builds` go on while it runs; `piceli gitops cancel` deletes
-  it.
-- **Unchanged inputs keep the running build**: a commit that changes no file
-  an image reads (a `flake.lock`, for example) no longer cancels a build host's
-  running build.
-- **Replacements go to the live host first**: a build whose inputs changed
-  waits for the host that held the old one while it reports, instead of
-  falling back to the cluster after `host_wait`. See the
-  [guide](https://docs.pynenc.org/projects/piceli/en/latest/gitops.html).
+- **Parallel Nix builds on docker hosts**: a `DevProfile.for_nix` run asks
+  the host's Nix daemon for `max-jobs = auto`, so independent derivations
+  build together instead of one at a time. See the
+  [guide](https://docs.pynenc.org/projects/piceli/en/stable/dev_builds.html).
 
 ## Web UI
 
