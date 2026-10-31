@@ -16,6 +16,9 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `generations=` prunes that profile only, so a hand-run `nixos-rebuild`
   and a release never undo each other. See
   {ref}`Only some services <nix-host-services>`.
+  Moving a host into service mode drops what the agent recorded for the
+  system (its current, previous and held builds), so no rollback or pin
+  ever points the profile at a system build.
 
 ## Version 0.44.0
 
