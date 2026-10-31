@@ -674,7 +674,10 @@ cache = NixCache(
 - **Where it runs.** On a **docker** host (a NixOS machine reached with the
   container CLI's own `ssh://`, nothing else installed), a
   `DevProfile(nix=True)` run mounts the host's `/nix` read-only (the store
-  and the daemon's socket) and sets `NIX_REMOTE=daemon`: the run image needs
+  and the daemon's socket) and sets `NIX_REMOTE=daemon` and, since 0.43.0,
+  `NIX_CONFIG=max-jobs = auto` (the container has no `nix.conf`, so its
+  client would otherwise ask the daemon to build one derivation at a time;
+  a profile's own `NIX_CONFIG` in `env` replaces it): the run image needs
   only `python3` (and `git` to fetch private flake inputs), evaluation
   runs in the container, the builds in the host
   daemon's sandbox, and the store (the cache that makes the next build

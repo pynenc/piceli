@@ -4,6 +4,24 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.43.0
+
+**Fixes**
+
+- **Nix builds on a docker host run in parallel.** A `DevProfile.for_nix`
+  run (and `piceli dev nix build --publish`) reaches the host's Nix daemon
+  from a container that has no `nix.conf`, so its client asked the daemon
+  for `max-jobs = 1` and independent derivations built one after another.
+  The container now gets `NIX_CONFIG=max-jobs = auto`; a profile's own
+  `NIX_CONFIG` still replaces it.
+
+**Development**
+
+- A pre-commit hook (`doc-refs`) refuses a `{ref}` without a title to a
+  label that is not above a heading, which the docs build rejects.
+- The pre-commit hooks keep every extra installed (`uv run --frozen
+  --all-extras`), so a commit no longer leaves the environment without them.
+
 ## Version 0.42.0
 
 **Fixes**

@@ -115,6 +115,7 @@ def test_the_steps_run_as_the_build_user_with_a_passwd_entry_and_a_home() -> Non
         assert "--user 0:0 --cap-drop ALL --cap-add SETUID --cap-add SETGID" in joined
         assert "--security-opt no-new-privileges" in joined
         assert "-v /nix:/nix:ro -e NIX_REMOTE=daemon" in joined
+        assert "-e NIX_CONFIG=max-jobs = auto" in joined  # 0.43: parallel builds
         assert "HOME=/tmp" not in joined  # root's /tmp: Nix then asks passwd
         tail = argv[argv.index("--entrypoint") :]
         assert tail[:5] == ["--entrypoint", "python3", IMAGE, "-I", "-c"]

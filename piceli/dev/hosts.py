@@ -66,8 +66,13 @@ _ARCH = {"aarch64": "linux/arm64", "arm64": "linux/arm64",
          "x86_64": "linux/amd64", "amd64": "linux/amd64"}  # fmt: skip
 UNAVAILABLE = "dev-host-unavailable"
 #: 0.24: how a ``DevProfile(nix=True)`` run (and ``dev nix build
-#: --publish``) reaches a docker host's own Nix.
-NIX_MOUNT = ("-v", "/nix:/nix:ro", "-e", "NIX_REMOTE=daemon")
+#: --publish``) reaches a docker host's own Nix. 0.43: the container has no
+#: ``nix.conf``, so its client would ask the daemon for ``max-jobs = 1`` and
+#: build one derivation at a time; ``auto`` lets independent ones run together
+#: (a profile's own ``NIX_CONFIG`` still wins).
+NIX_MOUNT = (
+    "-v", "/nix:/nix:ro", "-e", "NIX_REMOTE=daemon", "-e", "NIX_CONFIG=max-jobs = auto",
+)  # fmt: skip
 
 
 def roots_mount(path: str) -> tuple[str, ...]:
