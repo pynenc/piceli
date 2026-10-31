@@ -66,17 +66,19 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.41
+## What's new in 0.42
 
-- **Failed host builds explain themselves**: the failing command's last
-  lines and the build host's stage reach the run record, and
-  `piceli gitops show RUN --logs` prints them.
-- **Unstaged paths refused early**: a host build command that names a file
-  its context does not include is refused when the spec is loaded
-  (`host-build-path-not-staged`), not on the build host. See the
-  [guide](https://docs.pynenc.org/projects/piceli/en/stable/host_builds.html).
-- **No retries of an identical failure**: the same failure on the same
-  inputs is marked failed at once; transient failures are still retried.
+- **In-cluster builds no longer block the controller**: the build Job is
+  started and looked at once per poll, so other environments, approvals and
+  `piceli gitops builds` go on while it runs; `piceli gitops cancel` deletes
+  it.
+- **Unchanged inputs keep the running build**: a commit that changes no file
+  an image reads (a `flake.lock`, for example) no longer cancels a build host's
+  running build.
+- **Replacements go to the live host first**: a build whose inputs changed
+  waits for the host that held the old one while it reports, instead of
+  falling back to the cluster after `host_wait`. See the
+  [guide](https://docs.pynenc.org/projects/piceli/en/latest/gitops.html).
 
 ## Web UI
 

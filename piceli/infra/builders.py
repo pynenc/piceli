@@ -1081,10 +1081,15 @@ class JobBuilder:
         mirror_route: Any,
         backend: Any = None,
         say: Callable[[str], None] = lambda _: None,
+        asynchronous: bool = False,
     ) -> None:
         self.settings = settings
         self.urls = dict(urls)
         self.cluster = cluster
+        #: 0.42.0: the controller starts build Jobs and looks at them once
+        #: per poll (:meth:`start`) instead of waiting (``gitops run --once``
+        #: and the other CLI uses wait).
+        self.asynchronous = asynchronous
         self.mirror_route = mirror_route
         self.backend = backend
         self.say = say
@@ -1176,42 +1181,113 @@ class JobBuilder:
             return []
         return list(remove({BUILD_ENV_LABEL: _cache_label(environment)}))
 
+    # 0.42.0: a build is "a Job" (:meth:`_job_of`), run and waited for
+    # (:meth:`build`, :meth:`build_spec`) or started and looked at once per
+    # poll (:meth:`start`, :meth:`collect`, :meth:`stop`); both read the
+    # receipt the same way (:meth:`_result`).
+    @property
+    def builds_async(self) -> bool:
+        """Whether :meth:`start` may be used: asked for (``asynchronous``)
+        and the cluster runs build Jobs without waiting."""
+        return self.asynchronous and callable(
+            getattr(self.cluster, "start_build", None)
+        )
+
+    def _job_of(self, kind: str, work: Any) -> dict[str, Any]:
+        if kind == "spec":
+            job = self._for_environment(spec_job(self.settings, work, self.urls))
+            if self.attempt > 1:
+                job["metadata"]["name"] += f"-r{self.attempt}"
+            names = sorted(work.images)
+        else:
+            for item in work:
+                if (
+                    item.contract.build is not None
+                    and item.contract.build.kind == "dockerfile"
+                ):
+                    raise _unsupported(item.component, "dockerfile")
+            job = self._for_environment(component_job(self.settings, work, self.urls))
+            names = [item.component for item in work]
+        self.cluster.ensure_claim(self._claim())
+        self.say(f"[build] Job {job['metadata']['name']}: " + ", ".join(names))
+        return job
+
     def build(
         self, items: Sequence[BuildItem], checkout: Callable[[str, str, Path], Any]
     ) -> dict[str, BuiltImage]:
-        from piceli.artifacts.cluster_build import decode_receipt
-
-        for item in items:
-            if (
-                item.contract.build is not None
-                and item.contract.build.kind == "dockerfile"
-            ):
-                raise _unsupported(item.component, "dockerfile")
         if not items:
             return {}
-        job = self._for_environment(component_job(self.settings, items, self.urls))
-        claim = {
-            "apiVersion": "v1",
-            "kind": "PersistentVolumeClaim",
-            "metadata": {
-                "name": self.settings.cache_claim,
-                "namespace": self.settings.namespace,
-                "labels": {"app.kubernetes.io/managed-by": "piceli"},
-            },
-            "spec": {
-                "accessModes": ["ReadWriteOnce"],
-                "resources": {"requests": {"storage": self.settings.storage}},
-            },
-        }
-        self.cluster.ensure_claim(claim)
-        self.say(
-            f"[build] Job {job['metadata']['name']}: "
-            + ", ".join(item.component for item in items)
-        )
+        job = self._job_of("components", items)
         began = _utc()
+        clock = time.monotonic()
         outcome = _run(self.cluster, job)
+        return self._result(
+            "components", items, outcome, began, time.monotonic() - clock
+        )
+
+    def build_spec(
+        self, request: Any, checkout: Callable[[str, str, Path], Any]
+    ) -> dict[str, BuiltImage]:
+        """One Job that fetches every source of a pipeline's host spec and builds it."""
+        if not request.images:
+            return {}
+        job = self._job_of("spec", request)
+        # Earlier failed Jobs (and their logs) stay until a build succeeds.
+        began = _utc()
+        clock = time.monotonic()
+        outcome = _run(self.cluster, job, keep_earlier=True)
+        return self._result("spec", request, outcome, began, time.monotonic() - clock)
+
+    def start(self, kind: str, work: Any) -> dict[str, Any]:
+        """Start the build Job of ``work`` (``kind`` ``spec``: a
+        ``SpecBuildRequest``; ``components``: build items), or adopt the one
+        already running under its name; the record :meth:`collect` takes."""
+        from piceli.artifacts.cluster_build import build_key
+        from piceli.pipeline.prerollout import DEADLINE_SLACK_SECONDS
+
+        job = self._job_of(kind, work)
+        key = build_key(job)
+        how = self.cluster.start_build(job, key, keep_earlier=kind == "spec")
+        return {
+            "job": job["metadata"]["name"],
+            "labels": key,
+            "began": _utc(),
+            "allowed": float(job["spec"]["activeDeadlineSeconds"])
+            + DEADLINE_SLACK_SECONDS,
+            **({"adopted": True} if how == "adopted" else {}),
+        }
+
+    def collect(
+        self, kind: str, work: Any, record: dict[str, Any], elapsed: float
+    ) -> dict[str, BuiltImage] | None:
+        """One look at the Job :meth:`start` recorded: ``None`` while it runs
+        (``record["phase"]`` says how far), else its images or its failure."""
+        outcome = self.cluster.check_build(
+            str(record["job"]),
+            dict(record.get("labels") or {}),
+            keep_earlier=kind == "spec",
+            elapsed=elapsed,
+            allowed=record.get("allowed"),
+        )
+        if outcome is None:
+            phase = getattr(self.cluster, "build_phase", None)
+            if phase:
+                record["phase"] = str(phase)
+            return None
+        return self._result(kind, work, outcome, str(record.get("began")), elapsed)
+
+    def stop(self, record: Mapping[str, Any]) -> bool:
+        """Delete the Job :meth:`start` recorded (cancelled, superseded)."""
+        stop = getattr(self.cluster, "stop_build", None)
+        return bool(stop(str(record["job"]))) if callable(stop) else False
+
+    def _result(
+        self, kind: str, work: Any, outcome: Any, began: str, seconds: float
+    ) -> dict[str, BuiltImage]:
+        from piceli.artifacts.cluster_build import decode_receipt
+
         if outcome.state != "passed" or self.cluster.receipt_text is None:
-            raise _job_failed(outcome, "component")
+            raise _job_failed(outcome, "image" if kind == "spec" else "component")
         try:
             receipt = decode_receipt(self.cluster.receipt_text)
             self._keep_cache_report(receipt)
@@ -1219,23 +1295,46 @@ class JobBuilder:
             raise CompositionError(
                 "component-build-failed", "the build Job printed no readable receipt"
             ) from None
-        found = receipt.get("components") or {}
         built: dict[str, BuiltImage] = {}
-        for item in items:
-            entry = found.get(item.component)
-            if not isinstance(entry, Mapping) or entry.get("digest") != item.digest:
+        if kind != "spec":
+            found = receipt.get("components") or {}
+            for item in work:
+                entry = found.get(item.component)
+                if not isinstance(entry, Mapping) or entry.get("digest") != item.digest:
+                    raise CompositionError(
+                        "component-build-failed",
+                        f"the build Job returned no image of {item.component!r}",
+                    )
+                built[item.component] = BuiltImage(
+                    str(entry["pull_ref"]),
+                    str(entry["manifest_digest"]),
+                    {
+                        "provenance": self._provenance(
+                            {item.source: item.commit}, began, entry
+                        )
+                    },
+                )
+            return built
+        found = receipt.get("images") or {}
+        job_times = _job_times(
+            began, seconds, self.cluster, receipt.get("fetch_seconds")
+        )
+        self.timings = {
+            name: {**dict(entry["timings"]), **job_times}
+            for name, entry in found.items()
+            if isinstance(entry, Mapping) and isinstance(entry.get("timings"), Mapping)
+        }
+        for name, wanted in work.images.items():
+            entry = found.get(name)
+            if not isinstance(entry, Mapping) or entry.get("key") != wanted["key"]:
                 raise CompositionError(
                     "component-build-failed",
-                    f"the build Job returned no image of {item.component!r}",
+                    f"the build Job returned no image {name!r}",
                 )
-            built[item.component] = BuiltImage(
+            built[name] = BuiltImage(
                 str(entry["pull_ref"]),
                 str(entry["manifest_digest"]),
-                {
-                    "provenance": self._provenance(
-                        {item.source: item.commit}, began, entry
-                    )
-                },
+                {"provenance": self._provenance(work.commits, began, entry)},
             )
         return built
 
@@ -1258,59 +1357,6 @@ class JobBuilder:
             toolchains=toolchains if isinstance(toolchains, Mapping) else None,
             platforms=self.settings.platforms,
         )
-
-    def build_spec(
-        self, request: Any, checkout: Callable[[str, str, Path], Any]
-    ) -> dict[str, BuiltImage]:
-        """One Job that fetches every source of a pipeline's host spec and builds it."""
-        from piceli.artifacts.cluster_build import decode_receipt
-
-        if not request.images:
-            return {}
-        job = self._for_environment(spec_job(self.settings, request, self.urls))
-        if self.attempt > 1:
-            job["metadata"]["name"] += f"-r{self.attempt}"
-        self.cluster.ensure_claim(self._claim())
-        self.say(
-            f"[build] Job {job['metadata']['name']}: "
-            + ", ".join(sorted(request.images))
-        )
-        # Earlier failed Jobs (and their logs) stay until a build succeeds.
-        began = _utc()
-        clock = time.monotonic()
-        outcome = _run(self.cluster, job, keep_earlier=True)
-        if outcome.state != "passed" or self.cluster.receipt_text is None:
-            raise _job_failed(outcome, "image")
-        try:
-            receipt = decode_receipt(self.cluster.receipt_text)
-            self._keep_cache_report(receipt)
-        except (ValueError, OSError):
-            raise CompositionError(
-                "component-build-failed", "the build Job printed no readable receipt"
-            ) from None
-        found = receipt.get("images") or {}
-        built: dict[str, BuiltImage] = {}
-        job_times = _job_times(
-            began, time.monotonic() - clock, self.cluster, receipt.get("fetch_seconds")
-        )
-        self.timings = {
-            name: {**dict(entry["timings"]), **job_times}
-            for name, entry in found.items()
-            if isinstance(entry, Mapping) and isinstance(entry.get("timings"), Mapping)
-        }
-        for name, wanted in request.images.items():
-            entry = found.get(name)
-            if not isinstance(entry, Mapping) or entry.get("key") != wanted["key"]:
-                raise CompositionError(
-                    "component-build-failed",
-                    f"the build Job returned no image {name!r}",
-                )
-            built[name] = BuiltImage(
-                str(entry["pull_ref"]),
-                str(entry["manifest_digest"]),
-                {"provenance": self._provenance(request.commits, began, entry)},
-            )
-        return built
 
     def _claim(self) -> dict[str, Any]:
         return {

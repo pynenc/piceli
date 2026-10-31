@@ -860,6 +860,12 @@ def _wanted_builds(state: Mapping[str, Any], now: float) -> list[dict[str, Any]]
     return public(state, now)
 
 
+def _cluster_builds(state: Mapping[str, Any]) -> list[dict[str, Any]]:
+    from piceli.infra.cluster_builds import public
+
+    return public(state)
+
+
 def _offers(state: Mapping[str, Any]) -> list[dict[str, Any]]:
     from piceli.infra.remote_builds import public_offers
 
@@ -2320,9 +2326,9 @@ class CompositionController:
 
     def _cancel_env(self, body: Mapping[str, Any]) -> None:
         """``piceli gitops cancel ENV`` (0.26.0): drop the image builds the
-        environment waits for on build hosts (an in-cluster build Job runs
-        to its end)."""
-        from piceli.infra import remote_builds
+        environment waits for on build hosts; 0.42.0: and delete its
+        in-cluster build Jobs."""
+        from piceli.infra import cluster_builds, remote_builds
 
         name = str(body.get("name"))
         owners = set(self._group_records(name))
@@ -2336,14 +2342,23 @@ class CompositionController:
             for key, entry in wanted.items()
             if entry.get("owner") in owners and entry.get("kind") != "nix-publish"
         ]
-        if not found:
+        jobs = cluster_builds.owned(self.state, owners)
+        if not found and not jobs:
             raise GitOpsError(
                 "gitops-build-not-running",
-                f"environment {name} waits for no build on a build host",
+                f"environment {name} waits for no build on a build host or "
+                "in the cluster",
             )
         for key in found:
             remote_builds.cancel(self.state, key, body.get("by"), self.clock())
-        self.log(f"{name}: build cancelled ({len(found)} wanted build(s) dropped)")
+        for key in jobs:
+            cluster_builds.cancel(
+                self.state, key, body.get("by"), self.clock(), self.ports.builder
+            )
+        self.log(
+            f"{name}: build cancelled ({len(found)} wanted build(s) dropped, "
+            f"{len(jobs)} build Job(s) deleted)"
+        )
 
     # ------------------------------------------------------------ deploy
     def _repository(self, component: str) -> str:
@@ -2360,16 +2375,27 @@ class CompositionController:
         controller = getattr(cluster, "controller", None)
         order = tuple(getattr(controller, "builds", None) or ("cluster",))
         blocked = self._cluster_quarantine()
+        from piceli.infra.cluster_builds import ClusterBuilds
+
+        # 0.42.0: an in-cluster build Job is started, then looked at once
+        # per poll; the loop never waits for it.
+        jobs = ClusterBuilds(
+            self.ports.builder,
+            self.state,
+            platforms=self.config.platforms,
+            clock=self.clock,
+            owner=lambda: self._step_env,
+        )
         if "hosts" not in order:
             if blocked is not None:
                 # 0.22.0: a quarantined builder node makes no images.
                 return _Quarantined(self.ports.builder, blocked)
-            return self.ports.builder
+            return jobs
         from piceli.gitops.config import parse_duration
         from piceli.infra.remote_builds import HostBuilds
 
         return HostBuilds(
-            self.ports.builder,
+            jobs,
             self.state,
             platforms=self.config.platforms,
             order=order,
@@ -3052,6 +3078,11 @@ class CompositionController:
                 found = (getattr(image, "extra", None) or {}).get("provenance")
                 if isinstance(found, Mapping) and found.get("host"):
                     self._builds[name]["host"] = str(found["host"])[:64]
+                if isinstance(found, Mapping) and found.get("builder") == "cluster-job":
+                    # 0.42.0: a Job looked at over several polls started then.
+                    self._builds[name]["started_at"] = str(
+                        found.get("started_at") or began
+                    )
 
     def _stage(self, record: dict[str, Any], stage: str) -> None:
         """Show the stage the step is in (0.17.0: ``in_progress.stage``)."""
@@ -3830,9 +3861,13 @@ class CompositionController:
                 record.pop("waiting_since", None)
                 record.pop("waiting_for", None)
                 # 0.22.0: a step that ended without waiting wants no build.
-                from piceli.infra import remote_builds
+                from piceli.infra import cluster_builds, remote_builds
 
                 remote_builds.settle(self.state, str(record.get("branch")))
+                # 0.42.0: nor a build Job.
+                cluster_builds.settle(
+                    self.state, str(record.get("branch")), self.ports.builder
+                )
             if deploy and not pending:
                 self._record_step(record, *started)
             self.telemetry.step_finished(
@@ -4014,6 +4049,17 @@ class CompositionController:
         )
         if dropped:
             self.log(f"builds no longer wanted: {', '.join(sorted(dropped))}")
+        # 0.42.0: build Jobs no step looked at for half an hour are stopped.
+        from piceli.infra import cluster_builds
+
+        stopped = cluster_builds.prune(
+            self.state,
+            self.clock(),
+            max(3 * float(self.config.poll_seconds), 1800.0),
+            self.ports.builder,
+        )
+        if stopped:
+            self.log(f"build Jobs no longer wanted: {', '.join(sorted(stopped))}")
         self._alarms()
         return self._publish()
 
@@ -4645,6 +4691,8 @@ class CompositionController:
                 # Added in 0.21.0: what this controller waits for build hosts
                 # to build (piceli builder serve reads it).
                 "builds_wanted": _wanted_builds(self.state, self.clock()),
+                # Added in 0.42.0: the in-cluster build Jobs that run.
+                "cluster_builds": _cluster_builds(self.state),
                 # Added in 0.33.0: the build Job's image; builder serve builds
                 # in it unless --image overrides it.
                 **(

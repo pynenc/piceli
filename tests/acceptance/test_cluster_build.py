@@ -350,3 +350,47 @@ def test_a_failed_build_job_is_kept_with_its_log_until_the_next_attempt(
     )
     run_build_job(pipeline, COMMIT, cluster=cluster_for(local_api), **args)
     assert [k for k in api.objects if k[0] == "Job"] == []
+
+
+def test_a_build_job_is_started_looked_at_adopted_and_collected(
+    local_api: Any,
+) -> None:
+    """0.42.0: the controller starts a build Job and looks at it once per
+    poll; starting it again adopts the running Job; a passed one is read and
+    removed; a stopped one is gone."""
+    from piceli.artifacts.cluster_build import BUILD_LABEL
+
+    api, _ = local_api
+    cluster = cluster_for(local_api)
+    job = manifest("Job", "piceli-image-build-0a1b2c3d4e")
+    job["metadata"]["labels"] = {BUILD_LABEL: "true"}
+    job["spec"] = {"activeDeadlineSeconds": 600, "template": {"spec": {}}}
+    api.job_result("piceli-image-build-", container="build", waiting="PodInitializing")
+    key = {BUILD_LABEL: "true"}
+    assert cluster.start_build(job, key, keep_earlier=True) == "created"
+    name = job["metadata"]["name"]
+    assert cluster.check_build(name, key, elapsed=5, allowed=630) is None
+    assert cluster.build_phase == "pending"
+    assert cluster.start_build(job, key, keep_earlier=True) == "adopted"
+    assert [n for kind, n in api.objects if kind == "Job"] == [name]
+
+    receipt = {"state": "succeeded", "images": {}}
+    pod = api.objects[("Pod", f"{name}-x1")]
+    pod["status"]["containerStatuses"][0]["state"] = {"terminated": {"exitCode": 0}}
+    api.pod_logs[(f"{name}-x1", "build", False)] = f"{encode_receipt(receipt)}\n"
+    api.job_result("piceli-image-build-", container="build")  # now it ends
+    outcome = cluster.check_build(name, key, keep_earlier=True, elapsed=60, allowed=630)
+    assert outcome is not None and outcome.state == "passed"
+    assert outcome.seconds == 60 and decode_receipt(cluster.receipt_text) == receipt
+    assert [k for k in api.objects if k[0] == "Job"] == []  # removed
+
+    api.job_result("piceli-image-build-", container="build", waiting="PodInitializing")
+    assert cluster.start_build(job, key) == "created"
+    late = cluster.check_build(name, key, elapsed=700, allowed=630)
+    assert late is not None and late.reason == "deadline"
+    assert [k for k in api.objects if k[0] == "Job"] == []  # overdue: removed
+    assert cluster.start_build(job, key) == "created"
+    assert cluster.stop_build(name)
+    assert [k for k in api.objects if k[0] == "Job"] == []
+    gone = cluster.check_build(name, key, elapsed=1)
+    assert gone is not None and gone.reason == "job-not-found"

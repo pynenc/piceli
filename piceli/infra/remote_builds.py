@@ -272,6 +272,57 @@ def build_id(kind: str, body: Mapping[str, Any]) -> str:
     ).hexdigest()[:20]
 
 
+def spec_body(request: Any) -> dict[str, Any]:
+    """What a host needs to build a pipeline spec's changed images."""
+    return {
+        "spec": request.spec,
+        "repo": request.repo,
+        "commits": dict(request.commits),
+        "urls": dict(request.urls),
+        "facts": request.facts,
+        "keys": {name: dict(item) for name, item in request.images.items()},
+    }
+
+
+def components_body(items: Sequence[Any], urls: Mapping[str, str]) -> dict[str, Any]:
+    """What a host needs to build changed components."""
+    return {
+        "components": [
+            {
+                "component": item.component,
+                "source": item.source,
+                "commit": item.commit,
+                "digest": item.digest,
+                "repository": item.repository,
+            }
+            for item in items
+        ],
+        "urls": {item.source: urls.get(item.source, "") for item in items},
+    }
+
+
+def identity(kind: str, body: Mapping[str, Any]) -> dict[str, Any]:
+    """The part of a wanted build that names it (0.42.0): each image's
+    change key (staged content, see docs/compositions.md), never the
+    commits it is fetched at. A commit that changes no input of a build
+    asks for the same build: a running claim or Job continues and its
+    images serve the new revision."""
+    if kind == "components":
+        found: dict[str, Any] = {
+            "components": [
+                {k: v for k, v in dict(item).items() if k != "commit"}
+                for item in body.get("components") or ()
+            ]
+        }
+    elif kind == "spec":
+        found = {k: body.get(k) for k in ("spec", "repo", "facts", "keys")}
+    else:
+        found = {k: v for k, v in body.items() if k != "deliver"}
+    if body.get("deliver") is not None:
+        found["deliver"] = body["deliver"]
+    return found
+
+
 class HostBuilds:
     """A builder that hands builds to the build hosts (see the module doc).
 
@@ -344,9 +395,23 @@ class HostBuilds:
     def _wanted(self) -> dict[str, Any]:
         return self.state.setdefault(STATE_KEY, {})
 
-    def _ask(self, kind: str, body: dict[str, Any], names: list[str]) -> dict[str, Any]:
+    def _ask(
+        self,
+        kind: str,
+        body: dict[str, Any],
+        names: list[str],
+        *,
+        stopped_jobs: Sequence[str] = (),
+    ) -> dict[str, Any]:
         """The wanted entry for this build (new, or the one already asked);
-        raises the failure a host reported, or returns for the fallback."""
+        raises the failure a host reported, or returns for the fallback.
+
+        0.42.0: the entry is named by :func:`identity` (the change keys),
+        so a commit that changes none of them finds the same entry and its
+        claim. A new entry that replaces a build of the same environment
+        is offered first to whoever held that build (``prefer``): the live
+        host that had claimed it, or the cluster when ``stopped_jobs`` (its
+        superseded build Jobs) is not empty."""
         wanted = self._wanted()
         if self.nodes:
             missing = sorted(set(self.nodes.values()) - set(self.platforms))
@@ -358,7 +423,9 @@ class HostBuilds:
                     "platform (piceli gitops enable --platform ...)",
                 )
             body = {**body, "deliver": {"mode": "nodes", "nodes": dict(self.nodes)}}
-        found = build_id(kind, {**body, "platforms": list(self.platforms)})
+        found = build_id(
+            kind, {**identity(kind, body), "platforms": list(self.platforms)}
+        )
         now = self.clock()
         owner = self.owner()
         failure = (self.state.get(FAILED_KEY) or {}).get(found)
@@ -366,15 +433,29 @@ class HostBuilds:
             # 0.22.0: the same inputs failed on a host: not offered again
             # until they change or `piceli gitops sync` retries them.
             raise _failure_error(failure, found)
+        prefer: dict[str, Any] | None = None
+        if stopped_jobs:
+            prefer = {"host": "cluster", "jobs": list(stopped_jobs)[:4]}
         if owner is not None:
             # 0.22.0: a newer build of this environment replaces the older
-            # one (a new commit, or the environment moved on).
+            # one (its inputs changed, or the environment moved on).
             for key in [
                 key
                 for key, item in wanted.items()
                 if key != found and item.get("owner") == owner
             ]:
-                del wanted[key]
+                old = wanted.pop(key)
+                held = live_claim(old, now)
+                if held is not None and set(old.get("images") or ()) & set(names):
+                    # 0.42.0: offered first to the live host that held it.
+                    prefer = {
+                        "host": held.get("host"),
+                        "replaces": key,
+                        "epoch": max(
+                            float(held.get("epoch") or 0),
+                            float((old.get("progress") or {}).get("epoch") or 0),
+                        ),
+                    }
         entry = wanted.get(found)
         if entry is None:
             entry = wanted[found] = {
@@ -385,7 +466,12 @@ class HostBuilds:
                 "images": names,
                 "requested_at": _iso(now),
                 "requested_epoch": now,
+                **({"prefer": prefer} if prefer is not None else {}),
             }
+        elif live_claim(entry, now) is None and not entry.get("failed"):
+            # 0.42.0: the same inputs at a newer commit: a host that claims
+            # it from now on fetches the newest commits.
+            entry.update({k: v for k, v in body.items() if k != "deliver"})
         entry["asked_epoch"] = now
         if owner is not None:
             entry["owner"] = owner
@@ -430,12 +516,49 @@ class HostBuilds:
         after the request; after a hand-over (0.29.0) at once when no other
         host may take it, else within :data:`HANDOVER_SECONDS`."""
         at = float(entry.get("requested_epoch") or 0) + self.host_wait
+        if (entry.get("prefer") or {}).get("host") == "cluster":
+            # 0.42.0: it replaces a build the cluster was running: it goes
+            # back to the cluster at once (no host held it).
+            at = float(entry.get("requested_epoch") or 0)
         handed = entry.get("handed_epoch")
         if handed is None:
             return at
         if self._eligible(entry) == []:
             return min(at, float(handed))
         return min(at, float(handed) + HANDOVER_SECONDS)
+
+    def _preferred_hold(self, entry: Mapping[str, Any]) -> tuple[str, float] | None:
+        """The live host that held the build ``entry`` replaces (0.42.0) and
+        until when it counts as alive, or ``None``.
+
+        Alive: its last report (a claim, a ``build-progress``, any request
+        the controller saw from it) is under :data:`CLAIM_STALE_SECONDS`
+        old, the threshold that already decides a claim is dead. It no
+        longer holds the build once it may not take it (handed over,
+        quarantined for a source) or it builds another wanted build."""
+        host = (entry.get("prefer") or {}).get("host")
+        if not host or host == "cluster":
+            return None
+        now = self.clock()
+        eligible = self._eligible(entry)
+        if eligible is not None and host not in eligible:
+            return None
+        if host in {str(i.get("host")) for i in entry.get("handed_over") or ()}:
+            return None
+        if blocked_sources(self.state, host, entry):
+            return None
+        for other in self._wanted().values():
+            if other is entry or other.get("id") == entry.get("id"):
+                continue
+            if (live_claim(other, now) or {}).get("host") == host:
+                return None
+        seen = (self.state.get(HOSTS_KEY) or {}).get(host) or {}
+        last = max(
+            float((entry.get("prefer") or {}).get("epoch") or 0),
+            float(seen.get("seen_epoch") or 0),
+        )
+        until = last + CLAIM_STALE_SECONDS
+        return (str(host), until) if now < until else None
 
     def _standby_hold(self, entry: Mapping[str, Any]) -> tuple[str, float] | None:
         """A host standing by that may take ``entry`` (0.29.0) and until when
@@ -457,8 +580,9 @@ class HostBuilds:
         """Why the in-cluster fallback may not take ``entry`` now, or ``None``."""
         if "cluster" not in self.order:
             return 'builds=("hosts",): no in-cluster fallback'
-        if not callable(getattr(self.inner, method, None)) or not getattr(
-            self.inner, "builds_images", True
+        builder = getattr(self.inner, "inner", self.inner)  # 0.42.0: ClusterBuilds
+        if not callable(getattr(builder, method, None)) or not getattr(
+            builder, "builds_images", True
         ):
             return "no in-cluster builder image (piceli gitops enable --builder-image)"
         blocked = self.cluster_blocked()
@@ -467,6 +591,12 @@ class HostBuilds:
         claimed = live_claim(entry, self.clock())
         if claimed is not None:
             return f"claimed by {claimed.get('host')} since {claimed.get('at')}"
+        preferred = self._preferred_hold(entry)
+        if preferred is not None:
+            return (
+                f"offered first to build host {preferred[0]}, which held the build "
+                f"these inputs replace, while it reports (until {_iso(preferred[1])})"
+            )
         held = self._standby_hold(entry)
         if held is not None:
             return (
@@ -480,6 +610,10 @@ class HostBuilds:
         or not while a live host holds it)."""
         if self._no_fallback(entry, method) is None:
             return self._fallback_time(entry)
+        if live_claim(entry, self.clock()) is None:
+            preferred = self._preferred_hold(entry)
+            if preferred is not None:
+                return preferred[1]  # 0.42.0: looked at again when it expires
         held = self._standby_hold(entry)
         if held is not None and live_claim(entry, self.clock()) is None:
             return held[1]  # 0.29.0: looked at again when the standby ends
@@ -489,8 +623,12 @@ class HostBuilds:
         if self._no_fallback(entry, method) is not None:
             return False
         at, now = self._fallback_time(entry), self.clock()
-        # A hand-over is due at its time; host_wait once it has passed.
-        return now > at or (entry.get("handed_epoch") is not None and now >= at)
+        # A hand-over (and, 0.42.0, a replacement of a cluster build) is due
+        # at its time; host_wait once it has passed.
+        at_once = entry.get("handed_epoch") is not None or (
+            (entry.get("prefer") or {}).get("host") == "cluster"
+        )
+        return now > at or (at_once and now >= at)
 
     def waiting(
         self, entry: Mapping[str, Any], method: str, names: Sequence[str]
@@ -521,49 +659,61 @@ class HostBuilds:
         why = self._no_fallback(entry, method)
         if why is None:
             text += f"; in-cluster fallback at {_iso(self._fallback_time(entry))}"
+        elif why.startswith("offered first"):
+            text += f"; {why}"
         elif claimed is None or not why.startswith("claimed by"):
             text += f"; no in-cluster fallback: {why}"
         return text
 
-    def build_spec(self, request: Any, checkout: Any) -> dict[str, Any]:
-        body = {
-            "spec": request.spec,
-            "repo": request.repo,
-            "commits": dict(request.commits),
-            "urls": dict(request.urls),
-            "facts": request.facts,
-            "keys": {name: dict(item) for name, item in request.images.items()},
-        }
-        entry = self._ask("spec", body, sorted(request.images))
-        if self._fallback_due(entry, "build_spec"):
+    def _jobs(self) -> Any:
+        """The in-cluster builder when it runs Jobs without waiting (0.42.0)."""
+        found = self.inner
+        return found if callable(getattr(found, "running", None)) else None
+
+    def _build(
+        self,
+        kind: str,
+        work: Any,
+        body: dict[str, Any],
+        names: list[str],
+        method: str,
+        fallback: Callable[[], Any],
+    ) -> Any:
+        jobs = self._jobs()
+        stopped: list[str] = []
+        if jobs is not None:
+            jobs.cancelled(kind, work)
+            if jobs.running(kind, work):
+                # 0.42.0: the fallback's Job runs: looked at, not offered again.
+                return fallback()
+            stopped = jobs.supersede(kind, work)
+        entry = self._ask(kind, body, names, stopped_jobs=stopped)
+        if self._fallback_due(entry, method):
             del self._wanted()[entry["id"]]
-            return self.inner.build_spec(request, checkout)
+            return fallback()
         raise BuildPending(
-            self.waiting(entry, "build_spec", sorted(request.images)),
-            retry_at=self._fallback_at(entry, "build_spec"),
+            self.waiting(entry, method, names),
+            retry_at=self._fallback_at(entry, method),
+        )
+
+    def build_spec(self, request: Any, checkout: Any) -> dict[str, Any]:
+        return self._build(
+            "spec",
+            request,
+            spec_body(request),
+            sorted(request.images),
+            "build_spec",
+            lambda: self.inner.build_spec(request, checkout),
         )
 
     def build(self, items: Sequence[Any], checkout: Any) -> dict[str, Any]:
-        body = {
-            "components": [
-                {
-                    "component": item.component,
-                    "source": item.source,
-                    "commit": item.commit,
-                    "digest": item.digest,
-                    "repository": item.repository,
-                }
-                for item in items
-            ],
-            "urls": {item.source: self.urls.get(item.source, "") for item in items},
-        }
-        entry = self._ask("components", body, sorted(item.component for item in items))
-        if self._fallback_due(entry, "build"):
-            del self._wanted()[entry["id"]]
-            return dict(self.inner.build(items, checkout))
-        raise BuildPending(
-            self.waiting(entry, "build", sorted(item.component for item in items)),
-            retry_at=self._fallback_at(entry, "build"),
+        return self._build(
+            "components",
+            items,
+            components_body(items, self.urls),
+            sorted(item.component for item in items),
+            "build",
+            lambda: dict(self.inner.build(items, checkout)),
         )
 
 
@@ -576,7 +726,11 @@ def _failure_error(failure: Mapping[str, Any], build: str = "") -> CompositionEr
         outcome["stage"] = str(failure["stage"])[:16]
     error = CompositionError(
         "component-build-failed",
-        f"build host {failure.get('host')}: {failure.get('reason')}",
+        (
+            f"the in-cluster build: {failure.get('reason')}"
+            if failure.get("host") == "cluster"  # 0.42.0: a cancelled Job
+            else f"build host {failure.get('host')}: {failure.get('reason')}"
+        ),
         details={
             "outcome": outcome,
             "host": str(failure.get("host") or "?")[:64],
@@ -642,6 +796,8 @@ def public(state: Mapping[str, Any], now: float) -> list[dict[str, Any]]:
             item["progress"] = {
                 k: v for k, v in item["progress"].items() if k != "epoch"
             }
+        if isinstance(item.get("prefer"), Mapping):  # 0.42.0
+            item["prefer"] = {k: v for k, v in item["prefer"].items() if k != "epoch"}
         failure = entry.get("failed")
         if failure:
             # 0.22.0: shown, so hosts never offer it again and people see why.

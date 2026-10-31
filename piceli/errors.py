@@ -4717,7 +4717,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "gitops-build-not-running",
         "No build to cancel",
-        "`piceli gitops cancel NAME` named a NixRelease with no planned, queued or running publish, or an environment that waits for no build on a build host (an in-cluster build Job runs to its end).",
+        "`piceli gitops cancel NAME` named a NixRelease with no planned, queued or running publish, or an environment that waits for no build on a build host or in the cluster.",
         "Run `piceli gitops builds --target NAME --state active` to see what runs; nothing needs cancelling when it lists nothing.",
         True,
         "gitops",

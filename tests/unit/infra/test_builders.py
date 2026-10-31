@@ -167,6 +167,58 @@ def test_the_job_builder_reads_the_receipt() -> None:
     assert raised.value.code == "component-build-unsupported"
 
 
+class _JobsCluster(_Cluster):
+    """0.42.0: a cluster that starts build Jobs and is looked at per poll."""
+
+    def __init__(self, receipt: dict[str, Any]) -> None:
+        super().__init__(receipt)
+        self.looks = 0
+        self.stopped: list[str] = []
+        self.build_phase = "running"
+
+    def start_build(self, job: dict[str, Any], key: Any, **_: Any) -> str:
+        self.jobs.append(job)
+        return "created"
+
+    def check_build(self, name: str, key: Any, **_: Any) -> _Outcome | None:
+        self.looks += 1
+        return _Outcome() if self.looks > 2 else None
+
+    def stop_build(self, name: str) -> bool:
+        self.stopped.append(name)
+        return True
+
+
+def test_the_job_builder_starts_a_job_and_collects_it_later() -> None:
+    contracts = parse_contracts(TOML)
+    item = _item("site", "shop", "1" * 40, contracts)
+    ref = "piceli-registry.piceli-system.svc:5000/shop/site@sha256:" + "9" * 64
+    receipt = {"components": {"site": {
+        "pull_ref": ref, "manifest_digest": "sha256:" + "9" * 64, "digest": item.digest,
+    }}}  # fmt: skip
+    cluster = _JobsCluster(receipt)
+    settings = JobSettings(
+        image="registry.example/builder@sha256:" + "f" * 64,
+        namespace="piceli-system",
+        registry_url="oci://piceli-registry.piceli-system.svc:5000/shop",
+        node_registry="piceli-registry.piceli-system.svc:5000",
+    )
+    urls = {"shop": "https://git.example/shop.git"}
+    waits = JobBuilder(settings, urls, cluster, mirror_route=None)
+    assert not waits.builds_async  # gitops run --once and the CLI wait
+    builder = JobBuilder(settings, urls, cluster, mirror_route=None, asynchronous=True)
+    assert builder.builds_async
+    record = builder.start("components", [item])
+    assert record["job"] == cluster.jobs[0]["metadata"]["name"]
+    assert record["allowed"] > 0
+    assert builder.collect("components", [item], record, 10.0) is None
+    assert record["phase"] == "running"
+    assert builder.collect("components", [item], record, 20.0) is None
+    built = builder.collect("components", [item], record, 30.0)
+    assert built is not None and built["site"].pull_ref == ref
+    assert builder.stop(record) and cluster.stopped == [record["job"]]
+
+
 def test_the_job_run_builds_a_files_component(tmp_path: Path) -> None:
     source = tmp_path / "sources" / "shop"
     (source / "site").mkdir(parents=True)

@@ -547,6 +547,38 @@ def _image_records(
                 },
             )
         )
+    for entry in controller.get("cluster_builds") or ():
+        # 0.42.0: an in-cluster build Job that runs (the controller looks at
+        # it once per poll).
+        entry = _dict(entry)
+        owner = str(entry.get("owner") or "")
+        target = str(_dict(envs.get(owner)).get("group") or owner) or None
+        live.add(owner)
+        found.append(
+            _record(
+                id=f"images:{entry.get('id')}",
+                kind="images",
+                target=target,
+                trigger=_trigger(
+                    _dict(_dict(envs.get(owner)).get("in_progress")).get("trigger")
+                ),
+                host="cluster",
+                stage="building",
+                stages=[
+                    {
+                        "stage": "building",
+                        "started_at": entry.get("started_at"),
+                        "finished_at": None,
+                        "seconds": None,
+                    }
+                ],
+                requested_at=entry.get("started_at"),
+                started_at=entry.get("started_at"),
+                seconds=_seconds(entry.get("started_at"), None, now),
+                images=list(entry.get("images") or ()),
+                actions={"approve": False, "retry": False, "cancel": True},
+            )
+        )
     for name, value in sorted(_dict(history.get("envs")).items()):
         for run in (_dict(value).get("runs") or ())[:20]:
             run = _dict(run)

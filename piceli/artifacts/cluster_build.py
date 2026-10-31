@@ -532,6 +532,15 @@ class BuildCluster(PreRolloutCluster):
     _keeping: bool = False
     _job_failed: bool = False
     kept_job: str | None = None
+    #: 0.42.0: the last running build Job's phase (``pending``, ``running``).
+    build_phase: str | None = None
+
+    @property
+    def _watching(self) -> dict[str, dict[str, Any]]:
+        found = self.__dict__.get("_watch")
+        if found is None:
+            found = self.__dict__["_watch"] = {}
+        return found
 
     def run_build(
         self,
@@ -580,6 +589,84 @@ class BuildCluster(PreRolloutCluster):
             if failed and isinstance(name, str) and super().delete_job(name):
                 removed.append(name)
         return removed
+
+    # 0.42.0: a build Job the controller starts and then looks at once per
+    # poll (its loop never waits for a build).
+    def start_build(
+        self,
+        job: Mapping[str, Any],
+        key: Mapping[str, str],
+        *,
+        keep_earlier: bool = False,
+    ) -> str:
+        """Create build Job ``job``, or adopt the one of that name already
+        running (a controller restart, a step asking again): ``created`` or
+        ``adopted``. A failed Job of that name (kept for its log) is replaced.
+
+        :raises PipelineError: ``prerollout-unavailable`` when the API
+            refuses the Job.
+        """
+        from kubernetes.client.exceptions import ApiException
+
+        name = str(job["metadata"]["name"])
+        current = self._get(f"{self._ns_jobs()}/{name}")
+        if current is not None:
+            if not _failed_job(current):
+                return "adopted"
+            super().delete_job(name)
+        if not keep_earlier:
+            self.remove_kept(key)
+        try:
+            self._send(self._ns_jobs(), "POST", dict(job), fieldManager="piceli-build")
+        except ApiException as error:
+            raise PipelineError(
+                "prerollout-unavailable",
+                f"the API refused to create the build Job {name} (HTTP {error.status})",
+                failed=True,
+            ) from None
+        return "created"
+
+    def check_build(
+        self,
+        name: str,
+        key: Mapping[str, str],
+        *,
+        keep_earlier: bool = False,
+        elapsed: float = 0.0,
+        allowed: float | None = None,
+    ) -> Outcome | None:
+        """One look at build Job ``name`` (see :meth:`start_build`): ``None``
+        while it runs (:attr:`build_phase` says ``pending`` or ``running``),
+        else its outcome, with the receipt read as :meth:`run_build` reads
+        it. A passed Job is removed; a failed one is kept
+        (``outcome.extra["kept_job"]``) until the next build of its key."""
+        memo = self._watching.setdefault(name, {})
+        if self._get(f"{self._ns_jobs()}/{name}") is None:
+            self._watching.pop(name, None)
+            self.receipt_text = None
+            return Outcome("failed", reason="job-not-found", seconds=elapsed)
+        outcome = self._check(name, memo)
+        if outcome is None and allowed is not None and elapsed >= allowed:
+            outcome = Outcome("timeout", reason="deadline")
+        if outcome is None:
+            pod = self._pod(name)
+            self.build_phase = "running" if _build_started(pod) else "pending"
+            return None
+        self._watching.pop(name, None)
+        outcome.log_tail = self._logs(name, ())
+        outcome.seconds = elapsed
+        if outcome.state == "failed" or outcome.reason == "job-deadline-exceeded":
+            outcome.extra["kept_job"] = name
+        else:
+            outcome.cleaned = super().delete_job(name)
+        if keep_earlier and outcome.state == "passed":
+            self.remove_kept(key)
+        return outcome
+
+    def stop_build(self, name: str) -> bool:
+        """Delete build Job ``name`` and its pod (cancelled, superseded)."""
+        self._watching.pop(name, None)
+        return super().delete_job(name)
 
     def _ns_jobs(self) -> str:
         return f"/apis/batch/v1/namespaces/{self.namespace}/jobs"
@@ -663,6 +750,21 @@ class BuildCluster(PreRolloutCluster):
             fieldManager="piceli-build",
         )
         return True
+
+
+def _failed_job(job: Mapping[str, Any]) -> bool:
+    return any(
+        c.get("type") == "Failed" and c.get("status") == "True"
+        for c in (job.get("status") or {}).get("conditions") or ()
+    )
+
+
+def _build_started(pod: Mapping[str, Any] | None) -> bool:
+    for status in ((pod or {}).get("status") or {}).get("containerStatuses") or ():
+        if status.get("name") == "build":
+            state = status.get("state") or {}
+            return "running" in state or "terminated" in state
+    return False
 
 
 def build_key(job: Mapping[str, Any]) -> dict[str, str]:
