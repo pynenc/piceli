@@ -64,6 +64,9 @@ _PATTERN = re.compile(r"[A-Za-z0-9._+*?\[\]/-]{1,100}")
 _BRANCH = re.compile(r"[A-Za-z0-9_+-][A-Za-z0-9._+/-]{0,199}")
 _ATTR = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.+-]{0,511}")
 _UNIT = re.compile(r"[A-Za-z0-9:_.@-]{1,200}")
+_PROFILE = re.compile(
+    r"/nix/var/nix/profiles/(?:per-user/)?[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}(?:/[A-Za-z0-9_][A-Za-z0-9_.-]{0,99})?"
+)
 _HOST = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,252})")
 _USER = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
 _PATH = re.compile(r"/[A-Za-z0-9._/@+-]{1,255}")
@@ -326,6 +329,44 @@ def _attribute(flake: str) -> str:
 
 
 @dataclass(frozen=True)
+class Services:
+    """Release packages, not the whole system (0.45.0): the host's own
+    NixOS config stays in the owner's hands.
+
+    The agent sets the Nix ``profile`` to the published build (a new
+    generation) and restarts only ``units``; the host's config points those
+    units at the profile path (``/nix/var/nix/profiles/web``). It never runs
+    ``switch-to-configuration`` and never moves the boot entry: a manual
+    ``nixos-rebuild switch`` and a release never undo each other. A failed
+    check sets the profile back to the previous build and restarts the units
+    again; ``NixHost(generations=)`` prunes this profile, never the system's.
+    """
+
+    profile: str
+    units: Sequence[str]
+
+    def __post_init__(self) -> None:
+        units = tuple(self.units) if not isinstance(self.units, str) else ()
+        object.__setattr__(self, "units", units)
+        if (
+            not isinstance(self.profile, str)
+            or not _PROFILE.fullmatch(self.profile)
+            or self.profile == "/nix/var/nix/profiles/system"
+        ):
+            raise _invalid(
+                "Services(profile=) is a Nix profile under /nix/var/nix/profiles/ "
+                "other than the system's (/nix/var/nix/profiles/web)"
+            )
+        if not units or not all(
+            isinstance(unit, str) and _UNIT.fullmatch(unit) for unit in units
+        ):
+            raise _invalid("Services(units=) is a list of systemd unit names")
+
+    def describe(self) -> dict[str, Any]:
+        return {"kind": "services", "profile": self.profile, "units": list(self.units)}
+
+
+@dataclass(frozen=True)
 class NixHost:
     """A NixOS host that follows a Git ref of its flake from a binary cache.
 
@@ -366,6 +407,8 @@ class NixHost:
         puts on the host for sops-nix; ``None``: the host gets its key
         another way.
     :param age_key_file: Where it goes: sops-nix's ``sops.age.keyFile``.
+    :param scope: ``None`` (the whole system) or :class:`Services` (0.45.0):
+        only a Nix profile and its units follow the releases.
     :param gate: A :class:`~piceli.infra.Promotion` (0.25.0): the agent
         switches only to a build whose signed manifest carries the gate's
         verified ``pinned`` (input and environment); a ``NixRelease`` of
@@ -387,6 +430,7 @@ class NixHost:
     age_identity: str | None = None
     age_key_file: str = AGE_KEY_FILE
     gate: Any = None
+    scope: Services | None = None
     attribute: str = field(init=False, default="")
     #: The credential ``piceli host secrets`` writes to
     #: ``read_credentials_file`` (``None``: the host's own file).
@@ -425,6 +469,8 @@ class NixHost:
         object.__setattr__(self, "checks", checks)
         if self.report is not None and not isinstance(self.report, HostReport):
             raise _invalid("NixHost(report=) is a HostReport")
+        if self.scope is not None and not isinstance(self.scope, Services):
+            raise _invalid("NixHost(scope=) is Services(...) or None (the system)")
         build = self.build
         if build is None:
             parts = self.attribute[2:].split(".")
@@ -526,4 +572,6 @@ def agent_config(host: NixHost) -> dict[str, Any]:
         "state_dir": STATE_DIR,
         # 0.25.0, only when declared: the build must carry a verified pin.
         **({"gate": host.gate.to_dict()} if host.gate is not None else {}),
+        # 0.45.0, only when declared: release packages to a profile.
+        **({"scope": host.scope.describe()} if host.scope is not None else {}),
     }

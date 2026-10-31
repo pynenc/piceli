@@ -12,6 +12,22 @@ Importing this package is side-effect free.
 
 from __future__ import annotations
 
-from piceli.hosts.model import Branch, HostCheck, HostError, HostReport, NixHost, Tag
+from piceli.hosts.model import (
+    Branch,
+    HostCheck,
+    HostError,
+    HostReport,
+    NixHost,
+    Services,
+    Tag,
+)
 
-__all__ = ["Branch", "HostCheck", "HostError", "HostReport", "NixHost", "Tag"]
+__all__ = [
+    "Branch",
+    "HostCheck",
+    "HostError",
+    "HostReport",
+    "NixHost",
+    "Services",
+    "Tag",
+]

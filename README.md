@@ -66,14 +66,12 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.44
+## What's new in 0.45
 
-- **Test tags stay tests**: a tag with build metadata
-  (`v1.2.3+rollbacktest`) is never the release a host follows or
-  `piceli promote` bumps from.
-- **Checks that must hold**: `HostCheck.unit(..., stable=10)` rolls back a
-  unit that starts and dies a few seconds later. See the
-  [guide](https://docs.pynenc.org/projects/piceli/en/stable/nix_hosts.html).
+- **Release services, not the whole system**: `NixHost(...,
+  scope=Services(profile, units))` moves only a Nix profile and restarts
+  only its units, so a hand-managed NixOS host keeps its own system. See
+  the [guide](https://docs.pynenc.org/projects/piceli/en/stable/nix_hosts.html).
 
 ## Web UI
 

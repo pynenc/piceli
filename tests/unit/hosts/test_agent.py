@@ -113,6 +113,7 @@ class FakeHost:
         self.unit_active = unit_active
         self.unit_states: list[bool] = []  # one per check try, then unit_active
         self.fail_switch: set[str] = set()
+        self.fail_restart = False
         self.fail_copy = False
         self.fail_delete = False
         self.fail_gc: int | Exception = 0
@@ -197,6 +198,8 @@ class FakeHost:
                     self.current.symlink_to(path)
                 if verb in ("boot", "switch"):
                     self.boot = path
+        elif argv[0] == "fake-systemctl" and argv[1] == "restart":
+            code = 1 if self.fail_restart else 0
         elif argv[0] == "fake-systemctl":
             active = self.unit_states.pop(0) if self.unit_states else self.unit_active
             code = 0 if active else 3

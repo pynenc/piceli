@@ -581,8 +581,15 @@ class Agent:
         self.check_interval = check_interval
         self.dir = str(config.get("state_dir") or "/var/lib/piceli-host")
         self.tools = {**DEFAULT_TOOLS, **(config.get("tools") or {})}
-        self.profile = str(config.get("profile") or PROFILE)
-        self.current_link = str(config.get("current_system") or CURRENT)
+        scope = config.get("scope") or {}
+        # 0.45.0: in service mode a Nix profile and its units stand in for
+        # the system; the system and its boot entry are never touched.
+        self.services: dict[str, Any] | None = (
+            dict(scope) if scope.get("kind") == "services" else None
+        )
+        own = self.services["profile"] if self.services else None
+        self.profile = str(config.get("profile") or own or PROFILE)
+        self.current_link = str(config.get("current_system") or own or CURRENT)
         self.public = str(config["cache"]["public_key"])
         self.build = str(config["build"])
         self.env: dict[str, str] = {}
@@ -652,8 +659,13 @@ class Agent:
         return int(done.returncode), out.decode("utf-8", "replace")
 
     def running(self) -> str | None:
+        """The store path that runs: ``/run/current-system``'s, or in service
+        mode the profile's (through its generation link)."""
         try:
             target = os.readlink(self.current_link)
+            if self.services and not target.startswith("/nix/store/"):
+                link = os.path.join(os.path.dirname(self.current_link), target)
+                target = os.readlink(link)
         except OSError:
             return None
         return target if _STORE_PATH.fullmatch(target) else None
@@ -842,16 +854,30 @@ class Agent:
     def activate(self, store_path: str) -> None:
         """Run ``store_path`` now (``switch-to-configuration test``): the
         profile and the boot entry stay, so a reboot comes up on the system
-        the host booted before (0.26.2)."""
+        the host booted before (0.26.2). In service mode: set the profile to
+        it and restart only the declared units."""
+        if self.services:
+            self._set_profile(store_path)
+            units = [str(unit) for unit in self.services["units"]]
+            argv = [self.tools["systemctl"], "restart", *units]
+            if self._run(argv, SWITCH_SECONDS) != 0:
+                raise Failure("host-switch-failed", f"restart of {' '.join(units)}")
+            return
         self._configure(store_path, "test")
+
+    def _set_profile(self, store_path: str) -> None:
+        argv = [self.tools["nix_env"], "-p", self.profile, "--set", store_path]
+        if self._run(argv, 600) != 0:
+            raise Failure("host-switch-failed", "nix-env --set failed")
 
     def make_default(self, store_path: str) -> None:
         """Make ``store_path`` the system profile and the boot default
         (``nix-env --set``, ``switch-to-configuration boot``): only after its
-        checks passed (0.26.2)."""
-        argv = [self.tools["nix_env"], "-p", self.profile, "--set", store_path]
-        if self._run(argv, 600) != 0:
-            raise Failure("host-switch-failed", "nix-env --set failed")
+        checks passed (0.26.2). In service mode the profile moved when it was
+        activated, and there is no boot entry: nothing to do."""
+        if self.services:
+            return
+        self._set_profile(store_path)
         self._configure(store_path, "boot")
 
     # ---------------------------------------------------------- checks

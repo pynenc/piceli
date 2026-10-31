@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from piceli._lazy import lazy_exports
 from piceli.dev.model import BuildHost, DevBuilds, DevProfile
 from piceli.dev.nix import NixCache
-from piceli.hosts.model import Branch, HostCheck, HostReport, NixHost, Tag
+from piceli.hosts.model import Branch, HostCheck, HostReport, NixHost, Services, Tag
 from piceli.pipeline.errors import PipelineError
 from piceli.pipeline.model import Registry
 
@@ -72,6 +72,7 @@ __all__ = [
     "Rule",
     "S3Key",
     "Server",
+    "Services",
     "Source",
     "Ssh",
     "Tag",

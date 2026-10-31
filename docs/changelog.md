@@ -4,6 +4,19 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.45.0
+
+**Features**
+
+- **Release services, not the whole system.** `NixHost(...,
+  scope=Services(profile, units))` publishes and follows a package: the
+  agent sets the named Nix profile to the new build and restarts only the
+  listed units, and rolls the profile back when a restart or check fails.
+  It never runs `switch-to-configuration` or touches the boot entry, and
+  `generations=` prunes that profile only, so a hand-run `nixos-rebuild`
+  and a release never undo each other. See
+  {ref}`Only some services <nix-host-services>`.
+
 ## Version 0.44.0
 
 **Fixes**
