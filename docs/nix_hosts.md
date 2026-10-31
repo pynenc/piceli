@@ -75,6 +75,7 @@ web = NixHost(
 | `report=` | `HostReport(endpoint, headers_file=None, insecure=False)`: OTLP/HTTP logs |
 | `build=` | The manifests' name, `--name` of the publish (`NAME` of `.#NAME`, else the host's name) |
 | `read_credentials_file=` | The host's file with the cache's read S3 keys. When the cache's bucket declares `S3Key(access="read")` (0.25.0) or the cache names a pair you made, `NixCache(read_credentials=)` (0.25.3): `/var/lib/piceli-host/cache.env`, which `piceli host secrets` writes. Otherwise a sops-nix secret (`/run/secrets/piceli/cache.env` for an `s3://` cache, none otherwise). A path you give is your own file: `host secrets` leaves it alone |
+| `scope=` | `None` (the whole system) or `Services(PROFILE, units=[...])` (0.45.0): only a Nix profile and its units follow the releases; see [Only some services](#nix-host-services) |
 | `poll_seconds=`, `history=` | How often the agent polls (300) and how many attempts the status keeps (20) |
 | `generations=` | How many system generations the host keeps (5, at least 2: a rollback needs the previous one); see [Old systems](#old-systems) |
 | `age_identity=`, `age_key_file=` | The local credential with the host's age identity, and where `piceli host secrets` puts it (`/var/lib/sops-nix/key.txt`, sops-nix's `sops.age.keyFile`) |
@@ -88,6 +89,35 @@ follows it, `piceli promote` never bumps from it, and a host still running
 one goes back to the newest release at its next poll (0.44.0). A
 declaration that does not hold is refused with `host-invalid` or
 `host-check-invalid`.
+
+(nix-host-services)=
+
+### Only some services: `scope=Services(...)`
+
+When the host's NixOS system is managed by hand (`nixos-rebuild`) and runs
+more than your product, let the agent release only your packages (0.45.0):
+
+```python
+from piceli.infra import Services
+
+shop = NixHost(
+    "web-1", ..., follow=Tag("web-v*"),
+    flake=".#packages.x86_64-linux.shop",  # a package, not a system
+    scope=Services("/nix/var/nix/profiles/shop",
+                   units=["shop-api.service", "shop-worker.service"]),
+    checks=[HostCheck.unit("shop-api.service", stable=10)],
+)
+```
+
+The host's own config points the units at the profile, for example
+`ExecStart = "/nix/var/nix/profiles/shop/bin/shop-api"`. On a release the
+agent sets that profile to the new build (a new generation) and restarts
+only the listed units. A failed restart or check sets the profile back and
+restarts them again. It never runs `switch-to-configuration`, never moves
+the boot entry, and `generations=` prunes this profile only. So a manual
+`nixos-rebuild switch` never reverts a release, and a release never reverts
+a manual switch. The system profile (`/nix/var/nix/profiles/system`) is
+refused as a service profile.
 
 ### Several hosts in one repository: tag prefixes
 

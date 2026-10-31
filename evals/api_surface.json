@@ -6743,7 +6743,8 @@
    "attr_types": {
     "checks": "HostCheck",
     "follow": "Tag",
-    "report": "HostReport"
+    "report": "HostReport",
+    "scope": "Services"
    },
    "attrs": [
     "age_identity",
@@ -6762,6 +6763,7 @@
     "poll_seconds",
     "read_credentials_file",
     "report",
+    "scope",
     "server",
     "ssh_target"
    ],
@@ -6780,6 +6782,7 @@
     "poll_seconds",
     "read_credentials_file",
     "report",
+    "scope",
     "server"
    ],
    "methods": {
@@ -10672,6 +10675,20 @@
     "manifest": []
    },
    "pydantic": true
+  },
+  "Services": {
+   "attrs": [
+    "describe",
+    "profile",
+    "units"
+   ],
+   "init": [
+    "profile",
+    "units"
+   ],
+   "methods": {
+    "describe": []
+   }
   },
   "SigningError": {
    "attrs": [
@@ -16793,6 +16810,9 @@
    "Server": {
     "class": "Server"
    },
+   "Services": {
+    "class": "Services"
+   },
    "Source": {
     "class": "Source"
    },
@@ -18029,5 +18049,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.44.0"
+ "version": "0.45.0"
 }
