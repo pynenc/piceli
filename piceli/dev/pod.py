@@ -340,6 +340,15 @@ def fetch_main(
     return report
 
 
+def _unquote(raw: bytes) -> str:
+    """A path as Git's diff headers print it (C-quoted when unusual)."""
+    if not raw.startswith(b'"'):
+        return raw.decode("utf-8", "surrogateescape")
+    body = raw[1:-1] if raw.endswith(b'"') else raw[1:]
+    escaped = body.decode("latin-1").encode("latin-1").decode("unicode_escape")
+    return escaped.encode("latin-1").decode("utf-8", "surrogateescape")
+
+
 class DeltaSource:
     """One source of a delta upload, its commit in the builder's mirror."""
 
@@ -374,6 +383,12 @@ class DeltaSource:
                     index += 3
                 else:
                     index += 1
+            # 0.50.0: --numstat names only a rename's or copy's new path; an
+            # upload from an older client still carries renames.
+            for line in diff.read_bytes().splitlines():
+                for prefix in (b"rename from ", b"copy from "):
+                    if line.startswith(prefix):
+                        found.add(_unquote(line[len(prefix) :]))
         untracked = self.incoming / "untracked.tar"
         if untracked.is_file():
             with tarfile.open(untracked, "r:") as tar:
@@ -812,6 +827,7 @@ def shrink(
         "used_bytes": used,
         "max_bytes": max_bytes,
         "other_bytes": other,
+        "held_bytes": held,
         "evicted": evicted,
         "freed_bytes": freed,
         "over_budget": used > max_bytes,
@@ -1778,7 +1794,12 @@ def main(
         timeline.phase("sync")
         lineage_tree = lineage.path / "tree"
         if sources is not None:
-            previous = _read_meta(lineage.path).get("materialized")
+            meta = _read_meta(lineage.path)
+            previous = meta.pop("materialized", None)
+            if previous is not None:
+                # 0.50.0: a run killed mid-sync leaves no record, so the next
+                # run syncs fully instead of trusting a stale overlay list.
+                _write_meta(lineage.path, meta)
             counts = (
                 refresh_in_place(sources, lineage_tree, previous, work / "stage")
                 if not full and lineage_tree.is_dir()
@@ -1887,9 +1908,12 @@ def main(
         emit("[piceli-dev] running " + " ".join(command))
         timeout = float(spec.get("timeout_seconds") or 3600)
 
+        room: dict[str, Any] = {}
+
         def make_room(lineage_bytes: int) -> int:
             """Evict free lineages; the run's new cap."""
             report = evict(cache, limit, min_free_ratio=min_free)
+            room.update(report, lineage_bytes=lineage_bytes)
             if report["evicted"]:
                 emit(
                     f"[piceli-dev] cache budget: evicted {len(report['evicted'])} "
@@ -1989,9 +2013,24 @@ def main(
         if watch.stopped:
             gib = 2**30
             result["cache"].update(over_cap=True, stopped_for=watch.stopped)
+            result["cache"]["cap_bytes_at_stop"] = watch.cap
+            rest = (
+                int(room["used_bytes"]) - int(room["lineage_bytes"]) if room else None
+            )
+            # 0.50.0: the cap that stopped the run, which shrinks while it
+            # runs when other runs' lineages grow (it was the start's cap).
             why = (
                 f"its lineage held {watch.bytes / gib:.1f} GiB, over its cap of "
-                f"{cap / gib:.1f} GiB (the cache's budget less the rest of the cache)"
+                f"{watch.cap / gib:.1f} GiB: the cache's budget of "
+                f"{limit / gib:.1f} GiB less "
+                + (
+                    f"{rest / gib:.1f} GiB the rest of the cache holds, "
+                    f"{max(0, int(room.get('held_bytes') or 0) - int(room['lineage_bytes'])) / gib:.1f} GiB of it "
+                    "in lineages other runs hold (its cap at the start was "
+                    f"{cap / gib:.1f} GiB)"
+                    if rest is not None
+                    else "the rest of the cache"
+                )
                 if watch.stopped == "over-cap"
                 else f"the cache's disk fell under {min_free:.0%} free while its "
                 f"lineage grew to {watch.bytes / gib:.1f} GiB"
