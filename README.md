@@ -66,12 +66,12 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.47
+## What's new in 0.48
 
-- **The release journal stays within its budget**: finished executions
-  nothing needs are forgotten and the file is compacted, so a long-lived
-  environment keeps releasing. See the
-  [guide](https://docs.pynenc.org/projects/piceli/en/stable/release_cli.html).
+- **Development runs make room**: a run that grows past its cache cap
+  evicts idle lineages before it is stopped, and a build host can have its
+  own budget (`BuildHost(cache_max="300Gi")`). See the
+  [guide](https://docs.pynenc.org/projects/piceli/en/stable/dev_builds.html).
 
 ## Web UI
 

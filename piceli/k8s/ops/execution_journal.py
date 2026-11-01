@@ -98,6 +98,7 @@ class ExecutionJournal:
         migration lineage names it. Deployment sessions stay: a catalogued
         release reopens from its session. The file is rewritten
         (``VACUUM``) when more than a quarter of it is free afterwards."""
+        used_before = self.used_bytes()
         protected = set(keep)
         for row in self.connection.execute(
             "SELECT execution, source_execution FROM migration_lineage"
@@ -140,6 +141,8 @@ class ExecutionJournal:
             "vacuumed": vacuumed,
             "bytes_before": size,
             "bytes_after": self.path.stat().st_size,
+            "used_before": used_before,
+            "used_after": self.used_bytes(),
         }
 
     @contextmanager

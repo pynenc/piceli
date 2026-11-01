@@ -608,6 +608,8 @@ class DockerPort:
         spec["isolation_check"] = False
         # 0.35.0: the disk floor is a node's (DiskPressure); a host keeps the budget.
         spec.pop("cache_min_free_ratio", None)
+        if self.host.cache_max:  # 0.48.0: the host's own budget
+            spec["cache_max_bytes"] = bytes_of(self.host.cache_max)
         container = job["spec"]["template"]["spec"]["containers"][0]
         limits = (container.get("resources") or {}).get("limits") or {}
         memory = self.host.memory or limits.get("memory")
@@ -820,6 +822,10 @@ class NativePort:
         spec = json.loads(_env(self.jobs[run])["PICELI_DEV_SPEC"])
         spec["isolation_check"] = False
         spec.pop("cache_min_free_ratio", None)  # 0.35.0: a node's floor
+        if self.host.cache_max:  # 0.48.0: the host's own budget
+            from piceli.dev.model import bytes_of
+
+            spec["cache_max_bytes"] = bytes_of(self.host.cache_max)
         # This machine's own rustup honours rust-toolchain.toml itself, and
         # its own ~/.cargo already holds the crates.
         spec["provision_toolchains"] = False

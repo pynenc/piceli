@@ -12,8 +12,10 @@ on:
 permissions:
   contents: read
 
+# A newer push cancels an older one on the same ref; the nightly schedule has
+# its own group, so it never cancels the push run Release waits for on main.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 env:

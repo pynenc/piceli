@@ -1224,9 +1224,15 @@ class ReleaseRunner:
         keep |= set(latest.values())
         try:
             with journal.exclusive():
-                journal.compact(keep)
+                found = journal.compact(keep)
         except ValueError:
             return
+        logger.info(
+            "release journal compacted: %d executions removed, %d -> %d bytes "
+            "in use, file %d bytes%s",
+            found["removed"], found["used_before"], found["used_after"],
+            found["bytes_after"], " (vacuumed)" if found["vacuumed"] else "",
+        )  # fmt: skip
 
     def _sidecar_path(self, name: str) -> Path:
         return self.state / "releases" / f"{name}.json"

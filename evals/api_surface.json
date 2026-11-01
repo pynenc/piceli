@@ -1206,6 +1206,7 @@
   },
   "BuildHost": {
    "attrs": [
+    "cache_max",
     "cli",
     "cluster",
     "context",
@@ -1229,6 +1230,7 @@
     "state_dir"
    ],
    "init": [
+    "cache_max",
     "cli",
     "context",
     "cpu",
@@ -18070,5 +18072,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.47.0"
+ "version": "0.48.0"
 }

@@ -20,7 +20,8 @@ shared cache is ``/cache`` (the ``piceli-dev-cache`` claim).
 4. Optionally ``cargo fetch --locked``, then run the command with a deadline,
    streaming its output; parse cargo's output (crates compiled, build and
    test phases, test counts). 0.38.1: a lineage that grows past its cap
-   while it runs stops the run (``dev-cache-over-cap``) and is evicted.
+   while it runs stops the run (``dev-cache-over-cap``) and is evicted;
+   0.48.0: only after evicting every free lineage did not make room.
 5. Evict to the budget again (0.38.1), print one ``PICELI-DEV-RESULT
    {json}`` line, copy requested artifacts to ``/work/out/artifacts.tar.gz``
    and wait for the client to take them.
@@ -923,9 +924,11 @@ class CacheWatch:
         measure_every: float = MEASURE_SECONDS,
         slack: int = GROWTH_SLACK_BYTES,
         clock: Callable[[], float] = time.monotonic,
+        make_room: Callable[[int], int] | None = None,
     ) -> None:
         self.lineage = lineage
         self.cap = cap
+        self.make_room = make_room
         self.start_bytes = self.bytes = start_bytes
         self.min_free_ratio = min_free_ratio
         self.every = every
@@ -966,9 +969,17 @@ class CacheWatch:
             _write_meta(self.lineage, {**_read_meta(self.lineage), "bytes": self.bytes})
         except OSError:
             pass
+        grew = self.bytes > self.start_bytes + self.slack
+        if (self.bytes > self.cap or (low and grew)) and self.make_room is not None:
+            # 0.48.0: free lineages go before a running one is stopped.
+            self.cap = self.make_room(self.bytes)
+            free, total = filesystem(self.lineage)
+            low = bool(
+                self.min_free_ratio > 0 and total and free < total * self.min_free_ratio
+            )
         if self.bytes > self.cap:
             self.stopped = "over-cap"
-        elif low and self.bytes > self.start_bytes + self.slack:
+        elif low and grew:
             self.stopped = "filesystem-low"
         return self.stopped is not None
 
@@ -1875,10 +1886,23 @@ def main(
         command = [str(part) for part in spec["command"]]
         emit("[piceli-dev] running " + " ".join(command))
         timeout = float(spec.get("timeout_seconds") or 3600)
+
+        def make_room(lineage_bytes: int) -> int:
+            """Evict free lineages; the run's new cap."""
+            report = evict(cache, limit, min_free_ratio=min_free)
+            if report["evicted"]:
+                emit(
+                    f"[piceli-dev] cache budget: evicted {len(report['evicted'])} "
+                    f"free lineage(s), {report['freed_bytes'] / 2**30:.1f} GiB, "
+                    "to make room for this run"
+                )
+            return max(0, limit - (int(report["used_bytes"]) - lineage_bytes))
+
         watch = CacheWatch(
             lineage.path,
             cap,
             taken_bytes,
+            make_room=make_room,
             min_free_ratio=min_free,
             every=float(spec.get("cache_watch_seconds") or WATCH_SECONDS),
             measure_every=float(spec.get("cache_measure_seconds") or MEASURE_SECONDS),
