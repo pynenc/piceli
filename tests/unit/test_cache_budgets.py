@@ -472,6 +472,43 @@ def test_the_watch_measures_only_when_the_disk_says_so(
     assert json.loads((lineage / "meta.json").read_text())["bytes"] == watch.bytes
 
 
+def test_free_lineages_make_room_before_a_run_is_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0.48.0: a growing run evicts free lineages first; it stops only when
+    nothing else can go."""
+    cache = tmp_path / "cache"
+    lineage = _lineage(cache, "app-rust/0", 4096)
+    free = _lineage(cache, "app-rust/1", 300_000, bytes=300_000, last_used=1.0)
+    disk = {"used": 0}
+    monkeypatch.setattr(pod, "filesystem", lambda _p: (10**9 - disk["used"], 10**9))
+    clock = {"now": 0.0}
+    limit = 500_000
+
+    def make_room(lineage_bytes: int) -> int:
+        report = pod.evict(cache, limit)
+        return max(0, limit - (int(report["used_bytes"]) - lineage_bytes))
+
+    held = pod._try_lock(lineage)  # the run holds its lineage
+    assert held is not None
+    try:
+        watch = pod.CacheWatch(
+            lineage, 150_000, 4096, every=1, measure_every=1,
+            clock=lambda: clock["now"], make_room=make_room,
+        )  # fmt: skip
+        (lineage / "target" / "more").write_bytes(b"x" * 200_000)
+        disk["used"] += 200_000
+        clock["now"] = 2
+        assert watch() is False and not free.exists()  # the free one went
+        assert watch.cap > watch.bytes
+        (lineage / "target" / "most").write_bytes(b"x" * 400_000)
+        disk["used"] += 400_000
+        clock["now"] = 4
+        assert watch() is True and watch.stopped == "over-cap"  # nothing left
+    finally:
+        os.close(held)
+
+
 def test_every_run_trims_the_cache_to_its_budget_when_it_ends(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
