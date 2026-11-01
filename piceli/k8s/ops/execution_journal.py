@@ -75,10 +75,72 @@ class ExecutionJournal:
         if self.on_commit is not None:
             self.on_commit()
 
+    def used_bytes(self) -> int:
+        """Bytes in use: the file's pages minus the free ones (0.47.0), so
+        what :meth:`compact` deletes counts at once, before a ``VACUUM``."""
+        pages, free, size = (
+            self.connection.execute(f"PRAGMA {name}").fetchone()[0]
+            for name in ("page_count", "freelist_count", "page_size")
+        )
+        return int((pages - free) * size)
+
     def _capacity(self, encoded: str = "") -> None:
         # Reserve several SQLite pages for a complete intent/receipt transaction.
-        if self.path.stat().st_size + len(encoded.encode()) + 32768 > self.max_bytes:
+        if self.used_bytes() + len(encoded.encode()) + 32768 > self.max_bytes:
             raise ValueError("journal byte budget exhausted")
+
+    def compact(self, keep: set[str], *, retain: int = 20) -> dict[str, int]:
+        """Forget finished executions nothing needs any more (0.47.0).
+
+        An execution goes, with its actions, events and diagnosis, when it is
+        finished (not ``pending``), not in ``keep`` (the caller's live ones:
+        the latest of each release), not among the newest ``retain``, and no
+        migration lineage names it. Deployment sessions stay: a catalogued
+        release reopens from its session. The file is rewritten
+        (``VACUUM``) when more than a quarter of it is free afterwards."""
+        protected = set(keep)
+        for row in self.connection.execute(
+            "SELECT execution, source_execution FROM migration_lineage"
+        ):
+            protected.update((row[0], row[1]))
+        newest = {
+            row[0]
+            for row in self.connection.execute(
+                "SELECT id FROM executions ORDER BY rowid DESC LIMIT ?", (retain,)
+            )
+        }
+        doomed = [
+            row[0]
+            for row in self.connection.execute(
+                "SELECT id FROM executions WHERE state != 'pending'"
+            )
+            if row[0] not in protected and row[0] not in newest
+        ]
+        if doomed:
+            with self._transaction():
+                for table, column in (
+                    ("events", "execution"),
+                    ("actions", "execution"),
+                    ("diagnoses", "execution"),
+                    ("executions", "id"),
+                ):
+                    self.connection.executemany(
+                        f"DELETE FROM {table} WHERE {column}=?",
+                        [(execution,) for execution in doomed],
+                    )
+        size = self.path.stat().st_size
+        vacuumed = 0
+        if size and size - self.used_bytes() > size // 4:
+            self.connection.execute("VACUUM")
+            vacuumed = 1
+            if self.on_commit is not None:
+                self.on_commit()
+        return {
+            "removed": len(doomed),
+            "vacuumed": vacuumed,
+            "bytes_before": size,
+            "bytes_after": self.path.stat().st_size,
+        }
 
     @contextmanager
     def exclusive(self) -> Iterator[None]:

@@ -118,6 +118,19 @@ Unknown keys are rejected everywhere except `[values]`. Relative paths
 resolve from the spec's directory. A complete example lives in
 `examples/release/`.
 
+(release-state-size)=
+
+### How big the state grows (0.47.0)
+
+The journal (`journal.sqlite`) has a 64 MB budget. Once it is past half,
+opening it forgets finished executions nothing needs any more: an execution
+goes, with its actions, events and diagnosis, unless it is still `pending`,
+the latest execution of a release, named in the last 50 history entries,
+among the newest 20, or named by a migration lineage. The release's
+deployment session stays, so every catalogued release can still be
+reopened. The budget counts the pages in use, and the file is rewritten
+(`VACUUM`) when more than a quarter of it is free.
+
 ### Target and credentials
 
 `[target]` names exactly one namespace of one cluster: an explicit kubeconfig
