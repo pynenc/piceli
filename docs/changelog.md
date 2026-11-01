@@ -4,6 +4,27 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.49.0
+
+**Features**
+
+- **Release retention.** `[release] keep_releases = 20` (or
+  `Pipeline(keep_releases=20)`) keeps the newest releases, the running one
+  and any rollback target, and retires the rest with their sessions, files,
+  executions and secret versions at the end of a successful apply. Off
+  unless set; values below 2 are refused.
+- **`piceli release retention`** runs it by hand; `--dry-run` lists what it
+  would retire and changes nothing. Replace backups are never deleted; their
+  size is reported.
+
+**Fixes**
+
+- **The secret store no longer fills up with old object copies.** Versions
+  nothing names any more (also those left by executions 0.47.0 already
+  forgot) are removed after a grace period, and the store's budget counts
+  the pages in use, so freed space counts before a `VACUUM`.
+- A rollback to a retired release says it was retired.
+
 ## Version 0.48.0
 
 **Fixes**

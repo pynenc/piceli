@@ -131,6 +131,59 @@ deployment session stays, so every catalogued release can still be
 reopened. The budget counts the pages in use, and the file is rewritten
 (`VACUUM`) when more than a quarter of it is free.
 
+(release-retention)=
+
+### Keeping only recent releases (0.49.0)
+
+Every release adds a catalog record, a session, a sidecar, executions and
+secret versions (the secret store also keeps a copy of each object an apply
+writes). Without a limit the secret store reaches its 64 MB budget and no new
+release can be planned. Release retention keeps the state small. It is
+**off** unless the spec sets it:
+
+```toml
+[release]
+keep_releases = 20   # at least 2; leave it out to keep every release
+```
+
+A pipeline sets `Pipeline(..., keep_releases=20)`; each environment keeps its
+own releases. It is not part of any plan hash.
+
+- **What is kept:** the newest `keep_releases` releases (by creation time),
+  the selected (running) one, the `previous` release and the release an
+  automatic rollback would return to. A rollback by name to a retired release
+  fails with `unknown-release` and says it was retired.
+- **When:** at the end of every `apply` or `resume` that ends with a ready
+  release (after any automatic rollback). It waits while a plan is pending or
+  an execution is running. A failure is logged and never fails the apply.
+- **What goes:** the retired records, their sessions and input bindings,
+  their sidecar and discovery files, executions nothing needs any more and
+  their check reports.
+- **Secret versions** nothing names any more go only on a later run, after a
+  grace period of the longer of `approval_window_seconds` and one hour, so a
+  plan in progress never loses a value it wrote but has not named yet. This
+  also removes the old object copies earlier releases left behind. The
+  store's budget counts the pages in use, and the file is rewritten
+  (`VACUUM`) when more than a quarter of it is free.
+- **Never deleted:** replace backups (`backups/<execution>/`, recovery data)
+  and `history.json` (the audit trail). Each report gives the backups' total
+  size, so their growth stays visible.
+- **Prune and orphan scans** only look at the kinds catalogued releases
+  declare, so a kind only a retired release used is no longer scanned.
+
+Look before you turn it on, and run it by hand (never contacts the cluster):
+
+```sh
+piceli release retention --spec release.toml --dry-run          # change nothing
+piceli release retention --spec release.toml --dry-run --keep 10
+piceli release retention --spec release.toml                    # run it now
+```
+
+The dry run lists the releases, sessions and files it would retire, the
+executions it would remove, the secret versions nothing names (count and
+bytes, and how many are past the grace period) and the backups it keeps.
+JSON goes to stdout, a one-line summary to stderr.
+
 ### Target and credentials
 
 `[target]` names exactly one namespace of one cluster: an explicit kubeconfig
