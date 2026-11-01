@@ -4789,6 +4789,14 @@
     "resolved": []
    }
   },
+  "HelmRelease": {
+   "attrs": [
+    "name",
+    "namespace"
+   ],
+   "init": [],
+   "methods": {}
+  },
   "HelmToggle": {
    "attrs": [
     "default",
@@ -15873,6 +15881,9 @@
    "HelmOptional": {
     "class": "HelmOptional"
    },
+   "HelmRelease": {
+    "class": "HelmRelease"
+   },
    "HelmToggle": {
     "class": "HelmToggle"
    },
@@ -16162,6 +16173,9 @@
    },
    "HealthProbe": {
     "class": "HealthProbe"
+   },
+   "HelmRelease": {
+    "class": "HelmRelease"
    },
    "HttpRoute": {
     "class": "HttpRoute"
@@ -18049,5 +18063,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.45.0"
+ "version": "0.46.0"
 }

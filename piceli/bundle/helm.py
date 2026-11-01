@@ -57,6 +57,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from piceli.app.model import HELM_RELEASE_ANNOTATION, HelmRelease
 from piceli.bundle.build import (
     BUNDLE_ANNOTATION,
     PART_OF,
@@ -467,6 +468,19 @@ def _dig(value: Any, path: Sequence[str]) -> Any:
     return value
 
 
+def _reads_release_name(pod: Mapping[str, Any]) -> bool:
+    """A container of ``pod`` has an env value of ``HelmRelease.name``."""
+    path = HelmRelease.name.field_path
+    return any(
+        _dig(env, ("valueFrom", "fieldRef", "fieldPath")) == path
+        for group in ("initContainers", "containers")
+        for container in pod.get(group) or ()
+        if isinstance(container, dict)
+        for env in container.get("env") or ()
+        if isinstance(env, dict)
+    )
+
+
 def _image_path(image: str) -> str:
     """``image`` without its registry host, as a mirror serves it."""
     first, sep, rest = image.partition("/")
@@ -651,6 +665,14 @@ class _Templater:
                     annotations[key] = self.scalar(digest)
         if self.secret_names:
             self.existing_secret(pod)
+        if _reads_release_name(pod):
+            # 0.46.0: HelmRelease.name reads this pod annotation.
+            meta = _dig(manifest, pod_path[:-1])
+            if isinstance(meta, dict):
+                notes = meta.setdefault("metadata", {}).setdefault("annotations", {})
+                notes[HELM_RELEASE_ANNOTATION] = self.scalar(
+                    "{{ $.Release.Name | toJson }}"
+                )
         for group in ("initContainers", "containers"):
             for container in pod.get(group) or ():
                 if isinstance(container, dict):

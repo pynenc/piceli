@@ -341,6 +341,21 @@ keys that input fills are omitted, so mount the Secret as a volume (or
 read the key with an optional reference) and treat a missing file as "no
 private CA". Once passed, the value is kept across upgrades like any input.
 
+To tell a container which release and namespace it runs in (for example
+to print its own `helm upgrade` command), use `HelmRelease` as an env value
+(0.46.0). The chart's `{{ ... }}` escaping stays in place:
+
+```python
+from piceli import HelmRelease
+
+env = {"APP_RELEASE": HelmRelease.name, "APP_NAMESPACE": HelmRelease.namespace}
+```
+
+`HelmRelease.namespace` reads the pod's namespace, in every bundle.
+`HelmRelease.name` reads the pod annotation `piceli.io/helm-release`, which
+the chart sets to `{{ .Release.Name }}`; in a kustomize bundle or a
+`piceli deploy` the annotation is absent and the variable is empty.
+
 Publish the chart to an OCI registry as `helm push` does, with an approval
 of its digest like every Piceli publish:
 

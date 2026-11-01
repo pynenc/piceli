@@ -273,6 +273,25 @@ class FieldRef(_Model):
         return {"fieldRef": {"fieldPath": self.field_path}}
 
 
+HELM_RELEASE_ANNOTATION = "piceli.io/helm-release"
+
+
+class HelmRelease:
+    """Environment values that name the Helm release (0.46.0).
+
+    ``HelmRelease.namespace`` is the pod's namespace (the downward API), right
+    in every bundle. ``HelmRelease.name`` reads the pod annotation
+    ``piceli.io/helm-release``, which a Helm chart sets to the release name;
+    elsewhere (kustomize, ``piceli deploy``) the annotation is absent and the
+    variable is empty::
+
+        env={"APP_RELEASE": HelmRelease.name, "APP_NAMESPACE": HelmRelease.namespace}
+    """
+
+    name = FieldRef(field_path=f"metadata.annotations['{HELM_RELEASE_ANNOTATION}']")
+    namespace = FieldRef(field_path="metadata.namespace")
+
+
 EnvValue = str | SecretKey | ConfigKey | FieldRef
 
 

@@ -679,3 +679,29 @@ def test_an_optional_value_without_objects_or_patches_is_refused() -> None:
     assert HelmOptional("x", patches=[("Service/a", {})]).keys() == []
     with pytest.raises(ValueError, match="patched twice"):
         HelmOptional("x", patches=[("Service/a", {}), ("Service/a", [])]).resolved()
+
+
+# ------------------------------------------------------------------ release env
+
+
+def test_the_release_name_and_namespace_reach_the_env(tmp_path: Path) -> None:
+    out, _ = _write(tmp_path)
+    text = "\n".join(path.read_text() for path in (out / "templates").glob("*.yaml"))
+    assert "piceli.io/helm-release: {{ $.Release.Name | toJson }}" in text
+    assert "fieldPath: metadata.annotations['piceli.io/helm-release']" in text
+    assert "fieldPath: metadata.namespace" in text
+    # Outside Helm the annotation is absent: the variable is empty.
+    plain = tmp_path / "plain"
+    result = _run(TARGET, "--out", str(plain), "--version", "1.2.3")
+    assert result.exit_code == 0, result.output
+    files = "\n".join(p.read_text() for p in plain.rglob("*.yaml"))
+    assert "fieldPath: metadata.annotations['piceli.io/helm-release']" in files
+    assert "piceli.io/helm-release:" not in files
+
+
+def test_helm_fills_the_release_name(tmp_path: Path, helm: str) -> None:
+    out, _ = _write(tmp_path)
+    result = _template(helm, out, *VALUES)
+    assert result.returncode == 0, result.stderr
+    template = _objects(result.stdout)[("StatefulSet", "agent")]["spec"]["template"]
+    assert template["metadata"]["annotations"]["piceli.io/helm-release"] == "agent"
