@@ -998,3 +998,12 @@ def test_cluster_only_otlp_fields_are_refused_with_the_local_alternative(
         check_export(missing, {})
     assert refused.value.code == "train-invalid"
     assert "none.crt" not in str(refused.value)
+
+
+def test_runs_started_in_the_same_second_sort_in_order() -> None:
+    """0.50.0: run ids carry microseconds; older ids still count as run ids."""
+    from piceli.train.state import is_run_id, new_run_id
+
+    ids = [new_run_id(1_800_000_000 + step / 1000) for step in range(5)]
+    assert sorted(ids) == ids and all(is_run_id(i) for i in ids)
+    assert is_run_id("20261101T204329Z-a1b2c3")

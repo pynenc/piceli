@@ -17,6 +17,9 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   shrinks while a run runs when other runs' lineages grow; the message gives
   the cap at the stop, the cap at the start and what other runs hold, and
   the result records `cache.cap_bytes_at_stop`.
+- **Merge-train runs started in the same second sort in order.** Run ids
+  carry microseconds, so `train-wait <train>` and `status` find the newest
+  run; older ids still work.
 
 ## Version 0.49.0
 

@@ -36,7 +36,7 @@ from piceli.train.model import TrainError
 RUN_SCHEMA = "piceli.train.v1"
 EVENTS = "events.jsonl"
 _NAME = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
-_RUN = re.compile(r"\d{8}T\d{6}Z-[0-9a-f]{6}")
+_RUN = re.compile(r"\d{8}T\d{6}(?:\d{6})?Z-[0-9a-f]{6}")
 
 
 def default_root() -> Path:
@@ -46,7 +46,8 @@ def default_root() -> Path:
 
 def new_run_id(at: float | None = None) -> str:
     moment = datetime.fromtimestamp(time.time() if at is None else at, UTC)
-    return f"{moment.strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(3)}"
+    # 0.50.0: microseconds, so runs started in the same second sort in order.
+    return f"{moment.strftime('%Y%m%dT%H%M%S%fZ')}-{secrets.token_hex(3)}"
 
 
 def train_names(root: Path | None = None) -> list[str]:
