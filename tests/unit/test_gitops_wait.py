@@ -237,3 +237,39 @@ def test_gitops_cache_clear_records_a_request(tmp_path: Path) -> None:
     assert body["state"] == "requested" and body["crates"] == ["geometry"]
     pending = DirectoryChannel(tmp_path).requests()
     assert [item["kind"] for item in pending.values()] == ["cache-clear"]
+
+
+def test_a_timed_out_status_read_is_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from urllib3.exceptions import ReadTimeoutError
+
+    from piceli.gitops.state import DirectoryChannel
+
+    document = _doc(
+        state="deployed",
+        deployed_commit=NEW,
+        deployed_revision={"infra": "9" * 40, "product": NEW},
+    )
+    document["controller"] = {"state": "running"}
+    _write_status(tmp_path, document)
+    real = DirectoryChannel.read_status
+    failures = [ReadTimeoutError(None, "/", "read timed out")]  # type: ignore[arg-type]
+
+    def flaky(self: Any) -> Any:
+        if failures:
+            raise failures.pop()
+        return real(self)
+
+    monkeypatch.setattr(DirectoryChannel, "read_status", flaky)
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "gitops", "wait", "main", NEW[:7], "--state-dir", str(tmp_path),
+            "--interval", "1", "--json",
+        ],
+    )  # fmt: skip
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)["state"] == "deployed"
+    assert "status read failed (ReadTimeoutError); retrying" in result.stderr

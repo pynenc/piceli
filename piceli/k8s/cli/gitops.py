@@ -76,6 +76,21 @@ JsonOption = Annotated[
 ]
 
 
+def _transient_errors() -> tuple[type[BaseException], ...]:
+    """Network errors of a status read worth another try."""
+    found: list[type[BaseException]] = [TimeoutError, ConnectionError]
+    try:
+        from urllib3.exceptions import HTTPError
+
+        found.append(HTTPError)
+    except ImportError:  # pragma: no cover - urllib3 comes with the client
+        pass
+    return tuple(found)
+
+
+_TRANSIENT = _transient_errors()
+
+
 @contextmanager
 def _guard() -> Iterator[None]:
     from piceli.gitops import GitOpsError
@@ -1369,8 +1384,18 @@ def wait(
     body: dict[str, Any] = {}
     with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
         while True:
-            with _guard():
-                document = channel.read_status()
+            try:
+                with _guard():
+                    document = channel.read_status()
+            except _TRANSIENT as error:
+                # 0.48.0: a slow or dropped read of the API is retried until
+                # --timeout, never the end of the wait.
+                waited = time.monotonic() - started
+                if waited >= timeout:
+                    raise
+                say(f"{env}: status read failed ({type(error).__name__}); retrying")
+                time.sleep(min(interval, max(0.0, timeout - waited)))
+                continue
             state, body = outcome(document, env, commit, seen=seen)
             seen = bool(body.get("seen"))
             line = (body.get("state"), body.get("stage"), body.get("attempt"))
