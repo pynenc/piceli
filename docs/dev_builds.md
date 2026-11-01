@@ -378,8 +378,10 @@ declared size is **never enforced**, and a full cache is a node under
    seconds the wrapper reads the cache's disk (cheap); only when the disk
    says the lineage may be over its cap, or the disk is under 15% free, it
    measures the lineage (at most once a minute; every 10 minutes anyway).
-   A lineage over its cap, or one that grew by 1 GiB in this run while the
-   disk is under the floor, stops the run with `dev-cache-over-cap` and is
+   A lineage over its cap first evicts free lineages, least recently used
+   first, and its cap grows by what they held (0.48.0). Only when that is
+   not enough (or it grew by 1 GiB in this run while the disk is under the
+   floor) the run stops with `dev-cache-over-cap` and its lineage is
    evicted at once. Run again: it builds cold.
 3. **After a run** (0.38.1). Every run, passed or not, evicts free
    lineages to the budget again when it ends, so the cache never sits over
@@ -804,7 +806,7 @@ push another's out. The plan lists them under `tag_patterns`.
 | `dev-command-failed` | The command exited non-zero | Read `first_error` and `log_tail`, fix, run again; with `cache.suspect`, `piceli dev cache clear --lineage NAME` |
 | `dev-cache-clear-failed` | `dev cache clear`'s Job ended without a result | Check its pod in `piceli-dev`; run it again |
 | `dev-run-timed-out` | Over the profile's `timeout` (process group killed) | Split the command or find what hangs |
-| `dev-cache-over-cap` | The run's lineage grew past its cap (the budget less the rest of the cache), or grew while the cache's disk was under 15% free; the run was stopped and the lineage evicted | Run again (cold); if it repeats, raise `cache_size` or `cache_budget` |
+| `dev-cache-over-cap` | The run's lineage grew past its cap (the budget less the rest of the cache), or grew while the cache's disk was under 15% free; the run was stopped and the lineage evicted | Run again (cold); if it repeats, raise `cache_size` or `cache_budget`, or give the build host its own `BuildHost(cache_max="300Gi")` (0.48.0) |
 | `dev-run-out-of-memory` | Killed at the memory limit | Lower `CARGO_BUILD_JOBS` or ask for a bigger profile |
 | `dev-run-failed` | The pod ended without a result or could not start | Check the image; report it |
 | `dev-run-cancelled` | The Job was deleted (Ctrl-C) | Run again when wanted |

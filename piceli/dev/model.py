@@ -241,6 +241,10 @@ class BuildHost:
         the last image of each ``--image`` build's name, for ``infra
         apply``'s upload. ``None``: no root on a docker host (a garbage
         collection in that window takes the path).
+    :param cache_max: ``docker`` or ``native`` (0.48.0): the most this host's
+        development cache may hold (``300Gi``), instead of
+        ``DevBuilds.cache_size`` times ``cache_budget``: a host with more disk
+        than the cluster's claim keeps more lineages warm.
     """
 
     name: str
@@ -258,6 +262,7 @@ class BuildHost:
     quarantine_window: str = QUARANTINE_WINDOW
     runs: bool = True
     roots_dir: str | None = None
+    cache_max: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _LABEL.fullmatch(self.name):
@@ -323,6 +328,13 @@ class BuildHost:
                 f"host {self.name}: roots_dir is an absolute path of the host "
                 "(docker hosts only)"
             )
+        if self.cache_max is not None and (
+            self.kind == "cluster" or (_bytes(self.cache_max) or 0) < 1 << 30
+        ):
+            raise _invalid(
+                f"host {self.name}: cache_max is a size of at least 1Gi "
+                "(docker and native hosts only)"
+            )
 
     @classmethod
     def docker(
@@ -360,6 +372,7 @@ class BuildHost:
                     "state_dir": self.state_dir,
                     "image": self.image,
                     "roots_dir": self.roots_dir,
+                    "cache_max": self.cache_max,
                     # 0.22.0: only when changed, so earlier declarations keep
                     # their hashes.
                     "quarantine_after": self.quarantine_after
@@ -400,6 +413,7 @@ class BuildHost:
             quarantine_window=str(value.get("quarantine_window") or QUARANTINE_WINDOW),
             runs=bool(value.get("runs", True)),
             roots_dir=value.get("roots_dir"),
+            cache_max=value.get("cache_max"),
         )
 
 

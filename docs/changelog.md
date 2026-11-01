@@ -4,6 +4,32 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.48.0
+
+**Fixes**
+
+- **A growing development run makes room before it is stopped.** A run's
+  cap was the cache budget less what the other lineages held when it
+  started, so on a full cache a run was stopped (`dev-cache-over-cap`)
+  and its own warm lineage evicted while idle lineages stayed. Now it
+  evicts free lineages first and stops only when nothing else can go.
+- **`gitops wait` survives a slow API.** A timed-out or dropped status read
+  is retried until `--timeout` instead of ending the wait.
+- **Release journal compaction is logged**: what it removed and the bytes
+  in use.
+
+**Features**
+
+- **A build host's own cache budget.** `BuildHost.docker(...,
+  cache_max="300Gi")` (also native hosts) replaces the cluster's
+  `cache_size` share on that host, so a host with a large disk keeps more
+  lineages warm.
+
+**Development**
+
+- The nightly CI has its own concurrency group, so it never cancels the
+  push run on `main` that the release waits for.
+
 ## Version 0.47.0
 
 **Fixes**

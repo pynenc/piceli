@@ -328,6 +328,39 @@ def test_the_docker_port_starts_a_bounded_container_in_its_slot() -> None:
     )
 
 
+def test_a_host_with_its_own_cache_max_runs_with_that_budget() -> None:
+    """0.48.0: a host with more disk than the cluster's claim keeps more warm."""
+    from piceli.dev.hosts import ContainerCli
+    from piceli.dev.jobs import run_job
+    from piceli.infra.cluster import ClusterError as Invalid
+
+    host = BuildHost.docker("big", context="ssh://builder@big", cache_max="300Gi")
+    assert BuildHost.from_dict(host.describe()).cache_max == "300Gi"
+    assert "cache_max" not in BuildHost.docker("small").describe()
+    for bad in (
+        lambda: BuildHost.docker("big", cache_max="10Mi"),
+        lambda: BuildHost.cluster("node-1", cache_max="300Gi"),
+    ):
+        with pytest.raises(Invalid):
+            bad()
+    dev = _dev(host)
+    fake = FakeCli()
+    port = DockerPort(
+        host, dev, cli=ContainerCli(host, runner=fake), platform="linux/amd64"
+    )
+    job = run_job(
+        dev, dev.profile(None), run="r-1",
+        spec={"command": ["true"], "cwd": "shop", "lineage_key": "shop-sh", "sources": []},
+        requester="agent-1", priority="round",
+    )  # fmt: skip
+    port.create(job)
+    entry = Entry("r-1", "agent-1", "round", "2026-10-17T10:00:00.000Z")
+    assert port._claim(1, entry, job, IMAGE)
+    argv = fake.calls[-1]
+    spec = json.loads(next(a for a in argv if a.startswith("PICELI_DEV_SPEC="))[16:])
+    assert spec["cache_max_bytes"] == 300 * 2**30
+
+
 def test_a_cli_missing_makes_the_host_unavailable() -> None:
     from piceli.dev.hosts import ContainerCli, probe
 
