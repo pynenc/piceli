@@ -344,6 +344,9 @@ def test_default_template_is_the_bundle(tmp_path: Path, helm: str) -> None:
                     .startswith("sha256:")
                 )
                 want["spec"]["template"]["metadata"]["annotations"].pop(annotation)
+            # 0.46.0: only the chart names the release (HelmRelease.name).
+            notes = got["spec"]["template"]["metadata"]["annotations"]
+            assert notes.pop("piceli.io/helm-release") == "agent"
         if key[0] in {"ClusterRole", "ClusterRoleBinding"}:
             # The cluster-scoped names follow the release namespace (edge).
             want["metadata"]["name"] = want["metadata"]["name"].replace(
@@ -697,11 +700,3 @@ def test_the_release_name_and_namespace_reach_the_env(tmp_path: Path) -> None:
     files = "\n".join(p.read_text() for p in plain.rglob("*.yaml"))
     assert "fieldPath: metadata.annotations['piceli.io/helm-release']" in files
     assert "piceli.io/helm-release:" not in files
-
-
-def test_helm_fills_the_release_name(tmp_path: Path, helm: str) -> None:
-    out, _ = _write(tmp_path)
-    result = _template(helm, out, *VALUES)
-    assert result.returncode == 0, result.stderr
-    template = _objects(result.stdout)[("StatefulSet", "agent")]["spec"]["template"]
-    assert template["metadata"]["annotations"]["piceli.io/helm-release"] == "agent"
