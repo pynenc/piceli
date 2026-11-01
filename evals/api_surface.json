@@ -4237,16 +4237,21 @@
     "close",
     "compact",
     "diagnosis",
+    "doomed",
     "exclusive",
+    "execution_ids",
     "export_execution",
+    "forget_sessions",
     "import_legacy_execution",
     "migration_lineage",
     "on_commit",
     "record",
     "record_diagnosis",
     "record_failure",
+    "references_text",
     "resume",
     "session",
+    "session_ids",
     "set_state",
     "start",
     "store_session",
@@ -4278,9 +4283,17 @@
     "diagnosis": [
      "execution"
     ],
+    "doomed": [
+     "keep",
+     "retain"
+    ],
     "exclusive": [],
+    "execution_ids": [],
     "export_execution": [
      "execution"
+    ],
+    "forget_sessions": [
+     "session_ids"
     ],
     "import_legacy_execution": [
      "actions",
@@ -4309,12 +4322,16 @@
      "category",
      "execution"
     ],
+    "references_text": [
+     "skip"
+    ],
     "resume": [
      "execution"
     ],
     "session": [
      "session_id"
     ],
+    "session_ids": [],
     "set_state": [
      "execution",
      "state"
@@ -7915,6 +7932,7 @@
     "execution",
     "field_manager",
     "inherited_owners",
+    "keep_releases",
     "owner",
     "prune",
     "replace",
@@ -9195,6 +9213,7 @@
     "add",
     "get",
     "records",
+    "remove",
     "select",
     "selected"
    ],
@@ -9210,6 +9229,9 @@
      "name"
     ],
     "records": [],
+    "remove": [
+     "names"
+    ],
     "select": [
      "name"
     ],
@@ -9304,6 +9326,7 @@
     "field_manager",
     "inherited_owners",
     "journal",
+    "keep_releases",
     "name",
     "owner",
     "prune",
@@ -9323,6 +9346,7 @@
     "field_manager",
     "inherited_owners",
     "journal",
+    "keep_releases",
     "name",
     "owner",
     "prune",
@@ -10388,22 +10412,29 @@
   },
   "SecretVersionStore": {
    "attrs": [
+    "candidates",
     "close",
     "contains",
     "discard",
     "fingerprint",
     "fingerprint_value",
+    "forget_sessions",
     "put",
     "put_once",
     "resolve",
     "session_reference",
-    "values"
+    "session_versions",
+    "sweep",
+    "used_bytes",
+    "values",
+    "version_sizes"
    ],
    "init": [
     "max_bytes",
     "path"
    ],
    "methods": {
+    "candidates": [],
     "close": [],
     "contains": [
      "reference",
@@ -10420,6 +10451,9 @@
     ],
     "fingerprint_value": [
      "value"
+    ],
+    "forget_sessions": [
+     "session_ids"
     ],
     "put": [
      "target",
@@ -10440,10 +10474,18 @@
      "session_id",
      "target"
     ],
+    "session_versions": [],
+    "sweep": [
+     "grace_seconds",
+     "live",
+     "now"
+    ],
+    "used_bytes": [],
     "values": [
      "limit",
      "target"
-    ]
+    ],
+    "version_sizes": []
    },
    "returns": {
     "put": "SecretVersionRef",
@@ -14167,6 +14209,7 @@
      "plan",
      "preview",
      "resume",
+     "retention",
      "rollback",
      "secret",
      "status",
@@ -14258,6 +14301,16 @@
      "--env",
      "--release",
      "--skip-checks",
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "release retention": {
+    "arguments": [],
+    "flags": [
+     "--dry-run",
+     "--env",
+     "--keep",
      "--spec"
     ],
     "subcommands": []
@@ -15556,6 +15609,8 @@
    "release-owner-mismatch",
    "release-prerollout-unsupported",
    "release-refused",
+   "release-retention-invalid",
+   "release-retention-off",
    "release-state-unavailable",
    "render-model-invalid",
    "render-out-refused",
@@ -17894,6 +17949,7 @@
   "piceli.k8s.owned_processes",
   "piceli.k8s.port_owner",
   "piceli.k8s.release",
+  "piceli.k8s.release_retention",
   "piceli.k8s.release_runner",
   "piceli.k8s.release_secret_spec",
   "piceli.k8s.release_secrets",
@@ -18072,5 +18128,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.48.0"
+ "version": "0.49.0"
 }
