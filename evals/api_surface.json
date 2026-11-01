@@ -4233,6 +4233,7 @@
     "cancelled",
     "clear_diagnosis",
     "close",
+    "compact",
     "diagnosis",
     "exclusive",
     "export_execution",
@@ -4247,7 +4248,8 @@
     "set_state",
     "start",
     "store_session",
-    "summary"
+    "summary",
+    "used_bytes"
    ],
    "init": [
     "max_bytes",
@@ -4267,6 +4269,10 @@
      "execution"
     ],
     "close": [],
+    "compact": [
+     "keep",
+     "retain"
+    ],
     "diagnosis": [
      "execution"
     ],
@@ -4322,7 +4328,8 @@
     ],
     "summary": [
      "execution"
-    ]
+    ],
+    "used_bytes": []
    }
   },
   "ExecutionSpec": {
@@ -18063,5 +18070,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.46.0"
+ "version": "0.47.0"
 }

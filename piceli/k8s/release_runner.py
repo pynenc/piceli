@@ -170,6 +170,8 @@ logger = logging.getLogger(__name__)
 
 POLICY_REVISION = "piceli.release-cli/v1"
 _HASH = re.compile(r"[0-9a-f]{64}")
+# Executions of the newest history entries the journal always keeps (0.47.0).
+_JOURNAL_RECENT = 50
 ProviderFactory = Callable[[ReleaseSpec], ProviderBinding]
 #: ``factory(spec, release name, {image name: stored image})`` → a check context.
 CheckContextFactory = Callable[[ReleaseSpec, str, Mapping[str, Any]], CheckContext]
@@ -1191,11 +1193,40 @@ class ReleaseRunner:
         private_directory(self.state)
         journal = ExecutionJournal(self.spec.journal_path)
         journal.on_commit = self.checkpoint
+        if journal.used_bytes() > journal.max_bytes // 2:
+            self._compact(journal)
         return (
             ReleaseCatalog(self.spec.catalog_path),
             journal,
             SecretVersionStore(self.spec.secret_store_path),
         )
+
+    def _compact(self, journal: ExecutionJournal) -> None:
+        """Past half its budget, the journal forgets finished executions that
+        neither the latest entry of a release nor recent history names
+        (0.47.0); a busy journal (another run) is left for the next open."""
+        try:
+            entries = self.history.entries()
+        except ReleaseError:
+            return  # a malformed history: keep everything
+        keep: set[str] = set()
+        latest: dict[str, str] = {}
+        for index, entry in enumerate(entries):
+            named = {
+                str(entry[key])
+                for key in ("execution_id", "rollback_execution_id")
+                if isinstance(entry.get(key), str)
+            }
+            if index >= len(entries) - _JOURNAL_RECENT:
+                keep |= named
+            if isinstance(entry.get("execution_id"), str):
+                latest[str(entry.get("release"))] = str(entry["execution_id"])
+        keep |= set(latest.values())
+        try:
+            with journal.exclusive():
+                journal.compact(keep)
+        except ValueError:
+            return
 
     def _sidecar_path(self, name: str) -> Path:
         return self.state / "releases" / f"{name}.json"

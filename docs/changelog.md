@@ -4,6 +4,19 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.47.0
+
+**Fixes**
+
+- **A full release journal no longer blocks every release.** The journal
+  kept every execution forever, so after about 160 releases it reached its
+  64 MB budget and every new release was refused ("journal byte budget
+  exhausted"). Past half its budget it now forgets finished executions
+  nothing needs (not `pending`, not the latest of a release, not in recent
+  history, not named by a migration lineage), counts only the pages in use,
+  and shrinks the file with `VACUUM`. Deployment sessions stay. See
+  {ref}`release-state-size`.
+
 ## Version 0.46.0
 
 **Features**

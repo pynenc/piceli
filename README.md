@@ -66,12 +66,12 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.46
+## What's new in 0.47
 
-- **Helm release in the env**: `HelmRelease.name` and
-  `HelmRelease.namespace` give a container the release it was installed
-  as. See the
-  [guide](https://docs.pynenc.org/projects/piceli/en/stable/client_delivery.html).
+- **The release journal stays within its budget**: finished executions
+  nothing needs are forgotten and the file is compacted, so a long-lived
+  environment keeps releasing. See the
+  [guide](https://docs.pynenc.org/projects/piceli/en/stable/release_cli.html).
 
 ## Web UI
 
