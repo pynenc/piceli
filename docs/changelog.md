@@ -4,6 +4,20 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.50.0
+
+**Fixes**
+
+- **`piceli dev run` uploads work with staged renames.** Uncommitted changes
+  go as a delete and an add, and the builder reads both names of a rename
+  (also in uploads from older clients), so the patch applies.
+- **A run killed while its tree was refreshed in place** no longer leaves a
+  stale record: the next run on that lineage syncs the whole tree.
+- **`dev-cache-over-cap` names the cap that stopped the run.** The cap
+  shrinks while a run runs when other runs' lineages grow; the message gives
+  the cap at the stop, the cap at the start and what other runs hold, and
+  the result records `cache.cap_bytes_at_stop`.
+
 ## Version 0.49.0
 
 **Features**

@@ -446,6 +446,43 @@ def test_a_lineage_growing_past_its_cap_stops_the_run_and_is_evicted(
     assert any(line.startswith("[piceli-dev] run stopped") for line in lines)
 
 
+def test_the_stop_names_the_cap_that_stopped_the_run(tmp_path: Path) -> None:
+    """0.50.0: another run's lineage grew, the cap shrank under this run's
+    lineage; the message says the cap at the stop, not the one at the start."""
+    import os
+
+    from piceli.dev import pod
+    from tests.unit.dev.test_pod import _archive, _run, _spec
+
+    other = tmp_path / "cache" / "lineages" / "other" / "1"
+    held = pod._try_lock(other)  # another run holds it
+    assert held is not None
+    try:
+        pod._write_meta(other, {"bytes": 0})
+        data = _archive({"app/a.txt": "x"})
+        meta = other / "meta.json"
+        grow = (
+            f"echo '{{\"bytes\": 3000000}}' > {meta}; "
+            'head -c 5000000 /dev/zero > "$CARGO_TARGET_DIR/blob"; sleep 30'
+        )
+        spec = _spec(
+            data,
+            ["sh", "-c", grow],
+            cache_max_bytes=4_000_000,
+            cache_watch_seconds=0.05,
+            cache_measure_seconds=0.05,
+        )
+        result, lines = _run(tmp_path, data, spec)
+    finally:
+        os.close(held)
+    cache = result["cache"]
+    assert result["reason"] == "dev-cache-over-cap", result
+    assert cache["cap_bytes_at_stop"] < cache["cap_bytes"] < cache["lineage_bytes"]
+    assert cache["cap_bytes"] - cache["cap_bytes_at_stop"] >= 2_900_000
+    assert "in lineages other runs hold" in result["message"]
+    assert "its cap at the start was" in result["message"]
+
+
 def test_the_watch_measures_only_when_the_disk_says_so(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

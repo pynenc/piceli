@@ -66,13 +66,11 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.49
+## What's new in 0.50
 
-- **Keep only recent releases**: `keep_releases = 20` retires older
-  releases with their secret versions after each apply, and
-  `piceli release retention --dry-run` lists what it would retire first.
-  See the
-  [guide](https://docs.pynenc.org/projects/piceli/en/stable/release_cli.html).
+- **Development runs**: uploads with staged renames apply, a run killed
+  mid-sync no longer leaves stale files for the next one, and a run stopped
+  for its cache cap says which cap stopped it.
 
 ## Web UI
 

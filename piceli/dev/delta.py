@@ -250,7 +250,11 @@ def pack_delta(
                     entry["bundle_bytes"] = bundle.stat().st_size
                     bundle.unlink()
             if plan.diff:
-                diff = _git(plan.path, "diff", "--binary", "HEAD", binary=True).stdout
+                # 0.50.0: renames as a delete and an add, whatever the user's
+                # diff.renames says (the builder reads every path it touches).
+                diff = _git(
+                    plan.path, "diff", "--binary", "--no-renames", "HEAD", binary=True
+                ).stdout
                 if diff:
                     _add(archive, f"sources/{plan.name}/diff", diff)
                 entry["diff"] = bool(diff)
