@@ -66,12 +66,12 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.45
+## What's new in 0.46
 
-- **Release services, not the whole system**: `NixHost(...,
-  scope=Services(profile, units))` moves only a Nix profile and restarts
-  only its units, so a hand-managed NixOS host keeps its own system. See
-  the [guide](https://docs.pynenc.org/projects/piceli/en/stable/nix_hosts.html).
+- **Helm release in the env**: `HelmRelease.name` and
+  `HelmRelease.namespace` give a container the release it was installed
+  as. See the
+  [guide](https://docs.pynenc.org/projects/piceli/en/stable/client_delivery.html).
 
 ## Web UI
 

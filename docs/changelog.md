@@ -4,6 +4,17 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.46.0
+
+**Features**
+
+- **The Helm release name and namespace as env values.** A generated chart
+  escapes every `{{` in literal values, so a container could not be given
+  `{{ .Release.Name }}`. `HelmRelease.name` and `HelmRelease.namespace` are
+  env values for that: the namespace comes from the pod itself, and the
+  name from a pod annotation the chart sets to the release name (only on
+  pods that use it). Outside Helm the name is empty.
+
 ## Version 0.45.0
 
 **Features**

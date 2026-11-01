@@ -344,6 +344,9 @@ def test_default_template_is_the_bundle(tmp_path: Path, helm: str) -> None:
                     .startswith("sha256:")
                 )
                 want["spec"]["template"]["metadata"]["annotations"].pop(annotation)
+            # 0.46.0: only the chart names the release (HelmRelease.name).
+            notes = got["spec"]["template"]["metadata"]["annotations"]
+            assert notes.pop("piceli.io/helm-release") == "agent"
         if key[0] in {"ClusterRole", "ClusterRoleBinding"}:
             # The cluster-scoped names follow the release namespace (edge).
             want["metadata"]["name"] = want["metadata"]["name"].replace(
@@ -679,3 +682,21 @@ def test_an_optional_value_without_objects_or_patches_is_refused() -> None:
     assert HelmOptional("x", patches=[("Service/a", {})]).keys() == []
     with pytest.raises(ValueError, match="patched twice"):
         HelmOptional("x", patches=[("Service/a", {}), ("Service/a", [])]).resolved()
+
+
+# ------------------------------------------------------------------ release env
+
+
+def test_the_release_name_and_namespace_reach_the_env(tmp_path: Path) -> None:
+    out, _ = _write(tmp_path)
+    text = "\n".join(path.read_text() for path in (out / "templates").glob("*.yaml"))
+    assert "piceli.io/helm-release: {{ $.Release.Name | toJson }}" in text
+    assert "fieldPath: metadata.annotations['piceli.io/helm-release']" in text
+    assert "fieldPath: metadata.namespace" in text
+    # Outside Helm the annotation is absent: the variable is empty.
+    plain = tmp_path / "plain"
+    result = _run(TARGET, "--out", str(plain), "--version", "1.2.3")
+    assert result.exit_code == 0, result.output
+    files = "\n".join(p.read_text() for p in plain.rglob("*.yaml"))
+    assert "fieldPath: metadata.annotations['piceli.io/helm-release']" in files
+    assert "piceli.io/helm-release:" not in files

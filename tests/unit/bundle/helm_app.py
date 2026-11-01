@@ -29,7 +29,7 @@ from piceli import (
     Security,
     Target,
 )
-from piceli.app.model import FieldRef
+from piceli.app.model import FieldRef, HelmRelease
 from piceli.k8s.release_secret_spec import ImportSecretSpec
 
 AGENT_IMAGE = "registry.example/acme/agent@sha256:" + "a" * 64
@@ -73,6 +73,8 @@ agent = app.stateful_set(
     container="agent",
     env={
         "POD_NAME": FieldRef(field_path="metadata.name"),
+        "RELEASE": HelmRelease.name,
+        "RELEASE_NAMESPACE": HelmRelease.namespace,
         "TEAM": settings.key("team"),
         "CLUSTER_ID": settings.key("cluster-id"),
     },
