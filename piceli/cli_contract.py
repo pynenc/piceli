@@ -704,6 +704,20 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "run id) with the causes recorded when it failed (pod reasons, exit "
             "codes, redacted log tails, events).",
         ),
+        "release retention": _C(
+            "Retire releases beyond keep_releases, with their secret versions.",
+            contract="conforms",
+            reads=("release.toml or pipeline module (--spec MODULE:ATTR)", "state_dir"),
+            writes=("state_dir (catalog, journal, secret store, release files)",),
+            safe_to_retry=True,
+            notes="Never contacts the cluster. --dry-run changes nothing and "
+            "lists what would be retired. Keeps the newest releases, the "
+            "selected one and any rollback target; never deletes replace "
+            "backups. Secret versions nothing names go only on a later run "
+            "after a grace period. Deferred while a plan is pending or an "
+            "execution is running. Refuses with release-retention-off when neither "
+            "keep_releases nor --keep is set." + _ENV_NOTE,
+        ),
         "release orphans": _C(
             "List the objects with the app's ownership labels that no current "
             "release owns; --prune deletes them after approval.",

@@ -617,6 +617,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`release-owner-mismatch`](#error-release-owner-mismatch) | release | no |
 | [`release-prerollout-unsupported`](#error-release-prerollout-unsupported) | release | no |
 | [`release-refused`](#error-release-refused) | release | no |
+| [`release-retention-invalid`](#error-release-retention-invalid) | release | no |
+| [`release-retention-off`](#error-release-retention-off) | release | no |
 | [`release-state-unavailable`](#error-release-state-unavailable) | release | yes |
 | [`render-model-invalid`](#error-render-model-invalid) | render | no |
 | [`render-out-refused`](#error-render-out-refused) | render | no |
@@ -2858,6 +2860,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Read `message`; fix the input it names, then run the command again.
 - **Retry-safe:** no
 
+(error-release-retention-invalid)=
+### `release-retention-invalid`
+
+**Invalid release retention setting.** `keep_releases` (or `--keep`) is below 2: retention always keeps the running release and the one a rollback returns to.
+
+- **Fix:** Use 2 or more, or leave `keep_releases` unset to keep every release.
+- **Retry-safe:** no
+
+(error-release-retention-off)=
+### `release-retention-off`
+
+**Release retention is off.** `piceli release retention` ran on a spec without `[release] keep_releases` and without `--keep`.
+
+- **Fix:** Set `keep_releases = 20` under `[release]` (or `Pipeline(keep_releases=20)`), or pass `--keep N` to `piceli release retention`.
+- **Retry-safe:** no
+
 (error-release-state-unavailable)=
 ### `release-state-unavailable`
 
@@ -2957,7 +2975,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-unknown-release)=
 ### `unknown-release`
 
-**Unknown release.** The release name is not in this state directory's catalog.
+**Unknown release.** The release name is not in this state directory's catalog (or release retention retired it).
 
 - **Fix:** Run `piceli release status --spec release.toml` to list the releases.
 - **Retry-safe:** no

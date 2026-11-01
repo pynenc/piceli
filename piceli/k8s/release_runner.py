@@ -1201,14 +1201,14 @@ class ReleaseRunner:
             SecretVersionStore(self.spec.secret_store_path),
         )
 
-    def _compact(self, journal: ExecutionJournal) -> None:
-        """Past half its budget, the journal forgets finished executions that
-        neither the latest entry of a release nor recent history names
-        (0.47.0); a busy journal (another run) is left for the next open."""
+    def _compact_keep(self, releases: Collection[str] | None = None) -> set[str] | None:
+        """The executions compaction keeps: the latest of each release (of
+        ``releases`` only, when given: retention passes the catalogued ones)
+        and those recent history names; ``None`` for a malformed history."""
         try:
             entries = self.history.entries()
         except ReleaseError:
-            return  # a malformed history: keep everything
+            return None
         keep: set[str] = set()
         latest: dict[str, str] = {}
         for index, entry in enumerate(entries):
@@ -1221,7 +1221,18 @@ class ReleaseRunner:
                 keep |= named
             if isinstance(entry.get("execution_id"), str):
                 latest[str(entry.get("release"))] = str(entry["execution_id"])
-        keep |= set(latest.values())
+        if releases is not None:
+            latest = {name: value for name, value in latest.items() if name in releases}
+        return keep | set(latest.values())
+
+    def _compact(self, journal: ExecutionJournal) -> None:
+        """Past half its budget, the journal forgets finished executions that
+        neither the latest entry of a release nor recent history names
+        (0.47.0); a busy journal (another run) is left for the next open."""
+        # Called unbound in tests (a runner with a history only).
+        keep = ReleaseRunner._compact_keep(self)
+        if keep is None:
+            return  # a malformed history: keep everything
         try:
             with journal.exclusive():
                 found = journal.compact(keep)
@@ -2084,8 +2095,17 @@ class ReleaseRunner:
             try:
                 catalog.get(target)
             except ValueError:
+                retired = any(
+                    entry.get("release") == target for entry in self.history.entries()
+                )
                 raise ReleaseError(
-                    f"unknown release {target!r}", code="unknown-release"
+                    f"unknown release {target!r}"
+                    + (
+                        " (retired by release retention, keep_releases)"
+                        if retired
+                        else ""
+                    ),
+                    code="unknown-release",
                 ) from None
             return target
         if not self.history.deployed():
@@ -2803,6 +2823,8 @@ class ReleaseRunner:
             and trigger is None
         ):
             outcome["rollback"] = self._auto_rollback(name, execution_id)
+        if trigger is None:
+            self._retain_after_run(outcome)
         return outcome
 
     @staticmethod
@@ -2928,6 +2950,62 @@ class ReleaseRunner:
         )
         return value
 
+    # ------------------------------------------------------------ retention
+    def retention(
+        self, *, keep: int | None = None, dry_run: bool = False
+    ) -> dict[str, Any]:
+        """Retire releases beyond ``keep`` (default ``[release] keep_releases``).
+
+        With ``dry_run`` nothing changes: the report lists what a run would
+        retire (see :mod:`piceli.k8s.release_retention`).
+        """
+        from piceli.k8s.release_retention import ReleaseRetention
+
+        keep = self.spec.model.release.keep_releases if keep is None else keep
+        if keep is None:
+            raise ReleaseError(
+                "release retention is off: set [release] keep_releases (or pass "
+                "--keep N)",
+                code="release-retention-off",
+            )
+        if isinstance(keep, bool) or not isinstance(keep, int) or keep < 2:
+            raise ReleaseError(
+                "keep_releases must be at least 2", code="release-retention-invalid"
+            )
+        return ReleaseRetention(self, keep, now=_now()).run(dry_run=dry_run)
+
+    def _retain_after_run(self, outcome: dict[str, Any]) -> None:
+        """With ``keep_releases`` set, retire old releases after a run that
+        ended with a ready release (after any automatic rollback). A failure
+        is logged and never fails the run."""
+        from piceli.k8s.release_retention import summary
+
+        if self.spec.model.release.keep_releases is None:
+            return
+        try:
+            entries = self.history.entries()
+            if not entries or entries[-1].get("state") != "ready":
+                return
+            report = self.retention()
+        except Exception as error:  # retention never fails a run
+            logger.warning("release retention failed: %s", error)
+            outcome["retention"] = {"state": "failed", "detail": str(error)}
+            return
+        if report.get("state") != "done":
+            logger.info("%s", summary(report))
+        outcome["retention"] = {
+            key: report[key]
+            for key in (
+                "state",
+                "reason",
+                "keep_releases",
+                "retired",
+                "secret_versions",
+                "backups",
+            )
+            if key in report
+        }
+
     def check(self, release: str | None = None) -> dict[str, Any]:
         """Run the spec's checks now against a release (default: the selected one).
 
@@ -3050,6 +3128,8 @@ class ReleaseRunner:
             and "trigger" not in entry
         ):
             outcome["rollback"] = self._auto_rollback(name, entry["execution_id"])
+        if "trigger" not in entry:
+            self._retain_after_run(outcome)
         return outcome
 
     def stop(self, release: str | None = None) -> dict[str, Any]:

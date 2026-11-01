@@ -66,12 +66,13 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.48
+## What's new in 0.49
 
-- **Development runs make room**: a run that grows past its cache cap
-  evicts idle lineages before it is stopped, and a build host can have its
-  own budget (`BuildHost(cache_max="300Gi")`). See the
-  [guide](https://docs.pynenc.org/projects/piceli/en/stable/dev_builds.html).
+- **Keep only recent releases**: `keep_releases = 20` retires older
+  releases with their secret versions after each apply, and
+  `piceli release retention --dry-run` lists what it would retire first.
+  See the
+  [guide](https://docs.pynenc.org/projects/piceli/en/stable/release_cli.html).
 
 ## Web UI
 

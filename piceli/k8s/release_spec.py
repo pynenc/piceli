@@ -225,6 +225,21 @@ class ReleaseSettings(_Strict):
     # The owner's approval policy for `apply --approve-if-policy`; part of
     # the plan hash. See docs/agents.md.
     auto_approve: AutoApproveSpec | None = None
+    # Release retention (0.49.0): keep the newest N releases (plus the
+    # selected one and any rollback target) and retire the rest with their
+    # secret versions. Unset: off. Not part of the plan hash. See
+    # docs/release_cli.md.
+    keep_releases: int | None = None
+
+    @field_validator("keep_releases")
+    @classmethod
+    def _keep_releases(cls, value: int | None) -> int | None:
+        if value is not None and value < 2:
+            raise ValueError(
+                "keep_releases must be at least 2 (the running release and the "
+                "one a rollback returns to); leave it unset to keep every release"
+            )
+        return value
 
     @property
     def approval_policy(self) -> ApprovalPolicy | None:

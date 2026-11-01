@@ -15,7 +15,7 @@ import os
 import re
 import subprocess
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -335,6 +335,29 @@ class ReleaseCatalog:
             self._write(value)
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         return ReleaseRecord.from_dict(records[name])
+
+    def remove(self, names: Iterable[str]) -> list[str]:
+        """Retire records in one locked atomic write (release retention).
+
+        Refuses the selected release. Names not in the catalog are ignored, so
+        a retention run that stopped midway can repeat it. Returns the names
+        removed.
+        """
+        doomed = set(names)
+        with self._locked() as handle:
+            value = self._read()
+            if value["selected"] in doomed:
+                raise ValueError("the selected release cannot be retired")
+            removed = [
+                item["name"] for item in value["releases"] if item["name"] in doomed
+            ]
+            if removed:
+                value["releases"] = [
+                    item for item in value["releases"] if item["name"] not in doomed
+                ]
+                self._write(value)
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return removed
 
     def selected(self) -> ReleaseRecord:
         value = self._read()
