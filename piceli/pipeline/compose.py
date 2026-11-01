@@ -595,6 +595,11 @@ def _spec(
             "rollback_on_failed_checks": rollback_on_failed_checks,
             **({"prune": True} if prune else {}),
             **(
+                {"keep_releases": keep}
+                if (keep := getattr(pipeline, "keep_releases", None)) is not None
+                else {}
+            ),
+            **(
                 {}
                 if auto_approve is None
                 else {

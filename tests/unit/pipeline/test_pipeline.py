@@ -300,6 +300,19 @@ def test_release_spec_is_built_in_memory() -> None:
     assert set(model.secrets) == {"password", "url"}
 
 
+def test_keep_releases_reaches_the_release_spec() -> None:
+    web = ImageRef("web", DIGEST, "r/web", None, DIGEST)
+    default = _pipeline()
+    images = {"web": web, **pinned_images(default, {"web": 1})}
+    assert release_spec(default, images).model.release.keep_releases is None
+    kept = _pipeline(keep_releases=20)
+    assert release_spec(kept, images).model.release.keep_releases == 20
+    for value in (0, 1, True):
+        with pytest.raises(PipelineError) as raised:
+            _pipeline(keep_releases=value)
+        assert raised.value.code == "pipeline-invalid"
+
+
 def test_model_fingerprint_is_stable_and_tracks_the_app() -> None:
     first = model_fingerprint(_pipeline())
     assert first == model_fingerprint(_pipeline())

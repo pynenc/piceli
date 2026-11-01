@@ -1027,6 +1027,46 @@ def status(
     _emit(value)
 
 
+@app.command("retention")
+def retention(
+    spec: SpecOption,
+    env: EnvOption = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Only list what retention would retire (releases, sessions, "
+            "files, executions, secret versions); change nothing",
+        ),
+    ] = False,
+    keep: Annotated[
+        int | None,
+        typer.Option(
+            "--keep",
+            min=2,
+            help="Releases to keep (default: [release] keep_releases of the spec)",
+        ),
+    ] = None,
+) -> None:
+    """Retire releases beyond keep_releases, with their secret versions.
+
+    Keeps the newest releases, the selected one and any rollback target;
+    never deletes replace backups. Never contacts the cluster.
+    """
+    from piceli.k8s.release_retention import summary
+
+    try:
+        with _runner(spec, write=not dry_run, env=env) as runner:
+            value = runner.retention(keep=keep, dry_run=dry_run)
+    except _refusals() as error:
+        _refuse(error)
+        return
+    _say(summary(value))
+    for name in value.get("retired", ()):
+        _say(f"  {'would retire' if dry_run else 'retired'}: {name}")
+    _emit(value)
+
+
 def _age_text(seconds: int | None) -> str:
     if seconds is None:
         return "?"

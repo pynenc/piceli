@@ -8,7 +8,7 @@ import json
 import os
 import re
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -99,24 +99,7 @@ class ExecutionJournal:
         release reopens from its session. The file is rewritten
         (``VACUUM``) when more than a quarter of it is free afterwards."""
         used_before = self.used_bytes()
-        protected = set(keep)
-        for row in self.connection.execute(
-            "SELECT execution, source_execution FROM migration_lineage"
-        ):
-            protected.update((row[0], row[1]))
-        newest = {
-            row[0]
-            for row in self.connection.execute(
-                "SELECT id FROM executions ORDER BY rowid DESC LIMIT ?", (retain,)
-            )
-        }
-        doomed = [
-            row[0]
-            for row in self.connection.execute(
-                "SELECT id FROM executions WHERE state != 'pending'"
-            )
-            if row[0] not in protected and row[0] not in newest
-        ]
+        doomed = self.doomed(keep, retain=retain)
         if doomed:
             with self._transaction():
                 for table, column in (
@@ -144,6 +127,63 @@ class ExecutionJournal:
             "used_before": used_before,
             "used_after": self.used_bytes(),
         }
+
+    def doomed(self, keep: set[str], *, retain: int = 20) -> list[str]:
+        """The executions :meth:`compact` would remove (changes nothing)."""
+        protected = set(keep)
+        for row in self.connection.execute(
+            "SELECT execution, source_execution FROM migration_lineage"
+        ):
+            protected.update((row[0], row[1]))
+        newest = {
+            row[0]
+            for row in self.connection.execute(
+                "SELECT id FROM executions ORDER BY rowid DESC LIMIT ?", (retain,)
+            )
+        }
+        return [
+            row[0]
+            for row in self.connection.execute(
+                "SELECT id FROM executions WHERE state != 'pending'"
+            )
+            if row[0] not in protected and row[0] not in newest
+        ]
+
+    def execution_ids(self) -> set[str]:
+        return {row[0] for row in self.connection.execute("SELECT id FROM executions")}
+
+    def session_ids(self) -> set[str]:
+        return {
+            row[0]
+            for row in self.connection.execute("SELECT id FROM deployment_sessions")
+        }
+
+    def forget_sessions(self, session_ids: set[str]) -> int:
+        """Delete the archives of retired releases' sessions (0.49.0)."""
+        ids = sorted(session_ids & self.session_ids())
+        if not ids:
+            return 0
+        with self._transaction():
+            self.connection.executemany(
+                "DELETE FROM deployment_sessions WHERE id=?", [(item,) for item in ids]
+            )
+        return len(ids)
+
+    def references_text(self, *, skip: Collection[str] = ()) -> Iterator[str]:
+        """Every JSON text that may name private versions: session archives,
+        execution bindings and action payloads (of executions not in
+        ``skip``; session ids in ``skip`` are skipped too)."""
+        for row in self.connection.execute(
+            "SELECT id, archive FROM deployment_sessions"
+        ):
+            if row[0] not in skip:
+                yield row[1]
+        for row in self.connection.execute("SELECT id, binding FROM executions"):
+            if row[0] not in skip:
+                yield row[1]
+        for row in self.connection.execute("SELECT execution, payload FROM actions"):
+            if row[0] not in skip:
+                yield row[1]
 
     @contextmanager
     def exclusive(self) -> Iterator[None]:

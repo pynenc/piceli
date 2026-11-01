@@ -150,6 +150,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli release plan`](#cli-release-plan) | Capture live discovery and persist an approvable plan (prints its hash). | reads | no |
 | [`piceli release preview`](#cli-release-preview) | Alias of `plan`. | reads | no |
 | [`piceli release resume`](#cli-release-resume) | Resume an interrupted apply of a created release (same grant and ids). | writes | no |
+| [`piceli release retention`](#cli-release-retention) | Retire releases beyond keep_releases, with their secret versions. | none | no |
 | [`piceli release rollback`](#cli-release-rollback) | Re-plan and re-apply an earlier release against current cluster state. | writes | yes |
 | [`piceli release secret show`](#cli-release-secret-show) | Show a secret's metadata, and its value with --reveal (never logged). | none | no |
 | [`piceli release status`](#cli-release-status) | Show catalogued releases, their executions and history (no cluster access). | none | no |
@@ -3589,6 +3590,29 @@ Resume an interrupted apply of a created release (same grant and ids).
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Continues an already approved execution; needs no new approval. Runs [[checks]] when it becomes ready, as apply does.
+
+(cli-release-retention)=
+### `piceli release retention`
+
+Retire releases beyond keep_releases, with their secret versions.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
+| `--env` | text |  | Environment of a pipeline (--spec MODULE:ATTR): its app overrides, target and state (required when the pipeline has one target per environment) |
+| `--dry-run` | boolean | `False` | Only list what retention would retire (releases, sessions, files, executions, secret versions); change nothing |
+| `--keep` | integer |  | Releases to keep (default: [release] keep_releases of the spec) |
+
+**Contract**
+
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), state_dir
+- **Writes:** state_dir (catalog, journal, secret store, release files)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Never contacts the cluster. --dry-run changes nothing and lists what would be retired. Keeps the newest releases, the selected one and any rollback target; never deletes replace backups. Secret versions nothing names go only on a later run after a grace period. Deferred while a plan is pending or an execution is running. Refuses with release-retention-off when neither keep_releases nor --keep is set. With a pipeline, --env NAME selects one environment (its target, overrides and state).
 
 (cli-release-rollback)=
 ### `piceli release rollback`

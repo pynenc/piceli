@@ -13,6 +13,7 @@ import stat
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -137,6 +138,8 @@ class SecretVersionStore:
                 PRIMARY KEY(session_id, input_name));
             CREATE TABLE IF NOT EXISTS fingerprint_key (
                 id INTEGER PRIMARY KEY CHECK (id = 1), key TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS sweep_candidates (
+                version TEXT PRIMARY KEY, first_seen TEXT NOT NULL);
         """
         )
         with self.connection:
@@ -146,13 +149,25 @@ class SecretVersionStore:
                 )
         self.store_id = self.connection.execute("SELECT id FROM store").fetchone()[0]
 
+    def used_bytes(self) -> int:
+        """Bytes in use: the file's pages minus the free ones (0.49.0), so
+        versions a sweep deleted count at once, before a ``VACUUM``."""
+        pages, free, size = (
+            self.connection.execute(f"PRAGMA {name}").fetchone()[0]
+            for name in ("page_count", "freelist_count", "page_size")
+        )
+        return int((pages - free) * size)
+
+    def _capacity(self, encoded: str) -> None:
+        if self.used_bytes() + len(encoded.encode()) + 32768 > self.max_bytes:
+            raise ValueError("private store byte budget exhausted")
+
     def put(self, target: PlanTarget, value: Any) -> SecretVersionRef:
         encoded = json.dumps(
             value, sort_keys=True, separators=(",", ":"), allow_nan=False
         )
         strict_json(encoded, 1_000_000)
-        if self.path.stat().st_size + len(encoded.encode()) + 32768 > self.max_bytes:
-            raise ValueError("private store byte budget exhausted")
+        self._capacity(encoded)
         reference = SecretVersionRef(self.store_id, uuid.uuid4().hex)
         with self.connection:
             self.connection.execute(
@@ -185,8 +200,7 @@ class SecretVersionStore:
             value, sort_keys=True, separators=(",", ":"), allow_nan=False
         )
         strict_json(encoded, 1_000_000)
-        if self.path.stat().st_size + len(encoded.encode()) + 32768 > self.max_bytes:
-            raise ValueError("private store byte budget exhausted")
+        self._capacity(encoded)
         reference = SecretVersionRef(self.store_id, uuid.uuid4().hex)
         with self.connection:
             current = self.connection.execute(
@@ -335,6 +349,99 @@ class SecretVersionStore:
                     (version, target.cluster_id, target.namespace),
                 ).rowcount
         return removed
+
+    # ------------------------------------------------------------ retention
+    def version_sizes(self) -> dict[str, int]:
+        """Every stored version and the bytes of its value (no value read)."""
+        return {
+            row[0]: int(row[1])
+            for row in self.connection.execute(
+                "SELECT version, length(value) FROM versions"
+            )
+        }
+
+    def session_versions(self) -> list[tuple[str, str]]:
+        """``(session_id, version)`` of every session binding."""
+        return [
+            (row[0], row[1])
+            for row in self.connection.execute(
+                "SELECT session_id, version FROM session_bindings"
+            )
+        ]
+
+    def forget_sessions(self, session_ids: Iterable[str]) -> int:
+        """Drop the input bindings of retired sessions; their versions stay
+        until a sweep finds nothing names them. Returns the rows removed."""
+        ids = sorted(set(session_ids))
+        with self.connection:
+            return sum(
+                self.connection.execute(
+                    "DELETE FROM session_bindings WHERE session_id=?", (item,)
+                ).rowcount
+                for item in ids
+            )
+
+    def candidates(self) -> dict[str, str]:
+        """Unnamed versions seen by an earlier sweep: version -> first seen."""
+        return {
+            row[0]: row[1]
+            for row in self.connection.execute(
+                "SELECT version, first_seen FROM sweep_candidates"
+            )
+        }
+
+    def sweep(
+        self, live: set[str], *, grace_seconds: int, now: datetime
+    ) -> dict[str, int]:
+        """Delete versions nothing names any more, two runs and a grace apart.
+
+        ``live`` is every version some catalog record, session, execution,
+        binding, sidecar or plan names (the mark). An unnamed version becomes
+        a candidate first; it is deleted on a later sweep, still unnamed, once
+        it was first seen more than ``grace_seconds`` ago, so versions a plan
+        in progress wrote before naming them are never lost. Candidates named
+        again are dropped. The file is rewritten (``VACUUM``) when more than
+        a quarter of it is free afterwards.
+        """
+        sizes = self.version_sizes()
+        unnamed = set(sizes) - live
+        seen = self.candidates()
+        limit = now - timedelta(seconds=grace_seconds)
+        doomed = sorted(
+            version
+            for version in unnamed
+            if version in seen and datetime.fromisoformat(seen[version]) <= limit
+        )
+        bound = {version for _, version in self.session_versions()}
+        doomed = [version for version in doomed if version not in bound]
+        fresh = sorted(unnamed - set(seen))
+        with self.connection:
+            self.connection.executemany(
+                "DELETE FROM sweep_candidates WHERE version=?",
+                [(version,) for version in seen if version not in unnamed]
+                + [(version,) for version in doomed],
+            )
+            self.connection.executemany(
+                "INSERT OR IGNORE INTO sweep_candidates VALUES (?, ?)",
+                [(version, now.isoformat()) for version in fresh],
+            )
+            self.connection.executemany(
+                "DELETE FROM versions WHERE version=?",
+                [(version,) for version in doomed],
+            )
+        size = self.path.stat().st_size
+        vacuumed = 0
+        if size and size - self.used_bytes() > size // 4:
+            self.connection.execute("VACUUM")
+            vacuumed = 1
+        return {
+            "removed": len(doomed),
+            "removed_bytes": sum(sizes[version] for version in doomed),
+            "waiting": len(unnamed) - len(doomed),
+            "vacuumed": vacuumed,
+            "bytes_before": size,
+            "bytes_after": self.path.stat().st_size,
+        }
 
     def close(self) -> None:
         self.connection.close()

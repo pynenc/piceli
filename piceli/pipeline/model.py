@@ -1447,6 +1447,11 @@ class Pipeline:
         lists them as ``kept_orphaned`` with the command that deletes them.
         An ``auto_approve`` policy covers a prune unless it denies
         ``"prune"``. See ``docs/gitops.md``.
+    :param keep_releases: Release retention: after a successful apply, keep
+        the newest ``keep_releases`` releases of each environment (plus the
+        running one and any rollback target) and retire the rest with their
+        secret versions (at least 2). ``None`` (default): keep every release.
+        Not part of the combined hash. See ``docs/release_cli.md``.
 
     Invariants: every image the app uses is a build handle or pinned by
     digest; the release never manages the node-loopback registry.
@@ -1485,6 +1490,7 @@ class Pipeline:
         restore_points: RestorePoints | bool | None = None,
         envs: EnvConfig | None = None,
         prune: bool | None = None,
+        keep_releases: int | None = None,
     ) -> None:
         from piceli.app import App
 
@@ -1599,6 +1605,17 @@ class Pipeline:
         #: Delete what earlier releases created and the app no longer
         #: declares (``None``: only in environment deploys; see ``prune``).
         self.prune: bool | None = prune
+        if keep_releases is not None and (
+            isinstance(keep_releases, bool)
+            or not isinstance(keep_releases, int)
+            or keep_releases < 2
+        ):
+            raise PipelineError(
+                "pipeline-invalid",
+                "keep_releases must be an integer of at least 2, or None",
+            )
+        #: Releases retention keeps per environment (``None``: every release).
+        self.keep_releases: int | None = keep_releases
         #: Set on the pipeline of one environment (:func:`piceli.envs.env_pipeline`):
         #: how its app renders into the branch namespace.
         self.branch_env: BranchEnv | None = None

@@ -77,6 +77,7 @@ CASES: dict[str, tuple[Argv, str]] = {
             "diff",
             "check",
             "orphans",
+            "retention",
         )
     },
     "heavy run": (lambda p: ["heavy", "run"], "heavy-command-empty"),
