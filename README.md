@@ -66,11 +66,11 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.53
+## What's new in 0.54
 
-- **Warm dev-build lineages**: a new lineage starts from a copy of its
-  nearest sibling, and a full cache pauses the youngest run instead of
-  stopping it; `piceli dev status` lists the lineages.
+- **An honest dev-build queue**: `piceli dev status` says why queued runs
+  wait (disk pressure, cache budget, busy slots), keeps the cache numbers
+  across a controller restart, and runs whose client left expire.
 
 ## Web UI
 

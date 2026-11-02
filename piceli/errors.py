@@ -6142,6 +6142,16 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "dev",
     ),
     _E(
+        "dev-run-abandoned",
+        "Queued run abandoned",
+        "0.54.0: the client waiting for this queued run stopped saying it "
+        "waits (no beat for 5 minutes), or it waited past its queue timeout; "
+        "the scheduler removed it.",
+        "Run again when wanted.",
+        True,
+        "dev",
+    ),
+    _E(
         "dev-run-cancelled",
         "Run cancelled",
         "The run's Job was deleted (`piceli dev cancel`, Ctrl-C) before it finished.",

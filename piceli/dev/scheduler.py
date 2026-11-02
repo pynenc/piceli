@@ -21,6 +21,12 @@ running (its start-time eviction trims the cache, which only free lineages
 allow); while the builder node is under disk pressure it starts none. The
 status says so in ``held``. The scheduler never creates a Job.
 
+0.54.0: each queued run says why it waits (``waiting_for``); a queued run
+whose client stopped beating (``piceli.io/dev-client-at``, every 30 s) for
+5 minutes, or that waited past its queue timeout, is removed
+(``dev-run-abandoned``); a restarted scheduler starts from the last
+published cache use and recent runs.
+
 0.53.0: the status's ``cache`` carries ``lineages``, each lineage as the
 last finished run's end-of-run trim saw it (``at`` is its time).
 
@@ -37,7 +43,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from piceli.dev.jobs import PRIORITY_LABEL, PROFILE_LABEL, REQUESTER_LABEL, RUN_LABEL
+from piceli.dev.jobs import (
+    CLIENT_AT_ANNOTATION,
+    PRIORITY_LABEL,
+    PROFILE_LABEL,
+    QUEUE_TIMEOUT_ANNOTATION,
+    REQUESTER_LABEL,
+    RUN_LABEL,
+)
 from piceli.dev.model import DevBuilds, bytes_of, cpu_of
 
 STATUS_SCHEMA = "piceli.dev-status.v1"
@@ -48,6 +61,12 @@ RECORDED_TAIL = 20
 #: A scheduler silent for longer is not alive: clients start runs at once.
 ALIVE_SECONDS = 60
 TICK_SECONDS = 3.0
+#: 0.54.0: a queued run whose client has not said it waits for this long
+#: is abandoned (its client beats every 30 s).
+ABANDONED_SECONDS = 300.0
+#: 0.54.0: a queued run from an older client (no beat) is abandoned once it
+#: waited longer than its queue timeout, or this when it has none.
+LEGACY_QUEUE_SECONDS = 7200.0
 
 
 def _iso(seconds: float) -> str:
@@ -142,6 +161,29 @@ def run_summary(job: Mapping[str, Any], now: float) -> dict[str, Any]:
     return body
 
 
+def waiting_for(held: Mapping[str, Any] | None, slots: int, running: int) -> str:
+    """0.54.0: why a queued run has not started, in one line."""
+    if held is not None:
+        return str(held.get("message") or held.get("cause"))
+    if running >= slots:
+        return f"all {slots} slot(s) busy"
+    return "its turn (starting)"
+
+
+def abandoned(job: Mapping[str, Any], now: float) -> bool:
+    """0.54.0: whether the client waiting for this queued run is gone."""
+    notes = (job.get("metadata") or {}).get("annotations") or {}
+    beat = _seconds(notes.get(CLIENT_AT_ANNOTATION))
+    created = _seconds(_created(job))
+    try:
+        patience = float(notes.get(QUEUE_TIMEOUT_ANNOTATION) or LEGACY_QUEUE_SECONDS)
+    except ValueError:
+        patience = LEGACY_QUEUE_SECONDS
+    if created is not None and now - created > patience + ABANDONED_SECONDS:
+        return True  # its client gave up waiting long ago
+    return beat is not None and now - beat > ABANDONED_SECONDS
+
+
 def disk_pressure(node: Mapping[str, Any] | None) -> dict[str, Any] | None:
     """0.35.0: ``{node, since, message}`` when ``node``'s ``DiskPressure``
     condition holds, else ``None``."""
@@ -187,6 +229,7 @@ class Scheduler:
         #: 0.35.0: the node's DiskPressure condition while it holds.
         self.node_pressure: dict[str, Any] | None = None
         self._held: dict[str, Any] | None = None
+        self._restored = False
 
     def record(self, entry: dict[str, Any]) -> None:
         cache = dict(entry.get("cache") or {})
@@ -263,7 +306,28 @@ class Scheduler:
             self._slots = (now, auto_slots(self.dev, node))
         return self._slots[1]
 
-    def _finish(self, job: Mapping[str, Any], state: str, now: float) -> None:
+    def restore(self) -> None:
+        """0.54.0: start from the last published status (the cache use and
+        recent runs), so a restarted scheduler does not show an empty cache."""
+        self._restored = True
+        try:
+            status = self.port.status() or {}
+        except Exception:  # a read, never a reason to stop the queue
+            return
+        if not self.cache and isinstance(status.get("cache"), dict):
+            self.cache = dict(status["cache"])
+        if not self.recent:
+            for entry in reversed(list(status.get("recent") or ())[:MAX_RECENT]):
+                if isinstance(entry, dict):
+                    self.recent.appendleft(entry)
+
+    def _finish(
+        self,
+        job: Mapping[str, Any],
+        state: str,
+        now: float,
+        reason: str = "dev-run-cancelled",
+    ) -> None:
         run = run_of(job)
         entry = {**self.seen.get(run, {}), **run_summary(job, now)}
         result = self.port.result(run) if state != "cancelled" else None
@@ -290,7 +354,7 @@ class Scheduler:
                 if result.get("first_error"):
                     entry["first_error"] = list(result["first_error"])[:RECORDED_TAIL]
         elif state == "cancelled":
-            entry.update(state="cancelled", reason="dev-run-cancelled", exit_code=None)
+            entry.update(state="cancelled", reason=reason, exit_code=None)
         else:
             entry.update(state="error", reason="dev-run-failed", exit_code=None)
         entry["finished_at"] = _iso(now)
@@ -315,6 +379,8 @@ class Scheduler:
     def tick(self) -> dict[str, Any]:
         """Record, start and publish once; the published status."""
         now = self.clock()
+        if not self._restored:
+            self.restore()
         try:
             self.sync_git_secret(now)
         except Exception as error:  # never stops the queue
@@ -333,6 +399,13 @@ class Scheduler:
                 try:
                     self.port.delete(run_of(job))
                 except Exception:  # the Job's TTL removes it
+                    pass
+            elif state == "queued" and abandoned(job, now):
+                # 0.54.0: its client left; it never holds a place again.
+                self._finish(job, "cancelled", now, "dev-run-abandoned")
+                try:
+                    self.port.delete(run_of(job))
+                except Exception:  # tried again next tick
                     pass
             elif state == "queued":
                 queued.append(job)
@@ -365,7 +438,11 @@ class Scheduler:
             "slots": slots,
             "running": [run_summary(job, now) for job in running],
             "queued": [
-                {**run_summary(job, now), "position": index + 1}
+                {
+                    **run_summary(job, now),
+                    "position": index + 1,
+                    "waiting_for": waiting_for(held, slots, len(running)),
+                }
                 for index, job in enumerate(waiting)
             ],
             "recent": list(self.recent),

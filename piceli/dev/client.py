@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from piceli.dev.jobs import CLIENT_AT_ANNOTATION, QUEUE_TIMEOUT_ANNOTATION
 from piceli.dev.model import DevBuilds, DevError
 from piceli.dev.pack import SourceRequest, pack
 from piceli.dev.pod import RESULT_MARKER
@@ -80,6 +81,10 @@ def queue_lines(status: dict[str, Any] | None) -> list[str]:
     if held and held.get("cause") != "node-disk-pressure":
         lines.append(f"runs held: {held.get('message')}")  # 0.38.1
     return lines
+
+
+def _iso_now() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def new_run_id(now: datetime | None = None) -> str:
@@ -215,6 +220,9 @@ def run(
                 "piceli.io/dev-sources": json.dumps(
                     {plan.name: plan.head for plan in plans}
                 ),
+                # 0.54.0: the scheduler expires a queued run whose client left.
+                CLIENT_AT_ANNOTATION: _iso_now(),
+                QUEUE_TIMEOUT_ANNOTATION: str(int(request.queue_timeout)),
             },
         )
         port.create(job)
@@ -235,6 +243,7 @@ def run(
                 {"phase": name, "start": round(start, 3), "end": round(time.time(), 3)}
             )
 
+        started = False
         try:
             step = clock()
             wall = time.time()
@@ -248,6 +257,7 @@ def run(
                     else {}
                 ),
             )
+            started = True
             durations["queue"] = round(clock() - step, 3)
             phase("queue", wall)
             step = clock()
@@ -340,7 +350,9 @@ def run(
                 "durations": {},
             }
         finally:
-            if remove and not request.keep:
+            # 0.54.0: a client that leaves before its run started (a signal,
+            # any exit) takes its queued Job with it.
+            if (remove or not started) and not request.keep:
                 try:
                     port.delete(run_id)
                 except Exception:  # the TTL removes it

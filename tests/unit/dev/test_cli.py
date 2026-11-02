@@ -292,3 +292,24 @@ def test_cache_clear_empties_the_lineages_a_run_left(stand_in: dict[str, Any]) -
     assert everything.exit_code == 0
     assert f"cleared {lineages[0].name}/0" in everything.stderr
     assert not (lineages[0] / "0" / "target").exists()
+
+
+def test_status_says_why_the_queue_is_held(queue: QueuePort) -> None:
+    """0.54.0: the scheduler's ``held`` and each run's ``waiting_for``."""
+    published = queue.status()
+    held = {
+        "cause": "node-disk-pressure",
+        "message": "node builder-1 is under disk pressure",
+    }
+    queue.status = lambda: {  # type: ignore[method-assign]
+        **published,
+        "held": held,
+        "queued": [{"run": "r-agent", "waiting_for": held["message"]}],
+    }
+    result = dev("status", "--json")
+    assert result.exit_code == 0, result.stderr
+    view = json.loads(result.stdout)
+    assert view["held"] == held
+    why = {q["run"]: q.get("waiting_for") for q in view["queued"]}
+    assert why == {"r-round": None, "r-agent": held["message"]}
+    assert "held    node builder-1 is under disk pressure" in result.stderr

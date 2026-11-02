@@ -15208,6 +15208,7 @@
    "dev-profile-unknown",
    "dev-queue-timeout",
    "dev-ref-unknown",
+   "dev-run-abandoned",
    "dev-run-cancelled",
    "dev-run-failed",
    "dev-run-invalid",
@@ -18131,5 +18132,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.53.0"
+ "version": "0.54.0"
 }
