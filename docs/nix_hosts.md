@@ -671,6 +671,16 @@ the report `down` while records wait behind it, with `last_error`,
 `last_error_detail` (for example `HTTP 415`), `last_error_at`,
 `last_sent_at` and `sent_total`.
 
+**One trace per release (0.52.0).** The build host writes the release's
+W3C (World Wide Web Consortium) `traceparent` into the ref pointer it
+signs. A deploy from a pointer with a valid one uses its trace id, and its
+records carry the parent's span id (`spanId`), so the build, the publish
+and the deploy show up as one trace in the collector. `host status` shows
+the attempt's `trace_id` and `parent_span_id`. A pointer without one
+(older build hosts), or with a bad one, gets a new trace id; `piceli host
+pin` and `piceli host rollback` keep their own. Where the `traceparent`
+comes from: {doc}`gitops` (`--traceparent`).
+
 ## Codes
 
 | Code | Meaning |

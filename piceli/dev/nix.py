@@ -599,6 +599,13 @@ def sign_manifest(body: Mapping[str, Any], secret: str) -> dict[str, Any]:
     return {**unsigned, "signature": sign(secret, canonical(unsigned))}
 
 
+def new_traceparent() -> str:
+    """0.52.0: a new sampled W3C ``traceparent`` (random trace and span ids)."""
+    import secrets
+
+    return f"00-{secrets.token_hex(16)}-{secrets.token_hex(8)}-01"
+
+
 def _stamp(moment: _dt.datetime) -> str:
     return moment.astimezone(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
@@ -609,11 +616,15 @@ def pointer(
     *,
     previous: Mapping[str, Any] | None = None,
     now: _dt.datetime | None = None,
+    traceparent: str | None = None,
 ) -> dict[str, Any]:
     """The pointer ``key`` (:func:`pointer_key`) to the signed manifest
     ``signed``, unsigned. ``published_at`` (UTC, microseconds, compared as
     text) is later than ``previous``'s, even when this clock is behind:
-    hosts refuse a pointer older than one they have seen."""
+    hosts refuse a pointer older than one they have seen. A valid
+    ``traceparent`` (0.52.0) rides along: the hosts' deploy joins its trace."""
+    from piceli.dev.nix_verify import traceparent_ids
+
     moment = now or _dt.datetime.now(_dt.UTC)
     stamp = _stamp(moment)
     before = str((previous or {}).get("published_at") or "")
@@ -635,7 +646,7 @@ def pointer(
         "system": signed.get("system"),
         "published_at": stamp,
         "signed_by": signed["signed_by"],
-    }
+    } | ({"traceparent": traceparent} if traceparent_ids(traceparent) else {})
 
 
 # ------------------------------------------------------------------ cache objects
@@ -823,9 +834,11 @@ def upload_pointers(
     s3_keys: tuple[str, str] | None,
     opener: Opener | None = None,
     now: _dt.datetime | None = None,
+    traceparent: str | None = None,
 ) -> list[dict[str, Any]]:
     """Sign and put each ref pointer, after its manifest (a host never finds
-    a pointer to a manifest that is not there yet)."""
+    a pointer to a manifest that is not there yet); ``traceparent``: 0.52.0,
+    see :func:`pointer`."""
     objects = CacheObjects(cache, s3_keys, opener=opener)
     written = []
     for key in keys:
@@ -835,7 +848,7 @@ def upload_pointers(
             old = {}
         body = sign_manifest(
             pointer(signed, key, previous=old if isinstance(old, dict) else None,
-                    now=now),
+                    now=now, traceparent=traceparent),
             secret,
         )  # fmt: skip
         objects.put(key, json.dumps(body, sort_keys=True, indent=2).encode() + b"\n")
@@ -854,11 +867,13 @@ def publish_closure(
     *,
     say: Callable[[str], None],
     push: Callable[[Mapping[str, Any], Callable[[str], None]], Mapping[str, Any]],
+    traceparent: str | None = None,
 ) -> dict[str, Any]:
     """Publish a built store path as ``plan`` says: ``push`` signs and pushes
     the closure on the build host (the keys on its stdin only, see
     :func:`run_publisher`), then the signed manifest and the plan's ref
-    pointers go into the cache. :raises DevError: a step failed."""
+    pointers (0.52.0: with ``traceparent``) go into the cache.
+    :raises DevError: a step failed."""
     say(f"publishing {store_path} to {cache.store_url} (on {host})")
     request = {
         "store_path": store_path,
@@ -880,8 +895,9 @@ def publish_closure(
     )  # fmt: skip
     url = upload_manifest(cache, signed, s3_keys=s3_keys)
     pointers = upload_pointers(
-        cache, signed, plan.get("pointers") or [], secret, s3_keys=s3_keys
-    )
+        cache, signed, plan.get("pointers") or [], secret, s3_keys=s3_keys,
+        traceparent=traceparent,
+    )  # fmt: skip
     say(f"published; manifest {url}")
     for body in pointers:
         say(f"  {body['ref']} -> {str(body['commit'])[:12]} ({body['published_at']})")

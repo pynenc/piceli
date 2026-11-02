@@ -73,6 +73,7 @@ def publish(
     attribute: str = ATTRIBUTE,
     name: str = "web-1",
     pinned: dict[str, Any] | None = None,
+    traceparent: str | None = None,
 ) -> dict[str, Any]:
     """What ``piceli dev nix build --publish`` leaves in a file cache."""
     path = store_path(commit)
@@ -94,7 +95,9 @@ def publish(
         for kind, ref in (("tag", tag), ("branch", branch))
         if ref
     ]
-    nix.upload_pointers(cache, signed, keys, secret, s3_keys=None, now=when)
+    nix.upload_pointers(
+        cache, signed, keys, secret, s3_keys=None, now=when, traceparent=traceparent
+    )
     return signed
 
 
@@ -1022,3 +1025,82 @@ def test_a_status_without_pinned_still_reads(
     publish(cache_dir, commit_of(2), tag="v1.1.0", when=T0 + dt.timedelta(minutes=1))
     assert make_agent(tmp_path, host(cache_dir), fake).run_once()["state"] == "deployed"
     assert status(tmp_path)["previous"].get("pinned") is None
+
+
+# ------------------------------------------------------------------ one trace (0.52.0)
+
+TRACE = "4bf92f3577b34da6a3ce929d0e0e4736"
+SPAN = "00f067aa0ba902b7"
+TRACEPARENT = f"00-{TRACE}-{SPAN}-01"
+
+
+def _records(collector: Collector) -> list[dict[str, Any]]:
+    return [
+        record
+        for post in collector.posts
+        for resource in post["resourceLogs"]
+        for scope in resource["scopeLogs"]
+        for record in scope["logRecords"]
+    ]
+
+
+def test_a_deploy_joins_the_trace_of_its_signed_pointer(
+    tmp_path: Path, cache_dir: Path, fake: FakeHost
+) -> None:
+    publish(cache_dir, commit_of(1), tag="v1.0.0", traceparent=TRACEPARENT)
+    pointer = json.loads((cache_dir / "piceli/web-1/refs/tags/v1.0.0.json").read_text())
+    assert pointer["traceparent"] == TRACEPARENT
+    assert nix.verify_pointer(pointer, PUBLIC)
+    up = Collector(up=True)
+    declared = host(cache_dir, report=HostReport("https://otel.example.net:4318"))
+    assert make_agent(tmp_path, declared, fake, opener=up).run_once()["state"] == (
+        "deployed"
+    )
+    attempt = status(tmp_path)["last_attempt"]
+    assert attempt["trace_id"] == TRACE and attempt["parent_span_id"] == SPAN
+    records = _records(up)
+    assert records and all(r["traceId"] == TRACE for r in records)
+    assert all(r["spanId"] == SPAN for r in records)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "00-" + "0" * 32 + f"-{SPAN}-01",
+        f"00-{TRACE}-" + "0" * 16 + "-01",
+        f"01-{TRACE}-{SPAN}-01",
+        f"00-{TRACE.upper()}-{SPAN}-01",
+        "not a traceparent",
+        42,
+    ],
+)
+def test_a_bad_traceparent_on_the_pointer_gets_a_new_trace(
+    tmp_path: Path, cache_dir: Path, fake: FakeHost, value: Any
+) -> None:
+    publish(cache_dir, commit_of(1), tag="v1.0.0")
+    path = cache_dir / "piceli/web-1/refs/tags/v1.0.0.json"
+    body = json.loads(path.read_text())
+    path.write_text(
+        json.dumps(nix.sign_manifest(body | {"traceparent": value}, SECRET))
+    )
+    up = Collector(up=True)
+    declared = host(cache_dir, report=HostReport("https://otel.example.net:4318"))
+    assert make_agent(tmp_path, declared, fake, opener=up).run_once()["state"] == (
+        "deployed"
+    )
+    attempt = status(tmp_path)["last_attempt"]
+    assert len(attempt["trace_id"]) == 32 and attempt["trace_id"] != TRACE
+    assert "parent_span_id" not in attempt
+    assert all("spanId" not in r for r in _records(up))
+
+
+def test_a_pin_keeps_its_own_trace(
+    tmp_path: Path, cache_dir: Path, fake: FakeHost
+) -> None:
+    publish(cache_dir, commit_of(1), tag="v1.0.0", traceparent=TRACEPARENT)
+    publish(cache_dir, commit_of(2), tag="v1.1.0")
+    make_agent(tmp_path, host(cache_dir), fake).run_once()
+    result = make_agent(tmp_path, host(cache_dir), fake).control("pin", "v1.0.0")
+    assert result["state"] == "pinned"
+    assert result["attempt"]["trace_id"] != TRACE
+    assert "parent_span_id" not in result["attempt"]

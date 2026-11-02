@@ -4,6 +4,21 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.52.0
+
+**Features**
+
+- **One trace per host release.** `piceli gitops build NAME --ref TAG
+  --traceparent TP` and `piceli gitops approve NAME DIGEST --traceparent
+  TP` take a W3C (World Wide Web Consortium) `traceparent`; without one the
+  controller starts a trace when it plans the release. It travels beside
+  the plan (never in its digest) to the build host, which signs it into the
+  ref pointer. The host agent's deploy uses its trace id and its records
+  carry the parent's span id (`spanId`), so the release shows up as one
+  trace in the collector. `host status` shows `parent_span_id`. A bad value
+  is refused by the CLI (`gitops-traceparent-invalid`) and ignored by the
+  agent.
+
 ## Version 0.51.0
 
 **Fixes**

@@ -1329,6 +1329,17 @@ and so does the UI's **Build now**. Every trigger goes through the same
 gate, plan and approval; `--approve sha256:<digest>` approves it in one go
 when the plan's digest is that one. The release records `trigger_kind`
 (`tag`, `branch`, `schedule`, `sync`, `cli`, `ui`) and `requested_by`.
+
+**One trace per release (0.52.0).** `piceli gitops build web-1 --ref
+web-v1.4.0 --traceparent TP` and `piceli gitops approve web-1 DIGEST
+--traceparent TP` hand the controller a W3C (World Wide Web Consortium)
+`traceparent` (`00-<32 hex>-<16 hex>-<2 hex>`), so a release script that
+started a trace joins it; a bad one is refused
+(`gitops-traceparent-invalid`). Without one the controller starts a new
+trace when it plans the release; an approval with one replaces it. It
+travels beside the plan (`traceparent` in the release and its wanted
+build), never in the plan or its digest, and the build host signs it into
+the ref pointer, where the hosts' deploy joins it ({doc}`nix_hosts`).
 `piceli gitops cancel web-1` drops a planned, queued or running publish:
 a build host that holds it stops before its next stage and its answer is
 refused; the release is `cancelled` (`gitops-build-cancelled`) until a

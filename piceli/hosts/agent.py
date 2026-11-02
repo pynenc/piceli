@@ -406,6 +406,8 @@ class Reporter:
         self.error: str | None = None
         self.sent = 0
         self.queue: list[dict[str, Any]] = []
+        #: 0.52.0: trace id -> the parent span id its records carry (``spanId``).
+        self.spans: dict[str, str] = {}
         self.state_file = os.path.join(os.path.dirname(queue_file), REPORT_STATE_FILE)
         self.last: dict[str, Any] = {}
         if self.report:
@@ -447,6 +449,7 @@ class Reporter:
             "severityText": "ERROR" if error else "INFO",
             "body": {"stringValue": body},
             "traceId": trace,
+            **({"spanId": self.spans[trace]} if trace in self.spans else {}),
             "attributes": [_attribute("event.name", name)]
             + [_attribute(k, v) for k, v in sorted(attrs.items()) if v is not None],
         }
@@ -1204,11 +1207,16 @@ class Agent:
 
         ``trigger`` is ``poll``, ``pin`` or ``rollback``; a rollback goes to
         a system already in the store, verified when it was deployed: it
-        only switches and checks, and never marks a build bad."""
+        only switches and checks, and never marks a build bad. 0.52.0: a
+        poll joins the trace of the verified pointer's valid ``traceparent``
+        (its records carry the parent span id); else a new trace id."""
         local = trigger == "rollback"
+        parent = (
+            None if trace or local else _v.traceparent_ids(pointer.get("traceparent"))
+        )
         attempt: dict[str, Any] = {
             "id": secrets.token_hex(8),
-            "trace_id": trace or secrets.token_hex(16),
+            "trace_id": trace or (parent[0] if parent else secrets.token_hex(16)),
             "trigger": trigger,
             "commit": pointer.get("commit"),
             "tag": _tag(pointer),
@@ -1235,6 +1243,8 @@ class Agent:
             # one recorded when it was deployed; else the verified manifest's).
             "pinned": _pinned(pointer.get("pinned")) if local else None,
         }
+        if parent:
+            attempt["parent_span_id"] = self.reporter.spans[parent[0]] = parent[1]
         started = self.monotonic()
         trace = attempt["trace_id"]
         self.reporter.event(
@@ -1524,6 +1534,9 @@ class Agent:
                 "published_at": attempt.get("published_at"),
                 "reason": "host-deploy-interrupted",
             }  # fmt: skip
+        parent = attempt.get("parent_span_id")
+        if isinstance(parent, str):  # 0.52.0: still under the release's span
+            self.reporter.spans[str(attempt.get("trace_id"))] = parent
         self.reporter.event(
             "piceli.host.deploy.result", "interrupted", str(attempt.get("trace_id")),
             error=True, **{"piceli.commit": attempt.get("commit"),

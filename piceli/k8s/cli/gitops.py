@@ -1448,6 +1448,17 @@ def wait(
         raise typer.Exit(1)
 
 
+#: 0.52.0: one trace per host release (``gitops approve``, ``gitops build``).
+TraceparentOption = Annotated[
+    str | None,
+    typer.Option(
+        "--traceparent",
+        help="A NixRelease: the W3C traceparent (00-<32 hex>-<16 hex>-<2 hex>) "
+        "its publish and the hosts' deploy join",
+    ),
+]
+
+
 @app.command("approve")
 def approve_env(
     env: Annotated[
@@ -1456,6 +1467,7 @@ def approve_env(
     plan_hash: Annotated[
         str, typer.Argument(help="The plan hash `gitops status` shows")
     ],
+    traceparent: TraceparentOption = None,
     kubeconfig: KubeconfigOption = None,
     context: ContextOption = None,
     namespace: NamespaceOption = "piceli-system",
@@ -1466,7 +1478,7 @@ def approve_env(
     from piceli.gitops.state import approve_request
 
     with _guard():
-        key, body = approve_request(env, plan_hash, via="cli")
+        key, body = approve_request(env, plan_hash, via="cli", traceparent=traceparent)
     with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
         with _guard():
             channel.add_request(key, body)
@@ -1592,6 +1604,7 @@ def build(
     by: Annotated[
         str | None, typer.Option("--by", help="Who asks (default: your user name)")
     ] = None,
+    traceparent: TraceparentOption = None,
     kubeconfig: KubeconfigOption = None,
     context: ContextOption = None,
     namespace: NamespaceOption = "piceli-system",
@@ -1604,8 +1617,9 @@ def build(
 
     with _guard():
         key, body = build_request(
-            name, ref, via="cli", by=_requester(by), approve=approve
-        )
+            name, ref, via="cli", by=_requester(by), approve=approve,
+            traceparent=traceparent,
+        )  # fmt: skip
     with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
         with _guard():
             channel.add_request(key, body)
