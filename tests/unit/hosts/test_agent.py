@@ -644,7 +644,7 @@ def test_a_collector_that_is_down_never_blocks_a_deploy(
     down = Collector(up=False)
     poll = make_agent(tmp_path, declared, fake, opener=down).run_once()
     assert poll["state"] == "deployed"
-    assert down.tries == 1  # one try per run, then the records wait
+    assert down.tries == 2  # one try, one more after the checks; then they wait
     report = status(tmp_path)["report"]
     assert report["state"] == "down" and report["reason"] == "host-report-failed"
     queued = json.loads((tmp_path / "state" / "otlp-queue.json").read_text())
@@ -662,6 +662,72 @@ def test_a_collector_that_is_down_never_blocks_a_deploy(
     assert json.loads((tmp_path / "state" / "otlp-queue.json").read_text()) == []
     resource = up.posts[0]["resourceLogs"][0]["resource"]["attributes"]
     assert {"key": "host.name", "value": {"stringValue": "web-1"}} in resource
+
+
+class Refusing(Collector):
+    """0.51.0: a collector that answers HTTP 415 (it takes no JSON)."""
+
+    def __call__(self, request: Any, timeout: float = 0) -> Any:
+        if self.up:
+            return super().__call__(request, timeout)
+        self.tries += 1
+        raise urllib.error.HTTPError(request.full_url, 415, "no JSON", {}, None)  # type: ignore[arg-type]
+
+
+def test_a_send_error_stays_in_status_until_a_send_succeeds(
+    tmp_path: Path, cache_dir: Path, fake: FakeHost
+) -> None:
+    publish(cache_dir, commit_of(1), tag="v1.0.0")
+    declared = host(cache_dir, report=HostReport("https://otel.example.net:4318"))
+    refusing = Refusing(up=False)
+    assert make_agent(tmp_path, declared, fake, opener=refusing).run_once()[
+        "state"
+    ] == ("deployed")
+    # An idle run: nothing new to send, but what waits is tried again and the
+    # error from the earlier run still shows.
+    idle = Refusing(up=False)
+    assert make_agent(tmp_path, declared, fake, opener=idle).run_once()["state"] == (
+        "current"
+    )
+    assert idle.tries == 1
+    report = status(tmp_path)["report"]
+    assert report["state"] == "down" and report["queued"] > 0
+    assert report["last_error"] == "host-report-failed"
+    assert report["last_error_detail"] == "HTTP 415" and report["last_error_at"]
+    assert report["sent_total"] is None
+    # Fixed collector: the next idle run sends the queue and clears the error.
+    up = Collector(up=True)
+    make_agent(tmp_path, declared, fake, opener=up).run_once()
+    report = status(tmp_path)["report"]
+    assert report["state"] == "ok" and report["queued"] == 0
+    assert report["last_error"] is None and report["sent_total"] > 0
+    assert "piceli.host.deploy.result" in _events(up.posts)
+    # A later run with nothing queued and no error is ok.
+    make_agent(tmp_path, declared, fake, opener=Collector(up=True)).run_once()
+    assert status(tmp_path)["report"]["state"] == "ok"
+
+
+class Restarted(Collector):
+    """Down for its first try (the release restarts it), then up."""
+
+    def __call__(self, request: Any, timeout: float = 0) -> Any:
+        self.up = self.tries > 0
+        return super().__call__(request, timeout)
+
+
+def test_the_queue_is_sent_again_once_the_checks_pass(
+    tmp_path: Path, cache_dir: Path, fake: FakeHost
+) -> None:
+    publish(cache_dir, commit_of(1), tag="v1.0.0")
+    declared = host(cache_dir, report=HostReport("https://otel.example.net:4318"))
+    collector = Restarted(up=False)
+    poll = make_agent(tmp_path, declared, fake, opener=collector).run_once()
+    assert poll["state"] == "deployed"
+    events = _events(collector.posts)
+    assert events[0] == "piceli.host.deploy.start" and "piceli.host.check" in events
+    assert "piceli.host.deploy.result" in events  # in the same run
+    report = status(tmp_path)["report"]
+    assert report["state"] == "ok" and report["queued"] == 0
 
 
 def test_a_rollback_is_reported(

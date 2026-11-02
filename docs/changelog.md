@@ -4,6 +4,19 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.51.0
+
+**Fixes**
+
+- **`host status` no longer says the report is `ok` while nothing is sent.**
+  The host agent keeps its last send error (`last_error`,
+  `last_error_detail` such as `HTTP 415`, `last_error_at`) and its last
+  success (`last_sent_at`, `sent_total`) across runs; the report is `down`
+  while records wait behind an error.
+- **Waiting records are sent again on every run**, also a run with nothing
+  new, and **once more after a release's checks pass**, so a release that
+  restarts the collector still delivers its events.
+
 ## Version 0.50.0
 
 **Fixes**

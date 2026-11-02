@@ -78,6 +78,8 @@ STATUS_SCHEMA = "piceli.nix-host-status.v1"
 STATUS_FILE = "status.json"
 STATE_FILE = "state.json"
 QUEUE_FILE = "otlp-queue.json"
+#: 0.51.0: the last send and the last send error, kept across runs.
+REPORT_STATE_FILE = "otlp-state.json"
 FEATURES = ("--extra-experimental-features", "nix-command flakes")
 DEFAULT_TOOLS = {
     "nix": "/run/current-system/sw/bin/nix",
@@ -383,8 +385,10 @@ def _attribute(key: str, value: Any) -> dict[str, Any]:
 
 class Reporter:
     """OTLP/HTTP JSON logs, one record per event. Never raises: a collector
-    that is down costs at most one 2 s attempt per run; the records wait
-    in a bounded queue for the next run."""
+    that is down costs one 2 s attempt per run (a deploy tries once more
+    after its checks pass); the records wait in a bounded queue for the next
+    run, and the last error stays in ``otlp-state.json`` until a send
+    succeeds (0.51.0)."""
 
     def __init__(
         self,
@@ -402,6 +406,8 @@ class Reporter:
         self.error: str | None = None
         self.sent = 0
         self.queue: list[dict[str, Any]] = []
+        self.state_file = os.path.join(os.path.dirname(queue_file), REPORT_STATE_FILE)
+        self.last: dict[str, Any] = {}
         if self.report:
             try:
                 with open(queue_file, encoding="utf-8") as handle:
@@ -409,6 +415,7 @@ class Reporter:
                 self.queue = [r for r in loaded if isinstance(r, dict)][-QUEUE_MAX:]
             except (OSError, ValueError, TypeError):
                 self.queue = []
+            self.last = _read_json(self.state_file)
 
     def event(
         self, name: str, body: str, trace: str, error: bool = False, **attrs: Any
@@ -501,28 +508,64 @@ class Reporter:
             if not 200 <= status < 300:
                 raise Failure("host-report-failed", f"HTTP {status}")
         except Failure as failed:
-            self.down, self.error = True, failed.code
+            self._failed(failed.code, failed.detail)
             return
-        except Exception:  # a collector that is down never fails a deploy
-            self.down, self.error = True, "host-report-failed"
+        except urllib.error.HTTPError as refused:  # the collector said no
+            self._failed("host-report-failed", f"HTTP {refused.code}")
+            return
+        except Exception as error:  # a collector that is down never fails a deploy
+            self._failed("host-report-failed", type(error).__name__)
             return
         self.sent += len(self.queue)
+        self.last.update(
+            last_sent_at=now_text(),
+            sent_total=int(self.last.get("sent_total") or 0) + len(self.queue),
+            last_error=None, last_error_detail=None,
+        )  # fmt: skip
         self.queue = []
+
+    def _failed(self, code: str, detail: str) -> None:
+        """0.51.0: the error stays in the state file until a send succeeds."""
+        self.down, self.error = True, code
+        self.last.update(
+            last_error=code, last_error_detail=detail or None, last_error_at=now_text()
+        )
+
+    def retry(self) -> None:
+        """Send again after a failed try in this run (0.51.0: once a
+        release's checks pass, the collector it may have restarted is up)."""
+        if self.down:
+            self.down = False
+            self.flush()
 
     def save(self) -> None:
         if not self.report:
             return
         _write_json(self.queue_file, self.queue[-QUEUE_MAX:], 0o600)
+        _write_json(self.state_file, self.last, 0o600)
 
     def describe(self) -> dict[str, Any] | None:
         if not self.report:
             return None
+        # 0.51.0: records waiting behind an error from an earlier run are
+        # not "ok" (a run with nothing to send never tried).
+        failing = self.down or bool(self.queue and self.last.get("last_error"))
         return {
             "endpoint": self.report["endpoint"],
-            "state": "down" if self.down else "ok",
-            "reason": self.error,
+            "state": "down" if failing else "ok",
+            "reason": self.error or (self.last.get("last_error") if failing else None),
             "queued": len(self.queue),
             "sent": self.sent,
+            **{
+                key: self.last.get(key)
+                for key in (
+                    "last_error",
+                    "last_error_detail",
+                    "last_error_at",
+                    "last_sent_at",
+                    "sent_total",
+                )
+            },
         }
 
 
@@ -999,6 +1042,7 @@ class Agent:
         return running, current
 
     def _finish(self) -> None:
+        self.reporter.flush()  # 0.51.0: every run retries what waits
         for key in ("current", "previous", "hold"):
             self.status[key] = self.state.get(key)
         self.status.pop("in_progress", None)
@@ -1233,6 +1277,7 @@ class Agent:
                     raise Failure("host-check-failed", "a check did not pass")
 
             self._stage(attempt, "checks", run_checks)
+            self.reporter.retry()  # 0.51.0: the release may restart the collector
             booting = True
             attempt["phase"] = "boot"
             self._stage(
