@@ -201,6 +201,38 @@ def test_status_shows_slots_queue_order_recent_and_cache(queue: QueuePort) -> No
     assert "1/1 slots busy, 2 queued" in result.stderr
 
 
+def test_status_lists_the_lineages_largest_first(
+    queue: QueuePort, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0.53.0: one line per lineage (at most 10); --json has them all."""
+    import time
+
+    now = time.time()
+    lineages = [
+        {"name": f"shop-rust/{i}", "bytes": i * 2**30, "busy": False,
+         "last_used": now - 3600, "run": f"r{i}"}
+        for i in range(12)
+    ]  # fmt: skip
+    lineages[5].update(busy=True, run="r-running", hint="wp-a", taken_at=now - 1800)
+    lineages[11].update(
+        busy=True, run="r-paused", taken_at=now - 30,
+        paused={"since": now - 600, "reason": "over-cap"},
+    )  # fmt: skip
+    status = queue.status()
+    status["cache"].update(at="2026-11-02T10:00:00Z", lineages=lineages)
+    monkeypatch.setattr(queue, "status", lambda: status)
+    result = dev("status", "--json")
+    assert result.exit_code == 0, result.stderr
+    assert len(json.loads(result.stdout)["cache"]["lineages"]) == 12
+    shown = [line for line in result.stderr.splitlines() if "shop-rust/" in line]
+    assert len(shown) == 10 and "shop-rust/11" in shown[0]
+    assert "paused (over-cap) r-paused for 10 min" in shown[0]
+    assert "running r-running (wp-a) for 30 min" in shown[6]
+    assert "free, used 60 min ago" in shown[1]
+    assert "2 more lineage(s) (--json lists all)" in result.stderr
+    assert "(after the run that ended 2026-11-02T10:00:00Z)" in result.stderr
+
+
 def test_logs_of_a_live_and_a_finished_run(queue: QueuePort) -> None:
     live = dev("logs", "r-running")
     assert live.exit_code == 0 and live.stdout == "compiling\n"

@@ -60,7 +60,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli deploy`](#cli-deploy) | Deploy a pipeline: inputs → build → deliver → plan → apply → checks. | writes | yes |
 | [`piceli dev cache clear`](#cli-dev-cache-clear) | Empty free lineages' cargo targets (a corrupted cache); busy ones are skipped. | writes | no |
 | [`piceli dev cancel`](#cli-dev-cancel) | Cancel a queued or running run (its Job and pod are deleted). | writes | no |
-| [`piceli dev hosts`](#cli-dev-hosts) | Each declared build host: up or down (why), platforms, slots, runs and queue. | reads | no |
+| [`piceli dev hosts`](#cli-dev-hosts) | Each declared build host: up or down (why), platforms, slots, runs and queue; a docker or native host's cache and lineages. | reads | no |
 | [`piceli dev logs`](#cli-dev-logs) | A run's output (stdout): live, or the recorded tail of a finished run. | reads | no |
 | [`piceli dev nix build`](#cli-dev-nix-build) | Build a flake output on a Nix build host; with --publish, sign and push it. | none | yes |
 | [`piceli dev nix gc`](#cli-dev-nix-gc) | Remove builds of old commits from a Nix cache: plan, then --approve. | none | yes |
@@ -1252,7 +1252,7 @@ Cancel a queued or running run (its Job and pod are deleted).
 (cli-dev-hosts)=
 ### `piceli dev hosts`
 
-Each declared build host: up or down (why), platforms, slots, runs and queue.
+Each declared build host: up or down (why), platforms, slots, runs and queue; a docker or native host's cache and lineages.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |

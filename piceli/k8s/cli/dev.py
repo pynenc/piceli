@@ -519,6 +519,52 @@ def queue_view(port: Any, dev: Any, now: float) -> dict[str, Any]:
     }
 
 
+#: 0.53.0: the most lineages ``dev status`` prints (``--json`` has them all).
+SHOWN_LINEAGES = 10
+
+
+def _span(seconds: float) -> str:
+    seconds = max(0.0, seconds)
+    if seconds < 120:
+        return f"{seconds:.0f} s"
+    if seconds < 7200:
+        return f"{seconds / 60:.0f} min"
+    if seconds < 172800:
+        return f"{seconds / 3600:.1f} h"
+    return f"{seconds / 86400:.0f} d"
+
+
+def lineage_lines(cache: dict[str, Any], now: float) -> list[str]:
+    """0.53.0: one line per lineage of a cache report, largest first."""
+    found = [item for item in cache.get("lineages") or () if isinstance(item, dict)]
+    found.sort(key=lambda item: -int(item.get("bytes") or 0))
+    lines = []
+    for item in found[:SHOWN_LINEAGES]:
+        if item.get("busy"):
+            paused = item.get("paused") or {}
+            since = paused.get("since") if paused else item.get("taken_at")
+            state = (
+                f"paused ({paused.get('reason')})" if paused else "running"
+            ) + f" {item.get('run') or '?'}"
+            if item.get("hint"):
+                state += f" ({item['hint']})"
+            if isinstance(since, int | float):
+                state += f" for {_span(now - since)}"
+        else:
+            state = "free"
+            if isinstance(item.get("last_used"), int | float):
+                state += f", used {_span(now - item['last_used'])} ago"
+        lines.append(
+            f"    {item.get('name')!s:<28} "
+            f"{int(item.get('bytes') or 0) / 2**30:6.1f} GiB  {state}"
+        )
+    if len(found) > SHOWN_LINEAGES:
+        lines.append(
+            f"    ... {len(found) - SHOWN_LINEAGES} more lineage(s) (--json lists all)"
+        )
+    return lines
+
+
 @app.command("hosts")
 def hosts(
     cluster: ClusterOption,
@@ -527,8 +573,11 @@ def hosts(
     transport: TransportOption = "https",
     as_json: JsonOption = False,
 ) -> None:
-    """Each declared build host: up or down (why), platforms, slots, runs and queue."""
-    from piceli.dev.hosts import probe
+    """Each declared build host: up or down (why), platforms, slots, runs and
+    queue; a docker or native host's cache and lineages."""
+    import time
+
+    from piceli.dev.hosts import host_cache, probe
 
     declared = load_cluster(cluster)
     dev = declared.dev
@@ -544,6 +593,9 @@ def hosts(
 
     states = [probe(item, cluster_up=cluster_up(item.node)) for item in dev.hosts]
     for state in states:
+        if state.up and state.host.kind in {"docker", "native"}:
+            # 0.53.0: the host's own lineages, from its last budget check.
+            state.cache = host_cache(state.host, dev)
         say(
             f"{state.host.name:<12} {state.host.kind:<8} "
             + (
@@ -566,6 +618,14 @@ def hosts(
                 f"{'':<12} {health['recent']} health event(s) within the window "
                 f"(quarantined at {(health.get('policy') or {}).get('after')})"
             )
+        cache = state.cache or {}
+        if isinstance(cache.get("used_bytes"), int):
+            say(
+                f"{'':<12} cache {cache['used_bytes'] / 2**30:.1f} GiB of "
+                f"{int(cache.get('max_bytes') or 0) / 2**30:.1f} GiB"
+            )
+            for line in lineage_lines(cache, time.time()):
+                say(line)
     if as_json:
         emit_json(
             {
@@ -654,7 +714,11 @@ def status(
         say(
             f"  cache   {cache['used_bytes'] / 2**30:.1f} GiB of "
             f"{(cache.get('max_bytes') or 0) / 2**30:.1f} GiB in lineages"
+            + (f" (after the run that ended {cache['at']})" if cache.get("at") else "")
         )
+        # 0.53.0: what each lineage held at that time, and which run held it.
+        for line in lineage_lines(cache, time.time()):
+            say(line)
     if as_json:
         emit_json(view)
 

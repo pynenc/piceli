@@ -21,6 +21,9 @@ running (its start-time eviction trims the cache, which only free lineages
 allow); while the builder node is under disk pressure it starts none. The
 status says so in ``held``. The scheduler never creates a Job.
 
+0.53.0: the status's ``cache`` carries ``lineages``, each lineage as the
+last finished run's end-of-run trim saw it (``at`` is its time).
+
 It runs as a thread of the GitOps controller (``piceli gitops run``), or as
 ``piceli dev schedule``. Importing this module is side-effect free.
 """
@@ -186,10 +189,23 @@ class Scheduler:
         self._held: dict[str, Any] | None = None
 
     def record(self, entry: dict[str, Any]) -> None:
-        self.recent.appendleft(entry)
         cache = dict(entry.get("cache") or {})
         # 0.38.1: what the run left after its end-of-run trim, when it has it.
         trim = cache.get("trim")
+        lineages = None
+        if isinstance(trim, Mapping):
+            # 0.53.0: the cache's lineages go to the status once, not into
+            # every recent run.
+            lineages = trim.get("lineages")
+            if "lineages" in trim:
+                entry = {
+                    **entry,
+                    "cache": {
+                        **cache,
+                        "trim": {k: v for k, v in trim.items() if k != "lineages"},
+                    },
+                }
+        self.recent.appendleft(entry)
         if isinstance(trim, Mapping) and isinstance(trim.get("used_bytes"), int):
             cache.update(trim)
         used = cache.get("used_bytes")
@@ -209,6 +225,8 @@ class Scheduler:
                     )
                     if key in cache
                 },
+                # 0.53.0: each lineage at the end of that run (piceli dev status).
+                **({"lineages": list(lineages)} if isinstance(lineages, list) else {}),
             }
 
     def held(self) -> dict[str, Any] | None:

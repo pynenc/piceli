@@ -8,7 +8,7 @@ type DevRun = {
   created_at?: string | null; started_at?: string | null; finished_at?: string | null; waited_seconds?: number | null;
   position?: number | null; state?: string | null; exit_code?: number | null; reason?: string | null;
   durations?: Record<string, number> | null; tests?: { passed?: number; failed?: number; ignored?: number } | null;
-  cache?: { lineage?: string | null; warm?: boolean | null; crates_compiled?: number | null; crates_locked?: number | null; hit_ratio?: number | null } | null;
+  cache?: { lineage?: string | null; warm?: boolean | 'seeded' | null; crates_compiled?: number | null; crates_locked?: number | null; hit_ratio?: number | null } | null;
 };
 
 export type DevBuildsStatus = {
@@ -30,7 +30,7 @@ function cacheUse(run: DevRun): string {
   const cache = run.cache;
   if (!cache?.lineage) return '—';
   const hit = cache.hit_ratio == null ? '' : ` · ${Math.round(cache.hit_ratio * 100)} % fresh`;
-  return `${cache.warm ? 'warm' : 'cold'}${cache.crates_compiled != null ? ` · ${cache.crates_compiled} compiled` : ''}${hit}`;
+  return `${cache.warm === 'seeded' ? 'seeded' : cache.warm ? 'warm' : 'cold'}${cache.crates_compiled != null ? ` · ${cache.crates_compiled} compiled` : ''}${hit}`;
 }
 
 export function DevBuilds() {

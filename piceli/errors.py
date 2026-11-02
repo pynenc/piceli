@@ -6032,7 +6032,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "dev-cache-over-cap",
         "Run's cache lineage over its cap",
-        "0.38.1: while the command ran, its lineage (the run's tree and cargo target in the shared cache) grew past its cap, the cache's budget (`cache_budget` of `cache_size`) less what the rest of the cache holds, or the cache's disk fell under 15% free while the lineage grew. The run was stopped and the lineage evicted, so the next run builds it cold. On `local-path` storage a claim's size is never enforced: without this stop one run could fill the node's disk.",
+        "0.38.1: while the command ran, its lineage (the run's tree and cargo target in the shared cache) grew past its cap, the cache's budget (`cache_budget` of `cache_size`) less what the rest of the cache holds, or the cache's disk fell under 15% free while the lineage grew. 0.53.0: only when no other run held a lineage (while others do, the youngest run pauses and the rest continue), so this lineage alone is larger than the budget. The run was stopped and the lineage evicted, so the next run builds it cold. On `local-path` storage a claim's size is never enforced: without this stop one run could fill the node's disk.",
         "Run again (it builds cold). If it stops again, the build needs more room than the budget gives: raise `DevBuilds(cache_size=)` or `cache_budget`, or build less at once (fewer targets or features).",
         True,
         "dev",
