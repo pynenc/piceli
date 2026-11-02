@@ -66,11 +66,11 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.52
+## What's new in 0.53
 
-- **One trace per host release**: `piceli gitops build` and `approve` take
-  `--traceparent`; the build host signs it into the ref pointer and the host
-  agent's deploy joins that trace.
+- **Warm dev-build lineages**: a new lineage starts from a copy of its
+  nearest sibling, and a full cache pauses the youngest run instead of
+  stopping it; `piceli dev status` lists the lineages.
 
 ## Web UI
 

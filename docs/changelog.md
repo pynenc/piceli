@@ -4,6 +4,27 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.53.0
+
+**Features**
+
+- **A new lineage starts warm.** A run picks the free lineage of its branch,
+  else the one nearest its commit in Git (fewest commits apart), else the
+  most recently used. A run that needs a new lineage starts from a copy of
+  the nearest sibling, busy or not (`cp --reflink=auto`, else a plain
+  copy); files that changed during the copy are removed with their cargo
+  unit, so cargo rebuilds only those. The result says `cache.warm:
+  "seeded"` and `cache.seed`.
+- **A full cache pauses a run instead of stopping it.** When a lineage
+  passes its cap while other runs hold lineages, the youngest running run
+  pauses (`SIGSTOP`) and resumes when room appears (`cache.paused`); older
+  runs continue, so the oldest always finishes. Its lineage is kept. Only a
+  run that alone is over the budget still stops (`dev-cache-over-cap`).
+  Paused time extends the run's deadline, by at most its timeout.
+- **`piceli dev status` lists the lineages** (size, last use, the run that
+  holds it, its hint, paused), largest first; `--json` lists them all.
+  `piceli dev hosts` shows a docker or native host's lineages.
+
 ## Version 0.52.0
 
 **Features**

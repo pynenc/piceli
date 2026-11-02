@@ -979,6 +979,8 @@ class HostState:
     notes: list[str] = field(default_factory=list)
     #: 0.22.0: :func:`piceli.dev.health.view` (``None``: not tracked here).
     health: dict[str, Any] | None = None
+    #: 0.53.0: the host cache's last budget check (:func:`host_cache`).
+    cache: dict[str, Any] | None = None
 
     @property
     def quarantined(self) -> str | None:
@@ -1001,6 +1003,8 @@ class HostState:
             "health": self.health,
             # 0.25.0: False: the host only publishes Nix releases.
             "runs": self.host.runs,
+            # 0.53.0: its cache use and lineages (docker and native hosts).
+            "cache": self.cache,
         }
 
 
@@ -1119,6 +1123,50 @@ def candidates(
         )
     )
     return usable
+
+
+#: 0.53.0: what a host's cache report keeps (its budget check's fields).
+_CACHE_FIELDS = (
+    "at", "used_bytes", "max_bytes", "over_budget", "held_bytes", "lineages",
+)  # fmt: skip
+
+
+def host_cache(
+    host: BuildHost, dev: DevBuilds, *, cache_volume: str = CACHE_VOLUME
+) -> dict[str, Any] | None:
+    """0.53.0: a docker or native host's cache use and lineages, from the
+    budget check its last run wrote (:data:`piceli.dev.pod.BUDGET_FILE`);
+    ``None`` when there is none or it is unreadable.
+
+    A docker host reads it from its cache volume with the image it already
+    has (``--pull never``), never pulling one."""
+    from piceli.dev.pod import BUDGET_FILE
+
+    try:
+        if host.kind == "native":
+            root = Path(
+                host.state_dir or Path.home() / ".cache" / "piceli" / "dev" / host.name
+            ).expanduser()
+            text = (root / "cache" / BUDGET_FILE).read_text()
+        elif host.kind == "docker":
+            done = ContainerCli(host).run(
+                "run", "--rm", "--pull", "never", "--network", "none",
+                "--user", "65532:65532", "-v", f"{cache_volume}:/cache:ro",
+                "--entrypoint", "python3", host.image or dev.image, "-I", "-c",
+                f"print(open('/cache/{BUDGET_FILE}').read())",
+                timeout=60,
+            )  # fmt: skip
+            if done.returncode != 0:
+                return None
+            text = done.stdout.decode("utf-8", "replace")
+        else:
+            return None
+        found = json.loads(text)
+    except (DevError, OSError, ValueError):
+        return None
+    if not isinstance(found, dict):
+        return None
+    return {key: found[key] for key in _CACHE_FIELDS if key in found}
 
 
 def clear_host_cache(

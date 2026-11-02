@@ -453,3 +453,19 @@ def test_a_native_run_keeps_the_users_cargo_home(
     )  # fmt: skip
     assert result["state"] == "passed"
     assert f"home={tmp_path / 'my-cargo'}" in lines
+
+
+def test_a_native_hosts_cache_shows_its_lineages(tmp_path: Path) -> None:
+    """0.53.0: from the budget check its last run wrote."""
+    from piceli.dev import pod
+    from piceli.dev.hosts import host_cache
+
+    host = BuildHost.native("mac", state_dir=str(tmp_path))
+    dev = DevBuilds(node="n", image="img@sha256:" + "a" * 64, hosts=[host])
+    assert host_cache(host, dev) is None  # nothing ran there yet
+    cache = tmp_path / "cache"
+    (cache / "lineages" / "shop-rust" / "0").mkdir(parents=True)
+    pod.evict(cache, 10**9, now=1000.0)
+    found = host_cache(host, dev)
+    assert found is not None and found["at"] == 1000.0
+    assert [item["name"] for item in found["lineages"]] == ["shop-rust/0"]

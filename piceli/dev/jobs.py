@@ -274,7 +274,12 @@ def run_job(
         "spec": {
             "suspend": suspend,
             "backoffLimit": 0,
-            "activeDeadlineSeconds": timeout + UPLOAD_SECONDS + COLLECT_SECONDS + 900,
+            # 0.53.0: twice the timeout; a run paused for cache room gets
+            # up to its timeout back.
+            "activeDeadlineSeconds": 2 * timeout
+            + UPLOAD_SECONDS
+            + COLLECT_SECONDS
+            + 900,
             "ttlSecondsAfterFinished": 3600,
             "template": {
                 "metadata": {"labels": labels},

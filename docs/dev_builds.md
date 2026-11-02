@@ -340,8 +340,14 @@ piceli dev cancel 20261008t071900-ab12 --cluster infra.py:my_cluster
 
 `dev status --json` prints `piceli.dev-status.v1`: `node`, `slots`,
 `scheduler {alive, at}`, `running[]`, `queued[]` (with `position`),
-`recent[]`, `cache {used_bytes, max_bytes}` and, while runs are held
-(0.38.1), `held {cause, message}`. `dev logs` streams a
+`recent[]`, `cache {used_bytes, max_bytes, at, lineages}` and, while runs
+are held (0.38.1), `held {cause, message}`. `cache.lineages` (0.53.0) is
+every lineage as the last finished run left it (`at`): `name`, `bytes`,
+`last_used`, `busy`, `run`, `hint` (the branch), `taken_at` and `paused`.
+`dev status` prints the ten largest, one per line (running, paused or
+free), and `--json` lists them all. `piceli dev hosts` shows a docker or
+native host's own cache and lineages the same way, from the budget check
+its last run wrote. `dev logs` streams a
 running run (`--follow`) or prints the recorded tail of a finished one.
 `dev cancel` ends a queued or running run (`dev-run-cancelled`).
 
@@ -350,8 +356,24 @@ running run (`--follow`) or prints the recorded tail of a finished one.
 Each run builds in a **lineage**: a stable directory holding the synced
 tree and its `CARGO_TARGET_DIR`, one of a few per cache key (the root
 source's name, the profile and the toolchain's digest). A run takes the
-lineage its ref used last, else the most recently used free one, under an
-exclusive lock: two runs never write one target directory. The upload is
+lineage its ref used last, else (0.53.0) the free one whose last commit is
+nearest the run's commit (the fewest commits between them in the builder's
+Git mirror), else the most recently used free one, under an exclusive lock:
+two runs never write one target directory.
+
+**A new lineage starts warm** (0.53.0). When every lineage of the key is
+busy and a new one is made, it starts as a copy of its nearest sibling
+(same order: branch, then commits apart, then most recent): its tree and
+cargo target, reflinked where the filesystem can (`cp --reflink=auto`). The
+sibling may be building meanwhile: after the copy, every copied file whose
+size or modification time no longer matches the sibling's is removed, with
+all of its build unit's entries, so cargo rebuilds just those units. A
+copied cargo workspace stays fresh at its new path. The copy is made only
+when the sibling fits the run's cap; otherwise the run starts cold. The
+result says `cache.warm: "seeded"` and `cache.seed {from, bytes, seconds,
+method, dropped_units}`, and the run logs `[piceli-dev] lineage
+shop-rust-1a2b3c4d5e/2 (seeded from shop-rust-1a2b3c4d5e/0: ...)`. The
+upload is
 synced into the lineage **keeping the modification time of every unchanged
 file**, so cargo's own fingerprints rebuild only the crates that changed.
 Folders the sync leaves empty are removed too (0.36.0; `target/` and `.git/`
@@ -379,10 +401,22 @@ declared size is **never enforced**, and a full cache is a node under
    says the lineage may be over its cap, or the disk is under 15% free, it
    measures the lineage (at most once a minute; every 10 minutes anyway).
    A lineage over its cap first evicts free lineages, least recently used
-   first, and its cap grows by what they held (0.48.0). Only when that is
-   not enough (or it grew by 1 GiB in this run while the disk is under the
-   floor) the run stops with `dev-cache-over-cap` and its lineage is
-   evicted at once. Run again: it builds cold.
+   first, and its cap grows by what they held (0.48.0). When that is not
+   enough (or it grew by 1 GiB in this run while the disk is under the
+   floor), 0.53.0:
+   - **while other runs hold lineages**, the youngest running run (the one
+     that took its lineage last) **pauses**: its process group is stopped
+     (`SIGSTOP`), its lineage is kept, and it logs `[piceli-dev] run paused
+     (over-cap): ... while 2 other run(s) hold 31.0 GiB`. Every 15 seconds
+     it evicts free lineages again and resumes (`SIGCONT`) once it fits, or
+     once no older run is left. The paused time does not count against its
+     timeout, and the result lists each pause in `cache.paused [{reason,
+     seconds}]`. Every other run continues: the budget is soft while runs
+     share it, and the oldest run always proceeds, so nothing waits forever;
+   - **when no other run holds a lineage**, this lineage alone is larger
+     than the budget: the run stops with `dev-cache-over-cap` and its
+     lineage is evicted at once. Run again: it builds cold; raise the
+     budget if it repeats.
 3. **After a run** (0.38.1). Every run, passed or not, evicts free
    lineages to the budget again when it ends, so the cache never sits over
    its budget until the next run.
@@ -393,8 +427,8 @@ The run says what went (`[piceli-dev] cache budget: evicted 2 lineage(s),
 `fs_free_bytes`, `fs_low`), the lineage's `cap_bytes` and last measured
 `lineage_bytes` (with `over_cap` and `stopped_for` when it was stopped), and
 `trim`, the end-of-run check (`evicted`, `freed_bytes`, `used_bytes`,
-`over_budget`, `fs_free_bytes`, `fs_low`, and `dropped_bytes` for an
-evicted over-cap lineage).
+`over_budget`, `fs_free_bytes`, `fs_low`, `lineages` (0.53.0), and
+`dropped_bytes` for an evicted over-cap lineage).
 
 While the last run's `trim` is over budget or its disk low, the queue
 (0.38.1) starts one run at a time, and only when none is running, so that
@@ -806,7 +840,7 @@ push another's out. The plan lists them under `tag_patterns`.
 | `dev-command-failed` | The command exited non-zero | Read `first_error` and `log_tail`, fix, run again; with `cache.suspect`, `piceli dev cache clear --lineage NAME` |
 | `dev-cache-clear-failed` | `dev cache clear`'s Job ended without a result | Check its pod in `piceli-dev`; run it again |
 | `dev-run-timed-out` | Over the profile's `timeout` (process group killed) | Split the command or find what hangs |
-| `dev-cache-over-cap` | The run's lineage grew past its cap (the budget less the rest of the cache), or grew while the cache's disk was under 15% free; the run was stopped and the lineage evicted | Run again (cold); if it repeats, raise `cache_size` or `cache_budget`, or give the build host its own `BuildHost(cache_max="300Gi")` (0.48.0) |
+| `dev-cache-over-cap` | The run's lineage grew past its cap (the budget less the rest of the cache), or grew while the cache's disk was under 15% free, and no other run held a lineage (0.53.0: while others do, the run pauses or continues instead); the run was stopped and the lineage evicted | Run again (cold); if it repeats, raise `cache_size` or `cache_budget`, or give the build host its own `BuildHost(cache_max="300Gi")` (0.48.0) |
 | `dev-run-out-of-memory` | Killed at the memory limit | Lower `CARGO_BUILD_JOBS` or ask for a bigger profile |
 | `dev-run-failed` | The pod ended without a result or could not start | Check the image; report it |
 | `dev-run-cancelled` | The Job was deleted (Ctrl-C) | Run again when wanted |

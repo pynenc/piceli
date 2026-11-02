@@ -447,22 +447,26 @@ def test_a_lineage_growing_past_its_cap_stops_the_run_and_is_evicted(
 
 
 def test_the_stop_names_the_cap_that_stopped_the_run(tmp_path: Path) -> None:
-    """0.50.0: another run's lineage grew, the cap shrank under this run's
-    lineage; the message says the cap at the stop, not the one at the start."""
+    """0.50.0: the message says the cap at the stop, not the one at the start.
+
+    0.53.0: while an older run holds its lineage this run, the youngest,
+    pauses instead; once that run is gone and this lineage alone is over the
+    budget, it stops."""
     import os
 
     from piceli.dev import pod
-    from tests.unit.dev.test_pod import _archive, _run, _spec
+    from tests.unit.dev.test_pod import _archive, _spec
 
     other = tmp_path / "cache" / "lineages" / "other" / "1"
-    held = pod._try_lock(other)  # another run holds it
-    assert held is not None
+    held: list[int | None] = [pod._try_lock(other)]  # another, older run holds it
+    assert held[0] is not None
+    work = tmp_path / "w"
     try:
-        pod._write_meta(other, {"bytes": 0})
+        pod._write_meta(other, {"bytes": 0, "taken_at": 1.0})
         data = _archive({"app/a.txt": "x"})
         meta = other / "meta.json"
         grow = (
-            f"echo '{{\"bytes\": 3000000}}' > {meta}; "
+            f'echo \'{{"bytes": 3000000, "taken_at": 1.0}}\' > {meta}; '
             'head -c 5000000 /dev/zero > "$CARGO_TARGET_DIR/blob"; sleep 30'
         )
         spec = _spec(
@@ -472,15 +476,29 @@ def test_the_stop_names_the_cap_that_stopped_the_run(tmp_path: Path) -> None:
             cache_watch_seconds=0.05,
             cache_measure_seconds=0.05,
         )
-        result, lines = _run(tmp_path, data, spec)
+        (work / "upload").mkdir(parents=True)
+        (work / "upload" / "tree.tar.gz").write_bytes(data)
+        (work / "upload" / "ready").touch()
+        lines: list[str] = []
+
+        def emit(line: str) -> None:
+            lines.append(line)
+            if line.startswith("[piceli-dev] run paused") and held[0] is not None:
+                os.close(held[0])  # the older run ends: its lineage is free
+                held[0] = None
+
+        result = pod.main(spec, work, tmp_path / "cache", emit=emit)
     finally:
-        os.close(held)
+        if held[0] is not None:
+            os.close(held[0])
     cache = result["cache"]
     assert result["reason"] == "dev-cache-over-cap", result
-    assert cache["cap_bytes_at_stop"] < cache["cap_bytes"] < cache["lineage_bytes"]
-    assert cache["cap_bytes"] - cache["cap_bytes_at_stop"] >= 2_900_000
-    assert "in lineages other runs hold" in result["message"]
+    assert [p["reason"] for p in cache["paused"]] == ["over-cap"]
+    assert any(line.startswith("[piceli-dev] run paused") for line in lines)
+    assert any(line.startswith("[piceli-dev] run resumed") for line in lines)
+    assert cache["cap_bytes_at_stop"] < cache["lineage_bytes"]
     assert "its cap at the start was" in result["message"]
+    assert "other runs hold" not in result["message"]  # none held it at the stop
 
 
 def test_the_watch_measures_only_when_the_disk_says_so(
@@ -634,3 +652,60 @@ def test_the_scheduler_starts_nothing_on_a_node_under_disk_pressure() -> None:
     port = Pressed([job("q1")])
     status = Scheduler(port, _dev(2), clock=lambda: 1000.0).tick()
     assert port.unsuspended == [] and status["held"]["cause"] == "node-disk-pressure"
+
+
+# ------------------------------------------------- 0.53.0: lineages reported
+
+
+def test_evict_reports_every_lineage_it_leaves(tmp_path: Path) -> None:
+    cache = tmp_path / "cache"
+    _lineage(cache, "app-rust/0", 8192, last_used=1, bytes=8192, hint="old")
+    _lineage(
+        cache, "app-rust/1", 4096, last_used=5, bytes=4096, hint="wp-a", last_run="r1"
+    )
+    busy = _lineage(
+        cache, "app-rust/2", 4096, bytes=4096, hint="wp-b", run="r2", taken_at=7.0,
+        paused={"since": 8.0, "reason": "over-cap"},
+    )  # fmt: skip
+    held = pod._try_lock(busy)
+    assert held is not None
+    try:
+        report = pod.evict(cache, 14_000, now=NOW)
+    finally:
+        os.close(held)
+    assert report["evicted"] == ["app-rust/0"]
+    found = {item["name"]: item for item in report["lineages"]}
+    assert sorted(found) == ["app-rust/1", "app-rust/2"]
+    assert found["app-rust/1"] == {
+        "name": "app-rust/1", "bytes": 4096, "last_used": 5, "busy": False,
+        "run": "r1", "hint": "wp-a", "taken_at": None, "paused": None,
+    }  # fmt: skip
+    assert found["app-rust/2"]["busy"] is True and found["app-rust/2"]["run"] == "r2"
+    assert found["app-rust/2"]["taken_at"] == 7.0
+    assert found["app-rust/2"]["paused"] == {"since": 8.0, "reason": "over-cap"}
+    kept = json.loads((cache / pod.BUDGET_FILE).read_text())
+    assert [item["name"] for item in kept["lineages"]] == ["app-rust/1", "app-rust/2"]
+
+
+def test_the_status_keeps_the_lineages_of_the_last_trim() -> None:
+    from piceli.dev.scheduler import Scheduler
+    from tests.unit.dev.test_scheduler import FakePort, _dev
+
+    lineages = [
+        {"name": "app-rust/0", "bytes": 16 * GiB, "busy": True, "run": "r2"},
+        {"name": "app-rust/1", "bytes": 12 * GiB, "busy": False, "run": "r1"},
+    ]
+    scheduler = Scheduler(FakePort([]), _dev(4), clock=lambda: 1000.0)
+    trim = {"used_bytes": 30 * GiB, "over_budget": False, "lineages": lineages}
+    scheduler.record(
+        {
+            "run": "r1",
+            "finished_at": "2026-11-02T10:00:00Z",
+            "cache": {"used_bytes": 28 * GiB, "max_bytes": 64 * GiB, "trim": trim},
+        }
+    )
+    assert scheduler.cache["lineages"] == lineages
+    assert scheduler.cache["at"] == "2026-11-02T10:00:00Z"
+    # Kept once in the status, not in every recent run.
+    assert "lineages" not in scheduler.recent[0]["cache"]["trim"]
+    assert scheduler.tick()["cache"]["lineages"] == lineages
