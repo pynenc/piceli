@@ -214,6 +214,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`dev-profile-unknown`](#error-dev-profile-unknown) | dev | no |
 | [`dev-queue-timeout`](#error-dev-queue-timeout) | dev | yes |
 | [`dev-ref-unknown`](#error-dev-ref-unknown) | dev | no |
+| [`dev-run-abandoned`](#error-dev-run-abandoned) | dev | yes |
 | [`dev-run-cancelled`](#error-dev-run-cancelled) | dev | yes |
 | [`dev-run-failed`](#error-dev-run-failed) | dev | yes |
 | [`dev-run-invalid`](#error-dev-run-invalid) | dev | no |
@@ -5457,6 +5458,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** `git fetch` the commit (or branch) first, then run again.
 - **Retry-safe:** no
+
+(error-dev-run-abandoned)=
+### `dev-run-abandoned`
+
+**Queued run abandoned.** 0.54.0: the client waiting for this queued run stopped saying it waits (no beat for 5 minutes), or it waited past its queue timeout; the scheduler removed it.
+
+- **Fix:** Run again when wanted.
+- **Retry-safe:** yes
 
 (error-dev-run-cancelled)=
 ### `dev-run-cancelled`

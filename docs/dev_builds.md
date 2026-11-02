@@ -351,6 +351,19 @@ its last run wrote. `dev logs` streams a
 running run (`--follow`) or prints the recorded tail of a finished one.
 `dev cancel` ends a queued or running run (`dev-run-cancelled`).
 
+**Why a run waits, and runs nobody waits for** (0.54.0). Each queued run
+says why it waits (`waiting_for`): all slots busy, or the reason in `held`
+(the node under disk pressure, the cache over its budget). `dev status`
+prints `held` on its own line, and a waiting `dev run` prints the reason
+next to its position. A `dev run` that leaves before its run starts (any
+exit, a signal included) deletes its queued Job. A client killed outright
+cannot, so it marks its Job every 30 s while it waits
+(`piceli.io/dev-client-at`). The queue removes a queued run with no mark
+for 5 minutes, or one that waited past its client's `--queue-timeout`
+(2 hours for clients older than 0.54.0) as `dev-run-abandoned`. A
+restarted controller shows the last published cache use and recent runs
+until a new run ends.
+
 ## The shared cache
 
 Each run builds in a **lineage**: a stable directory holding the synced
@@ -844,6 +857,7 @@ push another's out. The plan lists them under `tag_patterns`.
 | `dev-run-out-of-memory` | Killed at the memory limit | Lower `CARGO_BUILD_JOBS` or ask for a bigger profile |
 | `dev-run-failed` | The pod ended without a result or could not start | Check the image; report it |
 | `dev-run-cancelled` | The Job was deleted (Ctrl-C) | Run again when wanted |
+| `dev-run-abandoned` | A queued run's client left (no mark for 5 minutes, or past its queue timeout) (0.54.0) | Run again when wanted |
 | `dev-queue-timeout` | No start within `--queue-timeout` | Wait or raise it |
 | `dev-run-unschedulable` | The run's pod found no node for `--unschedulable-seconds`; the message has the scheduler's reason | Under disk pressure, `piceli dev cache clear`; else free capacity on the node |
 | `dev-upload-failed` | The upload did not arrive intact; the message names the chunk and the cause (a dropped link after five retries, a bundle that does not apply, a commit the mirror lacks) | Run again; check `pods/exec` rights and the link |

@@ -32,6 +32,10 @@ RUN_LABEL = "piceli.io/dev-run"
 REQUESTER_LABEL = "piceli.io/dev-requester"
 PRIORITY_LABEL = "piceli.io/dev-priority"
 PROFILE_LABEL = "piceli.io/dev-profile"
+#: 0.54.0: when the client waiting for a queued run last said it is there
+#: (ISO 8601), and how long it waits for a slot (seconds).
+CLIENT_AT_ANNOTATION = "piceli.io/dev-client-at"
+QUEUE_TIMEOUT_ANNOTATION = "piceli.io/dev-queue-timeout"
 SCHEDULER = "piceli-dev-scheduler"
 #: The Git credentials the fetch init container uses (0.19.0): kept by the
 #: controller from its own, limited to the composition's source URLs.

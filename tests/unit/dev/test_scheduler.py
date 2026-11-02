@@ -250,3 +250,73 @@ def test_the_runs_git_credentials_follow_the_controllers(tmp_path: Any) -> None:
     scheduler.tick()
     assert [args[1] for args in pushed] == ["token-1", "token-2"]
     assert git_credentials_of(None, [])() is None
+
+
+def _noted(item: dict[str, Any], **notes: str) -> dict[str, Any]:
+    item["metadata"]["annotations"] = notes
+    return item
+
+
+def test_a_queued_run_whose_client_left_is_removed() -> None:
+    """0.54.0: no beat for 5 minutes, or past its queue timeout: abandoned."""
+    from piceli.dev.scheduler import _seconds
+
+    now = _seconds("2026-10-08T08:00:00Z")
+    assert now is not None
+    port = FakePort([
+        job("running", suspend=False),
+        _noted(job("silent", created="2026-10-08T07:50:00Z"),
+               **{"piceli.io/dev-client-at": "2026-10-08T07:54:00Z"}),
+        _noted(job("waiting", created="2026-10-08T07:50:00Z"),
+               **{"piceli.io/dev-client-at": "2026-10-08T07:59:40Z",
+                  "piceli.io/dev-queue-timeout": "3600"}),
+        _noted(job("patient", created="2026-10-08T07:00:00Z"),
+               **{"piceli.io/dev-client-at": "2026-10-08T07:59:50Z",
+                  "piceli.io/dev-queue-timeout": "1200"}),
+        job("old-client", created="2026-10-08T05:00:00Z"),
+        job("young-old-client", created="2026-10-08T07:00:00Z"),
+    ])  # fmt: skip
+    finished: list[dict[str, Any]] = []
+    Scheduler(port, _dev(1), clock=lambda: now, on_finished=finished.append).tick()
+    gone = {"piceli-dev-silent", "piceli-dev-patient", "piceli-dev-old-client"}
+    assert set(port.deleted) == gone
+    assert {f["run"]: f["reason"] for f in finished} == {
+        "silent": "dev-run-abandoned",
+        "patient": "dev-run-abandoned",
+        "old-client": "dev-run-abandoned",
+    }
+    queued = [q["run"] for q in port.published[-1]["queued"]]
+    assert queued == ["young-old-client", "waiting"]
+
+
+def test_each_queued_run_says_why_it_waits() -> None:
+    port = FakePort([
+        job("running", suspend=False),
+        job("q1", created="2026-10-08T07:00:01Z"),
+    ])  # fmt: skip
+    scheduler = Scheduler(port, _dev(1), clock=lambda: 1000.0)
+    scheduler.tick()
+    assert port.published[-1]["queued"][0]["waiting_for"] == "all 1 slot(s) busy"
+    scheduler.node_pressure = {"node": "n"}
+    scheduler._slots = (1000.0, 1)  # keep the pressure (no node read)
+    port.items[0]["status"]["conditions"] = [{"type": "Complete", "status": "True"}]
+    scheduler.tick()
+    status = port.published[-1]
+    assert status["held"]["cause"] == "node-disk-pressure"
+    assert "disk pressure" in status["queued"][0]["waiting_for"]
+    assert port.unsuspended == []
+
+
+def test_a_restarted_scheduler_keeps_the_last_cache_and_recent_runs() -> None:
+    class Restarted(FakePort):
+        def status(self) -> dict[str, Any]:
+            return {
+                "cache": {"used_bytes": 7, "max_bytes": 10, "fs_low": True},
+                "recent": [{"run": "r2"}, {"run": "r1"}],
+            }
+
+    port = Restarted([])
+    Scheduler(port, _dev(1), clock=lambda: 1000.0).tick()
+    status = port.published[-1]
+    assert status["cache"]["used_bytes"] == 7 and status["cache"]["fs_low"] is True
+    assert [r["run"] for r in status["recent"]] == ["r2", "r1"]

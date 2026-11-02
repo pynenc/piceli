@@ -500,6 +500,11 @@ def queue_view(port: Any, dev: Any, now: float) -> dict[str, Any]:
     running = [job for job in jobs if state_of(job) == "running"]
     queued = [job for job in jobs if state_of(job) == "queued"]
     finished = [job for job in jobs if state_of(job) in {"complete", "failed"}]
+    why = {
+        str(item.get("run")): str(item["waiting_for"])
+        for item in status.get("queued") or ()
+        if isinstance(item, dict) and item.get("waiting_for")
+    }
     slots = status.get("slots") or auto_slots(
         dev, None if isinstance(dev.slots, int) else port.node(dev.node)
     )
@@ -510,12 +515,25 @@ def queue_view(port: Any, dev: Any, now: float) -> dict[str, Any]:
         "scheduler": {"alive": alive(status, now), "at": status.get("scheduler_at")},
         "running": [run_summary(job, now) for job in running],
         "queued": [
-            {**run_summary(job, now), "position": index + 1}
-            for index, job in enumerate(order(queued, running))
+            {
+                **summary,
+                "position": index + 1,
+                **(
+                    {"waiting_for": why[summary["run"]]}
+                    if summary["run"] in why
+                    else {}
+                ),
+            }
+            for index, summary in enumerate(
+                run_summary(job, now) for job in order(queued, running)
+            )
         ],
         "finishing": [run_summary(job, now) for job in finished],
         "recent": list(status.get("recent") or ()),
         "cache": dict(status.get("cache") or {}),
+        # 0.54.0: why the scheduler starts no run (it published it, the view
+        # dropped it), and the node's disk pressure.
+        **{key: status[key] for key in ("held", "node_disk_pressure") if key in status},
     }
 
 
@@ -700,9 +718,12 @@ def status(
         say(
             f"  running {item['run']} {item['requester']} ({item['priority']}, {item['profile']})"
         )
+    if view.get("held"):  # 0.54.0
+        say(f"  held    {view['held'].get('message') or view['held'].get('cause')}")
     for item in view["queued"]:
         say(
             f"  queued  #{item['position']} {item['run']} {item['requester']} ({item['priority']})"
+            + (f": {item['waiting_for']}" if item.get("waiting_for") else "")
         )
     for item in view["recent"][:10]:
         say(

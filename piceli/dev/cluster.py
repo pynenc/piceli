@@ -39,6 +39,8 @@ def _chunks(path: Path) -> Iterator[bytes]:
 UNSCHEDULABLE_SECONDS = 60.0
 #: 0.35.0: while a run waits, its state is said again this often.
 WAITING_REPEAT_SECONDS = 30.0
+#: 0.54.0: how often a client waiting in the queue says it is still there.
+HEARTBEAT_SECONDS = 30.0
 
 
 def unschedulable(pod: dict[str, Any] | None) -> str | None:
@@ -149,6 +151,20 @@ class DevCluster:
             f"/apis/batch/v1/namespaces/{NAMESPACE}/jobs/{run_name(run)}",
             "PATCH",
             {"spec": {"suspend": False}},
+            "application/merge-patch+json",
+        )
+
+    def heartbeat(self, run: str) -> None:
+        """0.54.0: mark the queued run's client as still waiting."""
+        from datetime import UTC, datetime
+
+        from piceli.dev.jobs import CLIENT_AT_ANNOTATION, run_name
+
+        at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.api.call(
+            f"/apis/batch/v1/namespaces/{NAMESPACE}/jobs/{run_name(run)}",
+            "PATCH",
+            {"metadata": {"annotations": {CLIENT_AT_ANNOTATION: at}}},
             "application/merge-patch+json",
         )
 
@@ -284,6 +300,7 @@ class DevCluster:
         said_at = began
         unschedulable_since: float | None = None
         position_at, position = 0.0, ""
+        beat_at = began
         while True:
             job = self.job(run)
             if job is None:
@@ -303,7 +320,15 @@ class DevCluster:
                         if found
                         else "queued"
                     )
+                    if found and found.get("waiting_for"):  # 0.54.0
+                        position += f": {found['waiting_for']}"
                 why = position or "queued"
+                if time.monotonic() - beat_at >= HEARTBEAT_SECONDS:
+                    beat_at = time.monotonic()
+                    try:
+                        self.heartbeat(run)
+                    except Exception:  # the next beat tries again
+                        pass
             if phase == "Running":
                 return str(pod["metadata"]["name"])  # type: ignore[index]
             if phase in {"Succeeded", "Failed"}:

@@ -4,6 +4,23 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.54.0
+
+**Fixes**
+
+- **`dev status` says why queued runs wait.** The scheduler's `held` (the
+  node under disk pressure, the cache over its budget) and each queued
+  run's `waiting_for` reach `dev status` and its `--json`; a waiting `dev
+  run` prints the reason next to its position. Before, the view dropped
+  `held`, so a queue held by disk pressure looked stuck for no reason.
+- **The cache numbers survive a controller restart.** A restarted
+  scheduler starts from the last published cache use and recent runs.
+- **Queued runs nobody waits for expire.** A `dev run` that leaves before
+  its run starts deletes its queued Job. A client killed outright cannot,
+  so it marks its Job every 30 s while it waits; the queue removes a run
+  with no mark for 5 minutes, or one that waited past its queue timeout
+  (`dev-run-abandoned`).
+
 ## Version 0.53.0
 
 **Features**

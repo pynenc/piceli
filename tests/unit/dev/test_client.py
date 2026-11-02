@@ -164,3 +164,27 @@ def test_a_source_that_is_the_tree_being_run_is_skipped_with_a_note(
     )
     assert result["state"] == "passed"
     assert result["notes"] == ["--source sdk-again: it is the tree being run; skipped"]
+
+
+def test_a_client_that_leaves_while_queued_takes_its_job(tmp_path: Path) -> None:
+    """0.54.0: any exit before the run starts (a signal's SystemExit) deletes
+    the queued Job, so it holds no place in the queue."""
+
+    class Leaving(LocalPort):
+        def wait_started(self, run: str, *_args: object, **_kw: object) -> str:
+            raise SystemExit(143)
+
+    app = repo(tmp_path / "shop", {"a": "x"})
+    port = Leaving(tmp_path / "cluster")
+    with pytest.raises(SystemExit):
+        run(
+            port,
+            DEV,
+            RunRequest(SourceRequest("shop", app, "HEAD"), ["true"]),
+            run_id="left-run",
+            suspend=True,
+        )
+    assert port.deleted == ["left-run"]
+    notes = port.jobs["left-run"]["metadata"]["annotations"]
+    assert notes["piceli.io/dev-queue-timeout"] == "3600"
+    assert notes["piceli.io/dev-client-at"].endswith("Z")
