@@ -225,20 +225,42 @@ def request(kind: str, **fields: Any) -> tuple[str, dict[str, Any]]:
     return f"{kind}.{digest}", body
 
 
+def _traceparent(value: str | None) -> dict[str, str]:
+    """0.52.0: ``{"traceparent": value}`` (none without one).
+
+    :raises GitOpsError: ``gitops-traceparent-invalid``."""
+    from piceli.dev.nix_verify import traceparent_ids
+
+    if value is None:
+        return {}
+    if traceparent_ids(value) is None:
+        raise GitOpsError(
+            "gitops-traceparent-invalid",
+            "--traceparent is 00-<32 hex>-<16 hex>-<2 hex>, ids not all zeros",
+        )
+    return {"traceparent": value}
+
+
 def approve_request(
-    env: str, plan_hash: str, via: str | None = None
+    env: str,
+    plan_hash: str,
+    via: str | None = None,
+    *,
+    traceparent: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Approve ``plan_hash`` for ``env``; ``via`` (``cli`` or ``ui``) is recorded
-    by the controller as the approval's origin in the environment's history."""
+    by the controller as the approval's origin in the environment's history.
+    ``traceparent`` (0.52.0, a NixRelease): the trace its publish joins."""
     if not plan_hash.startswith("sha256:") or len(plan_hash) != 71:
         raise GitOpsError(
             "gitops-request-invalid", "the plan hash must be sha256:<64 hex>"
         )
+    traced = _traceparent(traceparent)
     if via is None:
-        return request("approve", env=env, plan_hash=plan_hash)
+        return request("approve", env=env, plan_hash=plan_hash, **traced)
     if via not in APPROVAL_VIA:
         raise GitOpsError("gitops-request-invalid", "unknown approval origin")
-    return request("approve", env=env, plan_hash=plan_hash, via=via)
+    return request("approve", env=env, plan_hash=plan_hash, via=via, **traced)
 
 
 def promote_request(target: str, env: str | None = None) -> tuple[str, dict[str, Any]]:
@@ -520,12 +542,14 @@ def build_request(
     via: str = "cli",
     by: str | None = None,
     approve: str | None = None,
+    traceparent: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Start a build of ``name`` by hand (0.26.0, ``piceli gitops build``,
     the UI's "Build now"): a NixRelease plans ``ref`` (a tag of it, its
     branch or a full commit; the newest without one), an environment
     rebuilds its images. Either goes through the gate, plan and approval;
-    ``approve`` approves the plan in one go when its digest is that one."""
+    ``approve`` approves the plan in one go when its digest is that one.
+    ``traceparent`` (0.52.0, a NixRelease): the trace its publish joins."""
     from piceli.dev.nix import ref_name_ok
 
     if ref is not None and not (isinstance(ref, str) and ref_name_ok(ref)):
@@ -544,6 +568,7 @@ def build_request(
     fields |= {"ref": ref} if ref else {}
     fields |= {"by": str(by)[:120]} if by else {}
     fields |= {"approve": approve} if approve else {}
+    fields |= _traceparent(traceparent)
     return request("build", **fields)
 
 

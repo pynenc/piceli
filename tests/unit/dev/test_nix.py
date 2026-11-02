@@ -372,6 +372,38 @@ def test_the_manifest_goes_into_a_file_cache(tmp_path: Path) -> None:
     )
 
 
+def test_a_pointer_carries_a_valid_traceparent_under_its_signature(
+    tmp_path: Path,
+) -> None:
+    """0.52.0: one trace per host release."""
+    from piceli.dev.nix import new_traceparent
+    from piceli.dev.nix_verify import traceparent_ids
+
+    cache = NixCache(PUBLIC, url=f"file://{tmp_path}")
+    signed = nix.sign_manifest(
+        nix.manifest(
+            name="web-1", commit=REV, tag="v1.4.0", target=".#web-1",
+            published=_published(), host="nix-1", key="cache-1",
+        ),
+        SECRET,
+    )  # fmt: skip
+    key = nix.pointer_key("web-1", "tag", "v1.4.0")
+    good = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    (body,) = nix.upload_pointers(
+        cache, signed, [key], SECRET, s3_keys=None, traceparent=good
+    )
+    assert body["traceparent"] == good and nix.verify_pointer(body, PUBLIC)
+    assert not nix.verify_pointer({**body, "traceparent": new_traceparent()}, PUBLIC)
+    for bad in (None, "nope", "00-" + "0" * 32 + "-00f067aa0ba902b7-01"):
+        (plain,) = nix.upload_pointers(
+            cache, signed, [key], SECRET, s3_keys=None, traceparent=bad
+        )
+        assert "traceparent" not in plain and nix.verify_pointer(plain, PUBLIC)
+    assert traceparent_ids(good) == ("4bf92f3577b34da6a3ce929d0e0e4736",
+                                     "00f067aa0ba902b7")  # fmt: skip
+    assert traceparent_ids(new_traceparent()) is not None
+
+
 # ------------------------------------------------------------------ publisher
 
 

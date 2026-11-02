@@ -159,6 +159,21 @@ def verify_pointer(body: Mapping[str, Any], public: str) -> bool:
     return verify_signed(body, public, POINTER_SCHEMA)
 
 
+# 0.52.0: one trace per host release. A W3C Trace Context ``traceparent``
+# (version 00) travels from ``piceli gitops build|approve`` to the signed
+# ref pointer, and the host agent's deploy joins that trace.
+_TRACEPARENT = re.compile(r"00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})")
+
+
+def traceparent_ids(value: Any) -> tuple[str, str] | None:
+    """``(trace id, parent span id)`` of a valid ``traceparent``, else
+    ``None`` (not text, another version, upper case, an all-zero id)."""
+    found = _TRACEPARENT.fullmatch(value) if isinstance(value, str) else None
+    if found is None or set(found[1]) == {"0"} or set(found[2]) == {"0"}:
+        return None
+    return found[1], found[2]
+
+
 def manifest_digest(body: Mapping[str, Any]) -> str:
     """``sha256:HEX`` of a signed manifest's canonical JSON (a pointer names it)."""
     return "sha256:" + hashlib.sha256(canonical(body)).hexdigest()

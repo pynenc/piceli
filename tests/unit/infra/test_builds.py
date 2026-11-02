@@ -418,3 +418,80 @@ def test_a_hand_started_publish_fetches_private_inputs_reports_and_cancels(
     status = controller.poll_once()
     assert built == [] and _release(status)["state"] == "cancelled"
     assert not [r for r in status["rejected_requests"] if r["kind"] == "build-failed"]
+
+
+# ------------------------------------------------------------------ one trace (0.52.0)
+
+TP_BUILD = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+TP_APPROVE = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+
+
+def test_a_release_carries_a_traceparent_beside_its_plan_never_in_its_digest(
+    world: dict[str, Any],
+) -> None:
+    from piceli.dev.nix_verify import traceparent_ids
+
+    controller, channel, repo = world["controller"], world["channel"], world["repo"]
+    controller.poll_once()
+    repo.commit({"a": "1"})
+    repo.tag("web-v1.1.0")
+    planned = _release(controller.poll_once())  # none given: a new one
+    assert planned["state"] == "approval-required"
+    assert traceparent_ids(planned["traceparent"]) is not None
+    assert "traceparent" not in json.dumps(planned["plan"])
+    assert planned["plan_digest"] == nix.plan_digest(planned["plan"])
+    channel.add_request(*build_request("web-1", "web-v1.1.0", traceparent=TP_BUILD))
+    again = _release(controller.poll_once())
+    assert again["traceparent"] == TP_BUILD
+    assert again["plan_digest"] == planned["plan_digest"]  # the same approval
+
+
+def test_one_trace_from_gitops_build_and_approve_to_the_signed_pointer(
+    world: dict[str, Any], tmp_path: Path
+) -> None:
+    from piceli.k8s.cli import app
+
+    controller, repo = world["controller"], world["repo"]
+    controller.poll_once()
+    commit = repo.commit({"a": "1"})
+    repo.tag("web-v1.1.0")
+    state = str(world["state"])
+    runner = CliRunner()
+    for command in (
+        ["build", "web-1", "--ref", "web-v1.1.0"],
+        ["approve", "web-1", "sha256:" + "0" * 64],
+    ):
+        for bad in ("00-" + "0" * 32 + "-00f067aa0ba902b7-01", "nope"):
+            refused = runner.invoke(
+                app, ["gitops", *command, "--traceparent", bad, "--state-dir", state]
+            )
+            assert refused.exit_code == 2
+            assert "gitops-traceparent-invalid" in refused.output
+    started = runner.invoke(
+        app, ["gitops", "build", "web-1", "--ref", "web-v1.1.0",
+              "--traceparent", TP_BUILD, "--state-dir", state],
+    )  # fmt: skip
+    assert started.exit_code == 0, started.output
+    record = _release(controller.poll_once())
+    assert record["state"] == "approval-required"
+    assert record["traceparent"] == TP_BUILD
+    digest = record["plan_digest"]
+    approved = runner.invoke(
+        app, ["gitops", "approve", "web-1", digest, "--traceparent", TP_APPROVE,
+              "--state-dir", state],
+    )  # fmt: skip
+    assert approved.exit_code == 0, approved.output
+    status = controller.poll_once()
+    record = _release(status)
+    assert record["state"] == "waiting-build" and record["traceparent"] == TP_APPROVE
+    (wanted,) = status["controller"]["builds_wanted"]
+    assert wanted["kind"] == "nix-publish" and wanted["traceparent"] == TP_APPROVE
+    assert wanted["digest"] == digest == nix.plan_digest(wanted["plan"])
+    worker, _ = _worker(world, tmp_path)
+    assert worker.once() == wanted["id"]
+    assert _release(controller.poll_once())["state"] == "published"
+    pointer = json.loads(
+        (world["cache"] / "piceli/web-1/refs/tags/web-v1.1.0.json").read_text()
+    )
+    assert nix.verify_pointer(pointer, PUBLIC) and pointer["commit"] == commit
+    assert pointer["traceparent"] == TP_APPROVE

@@ -757,6 +757,7 @@ class Releases:
             kind=via,
             by=why.get("by"),
             branch=branch,
+            traceparent=why.get("traceparent"),
         )
         if latest is not None:  # the newest one does not replace it at once
             record["followed"] = _position(target, latest)
@@ -772,6 +773,7 @@ class Releases:
             "via": body.get("via") if body.get("via") in ("cli", "ui") else "cli",
             "by": body.get("by"),
             "approve": body.get("approve"),
+            "traceparent": body.get("traceparent"),  # 0.52.0
         }
         return True
 
@@ -815,7 +817,14 @@ class Releases:
         kind: str | None = None,
         by: Any = None,
         branch: str | None = None,
+        traceparent: Any = None,
     ) -> None:
+        """Plan ``latest`` (``(tag, commit)``). ``traceparent`` (0.52.0): the
+        trace the publish joins, else a new one; beside the plan, never in
+        it or its digest (the owner approves the digest)."""
+        from piceli.dev.nix import new_traceparent
+        from piceli.dev.nix_verify import traceparent_ids
+
         tag, commit = latest
         pinned = None
         if target.gate is not None:
@@ -861,6 +870,9 @@ class Releases:
             seconds=None,
             build_id=None,
             approved_digest=approved,
+            traceparent=traceparent
+            if traceparent_ids(traceparent)
+            else new_traceparent(),
         )
         self.log(
             f"nix release {target.name}: {trigger} -> "
@@ -961,6 +973,8 @@ class Releases:
                 "builder": target.builder,
                 "plan": plan,
                 "digest": record["plan_digest"],
+                # 0.52.0: the build host signs it into the ref pointer.
+                "traceparent": record.get("traceparent"),
                 "commits": {target.source.key: plan["commit"]},
                 "urls": {target.source.key: target.source.url},
                 "images": [],
@@ -1007,7 +1021,10 @@ class Releases:
 
     def approve(self, body: Mapping[str, Any]) -> bool:
         """``piceli gitops approve NAME DIGEST`` of a release (``False``:
-        ``NAME`` is no release). :raises GitOpsError: a stale digest."""
+        ``NAME`` is no release); a valid ``traceparent`` (0.52.0) replaces
+        the planned one. :raises GitOpsError: a stale digest."""
+        from piceli.dev.nix_verify import traceparent_ids
+
         record = self.records().get(str(body.get("env")))
         if record is None:
             return False
@@ -1029,6 +1046,8 @@ class Releases:
             },
         )
         record.pop("approve_command", None)
+        if traceparent_ids(body.get("traceparent")):
+            record["traceparent"] = body["traceparent"]
         return True
 
     def sync(self, name: str | None) -> bool:
@@ -1409,6 +1428,7 @@ class Publisher:
             done = publish_closure(
                 cache, plan, store_path, self.host, None, secret, s3_keys,
                 say=say, push=self.push,
+                traceparent=entry.get("traceparent"),  # 0.52.0
             )  # fmt: skip
             del secret
         return {"manifest": done["manifest_body"], "pointers": done["pointers"]}

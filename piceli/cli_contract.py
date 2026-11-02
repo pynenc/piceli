@@ -1749,7 +1749,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "rebuilds every image at the commit it follows (--ref may name it), "
             "since 0.29.0 also when that commit is already deployed. "
             "An unknown target or ref is dropped (gitops-request-invalid or "
-            "gitops-build-ref-unknown in gitops status).",
+            "gitops-build-ref-unknown in gitops status). 0.52.0: --traceparent "
+            "(a W3C traceparent) is the trace a NixRelease's publish and the "
+            "hosts' deploy join, kept outside the plan's digest; without it the "
+            "controller starts one (a bad one: gitops-traceparent-invalid).",
         ),
         "gitops cancel": _C(
             "Ask the GitOps controller to cancel a NixRelease's or an "
@@ -2906,7 +2909,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "waiting for is dropped (gitops-approval-stale in gitops status). "
             "0.25.0: ENV may name a NixRelease waiting in approval-required; "
             "the hash is its plan digest, and approving it lets a build host "
-            "build, sign and publish that tag.",
+            "build, sign and publish that tag. 0.52.0: --traceparent (a W3C "
+            "traceparent) replaces the release's trace, outside its digest; "
+            "the build host signs it into the ref pointer and the hosts' "
+            "deploy joins it (a bad one: gitops-traceparent-invalid).",
         ),
         "gitops run": _C(
             "Run the GitOps controller loop (the controller Deployment's "

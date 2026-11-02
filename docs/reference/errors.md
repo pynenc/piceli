@@ -337,6 +337,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`gitops-target-invalid`](#error-gitops-target-invalid) | gitops | no |
 | [`gitops-target-required`](#error-gitops-target-required) | gitops | no |
 | [`gitops-token-expiring`](#error-gitops-token-expiring) | gitops | no |
+| [`gitops-traceparent-invalid`](#error-gitops-traceparent-invalid) | gitops | no |
 | [`gitops-wait-timeout`](#error-gitops-wait-timeout) | gitops | yes |
 | [`grant-expired`](#error-grant-expired) | build-spec | yes |
 | [`grant-mismatch`](#error-grant-mismatch) | artifacts-input | yes |
@@ -4678,6 +4679,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Git token expires soon.** A warning, not a failure (0.19.0): GitHub reports that the token in the controller's credentials Secret expires within 7 days (`controller.warnings` in `piceli gitops status`, and the controller's log). Once it expires every poll fails with `gitops-git-failed`.
 
 - **Fix:** Create a new token and update the `password` of the credentials Secret (`--credentials-secret`, in the controller's namespace) before `expires_at`; the controller reads it on its next poll.
+- **Retry-safe:** no
+
+(error-gitops-traceparent-invalid)=
+### `gitops-traceparent-invalid`
+
+**Traceparent invalid.** `--traceparent` of `piceli gitops build` or `piceli gitops approve` is not a W3C Trace Context `traceparent`: `00-<32 hex>-<16 hex>-<2 hex>`, lower case, with a trace id and a span id that are not all zeros.
+
+- **Fix:** Pass the `traceparent` of the trace that starts the release (for example `00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01`), or leave the option out and the controller starts a new trace.
 - **Retry-safe:** no
 
 (error-gitops-wait-timeout)=

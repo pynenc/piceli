@@ -66,11 +66,11 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.51
+## What's new in 0.52
 
-- **Host reports you can trust**: `piceli host status` shows the host
-  agent's last send error until a send succeeds, and the agent retries its
-  queue on every run and after a release's checks pass.
+- **One trace per host release**: `piceli gitops build` and `approve` take
+  `--traceparent`; the build host signs it into the ref pointer and the host
+  agent's deploy joins that trace.
 
 ## Web UI
 

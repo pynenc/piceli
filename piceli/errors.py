@@ -4675,6 +4675,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "gitops",
     ),
     _E(
+        "gitops-traceparent-invalid",
+        "Traceparent invalid",
+        "`--traceparent` of `piceli gitops build` or `piceli gitops approve` is not a W3C Trace Context `traceparent`: `00-<32 hex>-<16 hex>-<2 hex>`, lower case, with a trace id and a span id that are not all zeros.",
+        "Pass the `traceparent` of the trace that starts the release (for example `00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01`), or leave the option out and the controller starts a new trace.",
+        False,
+        "gitops",
+    ),
+    _E(
         "gitops-history-unavailable",
         "No deployment history",
         "`piceli gitops history`, `show` or `compare` found no `piceli.gitops-history.v1` document: the controller has not published its history yet (the ConfigMap `piceli-gitops-history`, or `history.json` in `--state-dir`), or it is not a composition controller.",

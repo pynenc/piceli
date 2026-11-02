@@ -13231,6 +13231,7 @@
      "--kubeconfig",
      "--namespace",
      "--state-dir",
+     "--traceparent",
      "--transport"
     ],
     "subcommands": []
@@ -13247,6 +13248,7 @@
      "--namespace",
      "--ref",
      "--state-dir",
+     "--traceparent",
      "--transport"
     ],
     "subcommands": []
@@ -15329,6 +15331,7 @@
    "gitops-target-invalid",
    "gitops-target-required",
    "gitops-token-expiring",
+   "gitops-traceparent-invalid",
    "gitops-wait-timeout",
    "grant-expired",
    "grant-mismatch",
@@ -18128,5 +18131,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.51.0"
+ "version": "0.52.0"
 }

@@ -1753,6 +1753,7 @@ Approve the pending plan of ENV; the controller applies it on its next poll.
 | --- | --- | --- | --- |
 | `ENV` | text | required |  |
 | `PLAN_HASH` | text | required |  |
+| `--traceparent` | text |  | A NixRelease: the W3C traceparent (00-<32 hex>-<16 hex>-<2 hex>) its publish and the hosts' deploy join |
 | `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
 | `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
 | `--namespace` | text | `piceli-system` | The controller's namespace |
@@ -1768,7 +1769,7 @@ Approve the pending plan of ENV; the controller applies it on its next poll.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** This is the owner's approval: run it only with the hash the owner approved. Writes a request to the ConfigMap piceli-gitops-requests; a hash the environment is no longer waiting for is dropped (gitops-approval-stale in gitops status). 0.25.0: ENV may name a NixRelease waiting in approval-required; the hash is its plan digest, and approving it lets a build host build, sign and publish that tag.
+- **Notes:** This is the owner's approval: run it only with the hash the owner approved. Writes a request to the ConfigMap piceli-gitops-requests; a hash the environment is no longer waiting for is dropped (gitops-approval-stale in gitops status). 0.25.0: ENV may name a NixRelease waiting in approval-required; the hash is its plan digest, and approving it lets a build host build, sign and publish that tag. 0.52.0: --traceparent (a W3C traceparent) replaces the release's trace, outside its digest; the build host signs it into the ref pointer and the hosts' deploy joins it (a bad one: gitops-traceparent-invalid).
 
 (cli-gitops-build)=
 ### `piceli gitops build`
@@ -1781,6 +1782,7 @@ Ask the controller to build NAME now: a NixRelease plans --ref, an environment r
 | `--ref` | text |  | A tag of the release, its branch or a full commit (default: the newest); an environment builds the commit it follows |
 | `--approve` | text |  | Approve the plan in one go when its digest is this sha256:... (a NixRelease) |
 | `--by` | text |  | Who asks (default: your user name) |
+| `--traceparent` | text |  | A NixRelease: the W3C traceparent (00-<32 hex>-<16 hex>-<2 hex>) its publish and the hosts' deploy join |
 | `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
 | `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
 | `--namespace` | text | `piceli-system` | The controller's namespace |
@@ -1796,7 +1798,7 @@ Ask the controller to build NAME now: a NixRelease plans --ref, an environment r
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.26.0. Writes a build request; the controller plans it on its next poll, recorded as triggered by cli with the requester (--by, else the user name). A NixRelease waits in approval-required unless auto_approve or --approve names the plan's digest. An environment rebuilds every image at the commit it follows (--ref may name it), since 0.29.0 also when that commit is already deployed. An unknown target or ref is dropped (gitops-request-invalid or gitops-build-ref-unknown in gitops status).
+- **Notes:** 0.26.0. Writes a build request; the controller plans it on its next poll, recorded as triggered by cli with the requester (--by, else the user name). A NixRelease waits in approval-required unless auto_approve or --approve names the plan's digest. An environment rebuilds every image at the commit it follows (--ref may name it), since 0.29.0 also when that commit is already deployed. An unknown target or ref is dropped (gitops-request-invalid or gitops-build-ref-unknown in gitops status). 0.52.0: --traceparent (a W3C traceparent) is the trace a NixRelease's publish and the hosts' deploy join, kept outside the plan's digest; without it the controller starts one (a bad one: gitops-traceparent-invalid).
 
 (cli-gitops-builds)=
 ### `piceli gitops builds`
