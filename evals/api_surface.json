@@ -10499,6 +10499,7 @@
     "items",
     "kind",
     "name",
+    "optional",
     "secret",
     "source",
     "volume_name"
@@ -10508,6 +10509,7 @@
     "items",
     "kind",
     "name",
+    "optional",
     "secret"
    ],
    "methods": {
@@ -18132,5 +18134,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.54.0"
+ "version": "0.55.0"
 }

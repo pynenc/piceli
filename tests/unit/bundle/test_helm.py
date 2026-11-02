@@ -551,9 +551,32 @@ def test_an_existing_secret_replaces_every_secret_and_renders_stably(
     objects = _objects(first.stdout)
     assert not [key for key in objects if key[0] == "Secret"]
     volumes = [v for v in _pod(objects)["volumes"] if "secret" in v]
-    assert {v["secret"]["secretName"] for v in volumes} == {"client-made"}
+    # an app Secret reads existingSecret; one the user makes keeps its name
+    assert {v["secret"]["secretName"] for v in volumes} == {
+        "client-made", "agent-alerts",
+    }  # fmt: skip
     generated = _template(helm, out, *BASE, "--set", "apiToken=x")
     assert ("Secret", "agent-private") in _objects(generated.stdout)
+
+
+def test_an_optional_secret_volume_mounts_with_every_patch(
+    helm: str, tmp_path: Path
+) -> None:
+    out, _body = _intake(tmp_path)
+    for extra in ((), ("--set", "intake.expose=true")):
+        result = _template(helm, out, *BASE, "--set", "apiToken=x", *extra)
+        assert result.returncode == 0, result.stderr
+        objects = _objects(result.stdout)
+        pod = _pod(objects)
+        volume = next(v for v in pod["volumes"] if v["name"] == "agent-alerts")
+        assert volume["secret"] == {"secretName": "agent-alerts", "optional": True}
+        mount = next(
+            m
+            for m in pod["containers"][0]["volumeMounts"]
+            if m["name"] == "agent-alerts"
+        )
+        assert mount == {"name": "agent-alerts", "mountPath": "/run/alerts"}
+        assert ("Secret", "agent-alerts") not in objects
 
 
 def test_new_declarations_are_checked() -> None:

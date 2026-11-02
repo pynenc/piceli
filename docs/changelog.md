@@ -4,6 +4,15 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.55.0
+
+**Features**
+
+- **Optional Secret volumes.** `SecretVolume(..., optional=True)` renders
+  `secret.optional: true`: the pod starts when the Secret is missing, with
+  an empty directory. A chart can mount a Secret its user creates later,
+  or never (an alerting key), on a workload another value already patches.
+
 ## Version 0.54.0
 
 **Fixes**

@@ -165,6 +165,9 @@ def test_volume_sources_and_default_names():
     }
     assert SecretVolume("s", name="tls").source() == {"secret": {"secretName": "s"}}
     assert SecretVolume("s").volume_name("/x") == "s"
+    assert SecretVolume("s", optional=True).source() == {
+        "secret": {"secretName": "s", "optional": True}
+    }
     assert MemoryVolume().volume_name("/run/cache") == "run-cache"
     assert MemoryVolume(size_limit="1Mi").source() == {
         "emptyDir": {"medium": "Memory", "sizeLimit": "1Mi"}

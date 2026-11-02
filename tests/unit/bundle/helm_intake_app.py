@@ -96,6 +96,7 @@ agent = app.stateful_set(
     volumes={
         "/var/lib/agent": ClaimTemplate("state", size="1Gi"),
         "/run/agent": SecretVolume(private, default_mode=0o440),
+        "/run/alerts": SecretVolume("agent-alerts", optional=True),
         "/tmp": MemoryVolume(size_limit="8Mi", name="tmp"),
     },
     init=[
