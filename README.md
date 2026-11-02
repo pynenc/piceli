@@ -66,11 +66,11 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.50
+## What's new in 0.51
 
-- **Development runs**: uploads with staged renames apply, a run killed
-  mid-sync no longer leaves stale files for the next one, and a run stopped
-  for its cache cap says which cap stopped it.
+- **Host reports you can trust**: `piceli host status` shows the host
+  agent's last send error until a send succeeds, and the agent retries its
+  queue on every run and after a release's checks pass.
 
 ## Web UI
 

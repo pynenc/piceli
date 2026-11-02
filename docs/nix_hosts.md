@@ -663,7 +663,13 @@ carry the commit, the state, the reason, the seconds and the deploy's
 `piceli.trigger` (`poll`, `pin` or `rollback`); one deploy or command
 shares one trace id. A collector that is down never
 blocks or fails a deploy. The agent makes one 2-second try per run, keeps up
-to 500 records in `otlp-queue.json` and sends them at the next run.
+to 500 records in `otlp-queue.json` and sends them at the next run, even a
+run with nothing new. From 0.51.0 a deploy tries once more after its checks
+pass, so a release that restarts the collector still delivers its events,
+and the last send error stays until a send succeeds: `host status` shows
+the report `down` while records wait behind it, with `last_error`,
+`last_error_detail` (for example `HTTP 415`), `last_error_at`,
+`last_sent_at` and `sent_total`.
 
 ## Codes
 
