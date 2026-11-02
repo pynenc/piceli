@@ -429,12 +429,16 @@ class SecretVolume(_Volume):
     :param name: Volume name; defaults to the Secret name.
     :param items: Only these keys, as ``{key: relative path}``.
     :param default_mode: File mode, such as ``0o400``.
+    :param optional: 0.55.0: the pod starts when the Secret (or a listed key)
+        is missing, with the directory empty; for a Secret the user creates
+        later, or never.
     """
 
     kind: Literal["secret"] = "secret"
     secret: ObjectName
     items: dict[DataKey, str] | None = None
     default_mode: int | None = Field(default=None, ge=0, le=0o777)
+    optional: bool | None = None
 
     def __init__(self, secret: Secret | str, /, **data: Any) -> None:
         super().__init__(**{"secret": _object_name(secret), **data})
@@ -448,6 +452,7 @@ class SecretVolume(_Volume):
                 secretName=self.secret,
                 items=_items(self.items),
                 defaultMode=self.default_mode,
+                optional=self.optional,
             )
         }
 

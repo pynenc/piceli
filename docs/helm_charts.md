@@ -106,6 +106,12 @@ an ExternalSecret, SOPS), and may give it another name. An object other
 than a Secret that holds a value Piceli redacts or injects at apply time is
 refused (`chart-secret-value`).
 
+A Secret the client may add later, or never (an alerting key, a webhook
+URL), is mounted with `SecretVolume("alert-secrets", optional=True)`: the
+pod starts without it and sees an empty directory. The volume is part of the
+workload, so it composes with any value that patches that workload (for
+example an optional value's `patches`). Secret volumes are always read-only.
+
 Creating Secrets from values the client supplies is deliberately not
 offered: secret values would then pass through values files, shell history
 and Helm's release records. Claims work the same way: an `ExistingClaim` the

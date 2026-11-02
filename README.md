@@ -66,11 +66,10 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.54
+## What's new in 0.55
 
-- **An honest dev-build queue**: `piceli dev status` says why queued runs
-  wait (disk pressure, cache budget, busy slots), keeps the cache numbers
-  across a controller restart, and runs whose client left expire.
+- **Optional Secret volumes**: `SecretVolume(..., optional=True)` mounts a
+  Secret the user may create later; the pod starts without it.
 
 ## Web UI
 
