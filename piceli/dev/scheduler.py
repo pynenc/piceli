@@ -326,7 +326,7 @@ class Scheduler:
         job: Mapping[str, Any],
         state: str,
         now: float,
-        reason: str = "dev-run-cancelled",
+        code: str = "dev-run-cancelled",
     ) -> None:
         run = run_of(job)
         entry = {**self.seen.get(run, {}), **run_summary(job, now)}
@@ -354,7 +354,7 @@ class Scheduler:
                 if result.get("first_error"):
                     entry["first_error"] = list(result["first_error"])[:RECORDED_TAIL]
         elif state == "cancelled":
-            entry.update(state="cancelled", reason=reason, exit_code=None)
+            entry.update(state="cancelled", reason=code, exit_code=None)
         else:
             entry.update(state="error", reason="dev-run-failed", exit_code=None)
         entry["finished_at"] = _iso(now)
@@ -402,7 +402,7 @@ class Scheduler:
                     pass
             elif state == "queued" and abandoned(job, now):
                 # 0.54.0: its client left; it never holds a place again.
-                self._finish(job, "cancelled", now, "dev-run-abandoned")
+                self._finish(job, "cancelled", now, code="dev-run-abandoned")
                 try:
                     self.port.delete(run_of(job))
                 except Exception:  # tried again next tick
