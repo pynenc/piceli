@@ -1433,6 +1433,9 @@ def scratch_check(
     ``not-writable`` with the engine's last line."""
     from piceli.tempfiles import temporary_directory
 
+    if cli.run("volume", "inspect", cache_volume, timeout=60).returncode != 0:
+        # 0.56.0: the check never creates the volume (Docker would make it root's)
+        return {"state": "missing", "cache": cache_volume}
     with temporary_directory("builder-check") as scratch:
         out = Path(scratch) / "out"
         out.mkdir()
@@ -1454,14 +1457,22 @@ def scratch_check(
 
 
 def prepare_cache(cli: Any, image: str, cache_volume: str = CACHE_VOLUME) -> None:
-    """The build cache volume, owned by the image's user (once)."""
-    if cli.run("volume", "inspect", cache_volume, timeout=60).returncode == 0:
-        return
-    cli.run("volume", "create", cache_volume, timeout=60)
-    cli.run(
+    """The build cache volume, owned by the image's user.
+
+    0.56.0: the owner is set every time, not only when this creates the
+    volume: a volume another mount created first (Docker makes it root's)
+    stayed unwritable for good."""
+    if cli.run("volume", "inspect", cache_volume, timeout=60).returncode != 0:
+        cli.run("volume", "create", cache_volume, timeout=60)
+    done = cli.run(
         "run", "--rm", "--user", "0", "-v", f"{cache_volume}:/cache",
         "--entrypoint", "chown", image, "65532:65532", "/cache", timeout=600,
     )  # fmt: skip
+    if done.returncode != 0:
+        tail = (done.stderr or b"").decode("utf-8", "replace").strip()[-200:]
+        raise BuildFailed(
+            f"cannot give the cache volume {cache_volume} to the build user: {tail}"
+        )
 
 
 def ensure_image(cli: Any, image: str, say: Callable[[str], None]) -> None:

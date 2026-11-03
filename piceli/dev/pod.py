@@ -949,6 +949,10 @@ MEASURE_SECONDS = 60.0
 REMEASURE_FACTOR = 10
 #: Under the disk floor a run stops once its lineage grew this much.
 GROWTH_SLACK_BYTES = 1 << 30
+#: 0.56.0: a run paused this long that still does not fit stops, so its
+#: lineage is freed for the runs that wait (paused runs held their
+#: lineages while the oldest run kept the cache over its budget).
+PAUSE_LIMIT_SECONDS = 600.0
 
 
 class CacheWatch:
@@ -971,6 +975,9 @@ class CacheWatch:
     older run is busy; every other run continues (the budget is soft while
     runs share it, and the oldest always proceeds). ``pauses`` lists each
     pause (``reason``, ``seconds``).
+
+    0.56.0: a run paused for ``pause_limit`` seconds that still does not
+    fit stops (``stopped``), so its lineage can be evicted.
     """
 
     def __init__(
@@ -988,8 +995,10 @@ class CacheWatch:
         lineages: Callable[[], list[dict[str, Any]]] | None = None,
         taken_at: float = 0.0,
         emit: Callable[[str], None] = lambda _line: None,
+        pause_limit: float = PAUSE_LIMIT_SECONDS,
     ) -> None:
         self.lineage = lineage
+        self.pause_limit = pause_limit
         self.name = f"{lineage.parent.name}/{lineage.name}"
         self.cap = cap
         self.make_room = make_room
@@ -1086,8 +1095,18 @@ class CacheWatch:
         running = [item for item in others if not item.get("paused")]
         held = sum(int(item.get("bytes") or 0) for item in others) / 2**30
         if self.paused is not None:
-            if not any(age(item) < self.taken_at for item in others):
+            older = [item for item in others if age(item) < self.taken_at]
+            if not older:
                 self._resume(now, "the oldest run in the cache")
+            elif now - self._paused_at >= self.pause_limit:
+                waited = now - self._paused_at
+                self._resume(now, "it stops instead")
+                self.stopped = why
+                self.emit(
+                    f"[piceli-dev] run stopped ({why}): paused {waited:.0f} s while "
+                    f"{len(older)} older run(s) still ran; its lineage "
+                    "is freed for the runs that wait"
+                )
             return
         older = any(age(item) < self.taken_at for item in running)
         if older and all(age(item) <= self.taken_at for item in running):
@@ -2341,6 +2360,7 @@ def main(
             lineages=lambda: list(room.get("lineages") or ()),
             taken_at=float(taken.get("taken_at") or time.time()),
             emit=emit,
+            pause_limit=float(spec.get("cache_pause_seconds") or PAUSE_LIMIT_SECONDS),
         )
 
         def paused() -> bool:

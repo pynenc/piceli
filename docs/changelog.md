@@ -4,6 +4,25 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.56.0
+
+**Fixes**
+
+- **A Docker host's cache volume is always the run user's.** The volume
+  was given to the run user (uid 65532) only when Piceli created it. Reading
+  a host's cache (`dev status`) or `builder serve --check` mounted it first
+  when it did not exist, so Docker created it owned by root and every run
+  failed with `Permission denied: '/cache/git'`, for example after the
+  host's Docker data moved. Runs and builder serve now set the owner every
+  time and fail clearly when they cannot; reads and the check never create
+  the volume.
+- **A claimed build says where it builds.** `gitops wait`, `enable --wait`
+  and the controller log said "waiting for a build host" while a host was
+  already building; they now say `building <images> on <host>`.
+- **Paused runs no longer wait for good.** A dev run paused for 10 minutes
+  that still does not fit the cache stops (`dev-cache-over-cap`) and its
+  lineage is freed for the runs that wait.
+
 ## Version 0.55.0
 
 **Features**

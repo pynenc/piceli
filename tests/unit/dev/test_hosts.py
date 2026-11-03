@@ -328,6 +328,51 @@ def test_the_docker_port_starts_a_bounded_container_in_its_slot() -> None:
     )
 
 
+def test_every_docker_run_gives_the_cache_volume_to_the_run_user() -> None:
+    """0.56.0: also a volume another mount created first (then root's)."""
+    from piceli.dev.hosts import ContainerCli
+    from piceli.dev.model import DevError
+
+    host = BuildHost.docker("mini", context="ssh://builder@mini")
+    fake = FakeCli()  # every volume exists
+    port = DockerPort(host, _dev(host), cli=ContainerCli(host, runner=fake))
+    port._ensure(IMAGE, lambda _line: None)
+    chown = fake.calls[-1]
+    assert "chown" in chown and chown[-2:] == ["65532:65532", "/cache"]
+    assert not any("create" in call for call in fake.calls)
+
+    def refused(argv: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.CompletedProcess(
+            argv, 1 if "chown" in argv else 0, b"", b"no"
+        )
+
+    port = DockerPort(host, _dev(host), cli=ContainerCli(host, runner=refused))
+    with pytest.raises(DevError, match="cache volume"):
+        port._ensure(IMAGE, lambda _line: None)
+
+
+def test_reading_a_docker_hosts_cache_never_creates_the_volume() -> None:
+    from piceli.dev.hosts import ContainerCli, clear_host_cache, host_cache
+
+    host = BuildHost.docker("mini", context="ssh://builder@mini")
+    calls: list[list[str]] = []
+
+    def none(argv: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 1, b"", b"no such volume")
+
+    original = ContainerCli.__init__
+
+    def patched(self: Any, host: Any, runner: Any = None, **kwargs: Any) -> None:
+        original(self, host, runner=none, **kwargs)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(ContainerCli, "__init__", patched)
+        assert host_cache(host, _dev(host)) is None
+        assert clear_host_cache(host, _dev(host))["cleared"] == []
+    assert calls and all("inspect" in argv for argv in calls)
+
+
 def test_a_host_with_its_own_cache_max_runs_with_that_budget() -> None:
     """0.48.0: a host with more disk than the cluster's claim keeps more warm."""
     from piceli.dev.hosts import ContainerCli

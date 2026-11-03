@@ -275,7 +275,10 @@ def serve(
                 failed = (
                     missing
                     or any(row["state"] != "reachable" for row in sources)
-                    or (scratch is not None and scratch["state"] != "writable")
+                    or (
+                        scratch is not None
+                        and scratch["state"] not in ("writable", "missing")
+                    )
                     or not version["matches"]
                 )
                 emit_json(
@@ -433,6 +436,8 @@ def _check_scratch(cli: Any, image: str) -> dict[str, Any]:
         + (
             "writable from the builder container"
             if found["state"] == "writable"
+            else "not created yet (the first build creates it)"
+            if found["state"] == "missing"
             else f"NOT writable from the builder container: {found.get('detail')}"
         )
     )

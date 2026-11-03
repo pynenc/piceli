@@ -52,6 +52,8 @@ class _Cli:
         self.calls: list[tuple[str, ...]] = []
 
     def run(self, *args: str, timeout: float = 120) -> Any:
+        if args[:2] == ("volume", "inspect"):
+            return subprocess.CompletedProcess(list(args), 0, b"", b"")
         self.calls.append(args)
         mount = next(a for a in args if a.endswith(":/work/out"))
         assert Path(mount.split(":", 1)[0]).is_dir()  # the scratch exists then
@@ -69,6 +71,47 @@ def test_scratch_check_writes_as_the_build_does() -> None:
 
     bad = scratch_check(_Cli(1, b"touch: /work/out/x: Permission denied\n"), "b:1")
     assert bad["state"] == "not-writable" and "Permission denied" in bad["detail"]
+
+
+class _Engine:
+    """0.56.0: an engine with or without the cache volume; ``chown`` fails
+    when ``refuse`` is set."""
+
+    def __init__(self, *, volume: bool, refuse: bool = False) -> None:
+        self.volume, self.refuse = volume, refuse
+        self.calls: list[tuple[str, ...]] = []
+
+    def run(self, *args: str, timeout: float = 120) -> Any:
+        self.calls.append(args)
+        code = 0
+        if args[:2] == ("volume", "inspect"):
+            code = 0 if self.volume else 1
+        elif "chown" in args and self.refuse:
+            code = 1
+        return subprocess.CompletedProcess(list(args), code, b"", b"denied")
+
+
+def test_the_check_never_creates_the_cache_volume() -> None:
+    engine = _Engine(volume=False)
+    assert scratch_check(engine, "builder:1")["state"] == "missing"
+    assert engine.calls == [("volume", "inspect", "piceli-build-cache")]
+
+
+def test_an_existing_cache_volume_is_given_to_the_build_user() -> None:
+    from piceli.infra.builder_serve import BuildFailed, prepare_cache
+
+    engine = _Engine(volume=True)  # made root's by another mount
+    prepare_cache(engine, "builder:1")
+    assert [c[0] for c in engine.calls] == ["volume", "run"]
+    assert engine.calls[-1][-3:] == ("builder:1", "65532:65532", "/cache")
+    new = _Engine(volume=False)
+    prepare_cache(new, "builder:1")
+    assert [c[:2] for c in new.calls][:2] == [
+        ("volume", "inspect"),
+        ("volume", "create"),
+    ]
+    with pytest.raises(BuildFailed, match="cache volume"):
+        prepare_cache(_Engine(volume=True, refuse=True), "builder:1")
 
 
 def test_args_file_adds_its_arguments(tmp_path: Path) -> None:

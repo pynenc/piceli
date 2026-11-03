@@ -289,11 +289,14 @@ def _progress(
             + since(progress_.get("stage_since") or progress_.get("since")),
         }
     if state == "retrying" and reason == "build-waiting":
-        return {
-            "state": "waiting",
-            "text": "building (waiting for a build host)"
-            + since(record.get("waiting_since")),
-        }
+        # 0.56.0: a claimed build says where it builds, not that it waits
+        waiting_for = str(record.get("waiting_for") or "")
+        text = (
+            waiting_for.split(":", 1)[0]
+            if waiting_for.startswith("building ")
+            else "building (waiting for a build host)"
+        )
+        return {"state": "waiting", "text": text + since(record.get("waiting_since"))}
     if state == "approval-required":
         return {
             "state": "waiting",

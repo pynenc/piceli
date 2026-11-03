@@ -109,7 +109,7 @@ dev=DevBuilds(
 
 | Kind | Where the run executes | Needs |
 | --- | --- | --- |
-| `docker` | A Linux container of the profile's image, through a Docker-compatible CLI: Docker Desktop, OrbStack, colima or Podman on a Mac, Docker or Podman on Linux; locally, or over the CLI's own `ssh://` transport (`context=`) or a CLI context name | The engine on the host; nothing else is installed there. The cache is a named volume (`piceli-dev-cache`) |
+| `docker` | A Linux container of the profile's image, through a Docker-compatible CLI: Docker Desktop, OrbStack, colima or Podman on a Mac, Docker or Podman on Linux; locally, or over the CLI's own `ssh://` transport (`context=`) or a CLI context name | The engine on the host; nothing else is installed there. The cache is a named volume (`piceli-dev-cache`), given to the run user (uid 65532) before every run |
 | `native` | This machine itself, the wrapper as a process (no container) | Python 3 and the tools; its lineages and queue live in `state_dir` (default `~/.cache/piceli/dev/NAME`); it keeps the user's own `CARGO_HOME` and rustup (crates already downloaded, `--offline` works). For builds that only work on the host's OS (macOS), and the fastest test runs |
 | `cluster` | A Job on `DevBuilds.node`, as before | `piceli cluster init` |
 
@@ -425,7 +425,10 @@ declared size is **never enforced**, and a full cache is a node under
      once no older run is left. The paused time does not count against its
      timeout, and the result lists each pause in `cache.paused [{reason,
      seconds}]`. Every other run continues: the budget is soft while runs
-     share it, and the oldest run always proceeds, so nothing waits forever;
+     share it, and the oldest run always proceeds. 0.56.0: a run paused for
+     10 minutes that still does not fit stops with `dev-cache-over-cap`, so
+     its lineage is freed for the runs that wait (before, paused runs kept
+     their lineages until the oldest run ended);
    - **when no other run holds a lineage**, this lineage alone is larger
      than the budget: the run stops with `dev-cache-over-cap` and its
      lineage is evicted at once. Run again: it builds cold; raise the
