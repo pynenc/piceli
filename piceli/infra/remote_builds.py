@@ -637,9 +637,12 @@ class HostBuilds:
         host (docker) to build web: offered to builder-1; not claimed;
         in-cluster fallback at 2026-01-01T00:00:20Z``."""
         now = self.clock()
-        text = f"waiting for a build host (docker) to build {', '.join(names)}"
-        text += ": offered to " + (", ".join(self.hosts) or "any build host")
         claimed = live_claim(entry, now)
+        if claimed is not None:  # 0.56.0: it builds; it no longer waits
+            text = f"building {', '.join(names)} on {claimed.get('host')} (docker)"
+        else:
+            text = f"waiting for a build host (docker) to build {', '.join(names)}"
+        text += ": offered to " + (", ".join(self.hosts) or "any build host")
         if claimed is not None:
             text += f"; claimed by {claimed.get('host')} at {claimed.get('at')}"
             stage = (entry.get("progress") or {}).get("stage")

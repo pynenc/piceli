@@ -58,6 +58,13 @@ def test_every_environment_must_run_its_revision_with_checks_passed() -> None:
     state, body = rollout(_doc(main=_running(), staging=WAITING_BUILD))
     assert state is None
     assert body["envs"]["staging"]["text"] == "building (waiting for a build host) 3m"
+    claimed = {
+        **WAITING_BUILD,
+        "waiting_for": "building web on builder-1 (docker): offered to builder-1; "
+        "claimed by builder-1 at 2033-05-18T03:37:05Z",
+    }
+    _state, body = rollout(_doc(main=_running(), staging=claimed))
+    assert body["envs"]["staging"]["text"] == "building web on builder-1 (docker) 3m"
     assert body["envs"]["main"]["text"] == "running bbbbbbbbbbbb, checks passed"
     state, _ = rollout(_doc(main=_running(), staging=_running()))
     assert state == "deployed"

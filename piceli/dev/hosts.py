@@ -464,12 +464,18 @@ class DockerPort:
         volume = self.cache_volume
         if self.cli.run("volume", "inspect", volume, timeout=60).returncode != 0:
             self.cli.run("volume", "create", volume, timeout=60)
-            # The image's user owns the cache (the volume starts root's).
-            self.cli.run(
-                "run", "--rm", "--user", "0", "-v", f"{volume}:/cache",
-                "--entrypoint", "chown", image, "65532:65532", "/cache",
-                timeout=600,
-            )  # fmt: skip
+        # The image's user owns the cache (the volume starts root's). 0.56.0:
+        # every run, so a volume another mount created first is fixed too.
+        done = self.cli.run(
+            "run", "--rm", "--user", "0", "-v", f"{volume}:/cache",
+            "--entrypoint", "chown", image, "65532:65532", "/cache",
+            timeout=600,
+        )  # fmt: skip
+        if done.returncode != 0:
+            tail = done.stderr.decode("utf-8", "replace").strip()[-200:]
+            raise _unavailable(
+                self.host, f"cannot give the cache volume to the run user: {tail}"
+            )
 
     def _platform_args(self) -> list[str]:
         return ["--platform", self.platform] if self.platform else []
@@ -1149,7 +1155,11 @@ def host_cache(
             ).expanduser()
             text = (root / "cache" / BUDGET_FILE).read_text()
         elif host.kind == "docker":
-            done = ContainerCli(host).run(
+            cli = ContainerCli(host)
+            # 0.56.0: a read never creates the volume (Docker would make it root's)
+            if cli.run("volume", "inspect", cache_volume, timeout=60).returncode != 0:
+                return None
+            done = cli.run(
                 "run", "--rm", "--pull", "never", "--network", "none",
                 "--user", "65532:65532", "-v", f"{cache_volume}:/cache:ro",
                 "--entrypoint", "python3", host.image or dev.image, "-I", "-c",
@@ -1182,7 +1192,7 @@ def clear_host_cache(
 
     :raises DevError: ``dev-host-unavailable``, ``dev-cache-clear-failed``.
     """
-    from piceli.dev.pod import RESULT_MARKER, clear_cache
+    from piceli.dev.pod import CLEAR_SCHEMA, RESULT_MARKER, clear_cache
 
     if host.kind == "native":
         root = Path(
@@ -1192,6 +1202,9 @@ def clear_host_cache(
     from piceli.dev.jobs import wrapper_source
 
     cli = ContainerCli(host)
+    if cli.run("volume", "inspect", cache_volume, timeout=60).returncode != 0:
+        # 0.56.0: no volume, nothing to clear (and never create it root's)
+        return {"schema": CLEAR_SCHEMA, "cleared": [], "busy": []}
     image = host.image or dev.image
     spec = json.dumps({"lineage": lineage, "crates": list(crates)})
     done = cli.run(

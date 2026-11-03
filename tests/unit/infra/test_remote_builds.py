@@ -461,6 +461,9 @@ def test_a_dead_hosts_claim_expires_for_the_fallback_and_other_hosts(
     status = _next_try(world)
     main = status["envs"]["main"]
     assert "claimed by builder-2 at" in main["waiting_for"], main
+    assert main["waiting_for"].startswith(
+        "building api, catalog, web on builder-2 (docker)"
+    )
     assert ports.builder.built == []  # a live claim holds the fallback
     world["clock"]["now"] += CLAIM_STALE_SECONDS - 120
     channel.add_request(*build_claim_request(wanted["id"], "builder-1"))

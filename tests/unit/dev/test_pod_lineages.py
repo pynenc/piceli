@@ -302,6 +302,25 @@ def test_a_paused_run_resumes_when_it_is_the_oldest_left(
     assert world.tick(watch) is True and watch.stopped == "over-cap"
 
 
+def test_a_run_paused_too_long_stops_and_frees_its_lineage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0.56.0: paused runs no longer hold their lineages for good."""
+    world = _Cache(tmp_path, monkeypatch)
+    world.others = [_other(10.0)]  # an older run that keeps the cache full
+    watch = world.watch()
+    watch.pause_limit = 5
+    world.tick(watch)
+    assert watch.paused is not None
+    assert world.tick(watch) is False and world.tick(watch) is False  # 4 s
+    assert world.tick(watch) is True and watch.stopped == "over-cap"  # 6 s
+    assert watch.paused is None and watch.pauses == [
+        {"reason": "over-cap", "seconds": 6.0}
+    ]
+    assert "paused 6 s while 1 older run(s) still ran" in world.lines[-1]
+    assert "paused" not in json.loads((world.lineage / "meta.json").read_text())
+
+
 def test_paused_time_does_not_count_against_the_deadline(tmp_path: Path) -> None:
     """A real process group, stopped and continued; the deadline moves."""
     began = time.monotonic()
