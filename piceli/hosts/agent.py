@@ -114,6 +114,11 @@ Runner = Callable[..., "subprocess.CompletedProcess[bytes]"]
 Opener = Callable[..., Any]
 
 
+#: 0.58.0: how much of a failed command's output a failure keeps.
+OUTPUT_LINES = 20
+OUTPUT_CHARS = 2000
+
+
 class Failure(Exception):
     """A refused or failed step; ``code`` is a registered ``host-*`` code."""
 
@@ -682,10 +687,26 @@ class Agent:
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired:
+            self.last_output = ""
             return 124
         except OSError:
+            self.last_output = ""
             return 127
+        # 0.58.0: the end of what the command said, for a failure's detail
+        text = ((done.stdout or b"") + (done.stderr or b"")).decode("utf-8", "replace")
+        self.last_output = "\n".join(text.strip().splitlines()[-OUTPUT_LINES:])[
+            -OUTPUT_CHARS:
+        ]
         return int(done.returncode)
+
+    def _said(self, what: str) -> str:
+        """``what`` and the end of the last command's output (0.58.0: a
+        failed switch said why, and the agent dropped it)."""
+        tail = getattr(self, "last_output", "")
+        if tail:
+            sys.stderr.write(f"piceli-host: {what} failed:\n{tail}\n")
+            sys.stderr.flush()
+        return f"{what}: {tail}" if tail else what
 
     def _output(
         self, argv: list[str], timeout: float, *, stderr: bool = False
@@ -895,7 +916,9 @@ class Agent:
     def _configure(self, store_path: str, verb: str) -> None:
         argv = [f"{store_path}/bin/switch-to-configuration", verb]
         if self._run(argv, SWITCH_SECONDS) != 0:  # a hang is 124: failed
-            raise Failure("host-switch-failed", f"switch-to-configuration {verb}")
+            raise Failure(
+                "host-switch-failed", self._said(f"switch-to-configuration {verb}")
+            )
 
     def activate(self, store_path: str) -> None:
         """Run ``store_path`` now (``switch-to-configuration test``): the
@@ -907,7 +930,9 @@ class Agent:
             units = [str(unit) for unit in self.services["units"]]
             argv = [self.tools["systemctl"], "restart", *units]
             if self._run(argv, SWITCH_SECONDS) != 0:
-                raise Failure("host-switch-failed", f"restart of {' '.join(units)}")
+                raise Failure(
+                    "host-switch-failed", self._said(f"restart of {' '.join(units)}")
+                )
             return
         self._configure(store_path, "test")
 
@@ -988,6 +1013,8 @@ class Agent:
             value = step()
         except Failure as failed:
             record.update(state="failed", reason=failed.code)
+            if failed.detail:  # 0.58.0: what failed, with its output's end
+                record["detail"] = failed.detail
             raise
         finally:
             record["seconds"] = round(self.monotonic() - started, 3)

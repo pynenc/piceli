@@ -48,6 +48,15 @@ def test_the_status_read_has_a_connect_keepalive_and_overall_timeout() -> None:
     count = int(_option(argv, "ServerAliveCountMax"))
     assert alive * count <= 30
     assert seen["timeout"] is not None and seen["timeout"] <= 30
+    # 0.58.0: one shared connection for a wait's polls
+    assert _option(argv, "ControlMaster") == "auto"
+    assert _option(argv, "ControlPath") == "~/.ssh/piceli-%C"
+    assert int(_option(argv, "ControlPersist")) == 60
+
+
+def test_commands_other_than_status_reads_get_their_own_connection() -> None:
+    argv = remote.ssh_argv(TARGET, remote=["true"])
+    assert not any(word.startswith("ControlMaster") for word in argv)
 
 
 @pytest.mark.parametrize(
