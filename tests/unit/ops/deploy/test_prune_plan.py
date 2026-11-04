@@ -175,3 +175,37 @@ def test_a_rename_creates_the_new_kind_and_deletes_the_old_after_it() -> None:
     assert operations[-1] == (PlanOperation.DELETE, "Deployment", "api")
     assert (PlanOperation.CREATE, "StatefulSet", "api") in operations
     assert _deleted(plan) == {("Deployment", "api")}
+
+
+def _companion(kind: str, name: str) -> dict:
+    found = manifest(kind, name)
+    if kind == "Ingress":
+        found["apiVersion"] = "networking.k8s.io/v1"
+    found["metadata"]["labels"] = {"piceli.io/access": "tailnet"}
+    return found
+
+
+def test_a_companion_changing_kind_is_deleted_before_anything_is_applied() -> None:
+    """0.59.0: a tailnet companion going from a LoadBalancer Service to an
+    Ingress under the same name. Deleted after the Ingress was created, the
+    old proxy still held the tailnet name, so the Ingress got ``NAME-1``."""
+    old = observed(_companion("Service", "web-tailnet"), uid="old")
+    other = observed(manifest("ConfigMap", "gone"), uid="gone")
+    plan = plan_for(
+        [_companion("Ingress", "web-tailnet"), manifest("ConfigMap", "kept")],
+        (old, other),
+        prune=True,
+    )
+    order = [
+        (a.operation, a.resource.ref.kind, a.resource.ref.name) for a in plan.actions
+    ]
+    assert order[0] == (PlanOperation.DELETE, "Service", "web-tailnet")
+    # Any other prune still runs last, after everything is applied.
+    assert order[-1] == (PlanOperation.DELETE, "ConfigMap", "gone")
+
+
+def test_an_object_of_the_same_name_without_the_label_is_pruned_last() -> None:
+    old = observed(manifest("Service", "web"), uid="old")
+    plan = plan_for([manifest("ConfigMap", "web")], (old,), prune=True)
+    assert plan.actions[-1].operation is PlanOperation.DELETE
+    assert plan.actions[0].operation is PlanOperation.CREATE

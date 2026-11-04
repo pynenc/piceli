@@ -163,12 +163,16 @@ def exposed_services(
 
 
 def http_ports(app: Any, namespace: str) -> dict[str, tuple[int, ...]]:
-    """``{service: ports}`` whose declared forward is HTTP (a path or an
-    HTTP health check): the ones ``Access(https=True)`` serves over HTTPS."""
+    """``{service: ports}`` whose declared forward is HTTP: the ones
+    ``Access(https=True)`` serves over HTTPS.
+
+    A forward is HTTP when its scheme is ``http`` or ``https`` (0.59.0: the
+    forward's ``scheme``, else what its port's name, number or protocol
+    says, as in ``piceli access``). Every forward has a path (``/`` by
+    default), so a path alone made a TURN or database forward HTTP too."""
     found: dict[str, set[int]] = {}
     for item in _forwards(app, namespace):
-        probe = getattr(item, "probe", None)
-        if getattr(item, "path", None) or getattr(probe, "type", None) == "http":
+        if getattr(item, "scheme", "http") in {"http", "https"}:
             found.setdefault(item.target.split("/", 1)[1], set()).add(
                 int(item.remote_port)
             )
@@ -362,8 +366,16 @@ def tailnet_plan(
         )
         host = access.host(env, name, namespace)
         secure = set((http or {}).get(name) or ()) if access.https else set()
-        served = [p for p in ports if int(p.get("port") or 0) in secure]
-        if served and len(served) < len(ports):
+        # An Ingress serves TCP only, one per port number (0.59.0).
+        tcp = [p for p in ports if p.get("protocol", "TCP") == "TCP"]
+        served = list(
+            {
+                int(p.get("port") or 0): p
+                for p in tcp
+                if int(p.get("port") or 0) in secure
+            }.values()
+        )
+        if served and (len(served) < len(tcp) or len(tcp) < len(ports)):
             plan.notes.append(
                 _skipped(
                     name,

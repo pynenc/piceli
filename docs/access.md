@@ -338,13 +338,19 @@ Options (0.19.1; defaults unchanged):
   access than the operator's default tag. The tailnet policy must make the
   operator's tag an owner of each (`tagOwners`), or the operator cannot
   create the proxy (an `access-tailnet-pending` note shows its event).
-- `https=True`: every exposed port whose forward is HTTP (it declares a
-  `path` or an HTTP health check) gets a Tailscale `Ingress`
+- `https=True`: every exposed TCP port whose forward speaks HTTP (its
+  `scheme`, else what the port's name or number says, as `piceli access`
+  shows it) gets a Tailscale `Ingress`
   (`ingressClassName: tailscale`) instead, served at
   `https://<name>.<tailnet>.ts.net/<path>` with a tailnet certificate and
   no port in the URL. It needs MagicDNS and HTTPS certificates on in the
   tailnet, which is why it is opt-in. A Service that also exposes
-  non-HTTP ports keeps one plain companion (`https-mixed-ports`).
+  non-HTTP or UDP ports keeps one plain companion (`https-mixed-ports`).
+  Turning it on replaces a port's plain companion with the Ingress of the
+  same name: the release deletes the old companion first, so the Ingress
+  gets the plain tailnet name (an Ingress created while the old proxy still
+  held the name got `NAME-1`; delete such an Ingress once, and the next
+  release creates it again under the plain name).
 - `proxy_class="NAME"` (label `tailscale.com/proxy-class`): the operator's
   `ProxyClass` for these proxies.
 

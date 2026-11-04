@@ -66,10 +66,10 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.58
+## What's new in 0.59
 
-- **Host releases that fail say why**: the switch's own output is kept, and
-  `host wait` no longer opens an SSH session per poll.
+- **HTTPS on the tailnet works as declared**: only HTTP ports get a
+  Tailscale Ingress, and it takes the plain tailnet name.
 
 ## Web UI
 
