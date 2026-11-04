@@ -177,6 +177,7 @@ def promote_host(
         )  # fmt: skip
         return
     digest = found["digest"]
+    document["plan_hash"] = digest  # 0.57.0: as every plan document names it
     document["approve_command"] = f"{command} --approve {digest}"
     if approve is None:
         pinned = body["pinned"]
@@ -214,8 +215,8 @@ def promote_host(
     document.pop("approve_command", None)
     say(f"{host}: promoted {document['tag']} at {document['commit'][:12]}")
     if wait is None:
-        if as_json:
-            emit_json(document)
+        # 0.57.0: always, so a script reads the tag from stdout, not the text
+        emit_json(document)
         return
     _wait_and_emit(
         document, host, str(document["tag"]), composition, found_composition,

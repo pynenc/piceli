@@ -73,6 +73,7 @@ def test_plan_then_approve_pins_commits_tags_and_pushes(found: dict[str, Any]) -
     assert (plan["remote"], plan["branch"], plan["base"]) == ("origin", "main", head)
     assert plan["commit_message"].startswith(f"promote app to {c[:12]} from main")
     assert body["approve_command"].endswith(f"--approve {body['digest']}")
+    assert body["plan_hash"] == body["digest"]  # 0.57.0: one name for scripts
     assert f"pin app {a[:12]} -> {c[:12]} (edit)" in said
     assert git(work, "status", "--porcelain") == ""  # the plan changed nothing
     assert _remote(found) == before

@@ -504,7 +504,14 @@ def run_publish_command(args: argparse.Namespace, **seams: Any) -> int:
         if args.approve is None or args.approve != plan.digest:
             if args.approve is not None:
                 raise PublishError("publish-not-approved")
-            emit_json({"state": "approval-required", **plan.preview()})
+            # 0.57.0: plan_hash, as every plan document names its approval
+            emit_json(
+                {
+                    "state": "approval-required",
+                    **plan.preview(),
+                    "plan_hash": plan.digest,
+                }
+            )
             say(
                 f"publish: {len(plan.images)} image(s) to {plan.target.registry} "
                 f"as {plan.tag}; approve with --approve {plan.digest}"
@@ -610,7 +617,14 @@ def run_publish_files_command(args: argparse.Namespace, **seams: Any) -> int:
         if args.approve is None or args.approve != plan.digest:
             if args.approve is not None:
                 raise PublishError("publish-not-approved")
-            emit_json({"state": "approval-required", **plan.preview()})
+            # 0.57.0: plan_hash, as every plan document names its approval
+            emit_json(
+                {
+                    "state": "approval-required",
+                    **plan.preview(),
+                    "plan_hash": plan.digest,
+                }
+            )
             for item in plan.files:
                 say(f"  {item.name}  {item.size} bytes  {item.sha256}")
             say(

@@ -147,6 +147,7 @@ def serve(
         BuilderServe,
         BuildFailed,
         VersionMismatch,
+        clean_stale_scratch,
         docker_container,
         ensure_image,
         node_importer,
@@ -237,6 +238,7 @@ def serve(
             if images and cli is not None:
                 ensure_image(cli, str(builder_image), say)
                 prepare_cache(cli, str(builder_image))
+                clean_stale_scratch(cli, str(builder_image), say)
         except DevError as error:
             reject(error.code, str(error))
         except BuildFailed as error:

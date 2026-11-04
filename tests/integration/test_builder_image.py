@@ -88,7 +88,8 @@ def builder_image(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
 
 def test_builder_has_the_tools_c_builds_need(builder_image: str) -> None:
     tools = (
-        "make cmake pkg-config curl xz gcc ld.lld cargo cargo-zigbuild zig uv python3"
+        "make cmake pkg-config curl xz gcc ld.lld cargo cargo-zigbuild cargo-nextest "
+        "zig uv python3"
     )
     output = _run(
         "docker", "run", "--rm", builder_image, "sh", "-c",
@@ -101,9 +102,10 @@ def test_builder_lints_rust_with_clippy_and_rustfmt(builder_image: str) -> None:
     """0.19: agents lint on the builder, read-only toolchain."""
     output = _run(
         "docker", "run", "--rm", "-e", "HOME=/tmp", builder_image, "sh", "-c",
-        "cargo clippy --version && cargo fmt --version",
+        "cargo clippy --version && cargo fmt --version && cargo nextest --version",
     )  # fmt: skip
     assert "clippy" in output and "rustfmt" in output
+    assert "cargo-nextest 0.9.149" in output  # 0.57.0: pinned
 
 
 def test_builder_ships_rust_1_97() -> None:

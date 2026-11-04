@@ -114,6 +114,40 @@ def test_an_existing_cache_volume_is_given_to_the_build_user() -> None:
         prepare_cache(_Engine(volume=True, refuse=True), "builder:1")
 
 
+def test_stale_scratch_of_killed_builds_is_removed_through_the_container(
+    tmp_path: Path,
+) -> None:
+    """0.57.0: the container's user wrote files the host's user cannot remove."""
+    import os
+    import time
+
+    from piceli.infra.builder_serve import clean_stale_scratch
+
+    stale = tmp_path / "piceli-builder-abcd1234"
+    (stale / "out" / ".home").mkdir(parents=True)
+    fresh = tmp_path / "piceli-builder-efgh5678"
+    fresh.mkdir()
+    other = tmp_path / "piceli-dev-ijkl9012"
+    other.mkdir()
+    old = time.time() - 7 * 3600
+    for path in (stale, other):
+        os.utime(path, (old, old))
+    engine = _Engine(volume=True)
+    lines: list[str] = []
+    assert clean_stale_scratch(engine, "builder:1", lines.append, tmp_path) == 1
+    assert not stale.exists() and fresh.exists() and other.exists()
+    assert engine.calls == []  # the host's user could remove it all
+    assert lines == ["builder: removed 1 scratch director(ies) of killed builds"]
+    for path in (fresh, other):  # the suite's leak check sees the names
+        path.rmdir()
+
+
+def test_the_build_opens_its_scratch_to_the_host_user() -> None:
+    from piceli.infra.builder_serve import _COPY_AND_RUN
+
+    assert "chmod -R a+rwX /work/out" in _COPY_AND_RUN.splitlines()[3]
+
+
 def test_args_file_adds_its_arguments(tmp_path: Path) -> None:
     path = tmp_path / "serve.args"
     path.write_text(

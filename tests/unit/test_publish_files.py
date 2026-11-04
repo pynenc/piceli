@@ -243,6 +243,7 @@ def test_cli_plans_then_pushes_and_never_prints_the_credential(
     captured = capsys.readouterr()
     plan = json.loads(captured.out)
     assert plan["state"] == "approval-required"
+    assert plan["plan_hash"] == plan["digest"]  # 0.57.0: one name for scripts
     assert [f["name"] for f in plan["files"]] == [p.name for p in dist]
     assert public.requests == []  # planning contacts nothing
     assert dist[0].name in captured.err and plan["digest"] in captured.err

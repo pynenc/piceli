@@ -1328,11 +1328,13 @@ class BuilderServe:
 
 #: The builder container's first step: copy every read-only checkout into
 #: ``SOURCES`` (``tar`` keeps file times; the copy is the container user's),
-#: run ``piceli``, remove the copy whatever the outcome.
+#: run ``piceli``, remove the copy whatever the outcome. 0.57.0: and open
+#: ``/work/out`` to the host's user, who removes the scratch afterwards (the
+#: directories the container's user made there were left behind for good).
 _COPY_AND_RUN = f"""set -eu
 dest={SOURCES}
 rm -rf "$dest"
-trap 'rm -rf "$dest"' EXIT
+trap 'rm -rf "$dest"; chmod -R a+rwX /work/out 2>/dev/null || true' EXIT
 mkdir -p "$dest"
 for src in /work/src/*/; do
   name=$(basename "$src")
@@ -1473,6 +1475,36 @@ def prepare_cache(cli: Any, image: str, cache_volume: str = CACHE_VOLUME) -> Non
         raise BuildFailed(
             f"cannot give the cache volume {cache_volume} to the build user: {tail}"
         )
+
+
+def clean_stale_scratch(
+    cli: Any, image: str, say: Callable[[str], None], temp_dir: Path | None = None
+) -> int:
+    """0.57.0, at ``builder serve`` start: remove the scratch directories of
+    builds that were killed (``piceli-builder-*``, stale). Files the
+    container's user wrote there are removed through the container, as
+    root. Returns how many were removed."""
+    from piceli.maintenance.cache import temporary_entries
+
+    removed = 0
+    for entry in temporary_entries(temp_dir):
+        path = Path(entry["path"])
+        if not entry["stale"] or not entry["name"].startswith("piceli-builder-"):
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+        if path.exists():
+            cli.run(
+                "run", "--rm", "--user", "0", "--network", "none",
+                "-v", f"{path}:/scratch", "--entrypoint", "sh", image,
+                "-c", "rm -rf /scratch/* /scratch/.[!.]* /scratch/..?*",
+                timeout=600,
+            )  # fmt: skip
+            shutil.rmtree(path, ignore_errors=True)
+        if not path.exists():
+            removed += 1
+    if removed:
+        say(f"builder: removed {removed} scratch director(ies) of killed builds")
+    return removed
 
 
 def ensure_image(cli: Any, image: str, say: Callable[[str], None]) -> None:
