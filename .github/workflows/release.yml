@@ -2,7 +2,10 @@ name: Release
 
 # PyPI releases come only from main. After CI succeeds on a push to main (or
 # when run manually), the version in pyproject.toml is released when PyPI does
-# not list all of its files yet. The index decides, not the git tag:
+# not list all of its files yet. A push to main whose tree its pull request's
+# CI already passed (the branch was up to date) releases at once, without
+# waiting for CI to test the same tree again; the run after CI then finds the
+# version released and does nothing. The index decides, not the git tag:
 #
 #   build   build the wheel and sdist, ask PyPI which files it lists for the
 #           version (scripts/release_state.py plan);
@@ -24,6 +27,8 @@ on:
     workflows: [CI]
     types: [completed]
     branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       ref:
@@ -40,11 +45,44 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  tested:
+    # A push to main: did its pull request's CI pass on this same tree?
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          ok=false
+          head=$(gh api "repos/$REPO/commits/$SHA/pulls" \
+            -q '[.[] | select(.merged_at != null)][0].head.sha // empty')
+          if [ -n "$head" ]; then
+            tree=$(gh api "repos/$REPO/commits/$SHA" -q .commit.tree.sha)
+            tested=$(gh api "repos/$REPO/commits/$head" -q .commit.tree.sha)
+            passed=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$head&event=pull_request&status=success" \
+              -q .total_count)
+            if [ "$tree" = "$tested" ] && [ "${passed:-0}" -gt 0 ]; then ok=true; fi
+          fi
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+          echo "tree passed CI in its pull request: $ok (head ${head:-none})"
+
   build:
+    needs: tested
     if: >-
-      github.event_name == 'workflow_dispatch'
-      || (github.event.workflow_run.conclusion == 'success'
-          && github.event.workflow_run.event == 'push')
+      always()
+      && (github.event_name == 'workflow_dispatch'
+          || (github.event_name == 'push' && needs.tested.outputs.ok == 'true')
+          || (github.event.workflow_run.conclusion == 'success'
+              && github.event.workflow_run.event == 'push'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
