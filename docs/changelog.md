@@ -4,6 +4,29 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.57.0
+
+**Features**
+
+- **`cargo-nextest` in the builder image.** The builder image ships
+  cargo-nextest 0.9.149 (pinned, checked against its sha256, amd64 and
+  arm64), so development runs on build hosts run test binaries in
+  parallel with retries instead of falling back to `cargo test`.
+- **One name for plan hashes in JSON.** The plan documents of `promote`,
+  `artifacts publish` and `artifacts publish-files` carry `plan_hash`
+  (the value `--approve` takes), as `gitops enable` already did; a script
+  reads stdout, not the human text on stderr. An approved `promote` always
+  prints its result (`tag`, `commit`) on stdout.
+
+**Fixes**
+
+- **`builder serve` no longer fills its temporary directory.** A build's
+  scratch was bind-mounted into the container, whose user made directories
+  there the host's user could not remove, so every build left files behind
+  (49 GB on one host). The container now opens the scratch to the host's
+  user before it exits, and `builder serve` removes the scratch of killed
+  builds (older than 6 hours) when it starts.
+
 ## Version 0.56.0
 
 **Fixes**

@@ -66,12 +66,11 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.56
+## What's new in 0.57
 
-- **Build hosts heal their cache volume**: a Docker host's cache volume is
-  given to the run user before every run, so a volume Docker created as
-  root no longer fails every build.
-- **Paused dev runs stop after 10 minutes** and free their lineage.
+- **`cargo-nextest` in the builder image**: tests on build hosts run in
+  parallel with retries.
+- **`plan_hash` in every plan's JSON**: scripts read stdout, not text.
 
 ## Web UI
 

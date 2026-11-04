@@ -47,12 +47,17 @@ CMD ["piceli", "--help"]
 # builds need (jemalloc-sys: make; aws-lc-sys: cmake; pkg-config, curl, xz),
 # lld (`-C link-arg=-fuse-ld=lld` links large Rust binaries faster than GNU
 # ld, 0.22.0) and node with npm (development runs of small JS tests,
-# 0.18.0). A source that pins its own Rust, node or wasm tools gets those
+# 0.18.0), cargo-nextest (parallel test binaries with retries, 0.57.0). A
+# source that pins its own Rust, node or wasm tools gets those
 # versions in the build cache instead (`[build] toolchains`, 0.22.0). The
 # toolchain is read-only; cargo
 # writes under $HOME, which the build Job points at its work directory.
 FROM controller AS builder
 LABEL org.opencontainers.image.description="Piceli cluster build Job (Rust and Python host builds)"
+ARG TARGETARCH
+ARG NEXTEST_VERSION=0.9.149
+ARG NEXTEST_SHA256_AMD64=32d1d8c0567b7a80bee2bad8bb09125c846da96bc009b2de11ec08557290c770
+ARG NEXTEST_SHA256_ARM64=6f82e375187cf3a1f3e336879a51940c315a5d0ce7253f7e517ad28295b74189
 USER root
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -67,6 +72,16 @@ RUN rustup target add aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu wasm32-
     && pip install --no-cache-dir ziglang==0.16.0 cargo-zigbuild==0.23.4 uv==0.12.22 \
     && printf '#!/bin/sh\nexec python3 -m ziglang "$@"\n' > /usr/local/bin/zig \
     && chmod 0755 /usr/local/bin/zig \
+    && case "$TARGETARCH" in \
+         amd64) arch=x86_64; sum="$NEXTEST_SHA256_AMD64" ;; \
+         arm64) arch=aarch64; sum="$NEXTEST_SHA256_ARM64" ;; \
+         *) echo "no cargo-nextest for $TARGETARCH" >&2; exit 1 ;; \
+       esac \
+    && curl -sSfL --retry 5 -o /tmp/nextest.tgz \
+       "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${NEXTEST_VERSION}/cargo-nextest-${NEXTEST_VERSION}-${arch}-unknown-linux-gnu.tar.gz" \
+    && echo "$sum  /tmp/nextest.tgz" | sha256sum -c - \
+    && tar -xzf /tmp/nextest.tgz -C /usr/local/cargo/bin cargo-nextest \
+    && rm /tmp/nextest.tgz \
     && chmod -R a+rX /usr/local/rustup /usr/local/cargo \
     && python -B -m piceli.integrity write --out /usr/local/share/piceli/files.sha256
 USER 65532:65532
