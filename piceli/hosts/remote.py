@@ -46,6 +46,11 @@ _LIMIT = 4 << 20
 #: 0.26.2: a status read gives up within this: the connection (10 s), a
 #: silent session (keepalives every 5 s, 2 unanswered) and the whole command.
 STATUS_SECONDS = 30
+#: 0.58.0: where status reads keep their shared connection (``%C`` is a
+#: hash of the host, port and user; a short path, as sockets need one), and
+#: how long it stays open after the last read.
+CONTROL_PATH = "~/.ssh/piceli-%C"
+CONTROL_PERSIST_SECONDS = 60
 #: What ``ssh`` prints when it never got a session: no route, refused,
 #: unresolved, the host key or the login. Anything else after an exit 255
 #: (nothing at all, ``closed by remote host``) is a session that broke.
@@ -76,8 +81,21 @@ def ssh_argv(
     words = remote or ["cat", "--", STATUS_PATH]
     if remote is not None and target.user != "root":
         words = ["sudo", "-n", *words]
+    # 0.58.0: status reads (a wait polls every few seconds) share one
+    # connection, so the host sees one login, not a session (and a user
+    # manager started and stopped) per poll.
+    shared = (
+        []
+        if remote is not None
+        else [
+            "-o", "ControlMaster=auto",
+            "-o", f"ControlPath={CONTROL_PATH}",
+            "-o", f"ControlPersist={CONTROL_PERSIST_SECONDS}",
+        ]
+    )  # fmt: skip
     return [
         ssh,
+        *shared,
         "-o", "BatchMode=yes",
         "-o", "StrictHostKeyChecking=yes",
         "-o", f"UserKnownHostsFile={' '.join(files)}",

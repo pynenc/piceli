@@ -4,6 +4,24 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.58.0
+
+**Fixes**
+
+- **A failed switch says why.** The host agent keeps the end of a failed
+  `switch-to-configuration` (or service restart) output in the failed
+  stage's `detail` and in its journal. Before, it kept only
+  `host-switch-failed`, so a cause such as `warning: user activation for
+  root failed` took a journal search to find.
+- **`host wait` keeps one SSH connection.** Status reads share one
+  connection (`ControlMaster`, kept 60 s after the last read), so a wait no
+  longer opens a login session every poll. Each logout stopped root's user
+  manager 10 s later, and a switch that landed in that gap failed.
+- **Generated host modules keep root's user manager running.** A
+  whole-system host module sets `users.users.root.linger = lib.mkDefault
+  true`, so no logout can stop it during a switch. Service-mode modules do
+  not.
+
 ## Version 0.57.0
 
 **Features**

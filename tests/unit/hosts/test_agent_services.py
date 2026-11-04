@@ -184,6 +184,7 @@ def test_the_module_leaves_the_boot_menu_alone(cache_dir: Path) -> None:
     text = render_module(services_host(cache_dir), "hosts.py:web", "0.44.0")
     assert (
         "configurationLimit" not in text
+        and "linger" not in text
         and '\\"kind\\":\\"services\\"' in text.replace(" ", "")
     )
 

@@ -56,6 +56,10 @@ def render_module(host: NixHost, ref: str, version: str | None = None) -> str:
         else f"""  # The agent keeps {host.generations} system generations; the boot menu lists as many.
   boot.loader.grub.configurationLimit = lib.mkDefault {host.generations};
   boot.loader.systemd-boot.configurationLimit = lib.mkDefault {host.generations};
+  # 0.58.0: root's user manager runs all the time. A switch activates each
+  # logged-in user's manager; one that an SSH logout stops under it fails
+  # the switch (status 4) though the new system is fine.
+  users.users.root.linger = lib.mkDefault true;
 """
     )
     return f"""# The Piceli host agent of {host.name} (piceli {version}).

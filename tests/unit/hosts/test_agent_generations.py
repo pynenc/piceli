@@ -185,4 +185,5 @@ def test_generations_are_declared_and_reach_the_boot_loader(
     text = render_module(host(cache_dir, generations=3), "hosts.py:web", "0.24.0")
     assert "boot.loader.grub.configurationLimit = lib.mkDefault 3;" in text
     assert "boot.loader.systemd-boot.configurationLimit = lib.mkDefault 3;" in text
+    assert "users.users.root.linger = lib.mkDefault true;" in text  # 0.58.0
     assert 'nix_store = "${config.nix.package}/bin/nix-store";' in text

@@ -66,11 +66,10 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.57
+## What's new in 0.58
 
-- **`cargo-nextest` in the builder image**: tests on build hosts run in
-  parallel with retries.
-- **`plan_hash` in every plan's JSON**: scripts read stdout, not text.
+- **Host releases that fail say why**: the switch's own output is kept, and
+  `host wait` no longer opens an SSH session per poll.
 
 ## Web UI
 

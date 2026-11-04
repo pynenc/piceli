@@ -195,6 +195,7 @@ class FakeHost:
             verb = argv[1]
             if path in self.fail_switch or (verb, path) in self.fail_verb:
                 code = 1
+                out = b"warning: user activation for root failed\n"
             else:
                 if verb in ("test", "switch"):
                     self.current.unlink()
@@ -463,9 +464,16 @@ def test_a_failed_switch_rolls_back(
 ) -> None:
     publish(cache_dir, commit_of(1), branch="main")
     fake.fail_switch.add(store_path(commit_of(1)))
-    poll = make_agent(tmp_path, host(cache_dir, follow=Branch("main")), fake).run_once()
+    agent = make_agent(tmp_path, host(cache_dir, follow=Branch("main")), fake)
+    poll = agent.run_once()
     assert poll["state"] == "rolled-back" and poll["reason"] == "host-switch-failed"
     assert os.readlink(fake.current) == OLD
+    # 0.58.0: the switch's own words reach the record
+    stages = agent.status["last_attempt"]["stages"]
+    (stage,) = [s for s in stages if s.get("state") == "failed"]
+    assert stage["detail"] == (
+        "switch-to-configuration test: warning: user activation for root failed"
+    )
 
 
 def test_a_failed_fetch_is_retried_and_not_marked_bad(
