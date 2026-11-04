@@ -4,6 +4,21 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.59.0
+
+**Fixes**
+
+- **`Access(https=True)` serves only HTTP over HTTPS.** A port counts as
+  HTTP by its forward's scheme (as `piceli access` shows it), not by its
+  path: every forward has a path (`/` by default), so a TURN forward got
+  Tailscale Ingresses. UDP ports never get an Ingress, and a port number
+  gets one Ingress, not one per protocol.
+- **A companion changing kind keeps its tailnet name.** Turning on `https`
+  replaces a port's plain companion (a `LoadBalancer` Service) with an
+  Ingress of the same name. The release now deletes the old companion
+  first and waits until it is gone. Before, the Ingress was created while
+  the old proxy still held the name, so it registered as `NAME-1`.
+
 ## Version 0.58.0
 
 **Fixes**

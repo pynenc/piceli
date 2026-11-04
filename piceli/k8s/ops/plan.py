@@ -1572,6 +1572,25 @@ def _propagation_deletes_protected(
     )
 
 
+#: The label of Piceli's access companions (``piceli.envs.access``).
+_COMPANION_LABEL = "piceli.io/access"
+
+
+def _kind_swapped(removed: ResourceIntent, desired: Mapping[ResourceRef, Any]) -> bool:
+    """Whether a pruned access companion is replaced by one of another kind
+    under the same name (``Access(https=True)``: Service -> Ingress)."""
+    labels = (removed.manifest.get("metadata") or {}).get("labels") or {}
+    if _COMPANION_LABEL not in labels:
+        return False
+    ref = removed.ref
+    return any(
+        other.namespace == ref.namespace
+        and other.name == ref.name
+        and other.kind != ref.kind
+        for other in desired
+    )
+
+
 def _deletion_depth(
     resource: ObservedResource,
     by_uid: Mapping[str, ObservedResource],
@@ -2334,15 +2353,24 @@ def build_plan(
             for resource in snapshot.resources
             if resource.precondition.uid is not None
         }
+        first: list[PlanAction] = []
         for current in sorted(
             (item for item in candidates if not item.retained),
             key=lambda item: (-_deletion_depth(item, by_uid), item.intent.ref),
         ):
-            actions.append(
-                PlanAction(
-                    PlanOperation.DELETE, current.intent, (), current.precondition
-                )
+            action = PlanAction(
+                PlanOperation.DELETE, current.intent, (), current.precondition
             )
+            if _kind_swapped(current.intent, desired):
+                first.append(action)
+            else:
+                actions.append(action)
+        # 0.59.0: an object the release now declares under the same name as
+        # another kind (a tailnet companion going from a LoadBalancer Service
+        # to an Ingress) is deleted before anything is applied, so the two
+        # never hold the same name at once (the executor waits until it is
+        # gone).
+        actions[:0] = first
 
     stale = stale_versioned_secrets(desired, snapshot, authorization)
     for current in stale:

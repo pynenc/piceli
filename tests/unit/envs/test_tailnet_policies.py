@@ -299,3 +299,43 @@ def test_tags_proxy_class_and_https_render_for_the_operator() -> None:
     )
     assert [o["kind"] for o in mixed.objects] == ["Service"]
     assert mixed.notes[0]["why"] == "https-mixed-ports"
+
+
+def test_only_forwards_that_speak_http_are_served_over_https() -> None:
+    """0.59.0: every forward has a path (``/`` by default), so the path made
+    a TURN forward HTTP and it got Ingresses. The scheme decides."""
+    from types import SimpleNamespace
+
+    from piceli.envs.access import http_ports
+
+    forwards = [
+        SimpleNamespace(target="service/web", remote_port=8090, scheme="http"),
+        SimpleNamespace(target="service/turn", remote_port=3478, scheme="turn"),
+        SimpleNamespace(target="service/db", remote_port=5432, scheme="postgresql"),
+    ]
+    app = SimpleNamespace(shortcuts=lambda namespace: forwards)
+    assert http_ports(app, "shop-main") == {"web": (8090,)}
+
+
+def test_a_service_with_udp_ports_keeps_one_plain_companion() -> None:
+    """A TCP and a UDP port of the same number: an Ingress serves neither."""
+    service = {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {"name": "turn", "namespace": "shop-main"},
+        "spec": {
+            "selector": {"app": "turn"},
+            "ports": [
+                {"name": "turn-udp", "port": 3478, "protocol": "UDP"},
+                {"name": "turn-tcp", "port": 3478, "protocol": "TCP"},
+            ],
+        },
+    }
+    plan = tailnet_plan(
+        [service], Access(tailnet=True, https=True), {"turn": (3478,)},
+        "main", "shop-main", http={"turn": (3478,)},
+    )  # fmt: skip
+    assert [(o["kind"], o["metadata"]["name"]) for o in plan.objects] == [
+        ("Service", "turn-tailnet")
+    ]
+    assert len(plan.objects[0]["spec"]["ports"]) == 2

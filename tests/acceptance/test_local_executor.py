@@ -1106,3 +1106,58 @@ def test_throttled_reads_are_sent_again_and_writes_are_not(local_api, tmp_path):
         executor(provider, tmp_path).run("t", plan, snapshot, grant)["state"] != "ready"
     )
     assert len(mutations(api)) == 1  # sent once, never retried
+
+
+def test_a_companion_changing_kind_is_gone_before_its_replacement_is_created(
+    local_api, tmp_path
+):
+    """0.59.0: the old tailnet companion (a Service) is deleted first, and its
+    finalizers finish, before the Ingress of the same name is created."""
+    api, provider = local_api
+    label = {"piceli.io/access": "tailnet"}
+    old = manifest("Service", "web-tailnet")
+    old["metadata"]["labels"] = label
+    old["metadata"]["finalizers"] = ["tailscale.com/finalizer"]
+    api.put(old, owned=True)
+    api_terminating = api.terminating_reads = 2
+    new = manifest("Ingress", "web-tailnet")
+    new["metadata"]["labels"] = label
+    plan, snapshot, grant = prepare(
+        provider,
+        [new],
+        prune=True,
+        kinds=(
+            ResourceType("v1", "Service"),
+            ResourceType("networking.k8s.io/v1", "Ingress"),
+        ),
+    )
+    assert [a.operation for a in plan.actions] == [
+        PlanOperation.DELETE,
+        PlanOperation.CREATE,
+    ]
+    assert (
+        executor(provider, tmp_path).run("swap", plan, snapshot, grant)["state"]
+        == "ready"
+    )
+    requests = [
+        (request["method"], request["path"])
+        for request in api.requests
+        if request["query"].get("dryRun") != ["All"]
+    ]
+    deleted = requests.index(
+        next(r for r in requests if r[0] == "DELETE" and "/services/" in r[1])
+    )
+    written = requests.index(
+        next(
+            r
+            for r in requests[deleted:]
+            if r[0] in {"POST", "PATCH"} and "/ingresses" in r[1]
+        )
+    )
+    # The executor read the Service until its finalizers were done.
+    reads = [
+        r for r in requests[deleted:written] if r[0] == "GET" and "/services/" in r[1]
+    ]
+    assert len(reads) > api_terminating
+    assert ("Service", "web-tailnet") not in api.objects
+    assert ("Ingress", "web-tailnet") in api.objects
