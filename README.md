@@ -66,10 +66,10 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.59
+## What's new in 0.60
 
-- **HTTPS on the tailnet works as declared**: only HTTP ports get a
-  Tailscale Ingress, and it takes the plain tailnet name.
+- **Rollbacks keep the current tailnet access**: a rollback re-applies the
+  older release but keeps the newest release's tailnet companions.
 
 ## Web UI
 

@@ -4,6 +4,17 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.60.0
+
+**Fixes**
+
+- **A rollback keeps the current tailnet companions.** A rollback still
+  re-applies the older release's own objects, but its tailnet companions
+  (label `piceli.io/access`) now come from the release it rolls back from.
+  Before, rolling back to a release 0.58 had rendered brought back the
+  `Access(https=True)` companions that 0.59 fixed, and deleted a TURN
+  Service's plain companion.
+
 ## Version 0.59.0
 
 **Fixes**

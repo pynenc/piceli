@@ -865,6 +865,67 @@ def scoped_rollback(
     return dataclasses.replace(composition, components=tuple(components))
 
 
+#: The label of the tailnet companions an environment renders
+#: (``piceli.envs.access``).
+_COMPANION_LABEL = "piceli.io/access"
+
+
+def _companion(resource: Any) -> bool:
+    labels = (resource.manifest.get("metadata") or {}).get("labels") or {}
+    return _COMPANION_LABEL in labels
+
+
+def current_companions(
+    composition: DeploymentComposition, source: DeploymentComposition
+) -> DeploymentComposition:
+    """``composition`` with the access companions of ``source`` (0.60.0).
+
+    A rollback re-applies an older release's objects exactly, but its
+    tailnet companions belong to the environment, not to the app, and the
+    older Piceli that rendered them may have rendered them wrong (0.59.0:
+    TURN's plain companion became two Ingresses again). So a rollback takes
+    them from the release it rolls back from, the newest render.
+    """
+    added: dict[str, list[Any]] = {}
+    for component in source.components:
+        for resource in component.resources:
+            if _companion(resource):
+                added.setdefault(component.name, []).append(resource)
+    names = {component.name for component in composition.components}
+    components = []
+    for component in composition.components:
+        kept = [r for r in component.resources if not _companion(r)]
+        components.append(
+            dataclasses.replace(
+                component, resources=(*kept, *added.get(component.name, ()))
+            )
+        )
+    for component in source.components:
+        if component.name in added and component.name not in names:
+            components.append(
+                dataclasses.replace(
+                    component, resources=tuple(added[component.name]), dependencies=()
+                )
+            )
+    return dataclasses.replace(composition, components=tuple(components))
+
+
+def _reapplied(
+    composition: DeploymentComposition,
+    scope: Collection[Mapping[str, Any]] | None,
+    companions: str | None,
+    catalog: Any,
+) -> DeploymentComposition:
+    """What a re-apply declares: ``composition`` scoped, with the companions
+    of release ``companions`` when one is named (0.60.0)."""
+    composition = scoped_rollback(composition, scope)
+    if companions is None:
+        return composition
+    return current_companions(
+        composition, composition_from_archive(catalog.get(companions).archive)
+    )
+
+
 def versioned_secrets(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
     """The versioned Secrets a plan creates and deletes (0.27.0).
 
@@ -1866,8 +1927,25 @@ class ReleaseRunner:
                         ),
                         key=lambda ref: tuple(ref.values()),
                     )
+                # 0.60.0: the tailnet companions of the newest release
+                # attempted (the failed one, for the automatic rollback).
+                entries = self.history.entries() if rollback_to is not None else []
+                newest = rollback_of or (entries[-1]["release"] if entries else None)
+                companions = (
+                    newest
+                    if newest not in (None, name)
+                    and newest in {record.name for record in catalog.records()}
+                    else None
+                )
                 return self._plan_reapply(
-                    name, intent, binding, catalog, store, requested, scope=scope
+                    name,
+                    intent,
+                    binding,
+                    catalog,
+                    store,
+                    requested,
+                    scope=scope,
+                    companions=companions,
                 )
             finally:
                 journal.close()
@@ -2352,10 +2430,13 @@ class ReleaseRunner:
         requested: _Ownership,
         *,
         scope: list[dict[str, Any]] | None = None,
+        companions: str | None = None,
     ) -> PlanResult:
         settings = self.spec.model.release
         record = catalog.get(name)
-        composition = scoped_rollback(composition_from_archive(record.archive), scope)
+        composition = _reapplied(
+            composition_from_archive(record.archive), scope, companions, catalog
+        )
         # A scoped rollback never deletes: it restores what both releases
         # declare and leaves the rest as it is.
         prune = settings.prune and scope is None
@@ -2417,6 +2498,7 @@ class ReleaseRunner:
             replace=replace,
             previous_releases=previous_releases,
             scope=scope,
+            companions=companions,
         )
         return result
 
@@ -2431,6 +2513,7 @@ class ReleaseRunner:
         replace: Sequence[Mapping[str, str]] = (),
         previous_releases: Sequence[str] = (),
         scope: list[dict[str, Any]] | None = None,
+        companions: str | None = None,
     ) -> None:
         _write_private(
             self._plan_path(result.plan_hash),
@@ -2448,6 +2531,7 @@ class ReleaseRunner:
                     "replace": list(replace),
                     "previous_releases": list(previous_releases),
                     **({"scope": scope} if scope is not None else {}),
+                    **({"companions_from": companions} if companions else {}),
                     # What apply checks is what was reviewed, not a later spec.
                     "checks": [check.public_dict() for check in self.spec.model.checks],
                     "rollback_on_failed_checks": (
@@ -2693,8 +2777,11 @@ class ReleaseRunner:
                         ),
                         policy=pending.get("approval_policy"),
                     )
-                    composition = scoped_rollback(
-                        composition_from_archive(record.archive), pending.get("scope")
+                    composition = _reapplied(
+                        composition_from_archive(record.archive),
+                        pending.get("scope"),
+                        pending.get("companions_from"),
+                        catalog,
                     )
                     approved_plan = build_plan(
                         composition,
@@ -2743,8 +2830,11 @@ class ReleaseRunner:
                             executor,
                             name,
                             execution_id=execution_id,
-                            restrict=lambda found: scoped_rollback(
-                                found, pending.get("scope")
+                            restrict=lambda found: _reapplied(
+                                found,
+                                pending.get("scope"),
+                                pending.get("companions_from"),
+                                catalog,
                             ),
                         )
 

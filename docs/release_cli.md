@@ -886,6 +886,13 @@ did not become ready (including `checks-failed`), the last ready release
 itself. A rollback runs the spec's `[[checks]]` too; an automatic rollback
 after failed checks is described in {doc}`checks`.
 
+One exception to "archived": the tailnet companions an environment renders
+(objects labelled `piceli.io/access`, see {doc}`access`) come from the
+newest release attempted, the one the rollback leaves (0.60.0). They belong
+to the environment, not to the app, and an older Piceli may have rendered
+them differently: before, rolling back to a release an older version had
+rendered could bring back a companion bug the running version had fixed.
+
 ## Resume, stop and status
 
 * `resume` continues an interrupted apply of a created release with the same
