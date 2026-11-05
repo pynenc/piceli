@@ -65,6 +65,16 @@ jobs:
           ok=false
           head=$(gh api "repos/$REPO/commits/$SHA/pulls" \
             -q '[.[] | select(.merged_at != null)][0].head.sha // empty')
+          if [ -z "$head" ]; then
+            # Seconds after a merge that lookup can be empty: the squash
+            # subject names the pull request, whose merge commit must be this.
+            number=$(gh api "repos/$REPO/commits/$SHA" -q .commit.message \
+              | head -n 1 | sed -nE 's/.*\(#([0-9]+)\)$/\1/p')
+            if [ -n "$number" ]; then
+              head=$(gh api "repos/$REPO/pulls/$number" \
+                -q "select(.merge_commit_sha == \"$SHA\") | .head.sha")
+            fi
+          fi
           if [ -n "$head" ]; then
             tree=$(gh api "repos/$REPO/commits/$SHA" -q .commit.tree.sha)
             tested=$(gh api "repos/$REPO/commits/$head" -q .commit.tree.sha)
