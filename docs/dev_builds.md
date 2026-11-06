@@ -374,6 +374,21 @@ nearest the run's commit (the fewest commits between them in the builder's
 Git mirror), else the most recently used free one, under an exclusive lock:
 two runs never write one target directory.
 
+**Warm for this command** (0.61.0). A lineage that built the tree for one
+command can still be cold for another: a new target, profile or
+`RUSTFLAGS` compiles every crate again. So a lineage remembers the
+**command keys** it finished: the command up to `--`, its working
+directory and its build environment (`RUSTFLAGS`, `CARGO_*`, `RUST*`,
+`CC`, `CFLAGS`...). A run prefers the free lineages that finished its key,
+then the order above. When only a busy lineage finished it, the run starts
+a new lineage copied from that one if the key has room; at
+`max_lineages` it waits for it up to 120 s (`warm_wait_seconds` in the run
+spec), then takes the best free one. `cache.warm` is true only when the
+lineage finished this key; `cache.tree_warm` says whether it was built
+before at all, and `cache.command_key` names the key. The run logs
+`(warm)`, `(warm, waited 40 s for it)` or `(cold for this command, built
+before by others)`.
+
 **A new lineage starts warm** (0.53.0). When every lineage of the key is
 busy and a new one is made, it starts as a copy of its nearest sibling
 (same order: branch, then commits apart, then most recent): its tree and

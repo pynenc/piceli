@@ -4,6 +4,21 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.61.0
+
+**Changes**
+
+- **"Warm" means warm for this command.** A dev run prefers the lineage
+  that last finished the same command key (the command up to `--`, its
+  working directory, `RUSTFLAGS`, `CARGO_*` and the other build
+  variables). Before, a lineage built for other commands counted as warm,
+  and a new target or profile compiled every crate there (875 s where the
+  warm build took 93 s). When only a busy lineage has the key, the run
+  copies it into a new lineage if there is room, else waits for it up to
+  120 s (`warm_wait_seconds`). The result adds `cache.tree_warm` and
+  `cache.command_key`; the log says `cold for this command` when only the
+  tree was warm.
+
 ## Version 0.60.0
 
 **Fixes**

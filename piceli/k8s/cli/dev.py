@@ -87,9 +87,16 @@ def run_summary(result: dict[str, Any]) -> str:
     if tests:
         line += f"; tests {tests.get('passed')} passed, {tests.get('failed')} failed"
     if cache.get("lineage"):
-        line += (
-            f"; lineage {cache['lineage']} ({'warm' if cache.get('warm') else 'cold'}"
+        warmth = (
+            "warm"
+            if cache.get("warm")
+            else "cold for this command"
+            if cache.get("tree_warm")
+            else "cold"
         )
+        line += f"; lineage {cache['lineage']} ({warmth}"
+        if cache.get("warm_wait_seconds"):
+            line += f", waited {cache['warm_wait_seconds']:.0f} s for it"
         if cache.get("crates_compiled") is not None:
             line += f", {cache['crates_compiled']} crates compiled"
         line += ")"

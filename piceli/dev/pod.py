@@ -1163,24 +1163,45 @@ class Lineage:
     0.53.0: ``seed_from`` is the nearest sibling to copy into a new one."""
 
     def __init__(
-        self, path: Path, descriptor: int, warm: bool, seed_from: Path | None = None
+        self,
+        path: Path,
+        descriptor: int,
+        warm: bool,
+        seed_from: Path | None = None,
+        *,
+        command_warm: bool | None = None,
+        waited: float = 0.0,
     ) -> None:
         self.path = path
         self.descriptor = descriptor
+        #: Built before, by any command (the tree and some of target/).
         self.warm = warm
         self.seed_from = seed_from
+        #: 0.61.0: this lineage last finished the run's own command key
+        #: (``None``: the run has no key).
+        self.command_warm = command_warm
+        #: 0.61.0: seconds the run waited for a busy lineage warm for it.
+        self.waited = waited
 
-    def release(self, hint: str | None, run: str) -> None:
+    def release(self, hint: str | None, run: str, command: str | None = None) -> None:
         meta = _read_meta(self.path)
         for key in ("taken_at", "run", "paused"):
             meta.pop(key, None)
+        now = time.time()
         meta.update(
-            last_used=time.time(),
+            last_used=now,
             bytes=du(self.path),
             hint=hint,
             runs=int(meta.get("runs") or 0) + 1,
             last_run=run,
         )
+        if command:
+            # 0.61.0: the command keys this lineage finished, newest kept.
+            done = dict(meta.get("commands") or {})
+            done[command] = now
+            meta["commands"] = dict(
+                sorted(done.items(), key=lambda item: -float(item[1]))[:COMMAND_KEYS]
+            )
         partial = self.path / ".meta.json.partial"
         partial.write_text(json.dumps(meta))
         os.replace(partial, self.path / "meta.json")
@@ -1220,16 +1241,58 @@ def distance(mirror: Path, one: str, two: str) -> int | None:
         return None
 
 
+#: 0.61.0: how many command keys a lineage remembers.
+COMMAND_KEYS = 16
+#: 0.61.0: the environment that changes what cargo builds (part of the key).
+_BUILD_ENV = re.compile(r"(CARGO_.*|RUST.*|CC|CXX|CFLAGS|CXXFLAGS|LDFLAGS|TARGET_.*)")
+#: 0.61.0: how long a run waits for a busy lineage warm for its command
+#: before it takes a cold one (``warm_wait_seconds`` in the spec).
+WARM_WAIT_SECONDS = 120.0
+
+
+def command_key(spec: dict[str, Any]) -> str | None:
+    """0.61.0: what a lineage must have built for a run to be warm: the
+    command up to ``--`` (test filters and binary arguments do not change
+    what cargo compiles), the working directory and the build environment
+    (``RUSTFLAGS``, ``CARGO_*``...). ``None`` without a command."""
+    command = [str(part) for part in spec.get("command") or ()]
+    if not command:
+        return None
+    if "--" in command:
+        command = command[: command.index("--")]
+    env = {
+        str(key): str(value)
+        for key, value in (spec.get("env") or {}).items()
+        if _BUILD_ENV.fullmatch(str(key))
+    }
+    document = {"command": command, "cwd": str(spec.get("cwd") or "."), "env": env}
+    return hashlib.sha256(json.dumps(document, sort_keys=True).encode()).hexdigest()[
+        :16
+    ]
+
+
+def _finished(meta: dict[str, Any], key: str | None) -> bool:
+    return bool(key) and key in (meta.get("commands") or {})
+
+
 def nearest(
     items: list[tuple[dict[str, Any], Path]],
     hint: str | None,
     near: DeltaSource | None,
+    command: str | None = None,
 ) -> tuple[dict[str, Any], Path] | None:
     """0.53.0: the lineage a run prefers among ``items`` (``(meta, path)``):
     the same hint (branch); else the smallest distance from its head to
-    ``near``'s head in ``near``'s mirror; else the most recently used."""
+    ``near``'s head in ``near``'s mirror; else the most recently used.
+
+    0.61.0: only among the lineages that finished the run's ``command`` key,
+    when any did: one warm for other commands only still compiles
+    everything for a new target, profile or ``RUSTFLAGS``."""
     if not items:
         return None
+    warm = [item for item in items if _finished(item[0], command)]
+    if warm:
+        items = warm
 
     def recent(item: tuple[dict[str, Any], Path]) -> float:
         return float(item[0].get("last_used") or 0)
@@ -1254,6 +1317,16 @@ def nearest(
     return max(items, key=recent)
 
 
+def _warmth(lineage: Lineage) -> str:
+    """0.61.0: ``warm`` only when the lineage finished this very command."""
+    if not lineage.warm:
+        return "cold"
+    if lineage.command_warm is False:
+        return "cold for this command, built before by others"
+    waited = f", waited {lineage.waited:.0f} s for it" if lineage.waited >= 1 else ""
+    return "warm" + waited
+
+
 def take_lineage(
     cache: Path,
     spec: dict[str, Any],
@@ -1272,7 +1345,10 @@ def take_lineage(
     root.mkdir(parents=True, exist_ok=True)
     most = max(1, int(spec.get("max_lineages") or 1))
     hint = spec.get("lineage_hint")
-    deadline = clock() + float(spec.get("timeout_seconds") or 3600)
+    command = command_key(spec)
+    started = clock()
+    deadline = started + float(spec.get("timeout_seconds") or 3600)
+    patience = float(spec.get("warm_wait_seconds", WARM_WAIT_SECONDS) or 0)
     while True:
         select = os.open(root / ".select.lock", os.O_RDWR | os.O_CREAT, 0o600)
         try:
@@ -1288,10 +1364,27 @@ def take_lineage(
                     free.append((index, _read_meta(path), path, descriptor))
             chosen = None
             seed = None
-            if free:
-                best = nearest([(item[1], item[2]) for item in free], hint, near)
+            # 0.61.0: no free lineage finished this command but a busy one
+            # did (a cold build of a new target can take ten times as long
+            # as a warm one): start a new lineage seeded from it when there
+            # is room, else wait for it a while.
+            busy = [index for index in existing if all(i[0] != index for i in free)]
+            warm_elsewhere = (
+                command is not None
+                and not any(_finished(item[1], command) for item in free)
+                and any(_finished(_read_meta(root / str(i)), command) for i in busy)
+            )
+            grow = len(existing) < most and (not free or warm_elsewhere)
+            if (
+                free
+                and not grow
+                and not (warm_elsewhere and clock() - started < patience)
+            ):
+                best = nearest(
+                    [(item[1], item[2]) for item in free], hint, near, command
+                )
                 chosen = next(item for item in free if best and item[2] == best[1])
-            elif len(existing) < most:
+            elif grow:
                 index = next(i for i in range(len(existing) + 1) if i not in existing)
                 path = root / str(index)
                 descriptor = _try_lock(path)
@@ -1303,7 +1396,7 @@ def take_lineage(
                         for i in existing
                         if (root / str(i) / "target").is_dir()
                     ]
-                    found = nearest(siblings, hint, near)
+                    found = nearest(siblings, hint, near, command)
                     seed = found[1] if found else None
             for item in free:
                 if item is not chosen:
@@ -1318,7 +1411,14 @@ def take_lineage(
                     path,
                     {**meta, "taken_at": time.time(), "run": spec.get("run")},
                 )
-                return Lineage(path, descriptor, bool(meta.get("runs")), seed)
+                return Lineage(
+                    path,
+                    descriptor,
+                    bool(meta.get("runs")),
+                    seed,
+                    command_warm=_finished(meta, command) if command else None,
+                    waited=round(clock() - started, 3),
+                )
         finally:
             os.close(select)
         if clock() >= deadline:
@@ -2185,7 +2285,19 @@ def main(
         result["cache"] = {
             "lineage": f"{lineage.path.parent.name}/{lineage.path.name}",
             "lineage_dir": str(lineage.path),
-            "warm": "seeded" if seeded else lineage.warm,
+            "warm": "seeded"
+            if seeded
+            else (
+                lineage.warm
+                if lineage.command_warm is None
+                else lineage.warm and lineage.command_warm
+            ),
+            **(
+                {"tree_warm": lineage.warm, "command_key": command_key(spec)}
+                if lineage.command_warm is not None
+                else {}
+            ),
+            **({"warm_wait_seconds": lineage.waited} if lineage.waited >= 1 else {}),
             **({"seed": seeded} if seeded else {}),
             "evicted": budget["evicted"],
             "used_bytes": budget["used_bytes"],
@@ -2213,7 +2325,7 @@ def main(
                 f"in {seeded['seconds']:.1f} s by {seeded['method']}, "
                 f"{seeded['dropped_units']} unit(s) to rebuild)"
                 if seeded
-                else f"({'warm' if lineage.warm else 'cold'})"
+                else f"({_warmth(lineage)})"
             )
         )
         timeline.phase("sync")
@@ -2524,7 +2636,11 @@ def main(
                 if watch is not None and watch.stopped:
                     dropped = lineage.drop()
                 else:
-                    lineage.release(spec.get("lineage_hint"), str(spec.get("run")))
+                    lineage.release(
+                        spec.get("lineage_hint"),
+                        str(spec.get("run")),
+                        command_key(spec),
+                    )
             except OSError:
                 pass
         if limit is not None and lineage is not None:
