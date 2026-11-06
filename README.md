@@ -66,10 +66,11 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.60
+## What's new in 0.61
 
-- **Rollbacks keep the current tailnet access**: a rollback re-applies the
-  older release but keeps the newest release's tailnet companions.
+- **Dev runs find the build they need**: a run prefers the lineage that
+  last built the same command, target and flags, and says when it was only
+  warm for others.
 
 ## Web UI
 

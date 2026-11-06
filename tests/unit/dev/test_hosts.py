@@ -237,9 +237,15 @@ def test_a_native_host_runs_the_wrapper_here_and_queues_on_files(
     assert list((tmp_path / "state" / "cache" / "lineages").glob("shop-sh*/*"))
     again = run(
         NativePort(host, dev), dev,
-        RunRequest(SourceRequest("shop", app, None), ["true"]), host=host,
+        RunRequest(SourceRequest("shop", app, None), ["sh", "t.sh"]), host=host,
     )  # fmt: skip
     assert again["cache"]["warm"] is True
+    # 0.61.0: another command finds the tree built, not its own build.
+    other = run(
+        NativePort(host, dev), dev,
+        RunRequest(SourceRequest("shop", app, None), ["true"]), host=host,
+    )  # fmt: skip
+    assert other["cache"]["warm"] is False and other["cache"]["tree_warm"] is True
 
 
 def test_native_runs_share_the_hosts_slots(tmp_path: Path) -> None:

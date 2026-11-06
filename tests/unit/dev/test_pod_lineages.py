@@ -353,3 +353,99 @@ def test_a_run_paused_for_ever_times_out_at_twice_its_timeout(tmp_path: Path) ->
     took = time.monotonic() - began
     assert timed_out is True and code is not None and code < 0
     assert 0.55 <= took < 5
+
+
+# ---------------------------------------------- warm per command (0.61.0)
+
+WASM = [
+    "cargo", "build", "--profile", "wasm-release",
+    "--target", "wasm32-unknown-unknown", "-p", "web",
+]  # fmt: skip
+
+
+def _wasm(**extra: Any) -> dict[str, Any]:
+    return _spec(command=WASM, env={"RUSTFLAGS": "--cfg=x", "HOME": "/h"}, **extra)
+
+
+def test_the_command_key_is_what_cargo_builds() -> None:
+    key = pod.command_key(_wasm())
+    assert key and len(key) == 16
+    # Arguments after `--` and unrelated environment do not change it ...
+    assert (
+        pod.command_key(
+            _spec(command=[*WASM, "--", "--nocapture"], env={"RUSTFLAGS": "--cfg=x"})
+        )
+        == key
+    )
+    # ... the build's flags and the target do.
+    assert pod.command_key(_spec(command=WASM, env={"RUSTFLAGS": "-Copt"})) != key
+    assert pod.command_key(_spec(command=WASM[:4], env={"RUSTFLAGS": "--cfg=x"})) != key
+    assert pod.command_key(_spec()) is None
+
+
+def test_the_lineage_that_built_this_command_wins(tmp_path: Path) -> None:
+    cache = tmp_path / "cache"
+    key = pod.command_key(_wasm())
+    _lineage(cache, "shop-rust/0", last_used=9.0, runs=5, hint="wp-a",
+             commands={"other": 9.0})  # fmt: skip
+    _lineage(cache, "shop-rust/1", last_used=1.0, runs=1, commands={key: 1.0})
+    taken = pod.take_lineage(cache, _wasm(lineage_hint="wp-a"), time.monotonic)
+    os.close(taken.descriptor)
+    assert taken.path.name == "1" and taken.command_warm is True
+    # Another command: lineage 0 is warm for the tree, cold for it.
+    taken = pod.take_lineage(cache, _spec(command=["cargo", "test"]), time.monotonic)
+    os.close(taken.descriptor)
+    assert taken.warm is True and taken.command_warm is False
+    assert pod._warmth(taken) == "cold for this command, built before by others"
+
+
+def test_a_release_records_the_command(tmp_path: Path) -> None:
+    cache = tmp_path / "cache"
+    taken = pod.take_lineage(cache, _wasm(), time.monotonic)
+    taken.release(None, "r9", pod.command_key(_wasm()))
+    meta = json.loads((taken.path / "meta.json").read_text())
+    assert list(meta["commands"]) == [pod.command_key(_wasm())]
+
+
+def test_with_room_a_new_lineage_copies_the_busy_warm_one(tmp_path: Path) -> None:
+    cache = tmp_path / "cache"
+    key = pod.command_key(_wasm())
+    _lineage(cache, "shop-rust/0", runs=3, commands={"other": 1.0})
+    warm = _lineage(cache, "shop-rust/1", runs=3, commands={key: 1.0})
+    busy = pod._try_lock(warm)
+    assert busy is not None
+    try:
+        taken = pod.take_lineage(cache, _wasm(), time.monotonic)
+        os.close(taken.descriptor)
+    finally:
+        os.close(busy)
+    assert taken.path.name == "2" and taken.seed_from == warm
+
+
+def test_at_the_limit_a_run_waits_a_while_for_the_busy_warm_one(
+    tmp_path: Path,
+) -> None:
+    cache = tmp_path / "cache"
+    key = pod.command_key(_wasm())
+    _lineage(cache, "shop-rust/0", runs=3, commands={"other": 1.0})
+    warm = _lineage(cache, "shop-rust/1", runs=3, commands={key: 1.0})
+    busy = pod._try_lock(warm)
+    assert busy is not None
+    now = [0.0]
+
+    def clock() -> float:
+        now[0] += 10.0
+        return now[0]
+
+    try:
+        taken = pod.take_lineage(
+            cache,
+            _wasm(max_lineages=2, warm_wait_seconds=60, poll_seconds=0.001),
+            clock,
+        )
+        os.close(taken.descriptor)
+    finally:
+        os.close(busy)
+    # It waited its 60 s, then built in the cold one rather than not at all.
+    assert taken.path.name == "0" and taken.waited >= 60
+    assert taken.command_warm is False
