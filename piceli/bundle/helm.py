@@ -525,7 +525,7 @@ class _Templater:
         storage_class: str | None,
         *,
         secret_names: frozenset[str] = frozenset(),
-        values_at: Mapping[str, Sequence[tuple[list[str], str]]] | None = None,
+        values_at: Mapping[str, Sequence[tuple[list[str], str, int]]] | None = None,
         value_defaults: Mapping[str, Any] | None = None,
         storage_env: Mapping[str, int] | None = None,
     ) -> None:
@@ -537,7 +537,8 @@ class _Templater:
         #: 0.31.0: the app's Secrets ``existingSecret`` replaces (empty: no
         #: ``existingSecret`` value).
         self.secret_names = secret_names
-        #: 0.31.0: ``"Kind/name"`` → ``(pointer parts, value path)``.
+        #: 0.31.0: ``"Kind/name"`` → ``(pointer parts, value path, target
+        #: number)``; the number counts the value's own targets (0.63.0).
         self.values_at = dict(values_at or {})
         #: 0.62.0: value path → its ``values.yaml`` default.
         self.value_defaults = dict(value_defaults or {})
@@ -610,7 +611,7 @@ class _Templater:
 
     def place_values(self, key: str, manifest: dict[str, Any]) -> None:
         """Each :class:`HelmValue` aimed at ``key``, at its pointer."""
-        for number, (parts, value) in enumerate(self.values_at.get(key, ())):
+        for parts, value, number in self.values_at.get(key, ()):
             try:
                 parent = _walk(manifest, parts[:-1])
                 last = parts[-1]
@@ -868,12 +869,8 @@ def _secret_helper(
         spec = generators[generator]
         out = _literal(generator)
         if isinstance(spec, TlsCaSpec | TlsSelfSignedSpec):
-            raise BundleError(
-                "bundle-secret-unsupported",
-                f"generator {generator!r} makes TLS keys, which a Helm chart "
-                "does not generate; use the kustomize bundle (prepare.sh) or "
-                "an imported certificate",
-            )
+            lines += _tls_lines(generator, spec, where, bundle.namespace)
+            continue
         lines.append('{{- $v = "" -}}')
         if isinstance(spec, RandomSecretSpec):
             lines += kept(generator)
@@ -914,6 +911,109 @@ def _secret_helper(
         lines.append(f"{{{{- $_ := set $out {out} $v -}}}}")
     lines += ["{{- toJson $out -}}", "{{- end -}}", ""]
     return "\n".join(lines)
+
+
+def _tls_names(names: Sequence[str], namespace: str) -> str:
+    """A Go list of names; the bundle's namespace becomes the release's.
+
+    ``intake.agent.svc`` built for namespace ``agent`` is
+    ``intake.<release namespace>.svc`` in the chart (0.63.0)."""
+    items = []
+    for name in names:
+        labels = name.split(".")
+        if namespace in labels[1:]:
+            at = labels.index(namespace, 1)
+            text = ".".join([*labels[:at], "%s", *labels[at + 1 :]])
+            items.append(f"(printf {_literal(text)} $.Release.Namespace)")
+        else:
+            items.append(_literal(name))
+    return f"(list {' '.join(items)})"
+
+
+def _tls_lines(
+    generator: str,
+    spec: Any,
+    where: Mapping[str, tuple[int, str]],
+    namespace: str,
+) -> list[str]:
+    """A private CA and its leaves (or one self-signed certificate), made at
+    install with Sprig's ``genCA``/``genSignedCert`` (0.63.0).
+
+    The outputs the app's Secrets hold are kept on upgrade when all of them
+    are there; otherwise every output of the generator is made again (the
+    CA key is not stored, so a new leaf needs a new CA)."""
+    from piceli.k8s.release_secret_spec import TlsCaSpec, outputs
+
+    if spec.rsa_bits != 2048:
+        raise BundleError(
+            "bundle-secret-unsupported",
+            f"generator {generator!r}: a Helm chart makes 2048-bit RSA keys "
+            f"(Sprig's genCA); rsa_bits={spec.rsa_bits} needs the kustomize "
+            "bundle (prepare.sh) or an imported certificate",
+        )
+    if getattr(spec, "ip_addresses", ()) or any(
+        leaf.ip_addresses for leaf in getattr(spec, "leaves", {}).values()
+    ):
+        raise BundleError(
+            "bundle-secret-unsupported",
+            f"generator {generator!r}: a chart's certificates name DNS names "
+            "only; another cluster's IP addresses are not known in advance",
+        )
+    every = [output.name for output in outputs(generator, spec)]
+    stored = [name for name in every if name in where]
+    tag = "".join(ch if ch.isalnum() else "_" for ch in generator)
+    lines = [f"{{{{- $keep_{tag} := {'true' if stored else 'false'} -}}}}"]
+    for name in stored:
+        number, key = where[name]
+        lines.append(
+            f"{{{{- if not (hasKey $d{number} {_literal(key)}) -}}}}"
+            f"{{{{- $keep_{tag} = false -}}}}{{{{- end -}}}}"
+        )
+    lines.append(f"{{{{- if $keep_{tag} -}}}}")
+    for name in every:
+        if name in where:
+            number, key = where[name]
+            value = f"get $d{number} {_literal(key)} | b64dec"
+        else:
+            value = '""'  # not stored (the CA key): not needed once issued
+        lines.append(f"{{{{- $_ := set $out {_literal(name)} ({value}) -}}}}")
+    lines.append("{{- else -}}")
+    if isinstance(spec, TlsCaSpec):
+        lines.append(
+            f"{{{{- $ca_{tag} := genCA {_literal(spec.common_name)} "
+            f"{int(spec.ca_days)} -}}}}"
+        )
+        lines.append(
+            f"{{{{- $_ := set $out {_literal(generator + '.ca.crt')} $ca_{tag}.Cert -}}}}"
+        )
+        lines.append(
+            f"{{{{- $_ := set $out {_literal(generator + '.ca.key')} $ca_{tag}.Key -}}}}"
+        )
+        for leaf in sorted(spec.leaves):
+            names = spec.leaves[leaf].dns_names
+            lines.append(
+                f"{{{{- $leaf := genSignedCert {_literal(names[0].split('.')[0])} "
+                f"nil {_tls_names(names, namespace)} {int(spec.days)} $ca_{tag} -}}}}"
+            )
+            for part, field_name in (("crt", "Cert"), ("key", "Key")):
+                lines.append(
+                    f"{{{{- $_ := set $out {_literal(f'{generator}.{leaf}.{part}')} "
+                    f"$leaf.{field_name} -}}}}"
+                )
+    else:
+        names = spec.dns_names
+        lines.append(
+            f"{{{{- $leaf := genSelfSignedCert {_literal(names[0].split('.')[0])} "
+            f"nil {_tls_names(names, namespace)} {int(spec.days)} -}}}}"
+        )
+        lines.append(
+            f"{{{{- $_ := set $out {_literal(generator + '.crt')} $leaf.Cert -}}}}"
+        )
+        lines.append(
+            f"{{{{- $_ := set $out {_literal(generator + '.key')} $leaf.Key -}}}}"
+        )
+    lines.append("{{- end -}}")
+    return lines
 
 
 def _secrets_template(
@@ -1175,10 +1275,10 @@ def build_helm(
         )
     required = {name for name in declared.required if name in settings}
     reverse = {ref: name for name, ref in settings.items()}
-    values_at: dict[str, list[tuple[list[str], str]]] = {}
+    values_at: dict[str, list[tuple[list[str], str, int]]] = {}
     for name, (_parts, _item, targets) in placed_values.items():
-        for key, pointer in targets:
-            values_at.setdefault(key, []).append((pointer, name))
+        for number, (key, pointer) in enumerate(targets):
+            values_at.setdefault(key, []).append((pointer, name, number))
     by_key = {f"{item.kind}/{item.name}": item for item in bundle.objects}
     templater = _Templater(
         bundle.name, bundle.namespace, reverse, required, bundle.storage_class,

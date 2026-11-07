@@ -4,6 +4,21 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.63.0
+
+**Changes**
+
+- **Helm charts make a private CA and its certificates.** A `TlsCa` (or
+  self-signed) generator was refused by `piceli bundle --helm`. The chart
+  now makes the CA and the leaves at install (`genCA`, `genSignedCert`)
+  and keeps them on upgrade through `lookup`; a DNS name with the bundle's
+  namespace takes the release namespace. Keys are 2048-bit RSA; other
+  sizes and IP addresses are refused.
+- **Several Helm values on one object.** Two `HelmValue`s aimed at the
+  same object (for example `scrape.enabled` and `scrape.intervalSeconds`)
+  were refused with `name objects the render lacks`: the placements were
+  counted per object, not per value. Each value now renders its own place.
+
 ## Version 0.62.0
 
 **Fixes**

@@ -66,10 +66,12 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.62
+## What's new in 0.63
 
-- **Helm charts upgrade with `--reuse-values`**: a value the older chart
-  did not have takes its default instead of failing the render.
+- **Helm charts make TLS certificates**: a private CA and its leaf
+  certificates are made at install and kept on upgrade.
+- **Several Helm values on one object**: two values may now target one
+  object, under one map (`scrape.enabled`, `scrape.intervalSeconds`).
 
 ## Web UI
 

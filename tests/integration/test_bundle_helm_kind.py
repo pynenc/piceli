@@ -10,9 +10,10 @@ It needs ``kubectl`` and ``helm`` on ``PATH`` and network access for one
 pinned public image. The test never reads the ambient kubeconfig.
 
 1. ``helm install`` with the required settings and the imported token from a
-   file: the StatefulSet becomes Ready, the generated Secret holds the token
-   and two random values.
-2. ``helm upgrade`` without the token: the Secret keeps every value.
+   file: the StatefulSet becomes Ready, the generated Secret holds the token,
+   a random value and a private CA with one leaf certificate.
+2. ``helm upgrade`` without the token: the Secret keeps every value, the
+   certificates included.
 3. ``helm uninstall``: the ClusterRole, its binding and the Secret are gone;
    the StatefulSet's claim stays (deleting the namespace removes it).
 
@@ -42,7 +43,8 @@ BUSYBOX = (
 )
 APP = f"""
 from piceli import (App, ClaimTemplate, Container, MemoryVolume, Pipeline, PodDefaults,
-                    Random, Resources, Rule, Secrets, SecretVolume, Security, Target)
+                    Random, Resources, Rule, Secrets, SecretVolume, Security, Target,
+                    TlsCa)
 from piceli import HelmChart
 from piceli.k8s.release_secret_spec import ImportSecretSpec
 
@@ -52,9 +54,12 @@ app = App("agent", pod_defaults=PodDefaults(security=Security.restricted(
 secrets = Secrets(
     api_token=ImportSecretSpec.model_validate({{"type": "import", "env": "API_TOKEN"}}),
     intake_token=Random(32),
+    tls=TlsCa({{"intake": ["agent-intake", "agent-intake.agent.svc"]}}),
 )
 private = app.secret("agent-private", {{
-    "api-token": secrets.ref("api_token"), "intake-token": secrets.ref("intake_token")}})
+    "api-token": secrets.ref("api_token"), "intake-token": secrets.ref("intake_token"),
+    "ca.crt": secrets.ref("tls.ca.crt"), "tls.crt": secrets.ref("tls.intake.crt"),
+    "tls.key": secrets.ref("tls.intake.key")}})
 settings = app.config("agent-settings", {{"team": "REPLACE"}})
 reader = app.service_account("agent-reader", cluster_rules=[
     Rule(resources=["nodes"], verbs=["get", "list"])])
@@ -137,7 +142,9 @@ def test_install_upgrade_and_uninstall(tmp_path: Path) -> None:
             "--wait", "--timeout", "5m",
         )  # fmt: skip
         first = secret()
-        assert set(first) == {"api-token", "intake-token"}
+        assert set(first) == {
+            "api-token", "intake-token", "ca.crt", "tls.crt", "tls.key"
+        }  # fmt: skip
         cluster = f"{namespace}:agent:agent-reader"
         assert kubectl("get", "clusterrole", cluster, "-o", "name").strip()
         helm(

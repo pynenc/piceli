@@ -183,8 +183,16 @@ What becomes a value:
 install. Generated values (`Random`, `Static`, `Template`) are made at install
 in the same form as `prepare.sh` makes them (`Random(32)`: 32 random bytes,
 URL-safe base64), and read back with Helm's `lookup` on every upgrade, so
-they never change; they are never printed. TLS generators are refused
-(`bundle-secret-unsupported`): use the kustomize bundle for them. Build
+they never change; they are never printed.
+
+A private CA (`TlsCa`) or a self-signed certificate is made at install too
+(0.63.0, Helm's `genCA` and `genSignedCert`) and kept on upgrade while the
+Secrets hold every key of it. A DNS name naming the bundle's namespace
+(`intake.agent.svc`) names the release namespace instead. Put `ca.crt` in a
+Secret the other workloads mount to let them trust the leaves. The CA key is
+not stored, so a new leaf in a later chart makes a new CA. Keys are 2048-bit
+RSA; other sizes and IP addresses are refused (`bundle-secret-unsupported`):
+use the kustomize bundle for those. Build
 images from `--receipt` are refused: push them and declare them by digest.
 
 **Argo CD and `helm template`.** They render without a cluster, so `lookup`
