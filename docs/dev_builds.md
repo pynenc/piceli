@@ -150,7 +150,7 @@ than the code, or its cache had to be repaired, `piceli dev run` records a
 
 | Kind | Output that counts |
 | --- | --- |
-| `internal-compiler-error` | `internal compiler error`, `thread 'rustc' panicked` |
+| `internal-compiler-error` | `internal compiler error`, `thread 'rustc' panicked` (also `thread 'rustc' (1169) panicked`), `the compiler unexpectedly panicked` |
 | `segfault` | `Segmentation fault`, `SIGSEGV`, `signal: 11` |
 | `illegal-instruction` | `Illegal instruction`, `SIGILL`, `signal: 4` |
 | `bus-error` | `Bus error`, `SIGBUS`, `signal: 7` |
@@ -252,7 +252,14 @@ piceli dev run --cluster infra.py:my_cluster --ref HEAD \
 # Another profile, a report copied back, the JSON result on stdout.
 piceli dev run --cluster infra.py:my_cluster --ref HEAD --profile node \
   --artifact target/report.json --json -- npm test
+
+# A variable for this run only, over the profile's env (0.64.0); a bare
+# name takes its value from your shell. Not for secrets: the Job shows it.
+piceli dev run --cluster infra.py:my_cluster --env CARGO_INCREMENTAL=0 -- cargo check
 ```
+
+A variable your shell holds does not reach the run unless `--env` names
+it.
 
 `PICELI_DEV_CLUSTER=infra.py:my_cluster` saves the `--cluster`. A ref
 your repository does not have is `dev-ref-unknown`: `git fetch` it first.
@@ -484,7 +491,9 @@ libraries`, `R_X86_64_RELATIVE`, a proc-macro that cannot be loaded),
 invalid crate metadata (`E0786`) or a linker reading a bad object
 (`undefined hidden symbol`, `file truncated`), the wrapper removes the
 blamed crates' artifacts (deps, fingerprints, build script outputs,
-incremental state), runs the command once more, and reports it:
+incremental state), runs the command once more, and reports it. A rustc
+crash (an ICE, internal compiler error, in any rustc's words) drops every
+`incremental/` directory of the lineage instead (kind `incremental`):
 
 ```json
 "cache": {"lineage": "shop-rust-1a2b3c4d5e/0", "warm": true,

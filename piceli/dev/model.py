@@ -33,6 +33,16 @@ _ENV = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 _RESERVED_ENV = {"CARGO_TARGET_DIR", "CARGO_HOME", "HOME", "PICELI_DEV_SPEC"}
 
 
+def run_env_error(env: dict[str, str]) -> str | None:
+    """Why a run's ``--env`` is refused (0.64.0); ``None`` when it is fine."""
+    for name in env:
+        if not _ENV.fullmatch(name):
+            return f"--env {name!r}: not a variable name"
+        if name in _RESERVED_ENV:
+            return f"--env {name}: Piceli sets it"
+    return None
+
+
 class DevError(PipelineError):
     """A development-build command was refused or a run failed (``dev-*`` codes)."""
 

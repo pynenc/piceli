@@ -1642,16 +1642,20 @@ def sync_tree(source: Path, dest: Path) -> dict[str, int]:
 
 
 # ------------------------------------------------- corrupted cargo caches (0.19)
+#: A rustc crash (an ICE: internal compiler error), in every rustc's words.
+_ICE = re.compile(
+    r"internal compiler error|thread 'rustc'(?: \(\d+\))? panicked"
+    r"|the compiler unexpectedly panicked"
+)
 #: Output that means a cached artifact is damaged, not the code: the loader
 #: refusing a proc-macro ``.so``, invalid crate metadata, a linker reading a
 #: truncated or garbled object (a run killed mid-write, a faulty disk).
 _CORRUPT = (
     # 0.20: rustc's incremental state broke the compiler itself (an ICE in
     # dep_graph/serialized.rs on a faulty node): drop incremental/, retry.
-    (
-        "incremental",
-        re.compile(r"internal compiler error|thread 'rustc' panicked"),
-    ),
+    # 0.64.0: rustc 1.97 says "thread 'rustc' (1169) panicked" and "the
+    # compiler unexpectedly panicked", without "internal compiler error".
+    ("incremental", _ICE),
     (
         "loader",
         re.compile(
@@ -1712,10 +1716,7 @@ def corrupt_crates(lines: list[str]) -> tuple[list[str], str | None]:
 #: cached blob whose bytes no longer match their digest. A build host that
 #: shows these repeatedly is quarantined (:mod:`piceli.dev.health`).
 HEALTH_SIGNATURES = (
-    (
-        "internal-compiler-error",
-        re.compile(r"internal compiler error|thread 'rustc' panicked"),
-    ),
+    ("internal-compiler-error", _ICE),
     (
         "link-symbol",
         re.compile(
