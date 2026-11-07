@@ -4769,6 +4769,7 @@
     "optional_inputs",
     "patched_values",
     "required",
+    "retired",
     "setting_keys",
     "settings",
     "storage_env",
@@ -4781,6 +4782,7 @@
     "optional",
     "optional_inputs",
     "required",
+    "retired",
     "settings",
     "storage_env",
     "target",
@@ -18135,5 +18137,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.64.0"
+ "version": "0.65.0"
 }

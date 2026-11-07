@@ -4,6 +4,20 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.65.0
+
+**Changes**
+
+- **Retired Helm values.** `HelmChart(retired={"tlsCert": "a TlsCa makes
+  it now"})` names values an older chart had. The schema still accepts
+  them, so `helm upgrade --reuse-values` from that chart works; the chart
+  ignores them, and the install notes warn when one is set. Before, the
+  upgrade failed: `additional properties ... not allowed`.
+- **Scalars as strings where needed.** A boolean or number `HelmValue`
+  placed where the object holds a string (a ConfigMap key, an environment
+  variable) is written as one (`"true"`, `"30"`), so a chart can offer
+  `scrape.enabled: false`.
+
 ## Version 0.64.0
 
 **Fixes**

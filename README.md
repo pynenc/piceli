@@ -66,11 +66,12 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.64
+## What's new in 0.65
 
-- **Dev runs survive a rustc 1.97 crash**: the run drops the lineage's
-  incremental state and retries once, as it did for older rustc.
-- **`piceli dev run --env`** sets a variable for one run.
+- **Helm charts keep upgrading after a value is dropped**: retired values
+  are accepted, ignored and warned about.
+- **Boolean chart values in ConfigMaps and environment variables** are
+  written as `"true"` or `"false"`.
 
 ## Web UI
 

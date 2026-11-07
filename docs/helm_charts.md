@@ -153,6 +153,12 @@ values of the chart installed before: a value that chart did not have
 (a new map such as `storage` or `intake`) takes its default from the new
 `values.yaml`.
 
+A value the chart dropped would still fail that upgrade: the old values
+hold it, and the schema refuses unknown values. Name it in
+`HelmChart(retired={"tlsCert": "a TlsCa makes it now"})`: the schema keeps
+accepting it, the chart ignores it, and the install notes warn when it is
+set.
+
 The chart also keeps literally what it cannot know about another cluster:
 
 - names of cluster-scoped objects (a ClusterRole named after your

@@ -177,7 +177,8 @@ What becomes a value:
 | `deleteDataOnUninstall` | StatefulSets with claims | `true`: uninstall also deletes their claims (Kubernetes 1.27 or later) |
 | `existingSecret` (0.31.0) | every Secret of the app | the name of a Secret you created holding every secret key (the README lists them); the chart then makes no Secret and generates nothing |
 | each optional value (`intake.expose`, 0.31.0) | `HelmChart(optional=...)` | `true` installs the named objects |
-| each object value (`intake.allowNamespaces`, 0.31.0) | `HelmChart(values=...)` | written at a JSON pointer of named objects (a list, a string, a number) |
+| each object value (`intake.allowNamespaces`, 0.31.0) | `HelmChart(values=...)` | written at a JSON pointer of named objects (a list, a string, a number); where the object holds a string (a ConfigMap key, an environment variable), a number or boolean is written as one, `"true"` (0.65.0) |
+| each retired value (0.65.0) | `HelmChart(retired=...)` | accepted and ignored, so `helm upgrade --reuse-values` from an older chart works; the install notes warn when it is set |
 
 `values.schema.json` refuses unknown values, so a mistyped name fails the
 install. Generated values (`Random`, `Static`, `Template`) are made at install
