@@ -716,6 +716,107 @@ def test_two_values_under_one_map_on_one_object(helm: str, tmp_path: Path) -> No
     assert (port["port"], port["targetPort"]) == (80, 8080)
 
 
+SCRAPE_APP = """
+from piceli import (App, HelmChart, HelmValue, Pipeline, PodDefaults, Resources,
+                    Security, Target)
+
+app = App("scraper", pod_defaults=PodDefaults(security=Security.restricted(
+    user=10001, read_only_root_filesystem=True)))
+config = app.config("scraper-settings", {"scrape": "false", "interval": "30"})
+worker = app.deployment(
+    "scraper", image="registry.example/scraper@sha256:" + "d" * 64,
+    env={"SCRAPE": "false"},
+    resources=Resources(cpu="10m", memory="16Mi", cpu_limit="100m", memory_limit="32Mi"),
+)
+pipeline = Pipeline(app, Target.profile("client", namespace="scraper"))
+chart = HelmChart(
+    pipeline,
+    settings={},
+    values={
+        "scrape.enabled": HelmValue("Scrape metrics", default=False, targets=[
+            ("ConfigMap/scraper-settings", "/data/scrape"),
+            ("Deployment/scraper", "/spec/template/spec/containers/0/env/0/value"),
+        ]),
+        "scrape.intervalSeconds": HelmValue("Seconds between scrapes", default=30,
+            targets=[("ConfigMap/scraper-settings", "/data/interval")]),
+    },
+    retired={"intakeTlsCert": "a TlsCa makes the certificate now",
+             "old.key": "use existingSecret"},
+)
+"""
+
+
+def _scraper(tmp_path: Path) -> Path:
+    module = tmp_path / "scraper_app.py"
+    module.write_text(SCRAPE_APP)
+    out = tmp_path / "scraper"
+    result = _run(f"{module}:chart", "--helm", "--out", str(out))
+    assert result.exit_code == 0, result.output
+    return out
+
+
+def _scrape(objects: dict[tuple[str, str], dict[str, Any]]) -> tuple[Any, Any, Any]:
+    data = objects[("ConfigMap", "scraper-settings")]["data"]
+    pod = objects[("Deployment", "scraper")]["spec"]["template"]["spec"]
+    return data["scrape"], data["interval"], pod["containers"][0]["env"][0]["value"]
+
+
+def test_a_boolean_value_is_written_as_a_string_where_one_is_needed(
+    helm: str, tmp_path: Path
+) -> None:
+    """0.65.0: a ConfigMap key and an environment variable hold strings."""
+    out = _scraper(tmp_path)
+    values = yaml.safe_load((out / "values.yaml").read_text())
+    assert values["scrape"] == {"enabled": False, "intervalSeconds": 30}
+    default = _template(helm, out)
+    assert default.returncode == 0, default.stderr
+    assert _scrape(_objects(default.stdout)) == ("false", "30", "false")
+    on = _template(
+        helm, out, "--set", "scrape.enabled=true", "--set", "scrape.intervalSeconds=15"
+    )
+    assert on.returncode == 0, on.stderr
+    assert _scrape(_objects(on.stdout)) == ("true", "15", "true")
+
+
+def test_a_retired_value_is_accepted_ignored_and_warned(
+    helm: str, tmp_path: Path
+) -> None:
+    """0.65.0: ``helm upgrade --reuse-values`` from an older chart keeps a
+    value this chart dropped; the schema accepts it and the notes warn."""
+    out = _scraper(tmp_path)
+    plain = _template(helm, out)
+    old = tmp_path / "old-values.yaml"
+    old.write_text("intakeTlsCert: PEM\nold:\n  key: k\n")
+    reused = _template(helm, out, "-f", str(old))
+    assert reused.returncode == 0, reused.stderr
+    assert _objects(reused.stdout) == _objects(plain.stdout)
+    install = subprocess.run(
+        [helm, "install", "scraper", str(out), "-n", "edge", "--dry-run=client",
+         "-f", str(old)],
+        capture_output=True, text=True, timeout=120,
+        env={"PATH": os.environ["PATH"], "HOME": str(tmp_path)},
+    )  # fmt: skip
+    assert install.returncode == 0, install.stderr
+    assert "WARNING: intakeTlsCert is retired and ignored" in install.stdout
+    assert "WARNING: old.key is retired and ignored" in install.stdout
+    quiet = subprocess.run(
+        [helm, "install", "scraper", str(out), "-n", "edge", "--dry-run=client"],
+        capture_output=True, text=True, timeout=120,
+        env={"PATH": os.environ["PATH"], "HOME": str(tmp_path)},
+    )  # fmt: skip
+    assert quiet.returncode == 0 and "retired" not in quiet.stdout
+
+
+def test_a_retired_value_the_chart_still_uses_is_refused(tmp_path: Path) -> None:
+    module = tmp_path / "clash.py"
+    module.write_text(
+        SCRAPE_APP.replace('"old.key": "use existingSecret"', '"scrape.enabled": "x"')
+    )
+    result = _run(f"{module}:chart", "--helm", "--out", str(tmp_path / "c"))
+    assert result.exit_code == 2, result.output
+    assert "still a value" in json.loads(result.stdout)["message"]
+
+
 # ------------------------- 0.34.0: one value adds and patches; optional inputs
 
 

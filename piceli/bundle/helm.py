@@ -290,6 +290,10 @@ class HelmChart:
         ``"privateCa"``) the client may leave out. Left out, the Secret keys
         they fill are omitted instead of failing the install; once passed, a
         value is kept across upgrades like any input.
+    :param retired: 0.65.0: dotted value name → what to use instead. A value
+        an older chart had: the schema still accepts it, so ``helm upgrade
+        --reuse-values`` from that chart works; the chart ignores it, and the
+        install notes warn when it is set.
     """
 
     target: Any
@@ -301,6 +305,7 @@ class HelmChart:
     values: Mapping[str, HelmValue] = field(default_factory=dict)
     storage_env: Mapping[str, int] = field(default_factory=dict)
     optional_inputs: Sequence[str] = ()
+    retired: Mapping[str, str] = field(default_factory=dict)
 
     def patched_values(self) -> dict[str, HelmToggle | HelmOptional]:
         """Value name → the toggle or optional value that patches objects:
@@ -473,6 +478,13 @@ def _value(path: str) -> str:
     return expression
 
 
+def _text(value: Any) -> str:
+    """A scalar as Helm's ``toString`` writes it (``true``, ``30``, ``0.5``)."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return "" if value is None else str(value)
+
+
 def _value_default(
     item: HelmValue, targets: Sequence[tuple[str, list[str]]], by_key: Mapping[str, Any]
 ) -> Any:
@@ -619,9 +631,9 @@ class _Templater:
                     index = int(last)
                     if not 0 <= index < len(parent):
                         raise IndexError(last)
-                    parent[index] = self.placed_value(value)
+                    parent[index] = self.placed_value(value, parent[index])
                 elif isinstance(parent, dict) and last in parent:
-                    parent[last] = self.placed_value(value)
+                    parent[last] = self.placed_value(value, parent[last])
                 else:
                     raise KeyError(last)
             except (KeyError, IndexError, TypeError, ValueError):
@@ -631,12 +643,22 @@ class _Templater:
                 ) from None
             self.placed.add((value, number))
 
-    def placed_value(self, value: str) -> str:
-        """The value, or its default when the values lack it (0.62.0)."""
+    def placed_value(self, value: str, current: Any = None) -> str:
+        """The value, or its default when the values lack it (0.62.0).
+
+        0.65.0: where the object holds a string (a ConfigMap key, an
+        environment variable), a scalar value is written as one: ``"true"``."""
         ref = _value(value)
-        default = _literal(json.dumps(self.value_defaults.get(value)))
+        default = self.value_defaults.get(value)
+        if isinstance(current, str) and not isinstance(default, list | dict):
+            text = _literal(_text(default))
+            return self.scalar(
+                f'{{{{ if kindIs "invalid" {ref} }}}}{{{{ {text} | toJson }}}}'
+                f"{{{{ else }}}}{{{{ {ref} | toString | toJson }}}}{{{{ end }}}}"
+            )
+        literal = _literal(json.dumps(default))
         return self.scalar(
-            f'{{{{ if kindIs "invalid" {ref} }}}}{{{{ {default} }}}}'
+            f'{{{{ if kindIs "invalid" {ref} }}}}{{{{ {literal} }}}}'
             f"{{{{ else }}}}{{{{ toJson {ref} }}}}{{{{ end }}}}"
         )
 
@@ -1081,6 +1103,8 @@ class HelmBundle:
     existing_secret_keys: tuple[str, ...] = ()
     #: 0.34.0: the inputs the client may leave out (value names).
     optional_inputs: tuple[str, ...] = ()
+    #: 0.65.0: retired value → what to use instead.
+    retired: tuple[tuple[str, str], ...] = ()
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -1533,6 +1557,12 @@ def build_helm(
             "(default: they stay)"
         )
     schema["global"] = {"type": "object"}
+    retired = _retire(schema, declared.retired)
+    if retired:
+        comments.append(
+            "# Retired (accepted, ignored): "
+            + ", ".join(name for name, _hint in retired)
+        )
     files["values.yaml"] = (
         f"# Values of {bundle.name} {bundle.version} (written by piceli bundle --helm).\n"
         + "\n".join(comments)
@@ -1573,6 +1603,7 @@ def build_helm(
         values=tuple(sorted(placed_values)),
         existing_secret_keys=tuple(sorted(secret_keys)) if offer_existing else (),
         optional_inputs=tuple(sorted(optional_inputs)),
+        retired=retired,
     )
     files["Chart.yaml"] = yaml.safe_dump(chart.metadata(), sort_keys=True).encode()
     files["templates/NOTES.txt"] = _notes(chart).encode()
@@ -1622,6 +1653,34 @@ def _install_command(chart: HelmBundle, source: str = "<chart>") -> str:
     return " ".join(parts)
 
 
+def _retire(
+    schema: dict[str, Any], retired: Mapping[str, str]
+) -> tuple[tuple[str, str], ...]:
+    """Add each retired value to ``schema`` (any type, ignored); a name the
+    chart still uses is refused (0.65.0)."""
+    result = []
+    for name, hint in sorted(retired.items()):
+        parts = _check_path(str(name), "retired value")
+        here = schema
+        for part in parts[:-1]:
+            group = here.setdefault(
+                part, {"type": "object", "additionalProperties": False,
+                       "properties": {}},
+            )  # fmt: skip
+            if "properties" not in group:
+                raise BundleError(
+                    "bundle-invalid", f"retired value {name}: {part} is a value"
+                )
+            here = group["properties"]
+        if parts[-1] in here:
+            raise BundleError(
+                "bundle-invalid", f"retired value {name} is still a value of the chart"
+            )
+        here[parts[-1]] = {"description": f"Retired, ignored: {hint}"}
+        result.append((str(name), str(hint)))
+    return tuple(result)
+
+
 def _notes(chart: HelmBundle) -> str:
     lines = [
         f"{chart.name} {chart.version} is installed in namespace {{{{ .Release.Namespace }}}}.",
@@ -1636,6 +1695,12 @@ def _notes(chart: HelmBundle) -> str:
             "{{- else }}",
             "The data claims of the StatefulSets stay after uninstall; delete the",
             "namespace to remove them: kubectl delete namespace {{ .Release.Namespace }}",
+            "{{- end }}",
+        ]
+    for name, hint in chart.retired:
+        lines += [
+            f'{{{{- if not (kindIs "invalid" {_value(name)}) }}}}',
+            f"WARNING: {name} is retired and ignored: {hint}",
             "{{- end }}",
         ]
     return "\n".join(lines) + "\n"
