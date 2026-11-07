@@ -262,23 +262,68 @@ def test_two_toggles_on_one_object_are_refused() -> None:
         )
 
 
-def test_a_tls_generator_is_refused() -> None:
+def _shop_helm(tmp_path: Path, **tls: Any) -> Path:
+    from piceli import TlsCa
     from piceli.app.render import rendered
     from tests.unit.bundle.fixtures import app
 
     shop, generators = app()
     inputs = {name: generators.ref(name) for name in generators.inputs()}
     components = rendered(shop.render("shop"), inputs)
+    spec = TlsCa({"cache": ["cache", "cache.shop.svc"]}, common_name="shop CA")
     bundle = build_bundle(
         components,
         name="shop",
         version="1.0.0",
         namespace="shop",
-        generators=generators.generators,
+        generators={
+            **generators.generators,
+            "tls": spec.model_copy(update=tls) if tls else spec,
+        },
     )
+    out = tmp_path / "shop"
+    for path, data in build_helm(bundle).files.items():
+        (out / path).parent.mkdir(parents=True, exist_ok=True)
+        (out / path).write_bytes(data)
+    return out
+
+
+def test_a_tls_ca_is_made_at_install(helm: str, tmp_path: Path) -> None:
+    """0.63.0: the chart makes the private CA and its leaves (Sprig), with
+    the bundle's namespace replaced by the release's in the DNS names."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives.asymmetric import padding
+
+    out = _shop_helm(tmp_path)
+    result = subprocess.run(
+        [helm, "template", "shop", str(out), "-n", "store"],
+        capture_output=True, text=True, timeout=120,
+        env={"PATH": os.environ["PATH"], "HOME": str(tmp_path)},
+    )  # fmt: skip
+    assert result.returncode == 0, result.stderr
+    data = _objects(result.stdout)[("Secret", "shop-private")]["data"]
+    pem = {key: base64.b64decode(data[key]) for key in ("ca.crt", "tls.crt", "tls.key")}
+    ca = x509.load_pem_x509_certificate(pem["ca.crt"])
+    leaf = x509.load_pem_x509_certificate(pem["tls.crt"])
+    assert ca.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+    assert ca.subject.rfc4514_string() == "CN=shop CA"
+    assert leaf.issuer == ca.subject
+    ca.public_key().verify(  # type: ignore[union-attr, call-arg]
+        leaf.signature, leaf.tbs_certificate_bytes, padding.PKCS1v15(),
+        leaf.signature_hash_algorithm,
+    )  # fmt: skip
+    names = leaf.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+    assert names.value.get_values_for_type(x509.DNSName) == ["cache", "cache.store.svc"]
+    assert b"PRIVATE KEY" in pem["tls.key"]
+    helper = (out / "templates" / "_helpers.tpl").read_text()
+    assert 'lookup "v1" "Secret"' in helper and "$keep_tls" in helper
+
+
+def test_tls_the_chart_cannot_make_is_refused(tmp_path: Path) -> None:
     with pytest.raises(BundleError) as error:
-        build_helm(bundle)
+        _shop_helm(tmp_path, rsa_bits=4096)
     assert error.value.code == "bundle-secret-unsupported"
+    assert "2048-bit" in str(error.value)
 
 
 def test_required_must_name_a_setting() -> None:

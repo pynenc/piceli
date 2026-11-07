@@ -6,8 +6,14 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.63.0
 
-**Fixes**
+**Changes**
 
+- **Helm charts make a private CA and its certificates.** A `TlsCa` (or
+  self-signed) generator was refused by `piceli bundle --helm`. The chart
+  now makes the CA and the leaves at install (`genCA`, `genSignedCert`)
+  and keeps them on upgrade through `lookup`; a DNS name with the bundle's
+  namespace takes the release namespace. Keys are 2048-bit RSA; other
+  sizes and IP addresses are refused.
 - **Several Helm values on one object.** Two `HelmValue`s aimed at the
   same object (for example `scrape.enabled` and `scrape.intervalSeconds`)
   were refused with `name objects the render lacks`: the placements were
