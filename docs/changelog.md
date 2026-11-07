@@ -4,6 +4,15 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.63.0
+
+**Fixes**
+
+- **Several Helm values on one object.** Two `HelmValue`s aimed at the
+  same object (for example `scrape.enabled` and `scrape.intervalSeconds`)
+  were refused with `name objects the render lacks`: the placements were
+  counted per object, not per value. Each value now renders its own place.
+
 ## Version 0.62.0
 
 **Fixes**

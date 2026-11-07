@@ -525,7 +525,7 @@ class _Templater:
         storage_class: str | None,
         *,
         secret_names: frozenset[str] = frozenset(),
-        values_at: Mapping[str, Sequence[tuple[list[str], str]]] | None = None,
+        values_at: Mapping[str, Sequence[tuple[list[str], str, int]]] | None = None,
         value_defaults: Mapping[str, Any] | None = None,
         storage_env: Mapping[str, int] | None = None,
     ) -> None:
@@ -537,7 +537,8 @@ class _Templater:
         #: 0.31.0: the app's Secrets ``existingSecret`` replaces (empty: no
         #: ``existingSecret`` value).
         self.secret_names = secret_names
-        #: 0.31.0: ``"Kind/name"`` → ``(pointer parts, value path)``.
+        #: 0.31.0: ``"Kind/name"`` → ``(pointer parts, value path, target
+        #: number)``; the number counts the value's own targets (0.63.0).
         self.values_at = dict(values_at or {})
         #: 0.62.0: value path → its ``values.yaml`` default.
         self.value_defaults = dict(value_defaults or {})
@@ -610,7 +611,7 @@ class _Templater:
 
     def place_values(self, key: str, manifest: dict[str, Any]) -> None:
         """Each :class:`HelmValue` aimed at ``key``, at its pointer."""
-        for number, (parts, value) in enumerate(self.values_at.get(key, ())):
+        for parts, value, number in self.values_at.get(key, ()):
             try:
                 parent = _walk(manifest, parts[:-1])
                 last = parts[-1]
@@ -1175,10 +1176,10 @@ def build_helm(
         )
     required = {name for name in declared.required if name in settings}
     reverse = {ref: name for name, ref in settings.items()}
-    values_at: dict[str, list[tuple[list[str], str]]] = {}
+    values_at: dict[str, list[tuple[list[str], str, int]]] = {}
     for name, (_parts, _item, targets) in placed_values.items():
-        for key, pointer in targets:
-            values_at.setdefault(key, []).append((pointer, name))
+        for number, (key, pointer) in enumerate(targets):
+            values_at.setdefault(key, []).append((pointer, name, number))
     by_key = {f"{item.kind}/{item.name}": item for item in bundle.objects}
     templater = _Templater(
         bundle.name, bundle.namespace, reverse, required, bundle.storage_class,

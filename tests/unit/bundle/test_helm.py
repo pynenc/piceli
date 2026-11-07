@@ -637,6 +637,40 @@ def test_storage_env_and_value_targets_must_exist(tmp_path: Path) -> None:
         assert json.loads(result.stdout)["reason"] == "bundle-invalid"
 
 
+def test_two_values_under_one_map_on_one_object(helm: str, tmp_path: Path) -> None:
+    """0.63.0: several values may target one object (and share a parent
+    map); each renders its own place, set or defaulted."""
+    module = tmp_path / "two_values.py"
+    module.write_text(
+        "import dataclasses\n"
+        "from piceli import HelmValue\n"
+        "from tests.unit.bundle.helm_intake_app import chart as base\n"
+        "chart = dataclasses.replace(base, values={**base.values,\n"
+        "    'intake.port': HelmValue('port', targets=[\n"
+        "        ('Service/agent-intake', '/spec/ports/0/port')]),\n"
+        "    'intake.targetPort': HelmValue('target port', targets=[\n"
+        "        ('Service/agent-intake', '/spec/ports/0/targetPort')]),\n"
+        "})\n"
+    )
+    out = tmp_path / "chart"
+    result = _run(f"{module}:chart", "--helm", "--out", str(out))
+    assert result.exit_code == 0, result.output
+    values = yaml.safe_load((out / "values.yaml").read_text())["intake"]
+    assert values["port"] == 4318 and values["targetPort"] == 4318
+    on = ("--set", "apiToken=x", "--set", "intake.expose=true")
+    default = _template(helm, out, *BASE, *on)
+    assert default.returncode == 0, default.stderr
+    port = _objects(default.stdout)[("Service", "agent-intake")]["spec"]["ports"][0]
+    assert (port["port"], port["targetPort"]) == (4318, 4318)
+    both = _template(
+        helm, out, *BASE, *on,
+        "--set", "intake.port=80", "--set", "intake.targetPort=8080",
+    )  # fmt: skip
+    assert both.returncode == 0, both.stderr
+    port = _objects(both.stdout)[("Service", "agent-intake")]["spec"]["ports"][0]
+    assert (port["port"], port["targetPort"]) == (80, 8080)
+
+
 # ------------------------- 0.34.0: one value adds and patches; optional inputs
 
 
