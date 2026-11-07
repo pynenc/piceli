@@ -4,6 +4,17 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.62.0
+
+**Fixes**
+
+- **Helm charts upgrade with `--reuse-values`.** A chart from
+  `piceli bundle --helm` now reads every nested value (`storage.size`,
+  `image.registry`, `intake.expose`, a `HelmValue` like
+  `alerts.egressAllow`) safely: when the values lack its map, as with
+  `helm upgrade --reuse-values` from an older chart, the value takes its
+  default. Before, the render failed with `nil pointer evaluating`.
+
 ## Version 0.61.0
 
 **Changes**
