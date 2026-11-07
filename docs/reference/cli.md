@@ -1414,6 +1414,7 @@ Run COMMAND on the builder for a commit (--ref) or a working tree (default: here
 | `--requester` | text |  | Who asks (fair share; default PICELI_DEV_REQUESTER or user-host) |
 | `--artifact` | text (repeatable) |  | Copy back files matching this glob (target/... is the target dir; repeat) |
 | `--artifacts-dir` | path | `piceli-dev-artifacts` | Where artifacts land (under RUN/) |
+| `--env` | text (repeatable) |  | NAME=VALUE, or NAME for its value here, over the profile's env for this run (repeat; not for secrets: the run's Job shows it) |
 | `--queue-timeout` | integer | `3600` | Seconds to wait for a slot |
 | `--unschedulable-seconds` | integer | `60` | Fail when the run's pod finds no node for this long, with the scheduler's reason (0.35.0) |
 | `--quiet` | boolean | `False` | Do not stream the run's log (the tail is still in the result) |

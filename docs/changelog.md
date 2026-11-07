@@ -4,6 +4,24 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.64.0
+
+**Fixes**
+
+- **A rustc 1.97 crash is repaired again.** Since 0.20 a dev run that hits
+  a rustc internal compiler error drops the lineage's `incremental/`
+  directories and runs once more. rustc 1.97 words the crash differently
+  (`thread 'rustc' (1169) panicked`, `the compiler unexpectedly panicked`),
+  so the retry never ran and the build host was not marked. Both wordings
+  are recognised now.
+
+**Changes**
+
+- **`piceli dev run --env`.** `--env NAME=VALUE` (or `--env NAME`, its
+  value in your shell) sets a variable for one run over the profile's
+  `env`, such as `CARGO_INCREMENTAL=0`. Before, a variable set in the
+  caller's shell never reached the run.
+
 ## Version 0.63.0
 
 **Changes**

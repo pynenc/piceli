@@ -444,3 +444,35 @@ def test_an_unchanged_cargo_lock_is_not_fetched_again(
         tmp_path, changed, _spec(changed, ["sh", "t.sh"], prefetch="cargo"), "w3"
     )
     assert third["prefetch"] == "ok" and len(log.read_text().splitlines()) == 2
+
+
+def test_a_rustc_197_ice_drops_incremental_and_runs_once_more(tmp_path: Path) -> None:
+    """0.64.0: rustc 1.97 words its panic without "internal compiler error";
+    the run still drops the lineage's incremental/ and passes on the retry."""
+    script = "\n".join(
+        [
+            'state="$CARGO_TARGET_DIR/debug/incremental/shop-1/s-1/query-cache.bin"',
+            'if [ -f "$state" ]; then',
+            "  echo '    Checking shop-query v0.1.0 (/x)'",
+            "  echo \"thread 'rustc' (1169) panicked at /rustc-dev/2d81/compiler/"
+            'rustc_middle/src/dep_graph/graph.rs:1301:32:"',
+            "  echo 'error: the compiler unexpectedly panicked. This is a bug'",
+            "  echo 'error: could not compile `shop-query` (test \"suite\")'",
+            "  exit 101",
+            "fi",
+            "echo '    Finished `dev` profile [unoptimized] target(s) in 1.0s'",
+        ]
+    )
+    data = _archive({"app/check.sh": script})
+    first, _ = _run(tmp_path, data, _spec(data, ["true"]), "seed")
+    target = Path(first["cache"]["lineage_dir"]) / "target"
+    (target / "debug/incremental/shop-1/s-1").mkdir(parents=True)
+    (target / "debug/incremental/shop-1/s-1/query-cache.bin").write_bytes(b"x")
+    (target / "debug/deps").mkdir(parents=True)
+    (target / "debug/deps/libshop-1.rmeta").write_text("kept")
+    result, lines = _run(tmp_path, data, _spec(data, ["sh", "check.sh"]), "ice")
+    assert result["state"] == "passed", result
+    assert result["cache"]["repaired"]["kind"] == "incremental"
+    assert any("corrupted cache (incremental)" in line for line in lines)
+    assert not (target / "debug/incremental").exists()
+    assert (target / "debug/deps/libshop-1.rmeta").exists()

@@ -188,3 +188,43 @@ def test_a_client_that_leaves_while_queued_takes_its_job(tmp_path: Path) -> None
     notes = port.jobs["left-run"]["metadata"]["annotations"]
     assert notes["piceli.io/dev-queue-timeout"] == "3600"
     assert notes["piceli.io/dev-client-at"].endswith("Z")
+
+
+def test_run_env_reaches_the_command_over_the_profiles(tmp_path: Path) -> None:
+    """0.64.0: ``--env`` sets a variable for one run (``CARGO_INCREMENTAL=0``)."""
+    app = repo(tmp_path / "shop", {"t.sh": 'echo "incremental=$CARGO_INCREMENTAL"'})
+    lines: list[str] = []
+    result = run(
+        LocalPort(tmp_path / "cluster"),
+        DEV,
+        RunRequest(
+            SourceRequest("shop", app, "HEAD"),
+            ["sh", "t.sh"],
+            env={"CARGO_INCREMENTAL": "0"},
+        ),
+        log=lines.append,
+    )
+    assert result["state"] == "passed", result
+    assert "incremental=0" in lines
+
+
+@pytest.mark.parametrize("name", ["CARGO_TARGET_DIR", "HOME", "1BAD"])
+def test_run_env_refuses_what_piceli_sets(tmp_path: Path, name: str) -> None:
+    app = repo(tmp_path / "shop", {"t.sh": "true"})
+    request = RunRequest(SourceRequest("shop", app, "HEAD"), ["true"], env={name: "x"})
+    with pytest.raises(DevError) as error:
+        run(LocalPort(tmp_path / "cluster"), DEV, request)
+    assert error.value.code == "dev-run-invalid"
+
+
+def test_env_flag_takes_a_value_or_the_callers(monkeypatch: pytest.MonkeyPatch) -> None:
+    from piceli.k8s.cli.dev import _run_env
+
+    monkeypatch.setenv("CARGO_INCREMENTAL", "0")
+    monkeypatch.delenv("NOT_SET_HERE", raising=False)
+    assert _run_env(["CARGO_INCREMENTAL", "RUSTFLAGS=-Dwarnings"]) == {
+        "CARGO_INCREMENTAL": "0",
+        "RUSTFLAGS": "-Dwarnings",
+    }
+    with pytest.raises(DevError, match="not set here"):
+        _run_env(["NOT_SET_HERE"])

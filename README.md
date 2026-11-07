@@ -66,12 +66,11 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.63
+## What's new in 0.64
 
-- **Helm charts make TLS certificates**: a private CA and its leaf
-  certificates are made at install and kept on upgrade.
-- **Several Helm values on one object**: two values may now target one
-  object, under one map (`scrape.enabled`, `scrape.intervalSeconds`).
+- **Dev runs survive a rustc 1.97 crash**: the run drops the lineage's
+  incremental state and retries once, as it did for older rustc.
+- **`piceli dev run --env`** sets a variable for one run.
 
 ## Web UI
 

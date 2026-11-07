@@ -11,7 +11,7 @@ import getpass
 import os
 import re
 import socket
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -115,6 +115,21 @@ def run_summary(result: dict[str, Any]) -> str:
     return line
 
 
+def _run_env(items: Sequence[str]) -> dict[str, str]:
+    """``--env NAME=VALUE`` or ``--env NAME`` (its value in this shell)."""
+    from piceli.dev.model import DevError
+
+    env: dict[str, str] = {}
+    for item in items:
+        name, sep, value = item.partition("=")
+        if not sep:
+            if name not in os.environ:
+                raise DevError("dev-run-invalid", f"--env {name}: not set here")
+            value = os.environ[name]
+        env[name] = value
+    return env
+
+
 @app.command("run")
 def run(
     command: Annotated[
@@ -209,6 +224,14 @@ def run(
     artifacts_dir: Annotated[
         Path, typer.Option("--artifacts-dir", help="Where artifacts land (under RUN/)")
     ] = Path("piceli-dev-artifacts"),
+    env: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--env",
+            help="NAME=VALUE, or NAME for its value here, over the profile's env "
+            "for this run (repeat; not for secrets: the run's Job shows it)",
+        ),
+    ] = None,
     queue_timeout: Annotated[
         int, typer.Option("--queue-timeout", help="Seconds to wait for a slot", min=1)
     ] = 3600,
@@ -271,6 +294,7 @@ def run(
             queue_timeout=float(queue_timeout),
             unschedulable_timeout=float(unschedulable_seconds),
             keep=keep,
+            env=_run_env(env or ()),
         )
     except DevError as error:
         reject(error.code, str(error))

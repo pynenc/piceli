@@ -50,6 +50,9 @@ class RunRequest:
     #: 0.35.0: how long the run's pod may stay unschedulable before the run
     #: fails with the scheduler's reason (``None``: the port's default, 60 s).
     unschedulable_timeout: float | None = None
+    #: 0.64.0: variables over the profile's ``env`` for this run only
+    #: (``--env``), such as ``CARGO_INCREMENTAL=0``.
+    env: dict[str, str] = field(default_factory=dict)
 
 
 def queue_lines(status: dict[str, Any] | None) -> list[str]:
@@ -145,6 +148,11 @@ def run(
         raise DevError("dev-run-invalid", "give the command after --")
     if request.priority not in PRIORITIES:
         raise DevError("dev-run-invalid", f"priority is one of {', '.join(PRIORITIES)}")
+    from piceli.dev.model import run_env_error
+
+    problem = run_env_error(request.env)
+    if problem:
+        raise DevError("dev-run-invalid", problem)
     cwd = Path(request.cwd)
     if cwd.is_absolute() or ".." in cwd.parts:
         raise DevError("dev-run-invalid", "--cwd is a path inside the root source")
@@ -198,6 +206,7 @@ def run(
             "lineage_key": f"{request.root.name}-{profile.name}",
             "lineage_hint": hint,
             "artifacts": list(request.artifacts),
+            **({"env": {**profile.env, **request.env}} if request.env else {}),
             **(
                 {"artifact_max_bytes": request.artifact_max_bytes}
                 if request.artifact_max_bytes

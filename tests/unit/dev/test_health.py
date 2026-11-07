@@ -45,6 +45,16 @@ def _dev(*hosts: BuildHost) -> DevBuilds:
     [
         ("error: internal compiler error: unexpected panic", "internal-compiler-error"),
         ("thread 'rustc' panicked at compiler/rustc_middle", "internal-compiler-error"),
+        # 0.64.0: rustc 1.97 names the thread and drops "internal compiler error".
+        (
+            "thread 'rustc' (1169) panicked at /rustc-dev/2d8144/compiler/"
+            "rustc_middle/src/dep_graph/graph.rs:1301:32:",
+            "internal-compiler-error",
+        ),
+        (
+            "error: the compiler unexpectedly panicked. This is a bug",
+            "internal-compiler-error",
+        ),
         ("rust-lld: error: undefined symbol: _ZN4core3fmt", "link-symbol"),
         ("ld: undefined hidden symbol `foo' in libbar.a", "link-symbol"),
         (
