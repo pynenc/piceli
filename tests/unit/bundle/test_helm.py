@@ -540,6 +540,36 @@ def test_optional_objects_values_size_and_disk_env(helm: str, tmp_path: Path) ->
     assert bad.returncode != 0
 
 
+def test_values_of_an_older_chart_render_with_the_defaults(
+    helm: str, tmp_path: Path
+) -> None:
+    """0.62.0: ``helm upgrade --reuse-values`` keeps an older chart's values,
+    which lack the maps a newer chart reads (``intake``, ``storage``,
+    ``image``). Every nested value then falls back to its default."""
+    out, _body = _intake(tmp_path)
+    values = yaml.safe_load((out / "values.yaml").read_text())
+    current = _stable(_template(helm, out, *BASE, "--set", "apiToken=x").stdout)
+    older = {k: v for k, v in values.items() if not isinstance(v, dict)}
+    assert {"intake", "storage", "image"} <= set(values) - set(older)
+    (out / "values.yaml").write_text(yaml.safe_dump(older))
+    (out / "values.schema.json").unlink(missing_ok=True)
+    reused = _template(helm, out, *BASE, "--set", "apiToken=x")
+    assert reused.returncode == 0, reused.stderr
+    after = _stable(reused.stdout)
+    for key in sorted(set(current) | set(after)):
+        assert after.get(key) == current.get(key), key
+
+
+def _stable(text: str) -> dict[tuple[str, str], dict[str, Any]]:
+    """The objects without generated Secrets and digests: the Secrets are
+    random on each render, and the digests hash the whole values set."""
+    objects = {key: item for key, item in _objects(text).items() if key[0] != "Secret"}
+    template = objects[("StatefulSet", "agent")]["spec"]["template"]["metadata"]
+    for digest in ("piceli.io/secrets-digest", "piceli.io/configmaps-digest"):
+        template["annotations"].pop(digest)
+    return objects
+
+
 def test_an_existing_secret_replaces_every_secret_and_renders_stably(
     helm: str, tmp_path: Path
 ) -> None:
@@ -625,7 +655,7 @@ def test_an_optional_value_also_patches_and_an_input_may_be_left_out(
         for path in (out / "templates").iterdir()
         if path.name.startswith("agent_statefulset")
     )
-    assert template.count("{{- if $.Values.intake.expose }}") == 1
+    assert template.count("{{- if (($.Values.intake | default dict).expose) }}") == 1
     assert "0.0.0.0:4318" in template and "127.0.0.1:4318" in template
     helpers = (out / "templates" / "_helpers.tpl").read_text()
     assert "apiToken is required on the first install" in helpers

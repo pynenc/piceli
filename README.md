@@ -66,11 +66,10 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.61
+## What's new in 0.62
 
-- **Dev runs find the build they need**: a run prefers the lineage that
-  last built the same command, target and flags, and says when it was only
-  warm for others.
+- **Helm charts upgrade with `--reuse-values`**: a value the older chart
+  did not have takes its default instead of failing the render.
 
 ## Web UI
 

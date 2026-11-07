@@ -148,6 +148,11 @@ the workloads; make workloads tolerate a dependency that is not ready yet),
 no generated or rotated secrets, no restore points and no release checks.
 See {doc}`gitops` for the same boundary with an exported OCI artifact.
 
+Upgrades keep working with `helm upgrade --reuse-values`, which keeps the
+values of the chart installed before: a value that chart did not have
+(a new map such as `storage` or `intake`) takes its default from the new
+`values.yaml`.
+
 The chart also keeps literally what it cannot know about another cluster:
 
 - names of cluster-scoped objects (a ClusterRole named after your

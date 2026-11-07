@@ -460,6 +460,30 @@ def _literal(text: str) -> str:
     return json.dumps(text, ensure_ascii=False)
 
 
+def _value(path: str) -> str:
+    """``$.Values.<path>``, nil-safe: a missing parent map reads as empty.
+
+    ``helm upgrade --reuse-values`` keeps the values of the older chart,
+    which may lack a map a newer chart reads (0.62.0).
+    """
+    first, *rest = path.split(".")
+    expression = f"$.Values.{first}"
+    for part in rest:
+        expression = f"(({expression} | default dict).{part})"
+    return expression
+
+
+def _value_default(
+    item: HelmValue, targets: Sequence[tuple[str, list[str]]], by_key: Mapping[str, Any]
+) -> Any:
+    """``item.default``, or the rendered value at its first target (as JSON)."""
+    default = item.default
+    if default is None:
+        key, pointer = targets[0]
+        default = _walk(copy.deepcopy(dict(by_key[key].manifest)), pointer)
+    return json.loads(json.dumps(default))
+
+
 def _dig(value: Any, path: Sequence[str]) -> Any:
     for part in path:
         if not isinstance(value, dict):
@@ -502,6 +526,7 @@ class _Templater:
         *,
         secret_names: frozenset[str] = frozenset(),
         values_at: Mapping[str, Sequence[tuple[list[str], str]]] | None = None,
+        value_defaults: Mapping[str, Any] | None = None,
         storage_env: Mapping[str, int] | None = None,
     ) -> None:
         self.name = name
@@ -514,6 +539,8 @@ class _Templater:
         self.secret_names = secret_names
         #: 0.31.0: ``"Kind/name"`` → ``(pointer parts, value path)``.
         self.values_at = dict(values_at or {})
+        #: 0.62.0: value path → its ``values.yaml`` default.
+        self.value_defaults = dict(value_defaults or {})
         self.storage_env = dict(storage_env or {})
         self.placed: set[tuple[str, int]] = set()  # (value path, target number)
         self.env_set: set[str] = set()
@@ -535,10 +562,10 @@ class _Templater:
         if value in self.required:
             message = f"{value} is required: --set {value}=..."
             return self.scalar(
-                f"{{{{ required {_literal(message)} $.Values.{value} | toString | toJson }}}}"
+                f"{{{{ required {_literal(message)} {_value(value)} | toString | toJson }}}}"
             )
         return self.scalar(
-            f'{{{{ $.Values.{value} | default "" | toString | toJson }}}}'
+            f'{{{{ {_value(value)} | default "" | toString | toJson }}}}'
         )
 
     def manifest(self, item: BundleObject) -> dict[str, Any]:
@@ -591,9 +618,9 @@ class _Templater:
                     index = int(last)
                     if not 0 <= index < len(parent):
                         raise IndexError(last)
-                    parent[index] = self.scalar(f"{{{{ toJson $.Values.{value} }}}}")
+                    parent[index] = self.placed_value(value)
                 elif isinstance(parent, dict) and last in parent:
-                    parent[last] = self.scalar(f"{{{{ toJson $.Values.{value} }}}}")
+                    parent[last] = self.placed_value(value)
                 else:
                     raise KeyError(last)
             except (KeyError, IndexError, TypeError, ValueError):
@@ -602,6 +629,15 @@ class _Templater:
                     f"value {value}: {key} has nothing at /{'/'.join(parts)}",
                 ) from None
             self.placed.add((value, number))
+
+    def placed_value(self, value: str) -> str:
+        """The value, or its default when the values lack it (0.62.0)."""
+        ref = _value(value)
+        default = _literal(json.dumps(self.value_defaults.get(value)))
+        return self.scalar(
+            f'{{{{ if kindIs "invalid" {ref} }}}}{{{{ {default} }}}}'
+            f"{{{{ else }}}}{{{{ toJson {ref} }}}}{{{{ end }}}}"
+        )
 
     def namespace_site(self) -> str:
         return self.scalar("{{ $.Release.Namespace | toJson }}")
@@ -625,7 +661,7 @@ class _Templater:
         if isinstance(requests, dict) and isinstance(requests.get("storage"), str):
             size = _literal(requests["storage"])
             requests["storage"] = self.scalar(
-                f"{{{{ $.Values.storage.size | default {size} | toJson }}}}"
+                f"{{{{ {_value('storage.size')} | default {size} | toJson }}}}"
             )
 
     def workload(self, manifest: dict[str, Any], pod_path: Sequence[str]) -> None:
@@ -681,13 +717,13 @@ class _Templater:
                 if isinstance(image, str):
                     container["image"] = self.scalar(
                         f'{{{{ include "{self.name}.image" (list {_literal(image)} '
-                        f"{_literal(_image_path(image))} $.Values.image.registry) | toJson }}}}"
+                        f"{_literal(_image_path(image))} {_value('image.registry')}) | toJson }}}}"
                     )
         if "imagePullSecrets" not in pod:
             self.optional(
                 pod,
                 "imagePullSecrets",
-                "$.Values.image.pullSecrets",
+                _value("image.pullSecrets"),
                 "{{ $names := list }}{{ range . }}"
                 '{{ $names = append $names (dict "name" .) }}{{ end }}'
                 "{{ toJson $names }}",
@@ -735,8 +771,8 @@ class _Templater:
                 continue
             declared = _literal(entry["value"])
             entry["value"] = self.scalar(
-                "{{ if $.Values.storage.size }}"
-                f'{{{{ include "{self.name}.percentOf" (list $.Values.storage.size '
+                f"{{{{ if {_value('storage.size')} }}}}"
+                f'{{{{ include "{self.name}.percentOf" (list {_value("storage.size")} '
                 f"{int(percent)}) | toJson }}}}"
                 f"{{{{ else }}}}{{{{ toJson {declared} }}}}{{{{ end }}}}"
             )
@@ -864,7 +900,7 @@ def _secret_helper(
             lines.append(f"{{{{- $v = print {' '.join(parts) or _literal('')} -}}}}")
         else:
             value = inputs[generator]
-            lines.append(f'{{{{- $v = $.Values.{value} | default "" | toString -}}}}')
+            lines.append(f'{{{{- $v = {_value(value)} | default "" | toString -}}}}')
             if isinstance(spec, ImportSecretSpec) and spec.trim_newline:
                 lines.append('{{- $v = regexReplaceAll "\\\\s+$" $v "" -}}')
             lines += kept(generator)
@@ -1143,15 +1179,19 @@ def build_helm(
     for name, (_parts, _item, targets) in placed_values.items():
         for key, pointer in targets:
             values_at.setdefault(key, []).append((pointer, name))
+    by_key = {f"{item.kind}/{item.name}": item for item in bundle.objects}
     templater = _Templater(
         bundle.name, bundle.namespace, reverse, required, bundle.storage_class,
         secret_names=frozenset(plan.name for plan in bundle.secrets)
         if offer_existing
         else frozenset(),
         values_at=values_at, storage_env=storage_env,
+        value_defaults={
+            name: _value_default(item, targets, by_key)
+            for name, (_parts, item, targets) in placed_values.items()
+        },
     )  # fmt: skip
     gated: dict[str, str] = {}
-    by_key = {f"{item.kind}/{item.name}": item for item in bundle.objects}
     for name, (_parts, _item, keys) in optional.items():
         for key in keys:
             found = by_key.get(key)
@@ -1203,7 +1243,7 @@ def build_helm(
             assert mine is not None
             body = templater.text(templater.manifest(mine))
             if file in gated:
-                body = f"{{{{- if $.Values.{gated[file]} }}}}\n{body}{{{{- end }}}}\n"
+                body = f"{{{{- if {_value(gated[file])} }}}}\n{body}{{{{- end }}}}\n"
             files[f"templates/{file}"] = (header + body).encode()
             continue
         toggle = owners[0]
@@ -1211,11 +1251,11 @@ def build_helm(
         on = templater.text(templater.manifest(theirs)) if theirs else ""
         off = templater.text(templater.manifest(mine)) if mine else ""
         if on and off:
-            body = f"{{{{- if $.Values.{toggle} }}}}\n{on}{{{{- else }}}}\n{off}{{{{- end }}}}\n"
+            body = f"{{{{- if {_value(toggle)} }}}}\n{on}{{{{- else }}}}\n{off}{{{{- end }}}}\n"
         elif on:
-            body = f"{{{{- if $.Values.{toggle} }}}}\n{on}{{{{- end }}}}\n"
+            body = f"{{{{- if {_value(toggle)} }}}}\n{on}{{{{- end }}}}\n"
         else:
-            body = f"{{{{- if not $.Values.{toggle} }}}}\n{off}{{{{- end }}}}\n"
+            body = f"{{{{- if not {_value(toggle)} }}}}\n{off}{{{{- end }}}}\n"
         files[f"templates/{file}"] = (header + body).encode()
     missing = sorted(
         name
@@ -1312,11 +1352,7 @@ def build_helm(
             + (" and patches others)" if name in patched else ")")
         )
     for name, (parts, item, targets) in sorted(placed_values.items()):
-        default = item.default
-        if default is None:
-            key, pointer = targets[0]
-            default = _walk(copy.deepcopy(dict(by_key[key].manifest)), pointer)
-        default = json.loads(json.dumps(default))
+        default = _value_default(item, targets, by_key)
         node: dict[str, Any] = {
             "description": descriptions.get(name) or item.description
         }
