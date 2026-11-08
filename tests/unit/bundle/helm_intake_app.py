@@ -19,6 +19,7 @@ from __future__ import annotations
 from piceli import (
     App,
     ClaimTemplate,
+    ConfigVolume,
     Container,
     HelmChart,
     HelmOptional,
@@ -97,6 +98,7 @@ agent = app.stateful_set(
         "/var/lib/agent": ClaimTemplate("state", size="1Gi"),
         "/run/agent": SecretVolume(private, default_mode=0o440),
         "/run/alerts": SecretVolume("agent-alerts", optional=True),
+        "/etc/agent/documents": ConfigVolume("agent-documents", optional=True),
         "/tmp": MemoryVolume(size_limit="8Mi", name="tmp"),
     },
     init=[
@@ -219,7 +221,13 @@ chart = HelmChart(
                     "/spec/ingress/0/from/0/namespaceSelector/matchExpressions/0/values",
                 )
             ],
-        )
+        ),
+        # 0.66.0: an optional ConfigMap volume whose name the client sets,
+        # on the StatefulSet that intake.expose also patches.
+        "documents.configMap": HelmValue(
+            "The ConfigMap holding the documents folder (may not exist)",
+            targets=[(agent, "/spec/template/spec/volumes/2/configMap/name")],
+        ),
     },
     storage_env={"DISK_LIMIT": 90},
     optional_inputs=("privateCa",),

@@ -165,6 +165,9 @@ def test_volume_sources_and_default_names():
     }
     assert SecretVolume("s", name="tls").source() == {"secret": {"secretName": "s"}}
     assert SecretVolume("s").volume_name("/x") == "s"
+    assert ConfigVolume("c", optional=True).source() == {
+        "configMap": {"name": "c", "optional": True}
+    }
     assert SecretVolume("s", optional=True).source() == {
         "secret": {"secretName": "s", "optional": True}
     }
