@@ -77,7 +77,7 @@ RUN rustup target add aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu wasm32-
          arm64) arch=aarch64; sum="$NEXTEST_SHA256_ARM64" ;; \
          *) echo "no cargo-nextest for $TARGETARCH" >&2; exit 1 ;; \
        esac \
-    && curl -sSfL --retry 5 -o /tmp/nextest.tgz \
+    && curl -sSfL --retry 5 --retry-all-errors --retry-delay 3 -o /tmp/nextest.tgz \
        "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${NEXTEST_VERSION}/cargo-nextest-${NEXTEST_VERSION}-${arch}-unknown-linux-gnu.tar.gz" \
     && echo "$sum  /tmp/nextest.tgz" | sha256sum -c - \
     && tar -xzf /tmp/nextest.tgz -C /usr/local/cargo/bin cargo-nextest \

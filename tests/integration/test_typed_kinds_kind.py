@@ -50,7 +50,8 @@ KUBECTL = shutil.which("kubectl")
 # nginx:1.27-alpine multi-arch index digest (runs `sleep` as a non-root user).
 DIGEST = "sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10"
 #: Gateway API standard channel CRDs, pinned to one release.
-GATEWAY_API_CRDS = (
+#: CI fetches the file first (signed in, with retries): PICELI_GATEWAY_API_CRDS.
+GATEWAY_API_CRDS = os.environ.get("PICELI_GATEWAY_API_CRDS") or (
     "https://github.com/kubernetes-sigs/gateway-api/releases/download/"
     "v1.2.1/standard-install.yaml"
 )

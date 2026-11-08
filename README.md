@@ -66,10 +66,10 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.66
+## What's new in 0.67
 
-- **Optional ConfigMap volumes**: `ConfigVolume("documents", optional=True)`
-  lets a pod start before (or without) the ConfigMap it mounts.
+- **Failed dev runs say why**: the signal that ended them, and
+  `out-of-memory` or `host-or-toolchain`, kept in `piceli dev status`.
 
 ## Web UI
 

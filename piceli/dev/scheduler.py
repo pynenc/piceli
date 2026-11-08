@@ -57,7 +57,7 @@ STATUS_SCHEMA = "piceli.dev-status.v1"
 PRIORITY_RANK = {"round": 0, "agent": 1, "normal": 2}
 MAX_RECENT = 50
 #: Log lines a finished run that did not pass keeps in the status.
-RECORDED_TAIL = 20
+RECORDED_TAIL = 30
 #: A scheduler silent for longer is not alive: clients start runs at once.
 ALIVE_SECONDS = 60
 TICK_SECONDS = 3.0
@@ -353,6 +353,10 @@ class Scheduler:
                 # 0.19: the cause survives a tail that only shows the end.
                 if result.get("first_error"):
                     entry["first_error"] = list(result["first_error"])[:RECORDED_TAIL]
+                # 0.67.0: what ended it, so a later look needs no log.
+                for key in ("signal", "cause", "health"):
+                    if result.get(key):
+                        entry[key] = result[key]
         elif state == "cancelled":
             entry.update(state="cancelled", reason=code, exit_code=None)
         else:
