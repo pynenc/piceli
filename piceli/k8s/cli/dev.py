@@ -112,6 +112,11 @@ def run_summary(result: dict[str, Any]) -> str:
         )
     if result.get("reason") and result.get("state") != "passed":
         line += f" ({result['reason']})"
+    ended_by = result.get("signal") or {}
+    if ended_by and result.get("state") != "passed":
+        line += f"; killed by {ended_by.get('name')}" + (
+            f" ({result['cause']})" if result.get("cause") else ""
+        )
     return line
 
 

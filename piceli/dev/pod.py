@@ -1737,6 +1737,54 @@ HEALTH_SIGNATURES = (
 )
 
 
+#: 0.67.0: a process killed by a signal, in cargo's, rustc's and gcc's words
+#: (``(signal: 9, SIGKILL: kill)``, ``ld terminated with signal 9``).
+_SIGNAL_LINE = re.compile(
+    r"\(signal: (\d+)(?:, (SIG[A-Z0-9]+))?|terminated with signal (\d+)"
+)
+#: 0.67.0: what a signal says about a failed run. SIGKILL is almost always
+#: the kernel's out-of-memory killer or the container's memory limit.
+#: By name: numbers differ between Linux and macOS (7 is SIGBUS on one,
+#: SIGEMT on the other).
+SIGNAL_CAUSES = {
+    "SIGKILL": "out-of-memory",
+    "SIGSEGV": "host-or-toolchain",
+    "SIGBUS": "host-or-toolchain",
+    "SIGILL": "host-or-toolchain",
+}
+
+
+def failure_signal(code: int | None, lines: Iterable[str]) -> dict[str, Any] | None:
+    """0.67.0: the signal that ended a failed run, as ``{"number", "name",
+    "from", "cause"}``: the command's own (a negative code, or a shell's
+    128 + N), else the first one its output names (a linker or a test
+    binary killed under cargo); ``None`` when there is none."""
+    number, name, where = None, None, "command"
+    if code is not None and code < 0:
+        number = -code
+    elif code is not None and 128 < code < 128 + 65:
+        number = code - 128
+    if number is None:
+        for line in lines:
+            found = _SIGNAL_LINE.search(line)
+            if found:
+                number, where = int(found.group(1) or found.group(3)), "output"
+                name = found.group(2)  # the text's name holds on any system
+                break
+    if number is None:
+        return None
+    if name is None:
+        try:
+            name = signal.Signals(number).name
+        except ValueError:
+            name = f"signal {number}"
+    found_signal: dict[str, Any] = {"number": number, "name": name, "from": where}
+    cause = SIGNAL_CAUSES.get(name)
+    if cause:
+        found_signal["cause"] = cause
+    return found_signal
+
+
 def health_signal(lines: Iterable[str]) -> dict[str, str] | None:
     """The first line of ``lines`` with a machine-health signature, as
     ``{"kind", "line"}``; ``None`` when there is none."""
@@ -2677,6 +2725,17 @@ def main(
         result["log_tail"] = list(tail)
         if first is not None and first.lines:
             result["first_error"] = list(first.lines)
+        # 0.67.0: the signal that ended it and what that says; only when the
+        # command failed by itself (Piceli's own stops also kill).
+        ended_by = (
+            failure_signal(result.get("exit_code"), list(tail))
+            if result.get("reason") == "dev-command-failed"
+            else None
+        )
+        if ended_by is not None:
+            result["signal"] = ended_by
+            if ended_by.get("cause"):
+                result["cause"] = ended_by["cause"]
     durations["total"] = round(clock() - began, 3)
     result["timeline"] = timeline.close()
     emit(RESULT_MARKER + json.dumps(result, sort_keys=True))

@@ -159,6 +159,26 @@ def test_finished_runs_are_recorded_then_removed() -> None:
     assert len(finished) == 2
 
 
+def test_a_failed_run_keeps_its_signal_cause_and_last_lines() -> None:
+    """0.67.0: ``dev status`` (and ``dev logs`` after the pod is gone) keeps
+    what ended a failed run and its last 30 lines."""
+    result = {
+        "state": "failed",
+        "exit_code": 1,
+        "reason": "dev-command-failed",
+        "cache": {},
+        "log_tail": [f"line {n}" for n in range(80)],
+        "signal": {"number": 9, "name": "SIGKILL", "from": "output", "cause": "out-of-memory"},
+        "cause": "out-of-memory",
+    }  # fmt: skip
+    port = FakePort([job("oom", suspend=False, done="Failed")], {"oom": result})
+    Scheduler(port, _dev(), clock=lambda: 1000.0).tick()
+    recent = port.published[-1]["recent"][0]
+    assert recent["cause"] == "out-of-memory" and recent["signal"]["name"] == "SIGKILL"
+    assert recent["log_tail"] == [f"line {n}" for n in range(50, 80)]
+    assert "health" not in recent
+
+
 def test_a_cancelled_run_is_recorded_as_cancelled() -> None:
     port = FakePort([job("q1")])
     finished: list[dict[str, Any]] = []

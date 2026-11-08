@@ -54,7 +54,8 @@ ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples" / "reference"
 CERTIFICATE_CRD = ROOT / "tests" / "fixtures" / "crds" / "cert-manager-certificate.yaml"
 #: Gateway API standard channel CRDs, pinned to one release.
-GATEWAY_API_CRDS = (
+#: CI fetches the file first (signed in, with retries): PICELI_GATEWAY_API_CRDS.
+GATEWAY_API_CRDS = os.environ.get("PICELI_GATEWAY_API_CRDS") or (
     "https://github.com/kubernetes-sigs/gateway-api/releases/download/"
     "v1.2.1/standard-install.yaml"
 )

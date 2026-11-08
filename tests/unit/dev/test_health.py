@@ -273,6 +273,67 @@ def test_a_link_error_alone_is_the_codes_not_the_hosts(tmp_path: Path) -> None:
     assert result["state"] == "failed" and "health" not in result
 
 
+@pytest.mark.parametrize(
+    ("code", "lines", "expected"),
+    [
+        (-9, [], {"number": 9, "name": "SIGKILL", "from": "command", "cause": "out-of-memory"}),
+        (137, [], {"number": 9, "name": "SIGKILL", "from": "command", "cause": "out-of-memory"}),
+        (
+            101,
+            ["error: linking with `cc` failed (signal: 11, SIGSEGV: invalid memory reference)"],
+            {"number": 11, "name": "SIGSEGV", "from": "output", "cause": "host-or-toolchain"},
+        ),
+        (
+            1,
+            ["collect2: fatal error: ld terminated with signal 9 [Killed]"],
+            {"number": 9, "name": "SIGKILL", "from": "output", "cause": "out-of-memory"},
+        ),
+        (
+            101,
+            ["process didn't exit successfully (signal: 7, SIGBUS: access to undefined memory)"],
+            {"number": 7, "name": "SIGBUS", "from": "output", "cause": "host-or-toolchain"},
+        ),
+        (-15, [], {"number": 15, "name": "SIGTERM", "from": "command"}),
+        (101, ["error[E0308]: mismatched types"], None),
+    ],
+)  # fmt: skip
+def test_the_signal_that_ended_a_run_and_its_cause(
+    code: int, lines: list[str], expected: dict[str, Any] | None
+) -> None:
+    """0.67.0: a failed run names the signal and what it points at."""
+    assert pod.failure_signal(code, lines) == expected
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell")
+def test_a_linker_killed_by_the_kernel_is_out_of_memory_not_the_hosts_health(
+    tmp_path: Path,
+) -> None:
+    result = _run_failing(
+        tmp_path,
+        "echo 'collect2: fatal error: ld terminated with signal 9 [Killed]'; exit 1",
+    )
+    assert result["signal"]["name"] == "SIGKILL"
+    assert result["cause"] == "out-of-memory" and "health" not in result
+    assert any("signal 9" in line for line in result["log_tail"])
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell")
+def test_a_segfaulting_linker_is_host_or_toolchain(tmp_path: Path) -> None:
+    result = _run_failing(
+        tmp_path,
+        "echo 'error: linking with `rust-lld` failed (signal: 11, SIGSEGV)'; exit 1",
+    )
+    assert result["cause"] == "host-or-toolchain"
+    assert result["health"]["kind"] == "segfault"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell")
+def test_a_command_killed_itself_reports_its_signal(tmp_path: Path) -> None:
+    result = _run_failing(tmp_path, "kill -SEGV $$")
+    assert result["state"] == "failed"
+    assert result["signal"]["number"] == 11 and result["signal"]["from"] == "command"
+
+
 # ------------------------------------------------------------------ the CLI
 
 
@@ -341,3 +402,17 @@ def test_an_event_checked_at_once_or_from_a_clock_a_little_ahead_counts(
     store.record(HealthEvent(at + 120, "machine-check"))  # a clock 2 min ahead
     found = quarantine(store.events(), after=2, window=86400, now=at)
     assert found is not None and found["events"] == 2
+
+
+def test_the_run_summary_names_the_signal_and_cause() -> None:
+    from piceli.k8s.cli.dev import run_summary
+
+    line = run_summary(
+        {
+            "run": "r1", "state": "failed", "exit_code": 101,
+            "reason": "dev-command-failed",
+            "signal": {"number": 9, "name": "SIGKILL", "from": "output"},
+            "cause": "out-of-memory",
+        }
+    )  # fmt: skip
+    assert line.endswith("(dev-command-failed); killed by SIGKILL (out-of-memory)")

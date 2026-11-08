@@ -199,13 +199,42 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
+      - name: Fetch pinned release files (signed in to GitHub, with retries)
+        # Downloads signed in with the job's token and retried: unsigned
+        # ones failed whole runs during a GitHub incident (2026-11-08).
+        # The tests read the local copies (PICELI_FLUX_INSTALL,
+        # PICELI_GATEWAY_API_CRDS); kind and Flux are checked against their sums.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KIND: ${{ needs.kind-nodes.outputs.kind }}
+        run: |
+          get() {  # repo tag pattern
+            for i in 1 2 3 4 5; do
+              gh release download "$2" -R "$1" -p "$3" -D "$RUNNER_TEMP/rel" --clobber && return 0
+              sleep $((i * 5))
+            done
+            return 1
+          }
+          get kubernetes-sigs/kind "$KIND" kind-linux-amd64
+          get kubernetes-sigs/kind "$KIND" kind-linux-amd64.sha256sum
+          get fluxcd/flux2 v2.9.5 install.yaml
+          get kubernetes-sigs/gateway-api v1.2.1 standard-install.yaml
+          (cd "$RUNNER_TEMP/rel" && sha256sum -c kind-linux-amd64.sha256sum)
+          sudo install -m 0755 "$RUNNER_TEMP/rel/kind-linux-amd64" /usr/local/bin/kind
+          {
+            echo "PICELI_FLUX_INSTALL=$RUNNER_TEMP/rel/install.yaml"
+            echo "PICELI_GATEWAY_API_CRDS=$RUNNER_TEMP/rel/standard-install.yaml"
+          } >> "$GITHUB_ENV"
       - name: Create kind cluster
-        uses: helm/kind-action@v1
-        with:
-          version: ${{ needs.kind-nodes.outputs.kind }}
-          node_image: ${{ matrix.node.image }}
-          kubectl_version: ${{ matrix.node.kubectl }}
-          cluster_name: piceli-ci
+        env:
+          NODE_IMAGE: ${{ matrix.node.image }}
+          KUBECTL: ${{ matrix.node.kubectl }}
+        run: |
+          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o /tmp/kubectl "https://dl.k8s.io/release/$KUBECTL/bin/linux/amd64/kubectl"
+          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 -o /tmp/kubectl.sha256 "https://dl.k8s.io/release/$KUBECTL/bin/linux/amd64/kubectl.sha256"
+          echo "$(cat /tmp/kubectl.sha256)  /tmp/kubectl" | sha256sum -c -
+          sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
+          kind create cluster --name piceli-ci --image "$NODE_IMAGE" --wait 120s
       - name: Name the cluster explicitly for the tests
         # The tests never use the current context: they read these variables.
         run: |

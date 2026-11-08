@@ -532,6 +532,21 @@ A failed run's result also carries `first_error`: the first `error` line
 of the output and the 19 lines after it, so the cause survives a long log
 whose `log_tail` only shows the end. `piceli dev run` prints it.
 
+When a signal ended the failed command, or a process under it (a linker, a
+test binary), the result says which and what it points at (0.67.0):
+
+| Signal | `cause` | Counts against the host's health |
+|---|---|---|
+| SIGKILL (9) | `out-of-memory`: the kernel's out-of-memory killer or the run's memory limit; give the profile more `memory` or fewer build jobs | no |
+| SIGSEGV, SIGBUS, SIGILL | `host-or-toolchain`: a faulty machine or a crashing compiler or linker | yes |
+
+For example `"signal": {"number": 9, "name": "SIGKILL", "from": "output",
+"cause": "out-of-memory"}` (`from`: the command's own exit, or a line of
+its output). A run Piceli stops itself (a timeout, the cache cap) has none.
+`piceli dev status` keeps each failed run's `signal`, `cause`, `health`,
+`first_error` and last 30 lines; `piceli dev logs RUN` prints them after
+the pod is gone.
+
 ## Speed
 
 What a warm run costs, and where it goes: the result's `timeline` has every

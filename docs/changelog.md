@@ -4,6 +4,24 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.67.0
+
+**Changes**
+
+- **A failed dev run names the signal that ended it.** The result has
+  `signal` (number, name, and whether the command or a line of its output
+  showed it) and a `cause`: SIGKILL is `out-of-memory` and no longer looks
+  like a crash; SIGSEGV, SIGBUS and SIGILL are `host-or-toolchain`.
+  `piceli dev status` keeps `signal`, `cause`, `health` and the last 30
+  lines (was 20) of each failed run, and the run summary ends with
+  `killed by SIGKILL (out-of-memory)`.
+
+**Fixes**
+
+- **CI and the builder image survive slow GitHub downloads.** kind, the
+  Flux and Gateway API manifests are fetched signed in, with retries; the
+  builder image's nextest download retries on a cut-off transfer.
+
 ## Version 0.66.0
 
 **Changes**
