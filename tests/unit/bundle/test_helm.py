@@ -542,7 +542,7 @@ def _intake(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
 def test_the_new_values_are_declared(tmp_path: Path) -> None:
     out, body = _intake(tmp_path)
     assert body["optional"] == ["intake.expose"]
-    assert body["values"] == ["intake.allowNamespaces"]
+    assert body["values"] == ["documents.configMap", "intake.allowNamespaces"]
     assert body["existing_secret_keys"] == [
         "api-token", "cluster-key", "intake-token", "private-ca",
     ]  # fmt: skip
@@ -652,6 +652,30 @@ def test_an_optional_secret_volume_mounts_with_every_patch(
         )
         assert mount == {"name": "agent-alerts", "mountPath": "/run/alerts"}
         assert ("Secret", "agent-alerts") not in objects
+
+
+def test_an_optional_config_volume_takes_its_name_from_a_value(
+    helm: str, tmp_path: Path
+) -> None:
+    """0.66.0: ``ConfigVolume(optional=True)`` renders ``optional: true``, and
+    a value names its ConfigMap, also when ``intake.expose`` patches the
+    same StatefulSet."""
+    out, _body = _intake(tmp_path)
+    values = yaml.safe_load((out / "values.yaml").read_text())
+    assert values["documents"] == {"configMap": "agent-documents"}
+    for extra, name in (
+        ((), "agent-documents"),
+        (("--set", "documents.configMap=client-docs"), "client-docs"),
+        (("--set", "intake.expose=true", "--set", "documents.configMap=d2"), "d2"),
+    ):
+        result = _template(helm, out, *BASE, "--set", "apiToken=x", *extra)
+        assert result.returncode == 0, result.stderr
+        objects = _objects(result.stdout)
+        volume = next(
+            v for v in _pod(objects)["volumes"] if v["name"] == "agent-documents"
+        )
+        assert volume["configMap"] == {"name": name, "optional": True}
+        assert ("ConfigMap", name) not in objects
 
 
 def test_new_declarations_are_checked() -> None:

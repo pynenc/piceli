@@ -2356,6 +2356,7 @@
     "items",
     "kind",
     "name",
+    "optional",
     "source",
     "volume_name"
    ],
@@ -2364,7 +2365,8 @@
     "default_mode",
     "items",
     "kind",
-    "name"
+    "name",
+    "optional"
    ],
    "methods": {
     "source": [],
@@ -18137,5 +18139,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.65.0"
+ "version": "0.66.0"
 }

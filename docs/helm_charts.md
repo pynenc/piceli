@@ -112,6 +112,11 @@ pod starts without it and sees an empty directory. The volume is part of the
 workload, so it composes with any value that patches that workload (for
 example an optional value's `patches`). Secret volumes are always read-only.
 
+A ConfigMap works the same way (0.66.0): `ConfigVolume("documents",
+optional=True)` mounts a ConfigMap the client may make, for example from a
+folder with kustomize's `configMapGenerator`. A `HelmValue` targeting
+`/spec/template/spec/volumes/<n>/configMap/name` lets the client name it.
+
 Creating Secrets from values the client supplies is deliberately not
 offered: secret values would then pass through values files, shell history
 and Helm's release records. Claims work the same way: an `ExistingClaim` the

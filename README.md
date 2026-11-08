@@ -66,12 +66,10 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.65
+## What's new in 0.66
 
-- **Helm charts keep upgrading after a value is dropped**: retired values
-  are accepted, ignored and warned about.
-- **Boolean chart values in ConfigMaps and environment variables** are
-  written as `"true"` or `"false"`.
+- **Optional ConfigMap volumes**: `ConfigVolume("documents", optional=True)`
+  lets a pod start before (or without) the ConfigMap it mounts.
 
 ## Web UI
 

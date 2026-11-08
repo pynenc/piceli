@@ -4,6 +4,16 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.66.0
+
+**Changes**
+
+- **Optional ConfigMap volumes.** `ConfigVolume(..., optional=True)`
+  renders `configMap.optional: true`, like `SecretVolume` since 0.55.0: the
+  pod starts when the ConfigMap is missing and sees an empty directory. A
+  `HelmValue` can name the ConfigMap, also on a workload another value
+  patches.
+
 ## Version 0.65.0
 
 **Changes**

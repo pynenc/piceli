@@ -399,12 +399,16 @@ class ConfigVolume(_Volume):
     :param name: Volume name; defaults to the ConfigMap name.
     :param items: Only these keys, as ``{key: relative path}``.
     :param default_mode: File mode, such as ``0o444``.
+    :param optional: 0.66.0: the pod starts when the ConfigMap (or a listed
+        key) is missing, with the directory empty; for a ConfigMap the user
+        creates later, or never.
     """
 
     kind: Literal["config"] = "config"
     config: ObjectName
     items: dict[DataKey, str] | None = None
     default_mode: int | None = Field(default=None, ge=0, le=0o777)
+    optional: bool | None = None
 
     def __init__(self, config: Config | str, /, **data: Any) -> None:
         super().__init__(**{"config": _object_name(config), **data})
@@ -418,6 +422,7 @@ class ConfigVolume(_Volume):
                 name=self.config,
                 items=_items(self.items),
                 defaultMode=self.default_mode,
+                optional=self.optional,
             )
         }
 
