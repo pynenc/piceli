@@ -26,6 +26,13 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   at most 60) after they leave the last 50 runs; `piceli dev logs RUN`
   finds them.
 
+**Fixes**
+
+- **Every CI download from GitHub is signed in.** OpenTofu, sops and
+  kustomize now come through `scripts/gh_fetch.sh` (`gh release download`
+  with the job's token, retried for about two minutes), like kind and Flux
+  since 0.67.0.
+
 ## Version 0.67.0
 
 **Changes**
