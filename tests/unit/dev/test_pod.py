@@ -476,3 +476,147 @@ def test_a_rustc_197_ice_drops_incremental_and_runs_once_more(tmp_path: Path) ->
     assert any("corrupted cache (incremental)" in line for line in lines)
     assert not (target / "debug/incremental").exists()
     assert (target / "debug/deps/libshop-1.rmeta").exists()
+
+
+# ------------------------------------------------- damaged lineages (0.69.0)
+#: A dependency's artifact the damaged lineage holds (its presence is the damage).
+_DAMAGED = "$CARGO_TARGET_DIR/debug/deps/libarrow_ord-05e6.rlib"
+_ICE_LINES = [
+    "  echo '   Compiling shop-query v0.1.0 (/x)'",
+    "  echo \"thread 'rustc' (1169) panicked at compiler/rustc_middle/src/"
+    'query/mod.rs:10:1:"',
+    "  echo 'error: the compiler unexpectedly panicked. This is a bug'",
+    "  echo 'error: could not compile `shop-query` (lib)'",
+]
+_LINK_LINES = [
+    "  echo 'error: linking with `cc` failed: exit status: 1'",
+    f'  echo "  = note: rust-lld: error: {_DAMAGED}(arrow_ord-05e6.o): '
+    'unknown file type"',
+    "  echo 'error: could not compile `shop` (bin \"shop\")'",
+]
+_SEGV_LINES = [
+    "  echo '   Compiling syn v2.0.87'",
+    "  echo 'error: rustc interrupted by SIGSEGV, printing backtrace'",
+    "  echo 'error: could not compile `syn` (lib)'",
+    "  echo 'Caused by:'",
+    "  echo \"  process didn't exit successfully: \\`/opt/rust/bin/rustc "
+    "--crate-name syn --edition=2021\\` (signal: 11, SIGSEGV: invalid memory "
+    'reference)"',
+]
+_FINISHED = "echo '    Finished `dev` profile [unoptimized] target(s) in 1.0s'"
+
+
+def _damaging(lines: list[str]) -> str:
+    """A build that fails with ``lines`` while the damaged artifact is there."""
+    return "\n".join(
+        [f'if [ -f "{_DAMAGED}" ]; then', *lines, "  exit 101", "fi", _FINISHED]
+    )
+
+
+def _warm(tmp_path: Path, data: bytes) -> Path:
+    """A warm lineage holding the damaged artifact and some incremental state."""
+    first, _ = _run(tmp_path, data, _spec(data, ["true"]), "seed")
+    lineage = Path(first["cache"]["lineage_dir"])
+    for name in ("debug/deps/libarrow_ord-05e6.rlib", "debug/incremental/q-1/s/x"):
+        (lineage / "target" / name).parent.mkdir(parents=True, exist_ok=True)
+        (lineage / "target" / name).write_text("x")
+    return lineage
+
+
+@pytest.mark.parametrize(
+    ("lines", "after"),
+    [(_ICE_LINES, "incremental"), (_LINK_LINES, None), (_SEGV_LINES, None)],
+    ids=["ice-persists", "link-into-deps", "rustc-sigsegv"],
+)
+def test_a_damaged_lineage_loses_its_target_and_runs_once_more_cold(
+    tmp_path: Path, lines: list[str], after: str | None
+) -> None:
+    """0.69.0: an ICE the incremental repair does not cure, a linker refusing
+    a cached rlib, rustc killed by SIGSEGV: target/ goes, the run retries."""
+    data = _archive({"app/check.sh": _damaging(lines)})
+    lineage = _warm(tmp_path, data)
+    result, out = _run(tmp_path, data, _spec(data, ["sh", "check.sh"]), "run")
+    assert result["state"] == "passed", result
+    repaired = result["cache"]["repaired"]
+    assert repaired["kind"] == "lineage" and repaired.get("after") == after
+    assert repaired["reason"] and repaired["first_error"]
+    assert any("damaged lineage" in line and "cold" in line for line in out)
+    assert not (lineage / "target/debug/deps/libarrow_ord-05e6.rlib").exists()
+    assert (lineage / "tree" / "app" / "check.sh").is_file()  # the sources stay
+    assert "damaged" not in json.loads((lineage / "meta.json").read_text())
+    assert "damaged" not in result["cache"]
+    assert result["health"]["repaired"] is True
+
+
+def test_code_errors_never_drop_the_lineage_target(tmp_path: Path) -> None:
+    """0.69.0: the code's own undefined symbol, a link error on a cold
+    lineage, a test binary segfaulting while the tests run: no lineage repair."""
+    target = "$CARGO_TARGET_DIR/debug/deps"
+    undefined = _archive(
+        {
+            "app/check.sh": "\n".join(
+                [
+                    "echo '  = note: rust-lld: error: undefined symbol: shop::gone'",
+                    f'echo "          >>> referenced by {target}/shop-1a.shop.o"',
+                    "echo 'error: could not compile `shop` (bin \"shop\")'",
+                    "exit 101",
+                ]
+            )
+        }
+    )
+    lineage = _warm(tmp_path, undefined)
+    result, _ = _run(tmp_path, undefined, _spec(undefined, ["sh", "check.sh"]), "u")
+    assert result["state"] == "failed"
+    assert result["cache"]["repaired"]["kind"] == "link"  # the 0.19 repair only
+    assert (lineage / "target/debug/deps/libarrow_ord-05e6.rlib").exists()
+
+    segfault = _archive(
+        {
+            "app/check.sh": "\n".join(
+                [
+                    _FINISHED,
+                    f'echo "     Running unittests src/lib.rs ({target}/shop-1a)"',
+                    "echo 'error: test failed, to rerun pass `--lib`'",
+                    "echo 'Caused by:'",
+                    f"echo \"  process didn't exit successfully: \\`{target}/shop-1a\\`"
+                    ' (signal: 11, SIGSEGV: invalid memory reference)"',
+                    "exit 101",
+                ]
+            )
+        }
+    )
+    result, _ = _run(tmp_path, segfault, _spec(segfault, ["sh", "check.sh"]), "s")
+    assert result["state"] == "failed" and "repaired" not in result["cache"]
+    assert (lineage / "target/debug/deps/libarrow_ord-05e6.rlib").exists()
+
+    cold = _archive({"app/check.sh": "\n".join([*_LINK_LINES, "exit 101"])})
+    spec = _spec(cold, ["sh", "check.sh"], lineage_key="cold-rust")
+    result, _ = _run(tmp_path, cold, spec, "c")
+    assert result["cache"]["warm"] is False
+    assert result["state"] == "failed" and "repaired" not in result["cache"]
+
+
+def test_a_lineage_still_damaged_after_the_cold_retry_is_removed(
+    tmp_path: Path,
+) -> None:
+    """0.69.0: the cold retry fails the same way: the lineage is removed at
+    release, and one a killed run marked damaged is never taken again."""
+    always = _archive({"app/check.sh": "\n".join([*_SEGV_LINES, "exit 101"])})
+    lineage = _warm(tmp_path, always)
+    result, out = _run(tmp_path, always, _spec(always, ["sh", "check.sh"]), "run")
+    assert result["state"] == "failed"
+    assert result["cache"]["repaired"]["kind"] == "lineage"
+    assert "rustc interrupted by SIGSEGV" in result["cache"]["damaged"]
+    assert any("still damaged" in line for line in out)
+    assert not lineage.exists()
+    again, _ = _run(tmp_path, always, _spec(always, ["true"]), "next")
+    assert again["state"] == "passed" and again["cache"]["warm"] is False
+
+    # A run killed after marking its lineage damaged: the next run skips it.
+    held = Path(again["cache"]["lineage_dir"])
+    meta = json.loads((held / "meta.json").read_text())
+    (held / "meta.json").write_text(json.dumps({**meta, "damaged": "rustc crash"}))
+    (held / "target" / "marker").write_text("x")
+    last, _ = _run(tmp_path, always, _spec(always, ["true"]), "last")
+    assert last["cache"]["warm"] is False and "seed" not in last["cache"]
+    assert not (Path(last["cache"]["lineage_dir"]) / "target" / "marker").exists()

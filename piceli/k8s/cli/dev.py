@@ -102,9 +102,13 @@ def run_summary(result: dict[str, Any]) -> str:
         line += ")"
     repaired = cache.get("repaired") or {}
     if repaired:
-        line += f"; corrupted cache ({repaired.get('kind')}) repaired: " + ", ".join(
-            repaired.get("crates") or ()
+        line += f"; corrupted cache ({repaired.get('kind')}) repaired: " + (
+            ", ".join(repaired.get("crates") or ())
+            # 0.69.0: a damaged lineage loses its whole target/.
+            or ("target/ removed" if repaired.get("kind") == "lineage" else "")
         )
+        if cache.get("damaged"):
+            line += "; the lineage was still damaged and is removed"
     elif (cache.get("suspect") or {}).get("kind"):
         line += (
             f"; the cache looks corrupted ({cache['suspect']['kind']}): "
