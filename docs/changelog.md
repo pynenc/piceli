@@ -4,6 +4,19 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.69.0
+
+**Fixes**
+
+- **A damaged dev lineage is rebuilt, not reused.** When a run on a warm
+  lineage still crashes rustc after the `incremental/` repair, or a linker
+  refuses a file inside the lineage's `target/`, or rustc itself is killed
+  by SIGSEGV or SIGBUS while compiling, the run removes that `target/` and
+  runs once more cold (`cache.repaired.kind = "lineage"`). A lineage still
+  damaged at the end is removed, so the next run never takes it. Before,
+  the incremental repair could not reach damaged dependencies in
+  `target/debug/deps/`, and each new run failed on the same lineage.
+
 ## Version 0.68.0
 
 **Changes**
