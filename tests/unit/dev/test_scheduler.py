@@ -179,6 +179,36 @@ def test_a_failed_run_keeps_its_signal_cause_and_last_lines() -> None:
     assert "health" not in recent
 
 
+def test_failed_runs_stay_seven_days_after_they_leave_recent() -> None:
+    """0.68.0: a failed run that leaves the last 50 stays in ``failed`` for
+    7 days (passed and cancelled runs do not), also across a restart."""
+    from piceli.dev import scheduler as module
+
+    now = [1_000_000.0]
+    port = FakePort([])
+    scheduler = Scheduler(port, _dev(), clock=lambda: now[0])
+    at = module._iso(now[0])
+    scheduler.record({"run": "bad", "state": "failed", "finished_at": at})
+    scheduler.record({"run": "stop", "state": "cancelled", "finished_at": at})
+    for n in range(module.MAX_RECENT):
+        scheduler.record({"run": f"ok{n}", "state": "passed", "finished_at": at})
+    assert [r["run"] for r in scheduler.failed] == ["bad"]
+    scheduler.tick()
+    assert [r["run"] for r in port.published[-1]["failed"]] == ["bad"]
+    published = port.published[-1]
+
+    class Restarted(FakePort):
+        def status(self) -> dict[str, Any]:
+            return published
+
+    restarted = Scheduler(Restarted([]), _dev(), clock=lambda: now[0])
+    restarted.tick()
+    assert [r["run"] for r in restarted.failed] == ["bad"]
+    now[0] += module.FAILED_SECONDS + 1
+    scheduler.tick()
+    assert "failed" not in port.published[-1]
+
+
 def test_a_cancelled_run_is_recorded_as_cancelled() -> None:
     port = FakePort([job("q1")])
     finished: list[dict[str, Any]] = []
