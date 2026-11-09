@@ -325,6 +325,40 @@ same for every platform still sees its platform's `$CARGO_TARGET_DIR` and
 `build.env`, and its outputs land in that platform's target directory, so
 running it once is only correct when the spec says so.
 
+## Steps for some images only (0.68.0)
+
+A composition controller builds only the images whose change key changed
+(see {doc}`compositions`). Every command still ran for them, and every image
+was assembled. To skip the steps of an image that did not change, write the
+command as a table that names its images, in `build.commands` or
+`build.shared_commands`:
+
+```toml
+[build]
+tools = ["cargo", "sh"]
+shared_commands = [
+    { run = ["sh", "-ec", "cargo build --release -p site --target wasm32-unknown-unknown"], images = ["site"] },
+]
+commands = [
+    { run = ["cargo", "build", "--release", "-p", "api"], images = ["api"] },
+    ["cargo", "build", "--release", "-p", "common"],   # a plain list: every build
+]
+```
+
+- A build of some images runs a table command only when one of its
+  `images` is among them, and assembles, packages and pushes only those
+  images. The other images keep the image they already have.
+- A plain argv list runs in every build, as before.
+- `images` lists 1 to 32 names of `[[output.image]]` tables of the same
+  spec, each once; `run` is checked like a plain command. Anything else is
+  refused when the spec is loaded (`invalid-spec`).
+- The plan, its preview and its hash hold only the commands and images the
+  build runs, so a build of `api` alone has another plan hash than a build
+  of every image. A local `piceli artifacts build-spec run` builds every
+  image and runs every command.
+- `$PICELI_SHARED_TARGET_DIR` stays set when the build runs none of the
+  shared commands: a command can read their outputs of an earlier build.
+
 ## The toolchain the source pins
 
 By default a command uses whatever Rust, node or wasm tools the build

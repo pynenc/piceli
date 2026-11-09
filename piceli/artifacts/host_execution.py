@@ -428,7 +428,9 @@ class HostExecution:
         target = self.shared_target if shared else self.target
         environment["CARGO_TARGET_DIR"] = str(target)
         environment["SOURCE_DATE_EPOCH"] = str(self.spec.source_date_epoch)
-        if self.plan.shared_commands:
+        # 0.68.0: declared, even when this build runs none of them (they are
+        # for other images): its commands may read their earlier outputs.
+        if self.spec.shared_commands:
             environment[SHARED_TARGET_ENV] = str(self.shared_target)
         environment.update(self.plan.shared_env if shared else self.plan.env)
         return environment

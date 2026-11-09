@@ -546,6 +546,8 @@ its output). A run Piceli stops itself (a timeout, the cache cap) has none.
 `piceli dev status` keeps each failed run's `signal`, `cause`, `health`,
 `first_error` and last 30 lines; `piceli dev logs RUN` prints them after
 the pod is gone.
+A failed run stays there for 7 days after it leaves the last 50 runs
+(0.68.0; in `failed`, at most 60), so `piceli dev logs RUN` still finds it.
 
 ## Speed
 

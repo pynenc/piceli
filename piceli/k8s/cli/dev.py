@@ -900,10 +900,15 @@ def logs(
                 if not line.startswith(RESULT_MARKER):
                     typer.echo(line)
             return
+        status = port.status() or {}
+        # 0.68.0: a failed run stays in ``failed`` for 7 days.
         recorded = next(
             (
                 item
-                for item in (port.status() or {}).get("recent") or ()
+                for item in [
+                    *(status.get("recent") or ()),
+                    *(status.get("failed") or ()),
+                ]
                 if item.get("run") == run_id
             ),
             None,

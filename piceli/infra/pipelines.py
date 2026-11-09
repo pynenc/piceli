@@ -12,9 +12,14 @@ pipeline's host builds (``Build.spec("host-build.toml", builder="host")``):
 - each ``[[output.image]]`` has a **change key** (:func:`image_keys`): its
   output table, the spec's build table, and the Git blob id of every file the
   contexts it reads include (``contexts = [...]``, default all) at their
-  commits. No changed key: nothing is built. Otherwise one build runs, and
-  only the images whose key changed take the new image; the others keep their
-  cached image and apply as no-op;
+  commits. No changed key: nothing is built. Otherwise one build runs for the
+  images whose key changed (0.68.0: it assembles only those, and a command
+  declared ``{ run = [...], images = [...] }`` runs only when it names one of
+  them); the others keep their cached image and apply as no-op;
+- the build compiles only the platforms the environment's pods can run on
+  (0.68.0, :func:`placement` and :func:`build_platforms`): the nodes of its
+  ``on_nodes``, else the nodes matching every workload's node selector, else
+  every declared node;
 - third-party images (``Registry.in_cluster(mirror=[ref@digest])`` of the
   cluster, and the pipeline's own delivery ``mirror=``) are copied into the
   in-cluster registry when the environment syncs; nodes pull them from there.
@@ -410,9 +415,15 @@ class SpecBuildRequest:
     :param commits: Every source the build reads, at its commit (the
         composition repository included).
     :param images: Image name → ``{"repository", "key"}`` of the images to
-        push (those whose key changed); the build compiles every image.
+        push (those whose key changed); 0.68.0: the build assembles only
+        these, and runs only the commands for them (see the module doc).
     :param facts: Declared node facts (``Build(node_facts=)``), if any.
     :param urls: Each source's URL (the build Job fetches them).
+    :param platforms: 0.68.0: the platforms to build (:func:`build_platforms`);
+        empty: every platform the builder is set up for.
+    :param nodes: 0.68.0: the declared nodes the environment's pods can run
+        on (:func:`placement`), where a delivery into the nodes goes;
+        ``None``: every node.
     """
 
     spec: str
@@ -421,6 +432,8 @@ class SpecBuildRequest:
     images: Mapping[str, Mapping[str, str]]
     facts: Mapping[str, Any] | None = None
     urls: Mapping[str, str] = field(default_factory=dict)
+    platforms: tuple[str, ...] = ()
+    nodes: tuple[str, ...] | None = None
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -428,7 +441,125 @@ class SpecBuildRequest:
             "repo": self.repo,
             "commits": dict(sorted(self.commits.items())),
             "images": {k: dict(v) for k, v in sorted(self.images.items())},
+            **({"platforms": list(self.platforms)} if self.platforms else {}),
+            **({"nodes": list(self.nodes)} if self.nodes is not None else {}),
         }
+
+
+# ---------------------------------------------------------------- placement
+
+#: Node labels :func:`placement` knows for a declared node; a selector's
+#: other labels are ignored (they can only narrow the nodes further).
+ARCH_LABEL = "kubernetes.io/arch"
+HOSTNAME_LABEL = "kubernetes.io/hostname"
+OS_LABEL = "kubernetes.io/os"
+
+
+def _labels(node: Any) -> dict[str, str]:
+    return {
+        **dict(node.labels),
+        HOSTNAME_LABEL: node.name,
+        ARCH_LABEL: node.arch,
+        OS_LABEL: "linux",
+    }
+
+
+def _known(key: str) -> bool:
+    from piceli.infra.cluster import BUILDER_LABEL, ROLE_PREFIX
+
+    return key in (ARCH_LABEL, HOSTNAME_LABEL, OS_LABEL, BUILDER_LABEL) or (
+        key.startswith(ROLE_PREFIX)
+    )
+
+
+def _matching(nodes: Sequence[Any], selector: Any) -> set[str] | None:
+    """The names of ``nodes`` that node names or a ``{label: value}``
+    selector place pods on; ``None`` when the selector names no label a
+    declared node is known to carry, or no declared node matches."""
+    if not isinstance(selector, Mapping):
+        found = {node.name for node in nodes if node.name in set(selector)}
+        return found or None
+    known = {k: v for k, v in selector.items() if _known(str(k))}
+    if not known:
+        return None
+    found = {
+        node.name
+        for node in nodes
+        if all(_labels(node).get(k) == v for k, v in known.items())
+    }
+    return found or None
+
+
+def placement(env: Any, nodes: Sequence[Any]) -> tuple[str, ...] | None:
+    """0.68.0: the declared ``nodes`` the pods of ``env`` can be placed on
+    (sorted names), or ``None`` for every node (or when it cannot be told).
+
+    The environment's ``on_nodes`` places every workload but a DaemonSet
+    (see :func:`piceli.envs.isolation.place`). Without it, each workload's
+    node selector (its own over the app's ``pod_defaults``) decides; a
+    workload without one of the known labels (``kubernetes.io/arch``,
+    ``kubernetes.io/hostname``, ``kubernetes.io/os``, a Piceli role label),
+    an override that sets a ``nodeSelector``, or components added with
+    ``app.add`` make it every node.
+    """
+    from piceli.app.kinds import DaemonSet
+    from piceli.app.model import Workload
+
+    if not nodes or getattr(env, "clusters", None):
+        return None
+    placed: set[str] | None = None
+    on_nodes = getattr(env, "on_nodes", None)
+    if on_nodes is not None:
+        placed = _matching(nodes, on_nodes)
+        if placed is None:
+            return None
+    app: Any = getattr(getattr(env, "pipeline", None), "app", None)
+    objects = getattr(app, "objects", None)
+    if app is None or objects is None:
+        return None if placed is None else tuple(sorted(placed))
+    workloads = [item for item in objects if isinstance(item, Workload)]
+    if placed is None and (getattr(app, "_extra", None) or not workloads):
+        return None
+    patched = {
+        name
+        for _, name, patch in getattr(app, "_overrides", None) or ()
+        if "nodeSelector" in repr(patch)
+    }
+    found = set(placed or ())
+    for workload in workloads:
+        if placed is not None and not isinstance(workload, DaemonSet):
+            continue
+        if workload.name in patched:
+            return None
+        matched = _matching(nodes, workload.node_labels(app.pod_defaults))
+        if matched is None:
+            return None
+        found |= matched
+    return tuple(sorted(found)) or None
+
+
+def build_platforms(
+    enabled: Sequence[str],
+    nodes: Sequence[Any],
+    placed: Sequence[str] | None,
+    *,
+    every_node: bool = False,
+) -> tuple[str, ...]:
+    """0.68.0: the ``enabled`` platforms (in their order) of the ``nodes``
+    the pods can be ``placed`` on (``None``: every node).
+
+    ``every_node`` (a delivery into the nodes, which declares them all)
+    narrows to the declared nodes' platforms also when ``placed`` is
+    ``None``; else an unknown placement keeps every enabled platform (a
+    node the composition does not declare may run the pods). No match
+    keeps every enabled platform too: the delivery refuses what is missing.
+    """
+    if not nodes or (placed is None and not every_node):
+        return tuple(enabled)
+    needed = {
+        f"linux/{node.arch}" for node in nodes if placed is None or node.name in placed
+    }
+    return tuple(item for item in enabled if item in needed) or tuple(enabled)
 
 
 def inputs_for(build: Any, roots: Mapping[str, Path]) -> Any:
@@ -498,7 +629,8 @@ def run_spec_build(
             else NodeFacts.for_platform(platform)
         )
         try:
-            spec = HostBuildSpec.from_toml(path)
+            # 0.68.0: only the images asked for, and only their commands.
+            spec = HostBuildSpec.from_toml(path).for_images(request.images)
             inputs = inputs_for(spec, roots)
             spec = spec.for_node(facts).with_cache_dir(cache)
             plan = spec.plan(inputs)

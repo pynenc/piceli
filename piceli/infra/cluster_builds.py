@@ -101,9 +101,10 @@ class ClusterBuilds:
     def key(self, kind: str, work: Any) -> str:
         """The build's identity: its kind, change keys and platforms."""
         body = spec_body(work) if kind == "spec" else components_body(work, {})
-        return build_id(
-            kind, {**identity(kind, body), "platforms": list(self.platforms)}
-        )
+        # 0.68.0: a spec build names its own platforms (the environment's).
+        named = tuple(getattr(work, "platforms", None) or ()) if kind == "spec" else ()
+        platforms = named or self.platforms
+        return build_id(kind, {**identity(kind, body), "platforms": list(platforms)})
 
     def running(self, kind: str, work: Any) -> bool:
         """Whether a Job of this build runs (0.42.0): the step looks at it

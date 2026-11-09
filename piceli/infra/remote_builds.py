@@ -48,7 +48,9 @@ the build instead of racing ``host_wait``.
 
 Delivery into the nodes (0.22.0, ``Controller(delivery="nodes")``): the
 wanted build also names every declared node and its platform
-(``deliver.nodes``). The host imports each image into each node's
+(``deliver.nodes``); 0.68.0: for a pipeline environment, only the nodes its
+pods can run on, built for their platforms only
+(:func:`piceli.infra.pipelines.placement`). The host imports each image into each node's
 containerd over SSH (``ctr images import``, through the validating relay of
 :mod:`piceli.artifacts.delivery`), the platform of the node's architecture,
 under one name for every node: ``node.piceli.invalid/<repository>:sha256-<hex>``,
@@ -402,6 +404,8 @@ class HostBuilds:
         names: list[str],
         *,
         stopped_jobs: Sequence[str] = (),
+        platforms: Sequence[str] = (),
+        placed: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         """The wanted entry for this build (new, or the one already asked);
         raises the failure a host reported, or returns for the fallback.
@@ -411,10 +415,21 @@ class HostBuilds:
         claim. A new entry that replaces a build of the same environment
         is offered first to whoever held that build (``prefer``): the live
         host that had claimed it, or the cluster when ``stopped_jobs`` (its
-        superseded build Jobs) is not empty."""
+        superseded build Jobs) is not empty.
+
+        0.68.0: ``platforms`` (default: every enabled one) are the platforms
+        built, and ``placed`` the nodes the pods can run on (``None``: every
+        node): only those get the images, and only their platforms must be
+        enabled."""
         wanted = self._wanted()
+        built = tuple(platforms or self.platforms)
         if self.nodes:
-            missing = sorted(set(self.nodes.values()) - set(self.platforms))
+            nodes = {
+                node: platform
+                for node, platform in self.nodes.items()
+                if placed is None or node in placed
+            } or dict(self.nodes)
+            missing = sorted(set(nodes.values()) - set(built))
             if missing:
                 raise CompositionError(
                     "composition-invalid",
@@ -422,10 +437,8 @@ class HostBuilds:
                     f"{', '.join(self.platforms)}: enable it with every node's "
                     "platform (piceli gitops enable --platform ...)",
                 )
-            body = {**body, "deliver": {"mode": "nodes", "nodes": dict(self.nodes)}}
-        found = build_id(
-            kind, {**identity(kind, body), "platforms": list(self.platforms)}
-        )
+            body = {**body, "deliver": {"mode": "nodes", "nodes": nodes}}
+        found = build_id(kind, {**identity(kind, body), "platforms": list(built)})
         now = self.clock()
         owner = self.owner()
         failure = (self.state.get(FAILED_KEY) or {}).get(found)
@@ -462,7 +475,7 @@ class HostBuilds:
                 "id": found,
                 "kind": kind,
                 **body,
-                "platforms": list(self.platforms),
+                "platforms": list(built),
                 "images": names,
                 "requested_at": _iso(now),
                 "requested_epoch": now,
@@ -681,6 +694,7 @@ class HostBuilds:
         names: list[str],
         method: str,
         fallback: Callable[[], Any],
+        **placement: Any,
     ) -> Any:
         jobs = self._jobs()
         stopped: list[str] = []
@@ -690,7 +704,7 @@ class HostBuilds:
                 # 0.42.0: the fallback's Job runs: looked at, not offered again.
                 return fallback()
             stopped = jobs.supersede(kind, work)
-        entry = self._ask(kind, body, names, stopped_jobs=stopped)
+        entry = self._ask(kind, body, names, stopped_jobs=stopped, **placement)
         if self._fallback_due(entry, method):
             del self._wanted()[entry["id"]]
             return fallback()
@@ -707,6 +721,9 @@ class HostBuilds:
             sorted(request.images),
             "build_spec",
             lambda: self.inner.build_spec(request, checkout),
+            # 0.68.0: the environment's platforms and nodes (pipelines.placement).
+            platforms=tuple(getattr(request, "platforms", ()) or ()),
+            placed=getattr(request, "nodes", None),
         )
 
     def build(self, items: Sequence[Any], checkout: Any) -> dict[str, Any]:

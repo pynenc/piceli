@@ -66,10 +66,11 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.67
+## What's new in 0.68
 
-- **Failed dev runs say why**: the signal that ended them, and
-  `out-of-memory` or `host-or-toolchain`, kept in `piceli dev status`.
+- **Faster pipeline builds**: only the platforms the pods run on, only
+  the steps of changed images, only changed images assembled.
+- **Failed dev runs kept for 7 days** in `piceli dev status`.
 
 ## Web UI
 

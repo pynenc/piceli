@@ -56,6 +56,10 @@ from piceli.dev.model import DevBuilds, bytes_of, cpu_of
 STATUS_SCHEMA = "piceli.dev-status.v1"
 PRIORITY_RANK = {"round": 0, "agent": 1, "normal": 2}
 MAX_RECENT = 50
+#: 0.68.0: failed runs stay in the status this long after they left
+#: ``recent`` (at most :data:`MAX_FAILED`, so the ConfigMap stays small).
+FAILED_SECONDS = 7 * 24 * 3600
+MAX_FAILED = 60
 #: Log lines a finished run that did not pass keeps in the status.
 RECORDED_TAIL = 30
 #: A scheduler silent for longer is not alive: clients start runs at once.
@@ -224,6 +228,8 @@ class Scheduler:
             maxlen=MAX_RECENT
         )
         self.seen: dict[str, dict[str, Any]] = {}
+        #: 0.68.0: failed runs older than ``recent`` holds, newest first.
+        self.failed: list[dict[str, Any]] = []
         self.cache: dict[str, Any] = {}
         self._slots: tuple[float, int] | None = None
         #: 0.35.0: the node's DiskPressure condition while it holds.
@@ -248,6 +254,8 @@ class Scheduler:
                         "trim": {k: v for k, v in trim.items() if k != "lineages"},
                     },
                 }
+        if len(self.recent) == MAX_RECENT:
+            self._keep_failed(self.recent[-1])
         self.recent.appendleft(entry)
         if isinstance(trim, Mapping) and isinstance(trim.get("used_bytes"), int):
             cache.update(trim)
@@ -320,6 +328,32 @@ class Scheduler:
             for entry in reversed(list(status.get("recent") or ())[:MAX_RECENT]):
                 if isinstance(entry, dict):
                     self.recent.appendleft(entry)
+        if not self.failed:
+            self.failed = [
+                dict(item)
+                for item in list(status.get("failed") or ())[:MAX_FAILED]
+                if isinstance(item, dict)
+            ]
+
+    def _published_failed(self) -> list[dict[str, Any]]:
+        self._trim_failed()
+        return list(self.failed)
+
+    def _keep_failed(self, entry: Mapping[str, Any]) -> None:
+        """0.68.0: a run leaving ``recent`` stays in ``failed`` when it did
+        not pass (cancelled runs aside), for :data:`FAILED_SECONDS`."""
+        if entry.get("state") in ("passed", "cancelled"):
+            return
+        self.failed.insert(0, dict(entry))
+        self._trim_failed()
+
+    def _trim_failed(self) -> None:
+        cutoff = self.clock() - FAILED_SECONDS
+        self.failed = [
+            item
+            for item in self.failed
+            if (_seconds(item.get("finished_at")) or 0) >= cutoff
+        ][:MAX_FAILED]
 
     def _finish(
         self,
@@ -450,6 +484,7 @@ class Scheduler:
                 for index, job in enumerate(waiting)
             ],
             "recent": list(self.recent),
+            **({"failed": failed} if (failed := self._published_failed()) else {}),
             "cache": dict(self.cache),
             # 0.35.0: the node is under disk pressure (runs cannot start).
             **(

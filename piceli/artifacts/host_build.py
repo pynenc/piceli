@@ -31,6 +31,12 @@ placeholder, run before ``build.commands`` with their own target directory,
 outputs with ``shared_files``. A multi-platform build runs them once, with its
 first platform (:mod:`piceli.artifacts.multi_platform`).
 
+A command for some images only (0.68.0): an entry of ``build.commands`` or
+``build.shared_commands`` may be ``{ run = [...], images = ["web"] }``. A
+build of some images (`HostBuildSpec.for_images`, what a pipeline build of
+the changed images asks) runs it only when it makes one of those images, and
+assembles only those images. A plain argv list runs in every build.
+
 * `HostBuildSpec.from_toml` parses and validates; nothing runs.
 * `HostBuildSpec.plan` scans the contexts and pins the tools (hashes them). It
   starts no process and contacts nothing.
@@ -49,7 +55,7 @@ import shutil
 import threading
 import time
 import tomllib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
@@ -300,6 +306,13 @@ class HostBuildSpec:
     """``build.shared_commands`` (0.23): run once for every platform, first."""
     files: tuple[HostFileOutput, ...] = ()
     """``[[output.files]]`` (0.39): plain files, no image needed."""
+    command_images: tuple[tuple[str, ...], ...] = ()
+    """0.68.0: per ``build.commands`` entry, the images it is for (``()``: every
+    build); empty when no command names images."""
+    shared_command_images: tuple[tuple[str, ...], ...] = ()
+    """0.68.0: the same for ``build.shared_commands``."""
+    selected: tuple[str, ...] | None = None
+    """0.68.0: the images this build makes (`for_images`); ``None``: all."""
 
     builder_kind: ClassVar[str] = "host"
     network: ClassVar[str] = "host"
@@ -356,6 +369,24 @@ class HostBuildSpec:
                         "command runs once for every platform, so it cannot use "
                         "the node's facts; move it to build.commands"
                     )
+        declared = {item.name for item in self.images}
+        for what, listed, tags in (
+            ("build.commands", self.commands, self.command_images),
+            ("build.shared_commands", self.shared_commands, self.shared_command_images),
+        ):
+            if tags and len(tags) != len(listed):
+                raise _fail(f"{what}: one images list per command")
+            for names in tags:
+                unknown = sorted(set(names) - declared)
+                if unknown:
+                    raise _fail(
+                        f"{what}: images names {unknown[0]!r}, which is not an "
+                        "[[output.image]] of this spec"
+                    )
+        if self.selected is not None:
+            unknown = sorted(set(self.selected) - declared)
+            if unknown:
+                raise _fail(f"the build asks for image {unknown[0]!r}, not declared")
         for image in self.images:
             if image.shared_files and not self.shared_commands:
                 raise _fail(
@@ -451,13 +482,15 @@ class HostBuildSpec:
             raise _fail("build.commands must be a list of argv lists")
         # Other braces in a command stay literal (shell ``${VAR}``): only the
         # known placeholders are substituted.
-        commands = tuple(_argv(item, "build.commands") for item in items)
+        commands, command_images = _commands(items, "build.commands")
         shared = build.get("shared_commands", [])
         if not isinstance(shared, list) or (
             "shared_commands" in build and not 0 < len(shared) <= 64
         ):
             raise _fail("build.shared_commands must be a list of argv lists")
-        shared_commands = tuple(_argv(item, "build.shared_commands") for item in shared)
+        shared_commands, shared_command_images = _commands(
+            shared, "build.shared_commands"
+        )
         env = build.get("env", {})
         if not isinstance(env, dict) or len(env) > 128:
             raise _fail("build.env must be a table")
@@ -493,6 +526,8 @@ class HostBuildSpec:
             files=tuple(_file_output(item) for item in output.get("files", [])),
             commands=commands,
             shared_commands=shared_commands,
+            command_images=command_images,
+            shared_command_images=shared_command_images,
             tools=tuple(tools),
             platform=build.get("platform"),
             declared_platforms=tuple(platforms),
@@ -519,7 +554,7 @@ class HostBuildSpec:
             "platform": self.platform,
             "contexts": [item.to_dict() for item in self.contexts],
             "images": [item.to_dict() for item in self.images],
-            "commands": [list(item) for item in self.commands],
+            "commands": _listed(self.commands, self.command_images),
             "tools": list(self.tools),
             "workdir": self.workdir,
             "env": dict(self.env),
@@ -534,7 +569,11 @@ class HostBuildSpec:
             ),
             **({"toolchains": dict(self.toolchains)} if self.toolchains else {}),
             **(
-                {"shared_commands": [list(item) for item in self.shared_commands]}
+                {
+                    "shared_commands": _listed(
+                        self.shared_commands, self.shared_command_images
+                    )
+                }
                 if self.shared_commands
                 else {}
             ),
@@ -566,6 +605,33 @@ class HostBuildSpec:
                 f"the node runs {facts.platform}",
             )
         return dataclasses.replace(self, facts=facts)
+
+    def for_images(self, names: Iterable[str]) -> HostBuildSpec:
+        """0.68.0: this spec making only the images ``names``: it assembles
+        those, and runs a command that names images only when it names one
+        of them (the plan, and its hash, hold exactly what runs).
+
+        :raises BuildSpecError: ``invalid-spec`` for an undeclared image.
+        """
+        return dataclasses.replace(self, selected=tuple(sorted(set(names))))
+
+    def _runs(self, images: tuple[str, ...]) -> bool:
+        """Whether a command for ``images`` (``()``: every build) runs."""
+        if not images or self.selected is None:
+            return True
+        return bool(set(images) & set(self.selected))
+
+    def _kept(
+        self, commands: tuple[tuple[str, ...], ...], tags: tuple[tuple[str, ...], ...]
+    ) -> tuple[tuple[str, ...], ...]:
+        """The ``commands`` this build runs (0.68.0)."""
+        if not tags:
+            return commands
+        return tuple(
+            command
+            for command, images in zip(commands, tags, strict=True)
+            if self._runs(images)
+        )
 
     def with_cache_dir(self, path: Path) -> HostBuildSpec:
         return dataclasses.replace(self, cache_dir=path)
@@ -637,7 +703,7 @@ class HostBuildSpec:
                 ) from None
         commands = tuple(
             tuple(substitute(arg, facts) for arg in command)
-            for command in self.commands
+            for command in self._kept(self.commands, self.command_images)
         )
         env = {key: substitute(value, facts) for key, value in self.env.items()}
         # A shared command sees no node fact: build.env values that use one
@@ -660,6 +726,7 @@ class HostBuildSpec:
                 ),
             )
             for image in self.images
+            if self.selected is None or image.name in self.selected
         )
         files = tuple(
             HostFileOutput(
@@ -697,7 +764,7 @@ class HostBuildSpec:
             env,
             images,
             pins,
-            self.shared_commands,
+            self._kept(self.shared_commands, self.shared_command_images),
             shared_env,
             files,
         )
@@ -838,7 +905,7 @@ class HostBuildSpec:
             shutil.rmtree(directory)
         crates = attestations.cargo_packages(plan)
         sources = start.to_dict()["sources"] if start is not None else []
-        for image in self.images:
+        for image in plan.images:  # 0.68.0: the images this build made
             entry = outputs["images"][image.name]
             for key, document in (
                 (
@@ -872,6 +939,49 @@ class HostBuildSpec:
                     "path": f"attestations/{written['path']}",
                     "sha256": written["sha256"],
                 }
+
+
+def _commands(
+    items: list[Any], what: str
+) -> tuple[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]]:
+    """The argv of each command and (0.68.0) the images it is for.
+
+    An entry is an argv list (every build runs it) or ``{ run = [...],
+    images = [...] }``. The images lists are empty when no entry names one.
+    """
+    commands: list[tuple[str, ...]] = []
+    tags: list[tuple[str, ...]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            commands.append(_argv(item, what))
+            tags.append(())
+            continue
+        _keys(item, {"run", "images"}, set(), f"{what} entry")
+        images = item["images"]
+        if (
+            not isinstance(images, list)
+            or not 0 < len(images) <= 32
+            or len(set(map(str, images))) != len(images)
+        ):
+            raise _fail(f"{what}: images must list 1-32 image names, each once")
+        for name in images:
+            _match(_NAME, name, f"{what} image name")
+        commands.append(_argv(item["run"], what))
+        tags.append(tuple(images))
+    return tuple(commands), (tuple(tags) if any(tags) else ())
+
+
+def _listed(
+    commands: tuple[tuple[str, ...], ...], tags: tuple[tuple[str, ...], ...]
+) -> list[Any]:
+    """Commands as the spec declares them: an argv list, or (0.68.0) a
+    ``{"run", "images"}`` table for a command that names images."""
+    if not tags:
+        return [list(item) for item in commands]
+    return [
+        {"run": list(command), "images": list(images)} if images else list(command)
+        for command, images in zip(commands, tags, strict=True)
+    ]
 
 
 def _context(name: Any, item: Any) -> ContextSpec:

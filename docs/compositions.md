@@ -85,11 +85,40 @@ Docker engine and is refused with `component-build-unsupported`):
   its contexts include at their commits. No changed key: nothing is built.
   Otherwise **one** build runs (one Job, every source fetched at its commit
   with the one Git Secret `piceli-build-git`); only the images whose key
-  changed are pushed and take the new image; the others keep their cached
-  digest, render identically and apply as no-op.
+  changed are assembled, pushed and take the new image (0.68.0: a command
+  declared `{ run = [...], images = [...] }` runs only for them, see
+  {doc}`host_builds`); the others keep their cached digest, render
+  identically and apply as no-op.
 - `Build(node_facts=…)` declared on the build is used for the build's
   platform (page size); otherwise the facts of the controller's first
   `--platform`.
+
+(pipeline-build-platforms)=
+### The platforms a build compiles (0.68.0)
+
+A pipeline environment's build compiles only the platforms its pods can run
+on, out of those the controller enables (`piceli gitops enable --platform`):
+
+1. the nodes of the environment's `on_nodes` (names or labels), when set;
+   a DaemonSet ignores `on_nodes` and counts with its own selector;
+2. else the nodes that every workload's node selector matches
+   (`node_selector=` or the app's `pod_defaults`), for example
+   `{"kubernetes.io/arch": "arm64"}` on every workload;
+3. else every declared node (`Cluster(nodes=[...])`).
+
+- Only labels Piceli knows a declared node carries count:
+  `kubernetes.io/arch`, `kubernetes.io/hostname` (the node's name),
+  `kubernetes.io/os` and the role labels (`piceli.io/role-<role>`). A
+  workload with none of them, an `app.override` that sets a
+  `nodeSelector`, or components added with `app.add` make it every node.
+- With `Controller(delivery="nodes")` the images go only into those nodes,
+  and only their platforms must be enabled. With a registry delivery an
+  unknown placement keeps every enabled platform (a node the composition
+  does not declare may run the pods).
+- The platforms are part of each image's change key: an environment whose
+  platforms change rebuilds its images once.
+- An environment on another cluster than the controller's builds every
+  enabled platform, as before.
 
 ### Several images from one source
 

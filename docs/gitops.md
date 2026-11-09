@@ -997,16 +997,22 @@ cluster = Cluster(
 - `Controller(delivery="nodes")` (the default is `"registry"`) needs
   `builds=("hosts",)`; with `("hosts", "cluster")` the in-cluster fallback
   still pushes to the registry, so a registry must be declared.
-- Every declared node needs `target=`: a workload can land on any node, so
-  every node receives every image. The target is the same as for a
+- Every declared node needs `target=`: a node receives the images of every
+  pipeline environment whose pods can run on it (see below). The target is the same as for a
   pipeline's `NodeImport`: `ssh://[user@]host[:port]?runtime=containerd` or
   `runtime=k3s-containerd` (`k3s ctr`), with `namespace=` (default
   `k8s.io`) and `sudo=` (default `true`: `sudo -n ctr`); `docker://name?runtime=containerd`
   for a kind node. The controller's configuration keeps the targets
   without their SSH user.
-- The controller must build every node's platform; `piceli gitops enable`
-  does by default (the architectures of the declared nodes). A node whose
-  platform is not built fails the step (`composition-invalid`).
+- The controller must build the platform of every node a pipeline
+  environment's pods can run on; `piceli gitops enable` enables every
+  declared node's platform by default. A needed platform that is not
+  enabled fails the step (`composition-invalid`).
+- A pipeline environment (0.68.0) builds and delivers only for the nodes its
+  pods can run on: the nodes of its `on_nodes`, else the nodes that match
+  every workload's node selector (`node_selector=`, or the app's
+  `pod_defaults`), else every declared node. See
+  {ref}`pipeline-build-platforms`.
 
 The wanted build then names each node and its platform
 (`controller.builds_wanted[].deliver`: `{"mode": "nodes", "nodes":

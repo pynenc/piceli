@@ -4,6 +4,35 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.68.0
+
+**Changes**
+
+- **Pipeline builds compile only the platforms the pods run on.** An
+  environment's needed nodes come from its `on_nodes`, else from its pods'
+  node selectors (`kubernetes.io/arch`, the hostname, Piceli's role labels),
+  else every node. A build compiles their platforms only, and delivery into
+  nodes imports into those nodes only. An arm64-only environment on a
+  cluster with an amd64 builder node no longer builds amd64. Its images
+  rebuild once after the upgrade, since the platforms are part of the
+  image key.
+- **Build steps for some images only.** A host-build command can be
+  `{ run = [...], images = ["site"] }` in `build.commands` or
+  `build.shared_commands`; it runs only when one of those images changed.
+  A plain argv list still runs in every build.
+- **Only changed images are assembled.** Images whose key did not change
+  are no longer packaged or pushed again.
+- **Failed dev runs stay in `piceli dev status` for 7 days** (in `failed`,
+  at most 60) after they leave the last 50 runs; `piceli dev logs RUN`
+  finds them.
+
+**Fixes**
+
+- **Every CI download from GitHub is signed in.** OpenTofu, sops and
+  kustomize now come through `scripts/gh_fetch.sh` (`gh release download`
+  with the job's token, retried for about two minutes), like kind and Flux
+  since 0.67.0.
+
 ## Version 0.67.0
 
 **Changes**
