@@ -209,6 +209,9 @@ jobs:
 
   release-notes:
     needs: [build, tag]
+    # always(): a skipped publish (files already on PyPI, an earlier run
+    # interrupted) must not skip the notes and images after the tag.
+    if: always() && needs.tag.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -240,6 +243,10 @@ jobs:
     # each target's two digests under the version tag. A version already
     # published is never rebuilt.
     needs: [build, tag, release-notes]
+    if: >-
+      always()
+      && needs.tag.result == 'success'
+      && needs.release-notes.result == 'success'
     strategy:
       matrix:
         target: [controller, builder]
@@ -310,6 +317,7 @@ jobs:
     # run summary and the release notes, so users pin them
     # (`gitops enable --image/--builder-image`).
     needs: [build, image-builds]
+    if: always() && needs.image-builds.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write # append the digests to the release notes
