@@ -68,6 +68,8 @@ objects).
 
 ## What's new in 0.70
 
+- **0.70.1**: works with the typer versions it was tested with (below 0.29).
+
 - **Long silent builds keep their build host's claim**: hosts report on a
   timer while they build.
 
