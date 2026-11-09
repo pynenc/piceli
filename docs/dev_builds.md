@@ -503,6 +503,26 @@ crash (an ICE, internal compiler error, in any rustc's words) drops every
 
 Only the build's output counts (not the tests'), and only once per run. When
 the damage is recognised but no crate is named, `cache.suspect` says so.
+
+Some damage sits deeper, for example in a dependency's metadata under
+`target/debug/deps/` (0.69.0). On a lineage that held a build before (warm
+or seeded), the wrapper removes the lineage's whole `target/` (the source
+tree stays) and runs the command once more, cold (kind `lineage`, with
+`reason` and, after an earlier repair, `after`) when:
+
+- the retry after a repair still fails with an ICE, a loader error or
+  invalid metadata;
+- a linker refuses a file inside the lineage's `target/`
+  (`rust-lld: error: /cache/lineages/…/target/debug/deps/libarrow_ord-….rlib(…)`);
+- rustc is killed by SIGSEGV or SIGBUS while compiling (`rustc interrupted
+  by SIGSEGV`, `` process didn't exit successfully: `…/rustc …` (signal: 11 ``),
+  or another process that names a path inside `target/` is.
+
+The code's own errors never trigger it: an `undefined symbol` in your code,
+or a test binary that crashes while the tests run. A run retries at most
+twice (a repair, then cold), within its timeout. When the cold retry fails
+the same way, or no time is left for it, the lineage is removed at the end
+of the run (`cache.damaged` says why) and the next run starts a new one.
 To clear by hand:
 
 ```sh

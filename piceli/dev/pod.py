@@ -1357,11 +1357,22 @@ def take_lineage(
             existing = sorted(
                 int(path.name) for path in root.iterdir() if path.name.isdigit()
             )
-            for index in existing:
+            for index in list(existing):
                 path = root / str(index)
                 descriptor = _try_lock(path)
-                if descriptor is not None:
-                    free.append((index, _read_meta(path), path, descriptor))
+                if descriptor is None:
+                    continue
+                meta = _read_meta(path)
+                if meta.get("damaged"):
+                    # 0.69.0: a run judged it damaged and never removed it
+                    # (its pod was killed): remove it, never build in it.
+                    try:
+                        _remove_tree(path)
+                    finally:
+                        os.close(descriptor)
+                    existing.remove(index)
+                    continue
+                free.append((index, meta, path, descriptor))
             chosen = None
             seed = None
             # 0.61.0: no free lineage finished this command but a busy one
@@ -1395,6 +1406,7 @@ def take_lineage(
                         (_read_meta(root / str(i)), root / str(i))
                         for i in existing
                         if (root / str(i) / "target").is_dir()
+                        and not _read_meta(root / str(i)).get("damaged")
                     ]
                     found = nearest(siblings, hint, near, command)
                     seed = found[1] if found else None
@@ -1805,6 +1817,72 @@ def clear_incremental(target: Path) -> int:
             dirs.remove("incremental")
             removed += 1
         dirs[:] = [d for d in dirs if d not in _ARTIFACT_DIRS]
+    return removed
+
+
+# ------------------------------------------------- damaged lineages (0.69.0)
+#: 0.69.0: rustc itself killed by a fault while compiling (not a test binary:
+#: only the build's output, before cargo's ``Finished``, is read).
+_RUSTC_CRASH = re.compile(
+    r"rustc interrupted by SIG(?:SEGV|BUS)"
+    r"|process didn't exit successfully: `(?:[^`\s]*/)?rustc(?:\s[^`]*)?` "
+    r"\(signal: (?:\d+, SIG(?:SEGV|BUS)|(?:7|11)\b)"
+)
+#: 0.69.0: a process killed by a fault, in any words (with a path: below).
+_FAULT = re.compile(r"SIGSEGV|SIGBUS|\(signal: (?:7|11)\b")
+#: 0.69.0: a linker refusing a file, the file first (``rust-lld: error:
+#: /cache/.../deps/libarrow_ord-05e6.rlib(...)``); never ``undefined symbol``.
+_LINKER_FILE = re.compile(
+    r"\b(?:rust-lld|ld\.lld|ld\.gold|lld|ld|mold): (?:(?:fatal )?error: )?(/\S+)"
+)
+#: 0.69.0: kinds of corrupted cache that, still there after their repair,
+#: mean the damage is elsewhere in the target (never ``link``: an undefined
+#: symbol twice is usually the code's own).
+_PERSISTENT = ("incremental", "loader", "metadata")
+
+
+def lineage_damage(
+    lines: list[str], target: Path, *, persisted: bool = False
+) -> str | None:
+    """0.69.0: the line that says a lineage's whole cargo ``target`` is
+    damaged, not one crate's artifacts or its incremental state; ``None``
+    for an ordinary failure.
+
+    ``lines`` is the build's output (not the tests'). Damage is rustc killed
+    by SIGSEGV or SIGBUS, a process killed by one of them that names a path
+    inside ``target``, or a linker refusing a file inside ``target``. With
+    ``persisted`` (the output of a retry after a repair), a corrupted cache
+    of a kind in :data:`_PERSISTENT` counts too.
+    """
+    inside = str(target).rstrip("/") + "/"
+    for line in lines:
+        if _RUSTC_CRASH.search(line):
+            return line.strip()[:300]
+        if inside in line and _FAULT.search(line):
+            return line.strip()[:300]
+        found = _LINKER_FILE.search(line)
+        if found and found.group(1).startswith(inside):
+            return line.strip()[:300]
+    if persisted:
+        for kind, signature in _CORRUPT:
+            if kind in _PERSISTENT:
+                hit = next((line for line in lines if signature.search(line)), None)
+                if hit is not None:
+                    return hit.strip()[:300]
+    return None
+
+
+def clear_target(lineage: Path) -> int:
+    """0.69.0: remove a lineage's whole cargo ``target`` (its tree, the
+    sources, stays); how many top-level entries went. The commands it
+    finished are forgotten: the next build is cold."""
+    target = lineage / "target"
+    removed = len(list(target.iterdir())) if target.is_dir() else 0
+    _remove_tree(target)
+    target.mkdir(parents=True, exist_ok=True)
+    meta = _read_meta(lineage)
+    meta.pop("commands", None)
+    _write_meta(lineage, meta)
     return removed
 
 
@@ -2531,12 +2609,25 @@ def main(
             command, cwd, env, timeout, emit, seen, watch, paused
         )
         watch.close()
+
+        def build_failed() -> bool:
+            assert watch is not None
+            return bool(code) and not timed_out and not watch.stopped
+
+        # 0.69.0: a lineage that held a build before (warm or seeded) can
+        # carry damage its repairs below do not reach.
+        held_build = bool(lineage.warm or seeded)
         crates, damage = (
-            corrupt_crates(list(building))
-            if code and not timed_out and not watch.stopped
-            else ([], None)
+            corrupt_crates(list(building)) if build_failed() else ([], None)
         )
-        if crates or damage == "incremental":
+        damaged = (
+            lineage_damage(list(building), target)
+            if held_build and build_failed() and damage != "incremental"
+            else None
+        )
+        if damaged:
+            pass  # the whole target, below
+        elif crates or damage == "incremental":
             # 0.19: a damaged cached artifact, not the code: clear those
             # crates and run once more (a run killed mid-write, a bad disk).
             # 0.20: an ICE in the incremental state: drop incremental/.
@@ -2568,8 +2659,60 @@ def main(
                 command, cwd, env, left, emit, seen, watch, paused
             )
             watch.close()
+            if held_build and build_failed():
+                damaged = lineage_damage(list(building), target, persisted=True)
         elif damage:
             result["cache"]["suspect"] = {"kind": damage}
+        if damaged:
+            # 0.69.0: the damage is not (only) in incremental/ or one crate's
+            # artifacts (rustc panicking on a dependency's metadata, a linker
+            # refusing a cached rlib, rustc killed by SIGSEGV): drop the
+            # lineage's whole target/ and run once more, cold. Once per run.
+            timeline.phase("repair")
+            before = result["cache"].get("repaired")
+            _write_meta(lineage.path, {**_read_meta(lineage.path), "damaged": damaged})
+            left = timeout - (clock() - step) + watch.paused_seconds
+            removed = clear_target(lineage.path) if left >= 1 else 0
+            result["cache"]["repaired"] = {
+                "kind": "lineage",
+                "crates": [],
+                "entries": removed,
+                "reason": damaged,
+                "first_error": list(errors.lines),
+                **({"after": before.get("kind")} if before else {}),
+            }
+            if left < 1:
+                emit(
+                    f"[piceli-dev] damaged lineage ({damaged}); no time left to "
+                    "run once more"
+                )
+            else:
+                emit(
+                    f"[piceli-dev] damaged lineage ({damaged}): removed its "
+                    f"target/ ({removed} entries); running once more, cold"
+                )
+                cargo = CargoOutput(clock)
+                errors.lines.clear()
+                building.clear()
+                tail.clear()
+                timeline.phase("command")
+                attempt_step = clock()
+                code, timed_out = run_command(
+                    command, cwd, env, left, emit, seen, watch, paused
+                )
+                watch.close()
+                damaged = (
+                    lineage_damage(list(building), target, persisted=True)
+                    if build_failed()
+                    else None
+                )
+                if damaged is None:
+                    meta = _read_meta(lineage.path)
+                    meta.pop("damaged", None)
+                    _write_meta(lineage.path, meta)
+            if damaged:
+                # 0.69.0: never hand a damaged lineage to the next run.
+                result["cache"]["damaged"] = damaged
         ended = clock()
         current = timeline.current
         if current is not None and cargo.finished_at is not None:
@@ -2684,6 +2827,14 @@ def main(
             try:
                 if watch is not None and watch.stopped:
                     dropped = lineage.drop()
+                elif result["cache"].get("damaged"):
+                    # 0.69.0: still damaged after its cold retry (or no time
+                    # for one): removed, the next run starts a new lineage.
+                    dropped = lineage.drop()
+                    emit(
+                        "[piceli-dev] the lineage is still damaged; it is "
+                        "removed and the next run starts a new one"
+                    )
                 else:
                     lineage.release(
                         spec.get("lineage_hint"),

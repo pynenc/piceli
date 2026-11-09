@@ -66,11 +66,10 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.68
+## What's new in 0.69
 
-- **Faster pipeline builds**: only the platforms the pods run on, only
-  the steps of changed images, only changed images assembled.
-- **Failed dev runs kept for 7 days** in `piceli dev status`.
+- **Damaged dev build caches are rebuilt**: a run whose cached build is
+  damaged retries once from scratch, and the damaged cache is never reused.
 
 ## Web UI
 

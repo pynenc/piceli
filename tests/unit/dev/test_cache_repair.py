@@ -173,3 +173,36 @@ def test_clearing_incremental_state_keeps_the_rest_of_the_target(
     assert not (target / "debug/incremental").exists()
     assert not (target / "wasm32-unknown-unknown/debug/incremental").exists()
     assert (target / "debug/deps/libcore-1.rlib").exists()
+
+
+def test_a_damaged_lineage_is_told_from_the_codes_own_errors() -> None:
+    """0.69.0: real lines from a lineage whose deps were damaged."""
+    from piceli.dev.pod import lineage_damage
+
+    target = Path(TARGET)
+    rlib = f"{TARGET}/debug/deps/libarrow_ord-05e60e528b0ab6ce.rlib"
+    link = f"rust-lld: error: {rlib}(arrow_ord-05e60e528b0ab6ce.arrow_ord.o): bad"
+    assert lineage_damage(["error: linking with `cc` failed", link], target) == link
+    segv = "error: rustc interrupted by SIGSEGV, printing backtrace"
+    assert lineage_damage([segv], target) == segv
+    killed = (
+        "  process didn't exit successfully: `/root/.rustup/toolchains/1.97-x/bin/"
+        "rustc --crate-name syn --edition=2021 src/lib.rs` (signal: 11, SIGSEGV: "
+        "invalid memory reference)"
+    )
+    assert lineage_damage([killed], target) == killed.strip()
+    # The code's own: an undefined symbol; a crash or file outside this target.
+    assert lineage_damage(UNDEFINED, target) is None
+    assert lineage_damage(LLD, target) is None
+    elsewhere = (
+        "  process didn't exit successfully: `/tmp/other/debug/deps/shop-1a` "
+        "(signal: 11, SIGSEGV: invalid memory reference)"
+    )
+    assert lineage_damage([elsewhere], target) is None
+    other = link.replace(TARGET, "/cache/lineages/shop-rust-1/1/target")
+    assert lineage_damage([other], target) is None
+    # An ICE or invalid metadata counts only once a repair did not cure it.
+    assert lineage_damage(ICE, target) is None
+    assert lineage_damage(ICE, target, persisted=True)
+    assert lineage_damage(METADATA, target, persisted=True)
+    assert lineage_damage(UNDEFINED, target, persisted=True) is None
