@@ -4,6 +4,16 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.70.0
+
+**Fixes**
+
+- **A silent build keeps its claim.** A build host now reports every 2
+  minutes while it builds, whatever the build prints. Before, only output
+  lines renewed the claim, so a compile or link step silent for 10 minutes
+  made the controller drop it (and its in-cluster fallback could start a
+  second build).
+
 ## Version 0.69.0
 
 **Fixes**

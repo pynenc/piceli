@@ -902,7 +902,9 @@ class BuilderServe:
         self.signals = []
         self._progress = self._reporter(build, tail)
         try:
-            images = self.build(entry, tail)
+            # 0.70.0: the claim is renewed on a timer, not only by log lines.
+            with self._progress.alive():
+                images = self.build(entry, tail)
         except builds.Cancelled:
             self.answered.add(build)
             self.say(f"builder: {build} was cancelled; stopped")

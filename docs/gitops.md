@@ -567,7 +567,10 @@ When there is no fallback it says why: `claimed by <host> since <time>`,
 the builder node is quarantined, `no in-cluster builder image`, or
 `builds=("hosts",)`. A claim lives while its host reports (0.27.1): a host
 that sent no claim or progress report for 10 minutes is taken for dead, so
-the fallback may take the build and another host may claim it.
+the fallback may take the build and another host may claim it. A host
+reports every 2 minutes while it builds, even when the build prints
+nothing for a long time (0.70.0; before, only output lines renewed the
+claim, so a long silent compile let it lapse).
 
 (build-identity)=
 **A build is named by its inputs, not its commit (0.42.0).** A wanted build

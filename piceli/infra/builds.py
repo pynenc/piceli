@@ -24,8 +24,10 @@ Importing this module is side-effect free.
 
 from __future__ import annotations
 
+import contextlib
 import re
 import subprocess
+import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -65,6 +67,10 @@ CANCELLED = "gitops-build-cancelled"
 PROGRESS_TAIL = 4000
 #: Seconds between two progress reports of one build.
 PROGRESS_SECONDS = 15.0
+#: 0.70.0: while a build runs, a report at least this often even when it
+#: prints nothing, so its claim never looks dead (the controller drops a
+#: claim after 10 min without a report).
+KEEPALIVE_SECONDS = 120.0
 _NAMED = {"hourly": "0 * * * *", "daily": "0 0 * * *", "weekly": "0 0 * * 1"}
 _FIELDS = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 6))
 _SHA = re.compile(r"[0-9a-f]{40}")
@@ -243,13 +249,18 @@ class Progress:
         self.tail = tail
         self.current: str | None = None
         self._sent = 0.0
+        self._lock = threading.Lock()
 
     def report(self, force: bool = False) -> None:
         """Send the stage and log tail (never raises: progress is a view)."""
-        now = self.clock()
-        if not force and now - self._sent < PROGRESS_SECONDS:
-            return
-        self._sent = now
+        with self._lock:
+            now = self.clock()
+            if not force and now - self._sent < PROGRESS_SECONDS:
+                return
+            self._sent = now
+            self._send(now)
+
+    def _send(self, now: float) -> None:
         from piceli.gitops.state import build_progress_request
 
         text = "\n".join(self.tail())[-PROGRESS_TAIL:]
@@ -261,6 +272,26 @@ class Progress:
             )
         except Exception:  # a report never fails the build
             pass
+
+    @contextlib.contextmanager
+    def alive(self, every: float = KEEPALIVE_SECONDS) -> Any:
+        """0.70.0: report at least every ``every`` seconds while the block
+        runs, also when the build prints nothing (a long silent compile or
+        link): before, a claim was renewed only by log lines and lapsed
+        after 10 silent minutes."""
+        stop = threading.Event()
+
+        def beat() -> None:
+            while not stop.wait(every):
+                self.report(force=True)
+
+        thread = threading.Thread(target=beat, name="build-keepalive", daemon=True)
+        thread.start()
+        try:
+            yield self
+        finally:
+            stop.set()
+            thread.join(timeout=5)
 
     def wanted(self) -> bool:
         """Whether the controller still wants this build (``True`` when the

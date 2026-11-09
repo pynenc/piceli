@@ -66,10 +66,10 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.69
+## What's new in 0.70
 
-- **Damaged dev build caches are rebuilt**: a run whose cached build is
-  damaged retries once from scratch, and the damaged cache is never reused.
+- **Long silent builds keep their build host's claim**: hosts report on a
+  timer while they build.
 
 ## Web UI
 
