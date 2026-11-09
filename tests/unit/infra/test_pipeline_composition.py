@@ -978,3 +978,46 @@ def test_with_no_composition_loaded_the_status_says_nothing_deploys(
     problem = status["controller"]["composition_problem"]
     assert problem.endswith("nothing deploys")
     assert "TypeError: roots_dir is unknown" in problem
+
+
+def test_an_environment_on_arm64_nodes_builds_only_arm64(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0.68.0: ``main`` runs on its ``on_nodes`` (one arm64 node): its build
+    compiles linux/arm64 only; ``rc`` may run anywhere: both platforms."""
+    files = example_files(EXAMPLE / "infra")
+    files["infra.py"] = (
+        files["infra.py"]
+        .replace(
+            "from piceli.infra import Cluster, Controller, Source",
+            "from piceli.infra import Cluster, Controller, Node, Source",
+        )
+        .replace(
+            "    controller=Controller(on=REGISTRY_NODE),",
+            '    nodes=[Node(REGISTRY_NODE, arch="amd64"), Node("arm-1", arch="arm64")],\n'
+            "    controller=Controller(on=REGISTRY_NODE),",
+        )
+        .replace(
+            '        namespace="example-main",',
+            '        namespace="example-main",\n        on_nodes=["arm-1"],',
+        )
+    )
+    remotes = tmp_path / "remotes"
+    infra = Repo(remotes, "infra", files)
+    for name in ("api", "worker"):
+        repo = Repo(remotes, name, example_files(EXAMPLE / name))
+        repo.tag("v0.1.0")  # rc follows api's tags
+        monkeypatch.setenv(f"EXAMPLE_{name.upper()}_URL", repo.url)
+    monkeypatch.setenv("EXAMPLE_INFRA_URL", infra.url)
+    ports = FakePorts()
+    controller = _controller(tmp_path, infra, ports, {"now": 1_000_000.0})
+    controller.config = CompositionConfig(
+        composition=SUMMARY,
+        repo=controller.config.repo,
+        poll_seconds=10,
+        platforms=("linux/amd64", "linux/arm64"),
+    )
+    controller.poll_once()
+    found = {(tuple(item.platforms), item.nodes) for item in ports.builder.requests}
+    assert (("linux/arm64",), ("arm-1",)) in found
+    assert (("linux/amd64", "linux/arm64"), None) in found

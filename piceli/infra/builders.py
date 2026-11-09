@@ -378,15 +378,17 @@ class LocalBuilder:
                 for name, commit in sorted(request.commits.items())
             }
             self.say(f"[build] {request.spec}: " + ", ".join(sorted(request.images)))
+            # 0.68.0: the environment's platforms, when the request names them.
+            platforms = tuple(getattr(request, "platforms", ()) or ()) or self.platforms
             receipt = run_spec_build(
                 request,
                 roots,
-                platforms=self.platforms,
+                platforms=platforms,
                 cache=self.cache_dir,
                 out=Path(out),
                 deliver=deliver,
                 say=self.say,
-                index=self._index if len(self.platforms) > 1 else None,
+                index=self._index if len(platforms) > 1 else None,
             )
         return {
             name: BuiltImage(
@@ -913,7 +915,10 @@ def spec_job(
             "--image",
             json.dumps({"image": name, **dict(wanted)}, sort_keys=True),
         ]
-    for platform in settings.platforms:
+    # 0.68.0: the environment's platforms, when the request names them.
+    for platform in (
+        tuple(getattr(request, "platforms", ()) or ()) or settings.platforms
+    ):
         arguments += ["--platform", platform]
     if request.facts:
         arguments += ["--facts", json.dumps(dict(request.facts), sort_keys=True)]

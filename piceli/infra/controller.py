@@ -2891,11 +2891,13 @@ class CompositionController:
         """Build the changed images of a pipeline environment, mirror, deploy."""
         from piceli.infra.pipelines import (
             SpecBuildRequest,
+            build_platforms,
             image_keys,
             key_of,
             load_spec,
             mirror_list,
             mirror_target,
+            placement,
             spec_paths,
         )
 
@@ -2914,9 +2916,20 @@ class CompositionController:
         rebuild = set((self.state.get("rebuild") or {}).get(name) or ())
         previous: dict[str, Any] = dict(record.get("components") or {})
         now = _iso(self.clock())
+        # 0.68.0: only the platforms of the nodes the pods can run on (on
+        # the home cluster, whose nodes a delivery into the nodes reaches).
+        cluster = getattr(self.composition, "cluster", None)
+        declared = tuple(getattr(cluster, "nodes", ()) or ())
+        placed = (
+            placement(env, declared) if instance.cluster in (None, self._home) else None
+        )
+        delivery = getattr(getattr(cluster, "controller", None), "delivery", None)
+        platforms = build_platforms(
+            self.config.platforms, declared, placed, every_node=delivery == "nodes"
+        )
         # 0.21: an image built for several platforms deploys as one index;
         # its key covers them all (one platform keeps its 0.20 key).
-        platform = ",".join(self.config.platforms)
+        platform = ",".join(platforms)
         components: dict[str, dict[str, Any]] = {}
         images: dict[str, BuiltImage] = {}
         requests: list[SpecBuildRequest] = []
@@ -2973,7 +2986,16 @@ class CompositionController:
                 commits[repo] = revision[repo]
                 urls = {key: self.sources.sources[key].url for key in commits}
                 requests.append(
-                    SpecBuildRequest(path, repo, commits, changed, facts, urls)
+                    SpecBuildRequest(
+                        path,
+                        repo,
+                        commits,
+                        changed,
+                        facts,
+                        urls,
+                        platforms=platforms,
+                        nodes=placed,
+                    )
                 )
         to_mirror = [
             MirrorItem(ref, ref, mirror_target(self.composition, pipeline, ref))
