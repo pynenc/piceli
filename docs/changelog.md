@@ -4,6 +4,18 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.70.1
+
+**Fixes**
+
+- **typer is capped below 0.29.** typer 0.29.0 (released 2026-11-09)
+  reworked its option classes: `piceli help-json` failed and `--help` on a
+  subcommand exited with code 2 in a fresh install. Piceli 0.70.0 allowed
+  it; its images were never published, use 0.70.1.
+- **A release run finishes after an interrupted one.** When the PyPI files
+  were already uploaded, the release workflow skipped the release notes
+  and the images too; they now run once the tag is pushed.
+
 ## Version 0.70.0
 
 **Fixes**
