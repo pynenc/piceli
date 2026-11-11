@@ -39,6 +39,7 @@ Importing this module is side-effect free.
 from __future__ import annotations
 
 import collections
+import errno
 import fcntl
 import hashlib
 import json
@@ -881,6 +882,10 @@ def evict(
     0.53.0: the report's ``lineages`` lists the lineages left, free or busy
     (``name``, ``bytes``, ``last_used``, ``busy``, ``run``, ``hint``,
     ``taken_at``, ``paused``).
+
+    0.71.0: it lists quarantined lineages too (``quarantined`` true,
+    ``error``, ``path`` under the cache, ``bytes`` ``None``: unknown, never
+    counted), until a person removes them.
     """
     now = time.time() if now is None else now
     cache.mkdir(parents=True, exist_ok=True)
@@ -894,6 +899,18 @@ def evict(
             if not path.name.isdigit() or not path.is_dir():
                 continue
             meta = _read_meta(path)
+            if meta.get("quarantined"):
+                # 0.71.0: never measured, locked nor evicted (never read).
+                listed.append(
+                    {
+                        **_listed(path, meta, busy=False),
+                        "bytes": None,
+                        "quarantined": True,
+                        "error": meta.get("quarantined"),
+                        "path": f"lineages/{path.parent.name}/{path.name}",
+                    }
+                )
+                continue
             changed = path.stat().st_mtime  # before the lock file touches it
             descriptor = _try_lock(path)
             if descriptor is None:
@@ -925,7 +942,9 @@ def evict(
                     remove,
                 )
             )
-        other, other_at = other_bytes(cache, ("lineages",), now)
+        # 0.71.0: a quarantined lineage is never read, so never measured.
+        other, other_at = other_bytes(cache, ("lineages", QUARANTINE), now)
+        listed.extend(quarantined(cache))
         report = shrink(cache, units, held, other, limit, min_free_ratio)
     finally:
         for descriptor in locks:
@@ -1357,6 +1376,15 @@ def take_lineage(
             existing = sorted(
                 int(path.name) for path in root.iterdir() if path.name.isdigit()
             )
+            # 0.71.0: a lineage marked quarantined (its rename out failed) is
+            # never taken, seeded from nor counted; its number stays used.
+            shelved = {
+                index
+                for index in existing
+                if _read_meta(root / str(index)).get("quarantined")
+            }
+            taken_numbers = set(existing)
+            existing = [index for index in existing if index not in shelved]
             for index in list(existing):
                 path = root / str(index)
                 descriptor = _try_lock(path)
@@ -1371,6 +1399,7 @@ def take_lineage(
                     finally:
                         os.close(descriptor)
                     existing.remove(index)
+                    taken_numbers.discard(index)
                     continue
                 free.append((index, meta, path, descriptor))
             chosen = None
@@ -1396,7 +1425,9 @@ def take_lineage(
                 )
                 chosen = next(item for item in free if best and item[2] == best[1])
             elif grow:
-                index = next(i for i in range(len(existing) + 1) if i not in existing)
+                index = next(
+                    i for i in range(len(taken_numbers) + 1) if i not in taken_numbers
+                )
                 path = root / str(index)
                 descriptor = _try_lock(path)
                 if descriptor is not None:
@@ -1604,7 +1635,11 @@ def _same(source: Path, dest: Path) -> bool:
 
 
 def sync_tree(source: Path, dest: Path) -> dict[str, int]:
-    """Make ``dest`` hold ``source``; unchanged files keep their mtime."""
+    """Make ``dest`` hold ``source``; unchanged files keep their mtime.
+
+    0.71.0: then removes every folder left empty (:func:`prune_empty_dirs`),
+    bottom-up: never ``dest`` itself nor anything in a ``target`` or
+    ``.git`` folder."""
     counts = {"written": 0, "removed": 0, "kept": 0, "removed_dirs": 0}
     dest.mkdir(parents=True, exist_ok=True)
     wanted: set[str] = set()
@@ -1647,6 +1682,10 @@ def sync_tree(source: Path, dest: Path) -> dict[str, int]:
         if relative != "." and relative not in wanted:
             shutil.rmtree(directory, ignore_errors=True)
             counts["removed_dirs"] += 1
+    # 0.71.0: folders left empty go too, also those the source itself has
+    # empty (Git tracks no empty folder: one in an upload is a leftover of a
+    # branch switch, and a cargo glob member fails on it).
+    counts["removed_dirs"] += prune_empty_dirs(dest)
     return counts
 
 
@@ -1907,6 +1946,126 @@ def clear_crates(target: Path, crates: list[str]) -> int:
     return removed
 
 
+# ------------------------------------------- quarantined lineages (0.71.0)
+#: 0.71.0: where a lineage whose files the filesystem cannot read goes, under
+#: the cache's root. Never read nor removed by Piceli: a person removes it.
+QUARANTINE = "quarantine"
+#: 0.71.0: errors that say the filesystem under a lineage is damaged, not
+#: the run: EUCLEAN ("Structure needs cleaning", 117 on Linux; macOS lacks
+#: the name), EIO, EBADMSG (a checksum error), EROFS, and ENOTEMPTY (a
+#: folder that cannot be listed whole, so not removed).
+LINEAGE_FAULTS = frozenset(
+    {
+        getattr(errno, "EUCLEAN", 117),
+        errno.EIO,
+        errno.EBADMSG,
+        errno.EROFS,
+        errno.ENOTEMPTY,
+    }
+)
+
+
+def lineage_fault(error: OSError, lineage: Path) -> str | None:
+    """0.71.0: ``"<errno name>: <path>"`` when ``error`` is a filesystem
+    fault on a path inside ``lineage`` (:data:`LINEAGE_FAULTS`); ``None``
+    for any other error (a missing file, a full disk, a path outside)."""
+    if error.errno not in LINEAGE_FAULTS:
+        return None
+    inside = str(lineage).rstrip("/") + "/"
+    for name in (error.filename, error.filename2):
+        if name is None:
+            continue
+        path = os.fsdecode(name)
+        if path.startswith(inside) or path == str(lineage):
+            code = errno.errorcode.get(error.errno or 0, str(error.errno))
+            if error.errno == getattr(errno, "EUCLEAN", 117):
+                code = "EUCLEAN"
+            return f"{code}: {path}"[:400]
+    return None
+
+
+def quarantine_lineage(
+    cache: Path, lineage: Path, fault: str, run: Any = None
+) -> dict[str, Any]:
+    """0.71.0: set a damaged lineage aside, out of ``lineages/``, in one
+    rename to ``quarantine/<key>-<n>-<time>``; nothing inside it is read or
+    removed. A ``<name>.json`` next to it says why. When even the rename
+    fails, its ``meta.json`` gets ``quarantined`` (if it can be written):
+    :func:`take_lineage` never takes it again. ``moved_to`` is ``None``
+    then; ``marked`` says whether the mark was written."""
+    key, index = lineage.parent.name, lineage.name
+    now = time.time()
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(now))
+    name = f"{key}-{index}-{stamp}"
+    record: dict[str, Any] = {
+        "kind": "lineage-quarantined",
+        "lineage": f"{key}/{index}",
+        "error": fault,
+        "at": now,
+        "run": run,
+        "moved_to": None,
+        "marked": False,
+    }
+    shelf = cache / QUARANTINE
+    try:
+        shelf.mkdir(parents=True, exist_ok=True)
+        suffix = 0
+        while (shelf / name).exists():
+            suffix += 1
+            name = f"{key}-{index}-{stamp}-{suffix}"
+        os.rename(lineage, shelf / name)
+        record["moved_to"] = f"{QUARANTINE}/{name}"
+    except OSError:
+        try:
+            _write_meta(lineage, {**_read_meta(lineage), "quarantined": fault})
+            record["marked"] = True
+        except OSError:
+            pass
+        return record
+    try:
+        note = shelf / f"{name}.json"
+        partial = shelf / f".{name}.json.partial"
+        partial.write_text(json.dumps(record, sort_keys=True))
+        os.replace(partial, note)
+    except OSError:
+        pass  # the listing still shows the folder, without its reason
+    return record
+
+
+def quarantined(cache: Path) -> list[dict[str, Any]]:
+    """0.71.0: the quarantined lineages, as a budget report lists them
+    (``quarantined`` true, ``bytes`` ``None``: never measured, so the
+    damaged folder is never read). They stay until a person removes them."""
+    shelf = cache / QUARANTINE
+    found: list[dict[str, Any]] = []
+    try:
+        entries = sorted(shelf.iterdir()) if shelf.is_dir() else []
+    except OSError:
+        return found
+    for path in entries:
+        if path.name.endswith(".json") or path.name.startswith("."):
+            continue
+        try:
+            note = json.loads((shelf / f"{path.name}.json").read_text())
+        except (OSError, ValueError):
+            note = {}
+        note = note if isinstance(note, dict) else {}
+        found.append(
+            {
+                "name": f"{QUARANTINE}/{path.name}",
+                "lineage": note.get("lineage"),
+                "bytes": None,
+                "last_used": note.get("at"),
+                "busy": False,
+                "run": note.get("run"),
+                "quarantined": True,
+                "error": note.get("error"),
+                "path": f"{QUARANTINE}/{path.name}",
+            }
+        )
+    return found
+
+
 CLEAR_SCHEMA = "piceli.dev-cache-clear.v1"
 
 
@@ -1938,6 +2097,8 @@ def clear_cache(
     busy: list[str] = []
     for path in _selected(cache, lineage):
         name = f"{path.parent.name}/{path.name}"
+        if _read_meta(path).get("quarantined"):
+            continue  # 0.71.0: never read; a person removes it
         descriptor = _try_lock(path)
         if descriptor is None:
             busy.append(name)
@@ -2392,111 +2553,165 @@ def main(
             )
         if toolchain != "none":
             spec = {**spec, "lineage_key": f"{spec['lineage_key']}-{toolchain}"}
-        lineage = take_lineage(cache, spec, clock, sources[0] if sources else None)
-        # 0.38.1: the lineage's cap is the budget less what the rest of the
-        # cache held (other lineages, toolchains, cargo's home, mirrors).
-        taken = _read_meta(lineage.path)
-        taken_bytes = int(taken.get("bytes") or 0)
-        cap = max(0, limit - (int(budget["used_bytes"]) - taken_bytes))
-        seeded = None
-        if lineage.seed_from is not None:
-            # 0.53.0: a new lineage starts from a copy of its nearest sibling.
-            try:
-                seeded = seed_lineage(lineage.path, lineage.seed_from, cap)
-            except OSError as error:
-                emit(
-                    f"[piceli-dev] seeding the lineage failed, it starts cold: {error}"
-                )
-            if seeded is not None:
-                taken_bytes = int(seeded["bytes"])
-        result["cache"] = {
-            "lineage": f"{lineage.path.parent.name}/{lineage.path.name}",
-            "lineage_dir": str(lineage.path),
-            "warm": "seeded"
-            if seeded
-            else (
-                lineage.warm
-                if lineage.command_warm is None
-                else lineage.warm and lineage.command_warm
-            ),
-            **(
-                {"tree_warm": lineage.warm, "command_key": command_key(spec)}
-                if lineage.command_warm is not None
-                else {}
-            ),
-            **({"warm_wait_seconds": lineage.waited} if lineage.waited >= 1 else {}),
-            **({"seed": seeded} if seeded else {}),
-            "evicted": budget["evicted"],
-            "used_bytes": budget["used_bytes"],
-            "max_bytes": limit,
-            "cap_bytes": cap,
-            "lineage_bytes": taken_bytes,
-            # 0.35.0: the whole cache counts; what eviction freed and
-            # whether the cache or its disk is still over its limit.
-            **{
-                key: budget[key]
-                for key in (
-                    "other_bytes",
-                    "freed_bytes",
-                    "over_budget",
-                    "fs_free_bytes",
-                    "fs_total_bytes",
-                    "fs_low",
-                )
-            },
-        }
-        emit(
-            f"[piceli-dev] lineage {result['cache']['lineage']} "
-            + (
-                f"(seeded from {seeded['from']}: {seeded['bytes'] / 2**30:.1f} GiB "
-                f"in {seeded['seconds']:.1f} s by {seeded['method']}, "
-                f"{seeded['dropped_units']} unit(s) to rebuild)"
+        # 0.71.0: a lineage whose files the filesystem cannot read (EUCLEAN,
+        # EIO: a damaged folder on the node's disk) is set aside and the run
+        # continues once on a new lineage.
+        set_aside: dict[str, Any] | None = None
+        while True:
+            lineage = take_lineage(cache, spec, clock, sources[0] if sources else None)
+            # 0.38.1: the lineage's cap is the budget less what the rest of the
+            # cache held (other lineages, toolchains, cargo's home, mirrors).
+            taken = _read_meta(lineage.path)
+            taken_bytes = int(taken.get("bytes") or 0)
+            cap = max(0, limit - (int(budget["used_bytes"]) - taken_bytes))
+            seeded = None
+            if lineage.seed_from is not None:
+                # 0.53.0: a new lineage starts from a copy of its nearest sibling.
+                try:
+                    seeded = seed_lineage(lineage.path, lineage.seed_from, cap)
+                except OSError as error:
+                    emit(
+                        f"[piceli-dev] seeding the lineage failed, it starts cold: {error}"
+                    )
+                if seeded is not None:
+                    taken_bytes = int(seeded["bytes"])
+            result["cache"] = {
+                "lineage": f"{lineage.path.parent.name}/{lineage.path.name}",
+                "lineage_dir": str(lineage.path),
+                "warm": "seeded"
                 if seeded
-                else f"({_warmth(lineage)})"
-            )
-        )
-        timeline.phase("sync")
-        lineage_tree = lineage.path / "tree"
-        if sources is not None:
-            meta = _read_meta(lineage.path)
-            previous = meta.pop("materialized", None)
-            if previous is not None:
-                # 0.50.0: a run killed mid-sync leaves no record, so the next
-                # run syncs fully instead of trusting a stale overlay list.
-                _write_meta(lineage.path, meta)
-            counts = (
-                refresh_in_place(sources, lineage_tree, previous, work / "stage")
-                if not full and lineage_tree.is_dir()
-                else None
-            )
-            if counts is not None:
-                result["sync"] = {**counts, "mode": "in-place"}
-                refreshed = int((previous or {}).get("refreshed") or 0) + 1
-                result["applied"] = {
-                    item.name: {
-                        "mode": "delta",
-                        "bundle": (item.incoming / "bundle").is_file(),
-                        "diff": (item.incoming / "diff").is_file(),
-                    }
-                    for item in sources
-                }
-            else:
-                if not full:
-                    result["applied"] = materialize(sources, tree)
-                result["sync"] = sync_tree(tree, lineage_tree)
-                refreshed = 0
-            _write_meta(
-                lineage.path,
-                {
-                    **_read_meta(lineage.path),
-                    "materialized": materialized(sources, refreshed),
+                else (
+                    lineage.warm
+                    if lineage.command_warm is None
+                    else lineage.warm and lineage.command_warm
+                ),
+                **(
+                    {"tree_warm": lineage.warm, "command_key": command_key(spec)}
+                    if lineage.command_warm is not None
+                    else {}
+                ),
+                **(
+                    {"warm_wait_seconds": lineage.waited} if lineage.waited >= 1 else {}
+                ),
+                **({"seed": seeded} if seeded else {}),
+                "evicted": budget["evicted"],
+                "used_bytes": budget["used_bytes"],
+                "max_bytes": limit,
+                "cap_bytes": cap,
+                "lineage_bytes": taken_bytes,
+                # 0.35.0: the whole cache counts; what eviction freed and
+                # whether the cache or its disk is still over its limit.
+                **{
+                    key: budget[key]
+                    for key in (
+                        "other_bytes",
+                        "freed_bytes",
+                        "over_budget",
+                        "fs_free_bytes",
+                        "fs_total_bytes",
+                        "fs_low",
+                    )
                 },
+            }
+            emit(
+                f"[piceli-dev] lineage {result['cache']['lineage']} "
+                + (
+                    f"(seeded from {seeded['from']}: {seeded['bytes'] / 2**30:.1f} GiB "
+                    f"in {seeded['seconds']:.1f} s by {seeded['method']}, "
+                    f"{seeded['dropped_units']} unit(s) to rebuild)"
+                    if seeded
+                    else f"({_warmth(lineage)})"
+                )
             )
-        else:
-            result["sync"] = sync_tree(tree, lineage_tree)
-            meta = _read_meta(lineage.path)
-            if meta.pop("materialized", None) is not None:
-                _write_meta(lineage.path, meta)
+            timeline.phase("sync")
+            try:
+                lineage_tree = lineage.path / "tree"
+                if sources is not None:
+                    meta = _read_meta(lineage.path)
+                    previous = meta.pop("materialized", None)
+                    if previous is not None:
+                        # 0.50.0: a run killed mid-sync leaves no record, so the next
+                        # run syncs fully instead of trusting a stale overlay list.
+                        _write_meta(lineage.path, meta)
+                    counts = (
+                        refresh_in_place(
+                            sources, lineage_tree, previous, work / "stage"
+                        )
+                        if not full and lineage_tree.is_dir()
+                        else None
+                    )
+                    if counts is not None:
+                        result["sync"] = {**counts, "mode": "in-place"}
+                        refreshed = int((previous or {}).get("refreshed") or 0) + 1
+                        result["applied"] = {
+                            item.name: {
+                                "mode": "delta",
+                                "bundle": (item.incoming / "bundle").is_file(),
+                                "diff": (item.incoming / "diff").is_file(),
+                            }
+                            for item in sources
+                        }
+                    else:
+                        if not full:
+                            result["applied"] = materialize(sources, tree)
+                            full = True  # 0.71.0: a retry on a new lineage reuses it
+                        result["sync"] = sync_tree(tree, lineage_tree)
+                        refreshed = 0
+                    _write_meta(
+                        lineage.path,
+                        {
+                            **_read_meta(lineage.path),
+                            "materialized": materialized(sources, refreshed),
+                        },
+                    )
+                else:
+                    result["sync"] = sync_tree(tree, lineage_tree)
+                    meta = _read_meta(lineage.path)
+                    if meta.pop("materialized", None) is not None:
+                        _write_meta(lineage.path, meta)
+                (lineage.path / "target").mkdir(exist_ok=True)
+                break
+            except OSError as error:
+                fault = lineage_fault(error, lineage.path)
+                if fault is None:
+                    raise
+                earlier, set_aside = (
+                    set_aside,
+                    quarantine_lineage(cache, lineage.path, fault, spec.get("run")),
+                )
+                if set_aside["moved_to"] is None and not set_aside["marked"]:
+                    raise RunError(
+                        "dev-lineage-damaged",
+                        f"the lineage's files cannot be read ({fault}) and it "
+                        "cannot be set aside: remove it by hand",
+                        quarantined=set_aside,
+                    ) from error
+                os.close(lineage.descriptor)
+                lineage = None
+                shutil.rmtree(work / "stage", ignore_errors=True)
+                if earlier is not None:
+                    raise RunError(
+                        "dev-lineage-damaged",
+                        f"a new lineage's files cannot be read either ({fault}; "
+                        f"before: {earlier['error']}): both are set aside, the "
+                        "cache's disk needs checking",
+                        quarantined=[earlier, set_aside],
+                    ) from error
+                emit(
+                    f"[piceli-dev] lineage {set_aside['lineage']} is damaged "
+                    f"({fault}): set aside in "
+                    f"{set_aside['moved_to'] or 'place, marked quarantined'}; "
+                    "remove it by hand; continuing on a new lineage"
+                )
+        if set_aside is not None:
+            result["cache"]["repaired"] = {
+                **{k: v for k, v in set_aside.items() if k != "at"},
+                "crates": [],
+                "entries": 0,
+                "first_error": [set_aside["error"]],
+            }
+            result["cache"]["quarantined"] = dict(set_aside)
+        assert lineage is not None  # the loop breaks with one, or raises
         shutil.rmtree(tree, ignore_errors=True)
         shutil.rmtree(work / "stage", ignore_errors=True)
         shutil.rmtree(inbox, ignore_errors=True)
