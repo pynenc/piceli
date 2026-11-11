@@ -651,6 +651,29 @@ and its `builder serve` skips them and says why. The quarantine lasts until
 by HOST (reason)`). A failure after the build started (a compiler error)
 still fails the step, as before.
 
+**No wait for hosts that cannot build (0.71.0).** The fallback no longer
+waits `host_wait` when no declared host can take the build:
+
+- at once when every declared host handed it over or is quarantined for one
+  of its sources, also when the quarantine came from an earlier build (that
+  host never claims the new one, so nothing hands it over);
+- after 60 seconds when no host that may take it is live: none reported to
+  the controller in the last 10 minutes and none stands by. A running
+  `builder serve` claims within its poll; an offline laptop is not waited
+  for. With `builds=("hosts",)` the build keeps waiting for it.
+
+The waiting environment says why, for example `in-cluster fallback at
+2026-01-01T10:01:00Z (no live host may take it ...)`.
+
+**A corrupt mirror is cloned again (0.71.0).** Each host keeps a Git mirror
+of every source. When Git finds it corrupt (`pack has bad object`, `invalid
+index-pack output`, `inflate`, `object ... is corrupt`), `builder serve`
+removes the mirror and the checkout and fetches the source once more from
+scratch, in the same build. It says `the mirror of source NAME was corrupt
+(...); re-cloned it`, and the receipt records it under `source.repaired`.
+A second failure is handed over as above. A network or credential failure
+never removes the mirror.
+
 (build-hosts-declared)=
 **Only declared hosts build (0.29.0).** When the composition declares build
 hosts (`DevBuilds(hosts=[...])`), the controller takes claims, answers and

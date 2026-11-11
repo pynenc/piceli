@@ -22,8 +22,22 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   folders are now removed after every sync (bottom-up, never the root,
   never inside `target/` or `.git/`).
 
-These run in the client: `piceli dev run` sends its own copy of the run's
-code. Upgrade the client that starts the runs.
+- **A corrupt source mirror is cloned again.** When a build host's Git
+  mirror of a source is corrupt (`pack has bad object`, `invalid
+  index-pack output`, ...), `builder serve` removes it and fetches the
+  source once more in the same build, says so and records it in the
+  receipt (`source.repaired`). Before, the host handed the build over and
+  stayed quarantined for that source. A network or credential failure
+  never removes the mirror.
+- **The fallback does not wait for hosts that cannot build.** It builds at
+  once when every declared host is quarantined for one of the build's
+  sources, also when an earlier build set the quarantine; and after 60
+  seconds, not `host_wait`, when no host that may take it reported in the
+  last 10 minutes (an offline laptop). The waiting status says why.
+
+The dev-run fixes run in the client: `piceli dev run` sends its own copy
+of the run's code. Upgrade the client that starts the runs. The build-host
+fixes need the 0.71.0 controller and `builder serve`.
 
 ## Version 0.70.1
 

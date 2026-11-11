@@ -10,7 +10,13 @@ from typing import Any
 
 import pytest
 
-from piceli.infra.builder_serve import BuildFailed, export_source, fetch_env, fetch_urls
+from piceli.infra.builder_serve import (
+    BuildFailed,
+    corrupt_git,
+    export_source,
+    fetch_env,
+    fetch_urls,
+)
 
 URL = "https://git.example.invalid/org/product.git"
 SSH = "git@git.example.invalid:org/product.git"
@@ -115,3 +121,114 @@ def test_an_unreachable_source_names_both_transports(
 
     with pytest.raises(BuildFailed, match=r"over HTTPS or SSH.*Permission denied"):
         export_source(URL, "a" * 40, tmp_path / "c", tmp_path / "git", run)
+
+
+# ------------------------------------------ a corrupt mirror (0.71.0)
+
+
+def _corrupt_packs(mirror: Path) -> None:
+    """Pack the mirror, then flip bytes inside every pack's object data."""
+    subprocess.run(
+        ["git", "--git-dir", str(mirror), "repack", "-q", "-a", "-d"], check=True
+    )
+    for pack in (mirror / "objects" / "pack").glob("*.pack"):
+        os.chmod(pack, 0o644)
+        data = bytearray(pack.read_bytes())
+        for at in range(16, len(data) - 24, 7):
+            data[at] ^= 0xFF
+        pack.write_bytes(bytes(data))
+
+
+@pytest.fixture
+def bigger(repo: Path) -> Path:
+    """A commit with incompressible files, so the mirror's pack has real data."""
+    for n in range(3):
+        (repo / f"blob{n}.txt").write_text(os.urandom(6000).hex())
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "data")
+    return repo
+
+
+def test_a_corrupt_mirror_is_cloned_again_once_and_the_repair_returned(
+    bigger: Path, tmp_path: Path
+) -> None:
+    url, mirrors = str(bigger), tmp_path / "git"
+    commit = _git(bigger, "rev-parse", "HEAD")
+    assert export_source(url, commit, tmp_path / "first", mirrors) is None
+    (mirror,) = mirrors.iterdir()
+    _corrupt_packs(mirror)
+
+    into = tmp_path / "second"
+    repaired = export_source(url, commit, into, mirrors)
+    assert repaired is not None and repaired["mirror"] == mirror.name
+    assert corrupt_git(repaired["error"]) == repaired["error"]
+    assert _git(into, "rev-parse", "HEAD") == commit
+    assert _git(into, "status", "--porcelain") == ""
+    subprocess.run(
+        ["git", "--git-dir", str(mirror), "fsck", "--no-progress"],
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_a_corrupt_mirror_that_fails_again_fails_the_build(
+    bigger: Path, tmp_path: Path
+) -> None:
+    url, mirrors = str(bigger), tmp_path / "git"
+    commit = _git(bigger, "rev-parse", "HEAD")
+    calls: list[list[str]] = []
+
+    def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        calls.append(list(argv))
+        if "fetch" in argv:
+            return subprocess.CompletedProcess(
+                argv, 128, b"", b"fatal: pack has bad object at offset 40412195"
+            )
+        return subprocess.run(argv, **kwargs)
+
+    with pytest.raises(BuildFailed, match="bad object"):
+        export_source(url, commit, tmp_path / "c", mirrors, run)
+    assert sum(argv[:1] == ["git"] and "init" in argv for argv in calls) == 2
+
+
+def test_a_network_failure_keeps_the_mirror(repo: Path, tmp_path: Path) -> None:
+    mirrors = tmp_path / "git"
+    commit = _git(repo, "rev-parse", "HEAD")
+    export_source(str(repo), commit, tmp_path / "c", mirrors)
+    (mirror,) = mirrors.iterdir()
+    objects = sorted(p.name for p in (mirror / "objects").rglob("*") if p.is_file())
+
+    def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        if "fetch" in argv:
+            return subprocess.CompletedProcess(
+                argv, 128, b"",
+                b"fatal: unable to access 'https://git.example.invalid/': "
+                b"Could not resolve host: git.example.invalid",
+            )  # fmt: skip
+        return subprocess.run(argv, **kwargs)
+
+    with pytest.raises(BuildFailed, match="Could not resolve host"):
+        export_source(str(repo), "b" * 40, tmp_path / "c", mirrors, run)
+    assert (
+        sorted(p.name for p in (mirror / "objects").rglob("*") if p.is_file())
+        == objects
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "corrupt"),
+    [
+        ("fatal: pack has bad object at offset 40412195: inflate returned -3", True),
+        ("fatal: fetch-pack: invalid index-pack output", True),
+        ("error: inflate: data stream error (incorrect data check)", True),
+        ("fatal: packed object 0ccb7e5a (stored in x.pack) is corrupt", True),
+        ("error: loose object 0ccb7e5a (stored in objects/0c/cb) is corrupt", True),
+        ("error: did not receive expected object 0ccb7e5a", True),
+        ("fatal: could not read Username for 'https://example.org'", False),
+        ("Could not resolve host: example.org", False),
+        ("git@example.org: Permission denied (publickey).", False),
+        ("fatal: remote error: upload-pack: not our ref 0ccb7e5a", False),
+    ],
+)
+def test_only_corruption_wipes_the_mirror(text: str, corrupt: bool) -> None:
+    assert (corrupt_git(f"remote: x\n{text}\n") is not None) is corrupt
