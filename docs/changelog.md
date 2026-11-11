@@ -4,6 +4,27 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.71.0
+
+**Fixes**
+
+- **A dev run on a damaged disk continues on a fresh lineage.** When the
+  tree sync into a lineage fails with a filesystem error inside it
+  (EUCLEAN "Structure needs cleaning", EIO, EBADMSG, EROFS, ENOTEMPTY),
+  the lineage is renamed into `cache/quarantine/` without reading or
+  deleting anything in it, and the same run continues on a fresh lineage
+  (`cache.repaired.kind = "lineage-quarantined"`). A quarantined lineage is
+  never taken again; `piceli dev status` lists it until a person removes
+  it. A second fault fails the run with `dev-lineage-damaged`.
+- **No empty folder survives a tree sync.** A whole-tree upload that held
+  an empty folder (left by a branch switch) kept it in the lineage, and a
+  workspace glob such as `members = ["crates/*"]` then failed. Empty
+  folders are now removed after every sync (bottom-up, never the root,
+  never inside `target/` or `.git/`).
+
+These run in the client: `piceli dev run` sends its own copy of the run's
+code. Upgrade the client that starts the runs.
+
 ## Version 0.70.1
 
 **Fixes**

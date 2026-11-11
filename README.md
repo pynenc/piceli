@@ -66,12 +66,11 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.70
+## What's new in 0.71
 
-- **0.70.1**: works with the typer versions it was tested with (below 0.29).
-
-- **Long silent builds keep their build host's claim**: hosts report on a
-  timer while they build.
+- **Dev runs survive a damaged cache disk**: the damaged lineage is set
+  aside and the run continues on a fresh one.
+- **No empty folders left after a dev run's tree sync.**
 
 ## Web UI
 
