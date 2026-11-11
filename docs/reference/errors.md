@@ -199,6 +199,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`dev-host-unavailable`](#error-dev-host-unavailable) | dev | no |
 | [`dev-host-unknown`](#error-dev-host-unknown) | dev | no |
 | [`dev-isolation-not-enforced`](#error-dev-isolation-not-enforced) | dev | no |
+| [`dev-lineage-damaged`](#error-dev-lineage-damaged) | dev | yes |
 | [`dev-nix-cache-invalid`](#error-dev-nix-cache-invalid) | dev | no |
 | [`dev-nix-cache-key-unset`](#error-dev-nix-cache-key-unset) | dev | no |
 | [`dev-nix-gc-failed`](#error-dev-nix-gc-failed) | dev | yes |
@@ -5338,6 +5339,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Use a CNI that enforces NetworkPolicy (k3s's default does; on kind, kindnet does), then run again.
 - **Retry-safe:** no
+
+(error-dev-lineage-damaged)=
+### `dev-lineage-damaged`
+
+**Run's cache lineage on a damaged disk.** 0.71.0: syncing the run's tree into its lineage failed with a filesystem error inside it (EUCLEAN "Structure needs cleaning", EIO, EBADMSG, EROFS, ENOTEMPTY). The first such lineage is set aside in `cache/quarantine/` and the run continues on a fresh one; this error means the fresh one failed too, or the damaged lineage could be neither moved nor marked.
+
+- **Fix:** Check the cache's disk (the kernel log, fsck). Remove the lineages listed under `cache/quarantine/` by hand once it is repaired, then run again.
+- **Retry-safe:** yes
 
 (error-dev-nix-cache-invalid)=
 ### `dev-nix-cache-invalid`

@@ -15200,6 +15200,7 @@
    "dev-host-unavailable",
    "dev-host-unknown",
    "dev-isolation-not-enforced",
+   "dev-lineage-damaged",
    "dev-nix-cache-invalid",
    "dev-nix-cache-key-unset",
    "dev-nix-gc-failed",
@@ -18139,5 +18140,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.70.1"
+ "version": "0.71.0"
 }

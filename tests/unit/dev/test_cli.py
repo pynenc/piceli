@@ -233,6 +233,30 @@ def test_status_lists_the_lineages_largest_first(
     assert "(after the run that ended 2026-11-02T10:00:00Z)" in result.stderr
 
 
+def test_status_shows_quarantined_lineages_first(
+    queue: QueuePort, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0.71.0: a lineage set aside for a damaged disk, until a person acts."""
+    lineages = [
+        {"name": f"shop-rust/{i}", "bytes": 2**30, "busy": False} for i in range(12)
+    ]
+    lineages.append(
+        {"name": "quarantine/shop-rust-0-20261111T100000Z", "bytes": None,
+         "busy": False, "quarantined": True, "lineage": "shop-rust/0",
+         "error": "EUCLEAN: /cache/lineages/shop-rust/0/tree/a.png.piceli-sync",
+         "path": "quarantine/shop-rust-0-20261111T100000Z"}
+    )  # fmt: skip
+    status = queue.status()
+    status["cache"].update(at="2026-11-02T10:00:00Z", lineages=lineages)
+    monkeypatch.setattr(queue, "status", lambda: status)
+    result = dev("status")
+    assert result.exit_code == 0, result.stderr
+    shown = [line for line in result.stderr.splitlines() if "shop-rust" in line]
+    assert "quarantine/shop-rust-0-20261111T100000Z" in shown[0]
+    assert "? GiB  quarantined (EUCLEAN: " in shown[0]
+    assert "remove quarantine/shop-rust-0-20261111T100000Z" in shown[0]
+
+
 def test_logs_of_a_live_and_a_finished_run(queue: QueuePort) -> None:
     live = dev("logs", "r-running")
     assert live.exit_code == 0 and live.stdout == "compiling\n"

@@ -593,11 +593,25 @@ def _span(seconds: float) -> str:
 
 
 def lineage_lines(cache: dict[str, Any], now: float) -> list[str]:
-    """0.53.0: one line per lineage of a cache report, largest first."""
+    """0.53.0: one line per lineage of a cache report, largest first.
+
+    0.71.0: a quarantined lineage comes first, with ``?`` bytes and how to
+    remove it."""
     found = [item for item in cache.get("lineages") or () if isinstance(item, dict)]
-    found.sort(key=lambda item: -int(item.get("bytes") or 0))
+    # 0.71.0: quarantined ones first (a person must act on them).
+    found.sort(
+        key=lambda item: (not item.get("quarantined"), -int(item.get("bytes") or 0))
+    )
     lines = []
     for item in found[:SHOWN_LINEAGES]:
+        if item.get("quarantined"):
+            # 0.71.0: set aside, its files unreadable; a person removes it.
+            lines.append(
+                f"    {item.get('name')!s:<28} {'?':>6} GiB  quarantined "
+                f"({item.get('error') or 'damaged'}); remove "
+                f"{item.get('path') or 'it'} from the cache by hand"
+            )
+            continue
         if item.get("busy"):
             paused = item.get("paused") or {}
             since = paused.get("since") if paused else item.get("taken_at")

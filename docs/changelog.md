@@ -4,6 +4,41 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.71.0
+
+**Fixes**
+
+- **A dev run on a damaged disk continues on a fresh lineage.** When the
+  tree sync into a lineage fails with a filesystem error inside it
+  (EUCLEAN "Structure needs cleaning", EIO, EBADMSG, EROFS, ENOTEMPTY),
+  the lineage is renamed into `cache/quarantine/` without reading or
+  deleting anything in it, and the same run continues on a fresh lineage
+  (`cache.repaired.kind = "lineage-quarantined"`). A quarantined lineage is
+  never taken again; `piceli dev status` lists it until a person removes
+  it. A second fault fails the run with `dev-lineage-damaged`.
+- **No empty folder survives a tree sync.** A whole-tree upload that held
+  an empty folder (left by a branch switch) kept it in the lineage, and a
+  workspace glob such as `members = ["crates/*"]` then failed. Empty
+  folders are now removed after every sync (bottom-up, never the root,
+  never inside `target/` or `.git/`).
+
+- **A corrupt source mirror is cloned again.** When a build host's Git
+  mirror of a source is corrupt (`pack has bad object`, `invalid
+  index-pack output`, ...), `builder serve` removes it and fetches the
+  source once more in the same build, says so and records it in the
+  receipt (`source.repaired`). Before, the host handed the build over and
+  stayed quarantined for that source. A network or credential failure
+  never removes the mirror.
+- **The fallback does not wait for hosts that cannot build.** It builds at
+  once when every declared host is quarantined for one of the build's
+  sources, also when an earlier build set the quarantine; and after 60
+  seconds, not `host_wait`, when no host that may take it reported in the
+  last 10 minutes (an offline laptop). The waiting status says why.
+
+The dev-run fixes run in the client: `piceli dev run` sends its own copy
+of the run's code. Upgrade the client that starts the runs. The build-host
+fixes need the 0.71.0 controller and `builder serve`.
+
 ## Version 0.70.1
 
 **Fixes**

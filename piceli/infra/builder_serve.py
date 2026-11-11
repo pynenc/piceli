@@ -249,13 +249,37 @@ def _tail(result: subprocess.CompletedProcess[bytes]) -> str:
     return raw.decode("utf-8", "replace").strip()[-500:]
 
 
+def _stderr(result: subprocess.CompletedProcess[bytes]) -> str:
+    raw = result.stderr if isinstance(result.stderr, bytes) else b""
+    return raw.decode("utf-8", "replace").strip()[-4000:]
+
+
+#: 0.71.0: Git's words for a damaged repository (a mirror or a checkout), as
+#: opposed to a network or credential failure, which never wipes the mirror.
+CORRUPT_GIT = re.compile(
+    r"pack has bad object|invalid index-pack output|\binflate\b"
+    r"|object \S+ .*is corrupt|packfile \S+ .*corrupt|repository corruption"
+    r"|did not receive expected object",
+    re.IGNORECASE,
+)
+
+
+def corrupt_git(text: str) -> str | None:
+    """The first line of ``text`` saying a Git repository is corrupt; ``None``
+    when there is none."""
+    for line in text.splitlines():
+        if CORRUPT_GIT.search(line):
+            return line.strip()[:300]
+    return None
+
+
 def export_source(
     url: str,
     commit: str,
     into: Path,
     mirrors: Path,
     run: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
-) -> None:
+) -> dict[str, str] | None:
     """``commit`` of ``url`` as a Git checkout in ``into``.
 
     The build verifies each source's Git identity (its commit, a clean tree,
@@ -266,9 +290,36 @@ def export_source(
     incremental builds (cargo) see exactly what changed. Everything is
     readable by others: the builder container's user reads it.
 
+    0.71.0: when Git finds the mirror or the checkout corrupt
+    (:data:`CORRUPT_GIT`), both are removed and the source is fetched once
+    more from scratch. The repair is returned (``{"mirror", "error"}``);
+    ``None`` when none was needed.
+
     :raises BuildFailed: the commit cannot be fetched or checked out.
     """
     mirror = mirrors / f"{_slug(url)}.git"
+    try:
+        _export(url, commit, into, mirror, run)
+        return None
+    except BuildFailed as error:
+        found = corrupt_git(error.tail)
+        if found is None:
+            raise
+    shutil.rmtree(mirror, ignore_errors=True)
+    shutil.rmtree(into, ignore_errors=True)
+    _export(url, commit, into, mirror, run)
+    return {"mirror": mirror.name, "error": found}
+
+
+def _export(
+    url: str,
+    commit: str,
+    into: Path,
+    mirror: Path,
+    run: Callable[..., subprocess.CompletedProcess[bytes]],
+) -> None:
+    """One attempt of :func:`export_source`; a failure's ``tail`` holds Git's
+    whole error output."""
     env = fetch_env()
     if not (mirror / "HEAD").is_file():
         mirror.mkdir(parents=True, exist_ok=True)
@@ -290,6 +341,7 @@ def export_source(
         ).returncode == 0  # fmt: skip
 
     errors: list[str] = []
+    said: list[str] = []
     for source in fetch_urls(url):
         if present():
             break
@@ -308,11 +360,13 @@ def export_source(
             )  # fmt: skip
             if fetched.returncode != 0 and _tail(fetched):
                 errors.append(f"{source}: {_tail(fetched)}")
+                said.append(_stderr(fetched))
     if not present():
         detail = f" ({errors[-1]})" if errors else ""
         raise BuildFailed(
             f"commit {commit[:12]} of {url} cannot be fetched from this host"
-            f" over HTTPS or SSH{detail}"
+            f" over HTTPS or SSH{detail}",
+            "\n".join(said),
         )
 
     def git(*args: str) -> subprocess.CompletedProcess[bytes]:
@@ -340,7 +394,8 @@ def export_source(
         done = git(*step)
         if done.returncode != 0:
             raise BuildFailed(
-                f"checkout of {url} at {commit[:12]} failed ({step[0]}: {_tail(done)})"
+                f"checkout of {url} at {commit[:12]} failed ({step[0]}: {_tail(done)})",
+                _stderr(done),
             )
     # Earlier commits' objects go: the checkout holds one commit.
     git("reflog", "expire", "--expire=now", "--all")
@@ -465,6 +520,9 @@ class BuilderServe:
     attest: Callable[[str, str, bytes], Any] | None = None
     #: Machine-health signals seen in the current build's output.
     signals: list[dict[str, str]] = field(default_factory=list)
+    #: 0.71.0: sources of the current build whose corrupt mirror was
+    #: re-cloned, by name (``{"mirror", "error"}``).
+    repaired: dict[str, dict[str, str]] = field(default_factory=dict)
     #: Why this host claims nothing (its quarantine), once said.
     quarantine: dict[str, Any] | None = None
     #: The controller's health record of this host, from its status.
@@ -900,6 +958,7 @@ class BuilderServe:
         began = self.clock()
         tail: deque[str] = deque(maxlen=TAIL_LINES)
         self.signals = []
+        self.repaired = {}
         self._progress = self._reporter(build, tail)
         try:
             # 0.70.0: the claim is renewed on a timer, not only by log lines.
@@ -953,6 +1012,8 @@ class BuilderServe:
             receipt["toolchains"] = dict(self.toolchains)
         if _nodes(entry):
             receipt["delivery"] = "nodes"
+        if self.repaired:  # 0.71.0: a corrupt mirror re-cloned on the way
+            receipt["source"] = {"repaired": dict(self.repaired)}
         # 0.22: a passed build that met a corrupt cache still counts.
         cached = [s for s in self.signals if s["kind"].startswith("cache-")]
         if cached:
@@ -1022,7 +1083,14 @@ class BuilderServe:
                 raise BuildFailed("the publish names no source at the plan's commit")
             checkout = self.root / "checkouts" / f"{source}-{_slug(url)}"
             with stage("fetch"):
-                export_source(url, commit, checkout, self.root / "git", self.git)
+                repaired = export_source(
+                    url, commit, checkout, self.root / "git", self.git
+                )
+                if repaired is not None:
+                    line(
+                        f"builder: the mirror of source {source} was corrupt "
+                        f"({repaired['error']}); re-cloned it"
+                    )
                 pointed = (
                     nix_releases.tag_commit(
                         url, str(plan["tag"]), self.root / "git", self.git
@@ -1136,11 +1204,21 @@ class BuilderServe:
                 self.say(f"builder: source {name} at {commit[:12]}")
                 checkout = self.root / "checkouts" / f"{name}-{_slug(url)}"
                 try:
-                    export_source(url, commit, checkout, self.root / "git", self.git)
+                    repaired = export_source(
+                        url, commit, checkout, self.root / "git", self.git
+                    )
                 except BuildFailed as error:  # 0.29.0: before the first command
                     raise BuildFailed(
                         str(error), error.tail, early=True, source=name
                     ) from None
+                if repaired is not None:
+                    self.repaired[name] = repaired
+                    said = (
+                        f"builder: the mirror of source {name} was corrupt "
+                        f"({repaired['error']}); re-cloned it"
+                    )
+                    tail.append(said)
+                    self.say(said)
                 sources[name] = checkout
             receipt_line: list[str] = []
 

@@ -414,7 +414,9 @@ file**, so cargo's own fingerprints rebuild only the crates that changed.
 Folders the sync leaves empty are removed too (0.36.0; `target/` and `.git/`
 stay), so a cargo glob member such as `crates/app/*` never meets an empty
 folder of a crate that is gone; the sync result counts them in
-`removed_dirs`.
+`removed_dirs`. 0.71.0: a full sync removes empty folders the upload itself
+holds as well (Git tracks no empty folder, so one is a leftover of a branch
+switch).
 `CARGO_HOME` (the registry and downloaded crates) is shared per toolchain;
 cargo locks it itself.
 
@@ -530,6 +532,21 @@ piceli dev cache clear --cluster infra.py:lab                      # every free 
 piceli dev cache clear --cluster infra.py:lab --lineage shop       # every lineage of a root source
 piceli dev cache clear --cluster infra.py:lab --lineage shop-rust-1a2b3c4d5e/0 --crate geometry
 ```
+
+**A lineage on a damaged disk** (0.71.0). When preparing the lineage
+(the tree sync) fails with a filesystem error on a path inside it
+(`EUCLEAN` "Structure needs cleaning", `EIO`, `EBADMSG`, `EROFS`,
+`ENOTEMPTY`), the wrapper moves the lineage aside in one rename, to
+`quarantine/<key>-<n>-<time>` in the cache (with a `.json` next to it that
+says why), logs `[piceli-dev] lineage … is damaged (…): set aside in …`
+and continues the same run once on a new lineage (never seeded from the
+damaged one). The result says `cache.repaired {kind: "lineage-quarantined",
+lineage, error, moved_to}`. When the new lineage fails the same way, the
+run fails with `dev-lineage-damaged`: the disk needs checking. When even
+the rename fails, the lineage's `meta.json` is marked `quarantined` and no
+run takes it again. Piceli never reads nor removes a quarantined lineage:
+`dev status` and `piceli dev hosts` list it first (bytes unknown, `?`)
+until a person removes its folder from the cache.
 
 It runs a short Job on the builder (same user and claim as a run, no
 Secret, no repository code) that empties the lineages' cargo targets, or

@@ -318,6 +318,102 @@ def test_builder_serve_marks_fetch_and_engine_failures_early(
         builder_serve.export_source = original  # type: ignore[assignment]
 
 
+def test_builder_serve_says_and_records_a_repaired_mirror(
+    world: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from collections import deque
+
+    from piceli.infra import builder_serve
+    from piceli.infra.builder_serve import BuildFailed
+
+    world["controller"].poll_once()
+    (entry,) = world["controller"].status()["controller"]["builds_wanted"]
+    worker = _serve(world, tmp_path, "builder-1")
+    worker.container = lambda *_a: 101
+    repair = {"mirror": "shop-0123456789.git", "error": "fatal: pack has bad object"}
+    monkeypatch.setattr(builder_serve, "export_source", lambda *_a, **_k: repair)
+    tail: deque[str] = deque()
+    with pytest.raises(BuildFailed):
+        worker.build(entry, tail)
+    assert worker.repaired == {"catalog": repair, "shop": repair}
+    said = [line for line in worker.said if "was corrupt" in line]
+    assert len(said) == 2 and "re-cloned it" in said[0]
+    assert said[0] in tail
+
+
+# --------------------------- 2b. no host that may take it (0.71.0)
+
+
+def _seen(world: dict[str, Any], host: str) -> None:
+    """``host`` tells the controller its version: a sighting."""
+    from piceli import __version__
+    from piceli.gitops.state import build_host_version_request
+
+    world["channel"].add_request(*build_host_version_request(host, __version__))
+
+
+def test_a_host_quarantined_by_an_earlier_build_does_not_hold_the_next_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = _world(tmp_path, monkeypatch, hosts=("builder-1",), host_wait="30m")
+    controller, ports, clock = world["controller"], world["ports"], world["clock"]
+    controller.poll_once()
+    assert _fails_to_fetch(world, tmp_path, "builder-1").once() is not None
+    controller.poll_once()  # handed over: the fallback builds it at once
+    assert len(ports.builder.built) == 1
+    clock["now"] += 60
+
+    # A later build needs the same source: builder-1 never claims it (still
+    # quarantined), so nothing hands it over; the fallback does not wait.
+    _seen(world, "builder-1")  # it is live: the quarantine is what counts
+    world["shop"].commit({"web/index.html": "<h1>v2</h1>\n"})
+    requested = clock["now"]
+    status = controller.poll_once()
+    assert len(ports.builder.built) == 2, status["envs"]["main"]
+    assert clock["now"] - requested < 5
+
+
+def test_the_fallback_does_not_wait_for_a_host_that_is_not_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.infra.remote_builds import HANDOVER_SECONDS
+
+    world = _world(tmp_path, monkeypatch, hosts=("builder-1",), host_wait="30m")
+    controller, ports, clock = world["controller"], world["ports"], world["clock"]
+    requested = clock["now"]
+    status = controller.poll_once()
+    # builder-1 never reported: a serving host claims within its poll, so the
+    # fallback leaves it the short window, not host_wait.
+    assert "no live host may take it" in str(status["envs"]["main"])
+    due = controller.next_due()
+    assert due is not None and due <= requested + HANDOVER_SECONDS + 1
+    clock["now"] += HANDOVER_SECONDS + 1
+    controller.poll_once()
+    assert ports.builder.built == [["api", "catalog", "web"]]
+
+
+def test_a_live_host_still_holds_the_fallback_for_host_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.infra.remote_builds import HANDOVER_SECONDS
+
+    world = _world(tmp_path, monkeypatch, hosts=("builder-1",), host_wait="30m")
+    controller, ports, clock = world["controller"], world["ports"], world["clock"]
+    _seen(world, "builder-1")
+    status = controller.poll_once()
+    assert "no live host" not in str(status["envs"]["main"])
+    clock["now"] += HANDOVER_SECONDS + 1
+    controller.poll_once()
+    assert ports.builder.built == []  # it may still claim it
+    _seen(world, "builder-1")
+    clock["now"] += 25 * 60
+    controller.poll_once()
+    assert ports.builder.built == []
+    clock["now"] += 5 * 60
+    controller.poll_once()
+    assert ports.builder.built == [["api", "catalog", "web"]]
+
+
 # ------------------------------------------- 3. gitops build when deployed
 
 

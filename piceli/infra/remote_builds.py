@@ -40,6 +40,16 @@ next declared host, or to the in-cluster fallback at once when no other
 host may take it (within :data:`HANDOVER_SECONDS` when one may). With
 ``builds=("hosts",)`` and no host left, the step fails with the host's reason.
 
+0.71.0: the fallback no longer waits ``host_wait`` for hosts that cannot
+build. At once when no declared host may take the build, also without a
+hand-over in this build (a host quarantined for a source by an earlier
+build never claims it); within :data:`HANDOVER_SECONDS` when none that may
+is live (heard from within :data:`CLAIM_STALE_SECONDS`, or standing by): a
+serving host claims within its poll, an offline laptop is not waited for.
+The waiting step says why. A host whose mirror of a source is corrupt
+re-clones it once before it hands the build over
+(:func:`piceli.infra.builder_serve.export_source`).
+
 Standing by (0.29.0, ``piceli builder serve --once --take-next``): a host
 that waits to take the next build says so (``build-standby``); while it
 stands by, the in-cluster fallback waits for it at most
@@ -524,20 +534,55 @@ class HostBuilds:
             if host not in handed and not blocked_sources(self.state, host, entry)
         ]
 
+    def _live(self, host: str, now: float) -> bool:
+        """0.71.0: whether the controller heard from ``host`` (a claim, a
+        report, a standby) within :data:`CLAIM_STALE_SECONDS`, or it stands
+        by now."""
+        seen = (self.state.get(HOSTS_KEY) or {}).get(host) or {}
+        if now - float(seen.get("seen_epoch") or 0) < CLAIM_STALE_SECONDS:
+            return True
+        return host in live_standby(self.state, now)
+
+    def _soon(self, entry: Mapping[str, Any]) -> str | None:
+        """0.71.0: why the in-cluster fallback does not wait ``host_wait``
+        for ``entry``, or ``None``: no declared host may take it (handed
+        over, quarantined for one of its sources, also by an earlier
+        build), or none that may is live."""
+        eligible = self._eligible(entry)
+        if eligible == []:
+            return "no declared host may take it"
+        if eligible and not any(self._live(h, self.clock()) for h in eligible):
+            return (
+                f"no live host may take it (none reported in the last "
+                f"{int(CLAIM_STALE_SECONDS // 60)} min)"
+            )
+        return None
+
     def _fallback_time(self, entry: Mapping[str, Any]) -> float:
         """When the in-cluster fallback may take ``entry``: ``host_wait``
         after the request; after a hand-over (0.29.0) at once when no other
-        host may take it, else within :data:`HANDOVER_SECONDS`."""
-        at = float(entry.get("requested_epoch") or 0) + self.host_wait
+        host may take it, else within :data:`HANDOVER_SECONDS`.
+
+        0.71.0: at once also when no declared host may take it without a
+        hand-over in this build (a host quarantined for a source by an
+        earlier build never claims it), and within :data:`HANDOVER_SECONDS`
+        when none that may is live: a serving host claims within its poll,
+        an offline one is not waited for. The ``builds=("hosts",)`` failure
+        keeps waiting for an offline host (:meth:`_eligible`)."""
+        requested = float(entry.get("requested_epoch") or 0)
+        at = requested + self.host_wait
         if (entry.get("prefer") or {}).get("host") == "cluster":
             # 0.42.0: it replaces a build the cluster was running: it goes
             # back to the cluster at once (no host held it).
-            at = float(entry.get("requested_epoch") or 0)
+            at = requested
         handed = entry.get("handed_epoch")
+        since = requested if handed is None else float(handed)
+        if self._eligible(entry) == []:
+            return min(at, since)
+        if self._soon(entry) is not None:
+            return min(at, since + HANDOVER_SECONDS)
         if handed is None:
             return at
-        if self._eligible(entry) == []:
-            return min(at, float(handed))
         return min(at, float(handed) + HANDOVER_SECONDS)
 
     def _preferred_hold(self, entry: Mapping[str, Any]) -> tuple[str, float] | None:
@@ -638,8 +683,10 @@ class HostBuilds:
         at, now = self._fallback_time(entry), self.clock()
         # A hand-over (and, 0.42.0, a replacement of a cluster build) is due
         # at its time; host_wait once it has passed.
-        at_once = entry.get("handed_epoch") is not None or (
-            (entry.get("prefer") or {}).get("host") == "cluster"
+        at_once = (
+            entry.get("handed_epoch") is not None
+            or (entry.get("prefer") or {}).get("host") == "cluster"
+            or self._eligible(entry) == []  # 0.71.0
         )
         return now > at or (at_once and now >= at)
 
@@ -675,6 +722,9 @@ class HostBuilds:
         why = self._no_fallback(entry, method)
         if why is None:
             text += f"; in-cluster fallback at {_iso(self._fallback_time(entry))}"
+            soon = self._soon(entry)
+            if soon is not None:  # 0.71.0: why it does not wait host_wait
+                text += f" ({soon})"
         elif why.startswith("offered first"):
             text += f"; {why}"
         elif claimed is None or not why.startswith("claimed by"):
