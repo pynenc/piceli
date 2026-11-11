@@ -6038,6 +6038,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "dev",
     ),
     _E(
+        "dev-lineage-damaged",
+        "Run's cache lineage on a damaged disk",
+        '0.71.0: syncing the run\'s tree into its lineage failed with a filesystem error inside it (EUCLEAN "Structure needs cleaning", EIO, EBADMSG, EROFS, ENOTEMPTY). The first such lineage is set aside in `cache/quarantine/` and the run continues on a fresh one; this error means the fresh one failed too, or the damaged lineage could be neither moved nor marked.',
+        "Check the cache's disk (the kernel log, fsck). Remove the lineages listed under `cache/quarantine/` by hand once it is repaired, then run again.",
+        True,
+        "dev",
+    ),
+    _E(
         "dev-run-timed-out",
         "Run over its time",
         "The command ran longer than the profile's timeout and its process group was killed, or no lineage became free in that time.",
