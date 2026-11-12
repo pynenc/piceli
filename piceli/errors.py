@@ -6046,6 +6046,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "dev",
     ),
     _E(
+        "dev-tree-mismatch",
+        "Run's tree does not match the uploaded commit",
+        "0.72.0: after the sync of a delta upload (the commit plus the uncommitted diff), the run's lineage still lacked a file the commit tracks, also after re-reading the files that differed from the head. The command did not run on the wrong tree. `missing` lists a few of the paths.",
+        "Run again: the lineage's next sync is a full one. If it fails again, clear the lineage (`piceli dev cache clear`) and report the paths.",
+        True,
+        "dev",
+    ),
+    _E(
         "dev-run-timed-out",
         "Run over its time",
         "The command ran longer than the profile's timeout and its process group was killed, or no lineage became free in that time.",

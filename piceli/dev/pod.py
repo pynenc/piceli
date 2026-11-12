@@ -48,6 +48,7 @@ import queue
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tarfile
@@ -357,6 +358,10 @@ def _unquote(raw: bytes) -> str:
     return escaped.encode("latin-1").decode("utf-8", "surrogateescape")
 
 
+#: Git's file modes, as the kind of file a tree holds (0.72.0).
+_KINDS = {"100644": "file", "100755": "exec", "120000": "link"}
+
+
 class DeltaSource:
     """One source of a delta upload, its commit in the builder's mirror."""
 
@@ -365,6 +370,29 @@ class DeltaSource:
         self.mirror = mirror
         self.head = head
         self.incoming = incoming
+        self._tracked: list[tuple[str, int, str]] | None = None
+
+    def tracked(self) -> list[tuple[str, int, str]]:
+        """0.72.0: the head's tracked files as ``(kind, size, path)``, kind
+        ``file``, ``exec`` or ``link``; submodules are left out."""
+        if self._tracked is None:
+            listed = _git(
+                "--git-dir", str(self.mirror), "ls-tree", "-r", "-l", "-z", self.head
+            )  # fmt: skip
+            if listed.returncode != 0:
+                raise RunError(
+                    "dev-upload-failed", f"git ls-tree of {self.name} failed"
+                )
+            found = []
+            for record in listed.stdout.decode("utf-8", "surrogateescape").split("\0"):
+                meta, _, path = record.partition("\t")
+                fields = meta.split()
+                if len(fields) != 4 or fields[1] != "blob" or not path:
+                    continue  # a submodule (commit) or the trailing empty record
+                kind = _KINDS.get(fields[0], "file")
+                found.append((kind, int(fields[3]), path))
+            self._tracked = found
+        return self._tracked
 
     def overlay(self) -> list[str]:
         """The paths this run's uncommitted diff and untracked files touch."""
@@ -449,7 +477,8 @@ def _archive_into(source: DeltaSource, target: Path, paths: list[str] | None) ->
     if paths is not None and not paths:
         return
     archive = subprocess.Popen(
-        ["git", "--git-dir", str(source.mirror), "archive", "--format=tar",
+        ["git", "--literal-pathspecs", "--git-dir", str(source.mirror),
+         "archive", "--format=tar",
          source.head, *(["--", *paths] if paths else [])],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
     )  # fmt: skip
@@ -487,7 +516,8 @@ def _in_head(source: DeltaSource, paths: list[str]) -> list[str]:
     if not paths:
         return []
     listed = _git(
-        "--git-dir", str(source.mirror), "ls-tree", "-r", "-z", "--name-only",
+        "--literal-pathspecs", "--git-dir", str(source.mirror),
+        "ls-tree", "-r", "-z", "--name-only",
         source.head, "--", *paths,
     )  # fmt: skip
     text = (listed.stdout or b"").decode("utf-8", "surrogateescape")
@@ -525,13 +555,15 @@ def refresh_in_place(
     lineage_tree: Path,
     previous: dict[str, Any] | None,
     stage: Path,
-) -> dict[str, int] | None:
+) -> dict[str, Any] | None:
     """Bring the lineage's tree to this run's sources by touching only what
     can differ (0.20): the lineage holds the same heads as last time, so
     only the paths last run's overlay and this run's overlay touch are
     re-read from the head, overlaid again, and copied when their content
-    changed (unchanged files keep their mtime). ``None``: not possible (other
-    heads or sources, or due for a full sync)."""
+    changed (unchanged files keep their mtime). 0.72.0: then every other
+    tracked file is checked against the head (kind and size) and re-read
+    when the last run's command changed it (``restored``). ``None``: not
+    possible (other heads or sources, or due for a full sync)."""
     if not previous or int(previous.get("refreshed") or 0) >= FULL_SYNC_EVERY:
         return None
     heads = previous.get("sources") or {}
@@ -539,7 +571,10 @@ def refresh_in_place(
         return None
     if any((heads.get(s.name) or {}).get("head") != s.head for s in sources):
         return None
-    counts = {"written": 0, "removed": 0, "kept": 0, "removed_dirs": 0}
+    counts: dict[str, Any] = {
+        "written": 0, "removed": 0, "kept": 0, "removed_dirs": 0, "restored": 0
+    }  # fmt: skip
+    sample: list[str] = []
     for source in sources:
         paths = sorted(
             set((heads.get(source.name) or {}).get("overlay") or ())
@@ -555,18 +590,7 @@ def refresh_in_place(
                 if _same(item, dest):
                     counts["kept"] += 1
                     continue
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                if dest.is_dir() and not dest.is_symlink():
-                    shutil.rmtree(dest)
-                elif dest.exists() or dest.is_symlink():
-                    dest.unlink()
-                if item.is_symlink():
-                    os.symlink(os.readlink(item), dest)
-                else:
-                    partial = dest.parent / f".{dest.name}.piceli-sync"
-                    shutil.copyfile(item, partial)
-                    os.chmod(partial, item.stat().st_mode & 0o777)
-                    os.replace(partial, dest)
+                _place(item, dest, dest_root)
                 counts["written"] += 1
             elif dest.exists() or dest.is_symlink():
                 if dest.is_dir() and not dest.is_symlink():
@@ -574,8 +598,92 @@ def refresh_in_place(
                 else:
                     dest.unlink()
                 counts["removed"] += 1
+        # 0.72.0: what the last run's command did to tracked files (a test
+        # deleting or rewriting a fixture, a run killed while one was moved)
+        # is not in any overlay: every other tracked file is checked against
+        # the head (kind and size) and re-read when it differs.
+        wrong = differing(source, dest_root, set(paths))
+        if wrong:
+            restore(source, dest_root, wrong, stage / ".restore" / source.name)
+            counts["restored"] += len(wrong)
+            sample.extend(f"{source.name}/{path}" for path in wrong)
         counts["removed_dirs"] += prune_empty_dirs(dest_root)
+    if sample:
+        counts["restored_sample"] = sample[:10]
     return counts
+
+
+def _place(item: Path, dest: Path, root: Path) -> None:
+    """Copy ``item`` (a file or a symlink) to ``dest``, replacing whatever is
+    there; a file or symlink where one of its folders goes is removed first."""
+    here = root
+    for part in dest.relative_to(root).parts[:-1]:
+        here = here / part
+        if here.is_symlink() or (here.exists() and not here.is_dir()):
+            here.unlink()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_dir() and not dest.is_symlink():
+        shutil.rmtree(dest)
+    elif dest.exists() or dest.is_symlink():
+        dest.unlink()
+    if item.is_symlink():
+        os.symlink(os.readlink(item), dest)
+    else:
+        partial = dest.parent / f".{dest.name}.piceli-sync"
+        shutil.copyfile(item, partial)
+        os.chmod(partial, item.stat().st_mode & 0o777)
+        os.replace(partial, dest)
+
+
+def _differs(dest: Path, kind: str, size: int) -> bool:
+    try:
+        found = dest.lstat()
+    except OSError:
+        return True
+    if kind == "link":
+        return not stat.S_ISLNK(found.st_mode) or found.st_size != size
+    if not stat.S_ISREG(found.st_mode) or found.st_size != size:
+        return True
+    return bool(found.st_mode & 0o111) != (kind == "exec")
+
+
+def differing(source: DeltaSource, root: Path, skip: set[str]) -> list[str]:
+    """0.72.0: the head's tracked files (not in ``skip``) whose copy under
+    ``root`` is missing or has another kind (file, executable, symlink) or
+    size. One ``lstat`` per file; a same-size content change is not seen."""
+    return [
+        path
+        for kind, size, path in source.tracked()
+        if path not in skip and _differs(root / path, kind, size)
+    ]
+
+
+def restore(source: DeltaSource, root: Path, paths: list[str], stage: Path) -> None:
+    """0.72.0: re-read ``paths`` from the head and write them under ``root``."""
+    try:
+        for start in range(0, len(paths), 1000):  # keep each command line short
+            _archive_into(source, stage, paths[start : start + 1000])
+        for path in paths:
+            item = stage / path
+            if item.is_file() or item.is_symlink():
+                _place(item, root / path, root)
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+def tracked_missing(sources: list[DeltaSource], tree: Path) -> list[str]:
+    """0.72.0: the tracked files of each head (less its overlay: the run's
+    own diff may delete them) that ``tree`` lacks, as ``<source>/<path>``."""
+    gone: list[str] = []
+    for source in sources:
+        skip = set(source.overlay())
+        root = tree / source.name
+        gone.extend(
+            f"{source.name}/{path}"
+            for _, _, path in source.tracked()
+            if path not in skip and not os.path.lexists(root / path)
+        )
+    return gone
 
 
 #: Folders a sync never prunes inside: build output and git's own state.
@@ -2657,6 +2765,22 @@ def main(
                             full = True  # 0.71.0: a retry on a new lineage reuses it
                         result["sync"] = sync_tree(tree, lineage_tree)
                         refreshed = 0
+                    if result["sync"].get("restored"):
+                        emit(
+                            f"[piceli-dev] restored {result['sync']['restored']} "
+                            "tracked file(s) an earlier run's command changed: "
+                            + ", ".join(result["sync"]["restored_sample"][:3])
+                        )
+                    # 0.72.0: never run on a tree that lacks a tracked file.
+                    gone = tracked_missing(sources, lineage_tree)
+                    if gone:
+                        raise RunError(
+                            "dev-tree-mismatch",
+                            "the lineage's tree does not match the uploaded "
+                            f"commit: {len(gone)} tracked file(s) missing, "
+                            + ", ".join(gone[:5]),
+                            missing=gone[:20],
+                        )
                     _write_meta(
                         lineage.path,
                         {

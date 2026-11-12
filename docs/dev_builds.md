@@ -602,7 +602,20 @@ Piceli's own part of a warm run is 4-6 s: the upload is the delta (a few
 hundred bytes for a one-line change), the lineage's tree is refreshed in
 place (only the files the change touches; unchanged files keep their
 mtime), and `cargo fetch` is skipped while `Cargo.lock` does not change.
-The rest is the compiler. To make it faster:
+The rest is the compiler.
+
+A run's command can change the tree it runs in: a test that deletes,
+moves or rewrites a fixture. Since 0.72.0 each in-place refresh checks
+every other file the commit tracks (it exists, has the right kind: file,
+executable or symlink, and the right size) and re-reads from the commit
+those that differ; `sync.restored` counts them. That is one `stat` per
+file, about 90 ms for 10,000 files. A content change that keeps the size
+is not seen; the full sync every 50 runs still replaces it. When a file
+the commit tracks is still missing after the sync, the run fails with
+`dev-tree-mismatch` instead of running on the wrong tree, and the next
+run syncs in full.
+
+To make a warm run faster:
 
 - **Tests that only need to pass:** a `native` host first; Linux containers
   only for Linux artifacts.

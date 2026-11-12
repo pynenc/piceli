@@ -228,6 +228,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`dev-toolchain-checksum`](#error-dev-toolchain-checksum) | dev | yes |
 | [`dev-toolchain-failed`](#error-dev-toolchain-failed) | dev | no |
 | [`dev-toolchain-invalid`](#error-dev-toolchain-invalid) | dev | no |
+| [`dev-tree-mismatch`](#error-dev-tree-mismatch) | dev | yes |
 | [`dev-upload-failed`](#error-dev-upload-failed) | dev | yes |
 | [`digest-mismatch`](#error-digest-mismatch) | artifacts-delivery | no |
 | [`discovery-incomplete`](#error-discovery-incomplete) | release | yes |
@@ -5571,6 +5572,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Fix the file; `channel` is a version (1.97.0), `stable`, `beta` or `nightly-YYYY-MM-DD`.
 - **Retry-safe:** no
+
+(error-dev-tree-mismatch)=
+### `dev-tree-mismatch`
+
+**Run's tree does not match the uploaded commit.** 0.72.0: after the sync of a delta upload (the commit plus the uncommitted diff), the run's lineage still lacked a file the commit tracks, also after re-reading the files that differed from the head. The command did not run on the wrong tree. `missing` lists a few of the paths.
+
+- **Fix:** Run again: the lineage's next sync is a full one. If it fails again, clear the lineage (`piceli dev cache clear`) and report the paths.
+- **Retry-safe:** yes
 
 (error-dev-upload-failed)=
 ### `dev-upload-failed`
