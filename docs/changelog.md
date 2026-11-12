@@ -4,6 +4,29 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.72.0
+
+**Fixes**
+
+- **A tracked file a run's command changed is restored.** An in-place
+  refresh of a lineage's tree only re-read the paths of the uncommitted
+  changes, so a file a test or build script had deleted, truncated or
+  rewritten stayed that way for up to 49 runs, and a later run of the
+  same commit failed with a missing file. Each in-place refresh now checks
+  every tracked file of the commit (exists, file, executable or symlink,
+  size) and re-reads those that differ (`sync.restored`, with up to 10
+  paths in `sync.restored_sample`). About 90 ms for 10,000 files. A
+  same-size content change is not caught; the full sync every 50 runs
+  still covers it.
+- **A run never starts on a tree that lacks a tracked file.** After the
+  sync of a delta upload, a tree still missing a file the commit tracks
+  (less those the run's own diff deletes) fails the run with the new
+  error `dev-tree-mismatch`, listing a few paths; the next run syncs in
+  full.
+
+The fix runs in the client: `piceli dev run` sends its own copy of the
+run's code. Upgrade the client that starts the runs.
+
 ## Version 0.71.0
 
 **Fixes**
