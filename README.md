@@ -66,16 +66,12 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.71
+## What's new in 0.72
 
-- **Dev runs survive a damaged cache disk**: the damaged lineage is set
-  aside and the run continues on a fresh one.
-- **No empty folders left after a dev run's tree sync.**
-- **A build host re-clones a corrupt source mirror** instead of handing
-  the build over.
-- **No long wait for build hosts that cannot build**: the in-cluster
-  fallback starts at once when every host is quarantined for a source, and
-  after a minute when none is online.
+- **Dev runs repair their reused tree**: a tracked file an earlier run's
+  command deleted or changed is restored before the next run.
+- **No run on a wrong tree**: a tree still missing a tracked file fails
+  with `dev-tree-mismatch` instead of running.
 
 ## Web UI
 
