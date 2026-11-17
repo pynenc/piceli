@@ -302,8 +302,20 @@ def build(
             "composition that publishes this output adds its own",
         ),
     ] = None,
+    artifacts: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--artifact",
+            help="A file of the built output to copy back: a path or glob under "
+            "it (release.json, share/*.txt); repeat. The result lists each with "
+            "its sha256; one that matches nothing fails the build",
+        ),
+    ] = None,
     artifacts_dir: Annotated[
-        Path, typer.Option("--artifacts-dir", help="Where an image lands (RUN/)")
+        Path,
+        typer.Option(
+            "--artifacts-dir", help="Where an image or --artifact files land (RUN/)"
+        ),
     ] = Path("piceli-dev-artifacts"),
     queue_timeout: Annotated[
         int, typer.Option("--queue-timeout", help="Seconds to wait for a slot", min=1)
@@ -326,6 +338,8 @@ def build(
         image_of,
         image_patterns,
         installable,
+        output_patterns,
+        outputs_of,
         plan_digest,
         publish_plan,
         ref_name_ok,
@@ -358,6 +372,7 @@ def build(
         label = name or default_name(target, image)
         if label is not None:
             check_name(label)
+        wanted = output_patterns(artifacts or [])
     except DevError as error:
         reject(error.code, str(error))
     chosen_profile = _profile(dev, profile)
@@ -429,6 +444,8 @@ def build(
                 command += f" --branch {plan['branch']}"
             for item in inputs or ():
                 command += f" --input {item}"
+            for item in artifacts or ():
+                command += f" --artifact '{item}'"
             say(f"publish {target} at {rev[:12]} to {cache.store_url}")
             say(f"  signed by {cache.key_name}; manifest {plan['manifest']}")
             for key in plan["pointers"]:
@@ -487,7 +504,7 @@ def build(
         cwd=".",
         profile=chosen_profile.name,
         requester=requester_label(None),
-        artifacts=image_patterns() if image else [],
+        artifacts=(image_patterns() if image else []) + wanted,
         artifacts_dir=artifacts_dir,
         queue_timeout=float(queue_timeout),
         artifact_max_bytes=IMAGE_MAX_BYTES if image else None,
@@ -531,8 +548,23 @@ def build(
     found_image = image_of(result.get("artifacts") or ()) if image else None
     if image and found_image is None:
         fail("dev-nix-no-output", "the output holds no disk image file", **body)
-    body.update({"store_path": store_path, "image": found_image, "publish": None})
+    # 0.73.0: the --artifact files, each with its sha256.
+    copied, missing = outputs_of(
+        result.get("artifacts") or (), [p.partition("/")[2] for p in wanted]
+    )
+    if missing:
+        fail(
+            "dev-nix-no-output",
+            "the output holds no file matching --artifact " + ", ".join(missing),
+            store_path=store_path, **body,
+        )  # fmt: skip
+    body.update(
+        {"store_path": store_path, "image": found_image, "artifacts": copied,
+         "publish": None}
+    )  # fmt: skip
     say(f"built {store_path}")
+    for row in copied:
+        say(f"artifact {row['path']}: {row['file']} (sha256 {row['sha256']})")
     if found_image is not None:
         found_image["build"] = str(
             _image_sidecar(artifacts_dir, label or "image", found_image, store_path,

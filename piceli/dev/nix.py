@@ -474,6 +474,75 @@ def image_patterns() -> list[str]:
     ]
 
 
+def output_patterns(paths: Sequence[str]) -> list[str]:
+    """``--artifact`` globs of the files ``paths`` names in the output (0.73.0).
+
+    Each is a path or a glob relative to the built output (``release.json``,
+    ``share/*.txt``): no absolute path, no ``..``, no ``**``."""
+    patterns = []
+    for text in paths:
+        parts = Path(text).parts
+        if (
+            not text.strip()
+            or text.startswith("/")
+            or ".." in parts
+            or any("**" in part for part in parts)
+        ):
+            raise DevError(
+                "dev-nix-invalid",
+                f"--artifact {text!r} is a path or glob under the output "
+                "(release.json, share/*.txt): no /, .. or **",
+            )
+        patterns.append(f"{OUT_LINK}/{Path(*parts)}")
+    return patterns
+
+
+def outputs_of(
+    paths: Sequence[str], wanted: Sequence[str]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """The run's copied files that ``wanted`` (``--artifact``) names, and the
+    names nothing matched. Each file: its ``path`` in the output, the local
+    ``file``, ``bytes`` and ``sha256``."""
+    import fnmatch
+
+    rows: dict[str, dict[str, Any]] = {}
+    unmatched = []
+    for pattern in wanted:
+        want = Path(pattern).parts
+        hit = False
+        for text in paths:
+            local = Path(text)
+            parts = local.parts
+            if OUT_LINK not in parts:
+                continue
+            link = max(i for i, part in enumerate(parts) if part == OUT_LINK)
+            inner = parts[link + 1 :]
+            if len(inner) != len(want) or not all(
+                fnmatch.fnmatchcase(part, glob)
+                for part, glob in zip(inner, want, strict=True)
+            ):
+                continue
+            hit = True
+            if text not in rows and local.is_file():
+                rows[text] = {
+                    "path": "/".join(inner),
+                    "file": text,
+                    "bytes": local.stat().st_size,
+                    "sha256": _sha256_of(local),
+                }
+        if not hit:
+            unmatched.append(pattern)
+    return sorted(rows.values(), key=lambda row: row["path"]), unmatched
+
+
+def _sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def store_path_of(lines: Sequence[str]) -> str | None:
     """The last store path ``--print-out-paths`` printed."""
     for line in reversed(list(lines)):
@@ -488,15 +557,11 @@ def image_of(paths: Sequence[str]) -> dict[str, Any] | None:
         path = Path(text)
         ext = path.suffix.lstrip(".")
         if ext in IMAGE_FORMATS and path.is_file():
-            digest = hashlib.sha256()
-            with path.open("rb") as handle:
-                for chunk in iter(lambda: handle.read(1 << 20), b""):
-                    digest.update(chunk)
             return {
                 "file": str(path),
                 "format": "raw" if ext == "img" else ext,
                 "bytes": path.stat().st_size,
-                "sha256": digest.hexdigest(),
+                "sha256": _sha256_of(path),
             }
     return None
 

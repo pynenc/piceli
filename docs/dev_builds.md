@@ -870,6 +870,21 @@ piceli dev nix build nixosConfigurations.web-1.config.system.build.toplevel \
   --ref v1.4.0 --publish infra.py:cache --input app=git
 ```
 
+**Files of the output** (0.73.0). `--artifact PATH` (repeat) copies a file
+of the built output back: a path or glob relative to the output
+(`release.json`, `share/*.txt`; no absolute path, `..` or `**`). The files
+land under `--artifacts-dir` and the result's `artifacts` lists each:
+`path` in the output, local `file`, `bytes` and `sha256`. A path that
+matches no file fails the build (`dev-nix-no-output`, exit 1, naming it).
+With `--composition`, the private inputs are fetched as for any build, so
+an output that needs them is built and read on the build host, never on a
+machine that has no access to those inputs.
+
+```sh
+piceli dev nix build .#site --ref main --dev infra.py:dev \
+  --composition infra.py --artifact release.json --json
+```
+
 The approved command builds the commit as any run: isolated, with no key
 and no cloud credential. Then, **on the same host**, a separate short step
 that runs no project code receives the secret key and the S3 keys on its

@@ -66,12 +66,12 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.72
+## What's new in 0.73
 
-- **Dev runs repair their reused tree**: a tracked file an earlier run's
-  command deleted or changed is restored before the next run.
-- **No run on a wrong tree**: a tree still missing a tracked file fails
-  with `dev-tree-mismatch` instead of running.
+- **Files of a Nix build come back**: `piceli dev nix build --artifact
+  release.json` copies named files of the built output to this machine,
+  each listed with its sha256; the build's private inputs are fetched as
+  for any build.
 
 ## Web UI
 

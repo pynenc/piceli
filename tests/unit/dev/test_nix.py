@@ -626,12 +626,20 @@ def cli_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     image_file = tmp_path / "out" / "piceli-nix-out" / "nixos.qcow2"
     image_file.parent.mkdir(parents=True)
     image_file.write_bytes(b"qcow2 bytes")
+    (image_file.parent / "release.json").write_text('{"files": 1}')
+    (image_file.parent / "share").mkdir()
+    (image_file.parent / "share" / "a.txt").write_text("a")
+    (image_file.parent / "share" / "b.txt").write_text("b")
     runs: list[Any] = []
 
     def fake_run(port: Any, dev: Any, request: Any, **kwargs: Any) -> dict[str, Any]:
         runs.append(request)
         kwargs["log"](STORE)
-        artifacts = [str(image_file)] if request.artifacts else []
+        # As the wrapper's collect: each pattern globbed under the run's cwd.
+        base = image_file.parent.parent
+        artifacts = sorted(
+            {str(p) for pattern in request.artifacts for p in base.glob(pattern)}
+        )
         return {"run": "r-1", "state": "passed", "exit_code": 0, "durations": {},
                 "artifacts": artifacts, "log_tail": [STORE]}  # fmt: skip
 
@@ -669,7 +677,40 @@ def test_a_build_without_publish_is_a_plain_run(cli_env: dict[str, Any]) -> None
     request = cli_env["runs"][0]
     assert request.command == nix.build_argv(f".#{ATTR}")
     assert request.profile == "nix" and request.artifacts == []
+    assert body["artifacts"] == []
     assert cli_env["published"] == []
+
+
+def test_artifact_copies_named_files_of_the_output_back(
+    cli_env: dict[str, Any],
+) -> None:
+    import hashlib
+
+    base = ("dev", "nix", "build", ATTR, "--cluster", "infra.py:c", "--json")
+    result = _invoke(*base, "--artifact", "release.json", "--artifact", "share/*.txt")
+    assert result.exit_code == 0, result.stdout + result.stderr
+    body = json.loads(result.stdout)
+    assert cli_env["runs"][0].artifacts == [
+        "piceli-nix-out/release.json", "piceli-nix-out/share/*.txt",
+    ]  # fmt: skip
+    assert [row["path"] for row in body["artifacts"]] == [
+        "release.json", "share/a.txt", "share/b.txt",
+    ]  # fmt: skip
+    release = body["artifacts"][0]
+    assert Path(release["file"]).read_text() == '{"files": 1}'
+    assert release["bytes"] == len('{"files": 1}')
+    assert release["sha256"] == hashlib.sha256(b'{"files": 1}').hexdigest()
+    assert body["image"] is None and body["state"] == "built"
+    missing = _invoke(*base, "--artifact", "release.json", "--artifact", "nope.*")
+    assert missing.exit_code == 1, missing.stdout + missing.stderr
+    failed = json.loads(missing.stdout)
+    assert failed["reason"] == "dev-nix-no-output" and "nope.*" in failed["message"]
+    assert failed["store_path"] == STORE
+    for bad in ("/etc/passwd", "../x", "a/**/b", " "):
+        refused = _invoke(*base, "--artifact", bad)
+        assert refused.exit_code == 2, bad
+        assert json.loads(refused.stdout)["reason"] == "dev-nix-invalid", bad
+    assert len(cli_env["runs"]) == 2  # a refused path builds nothing
 
 
 def test_publish_plans_first_then_runs_only_the_approved_digest(

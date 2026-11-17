@@ -1326,7 +1326,8 @@ Build a flake output on a Nix build host; with --publish, sign and push it.
 | `--state-dir` | path |  | With --release: a local controller's state directory |
 | `--namespace` | text | `piceli-system` | With --release: the controller's namespace |
 | `--input` | text (repeatable) |  | A private flake input to fetch on the build host before the build, NAME or NAME=CREDENTIAL (a git-token in this machine's piceli secrets; default: git); repeat. The NixRelease of the composition that publishes this output adds its own |
-| `--artifacts-dir` | path | `piceli-dev-artifacts` | Where an image lands (RUN/) |
+| `--artifact` | text (repeatable) |  | A file of the built output to copy back: a path or glob under it (release.json, share/*.txt); repeat. The result lists each with its sha256; one that matches nothing fails the build |
+| `--artifacts-dir` | path | `piceli-dev-artifacts` | Where an image or --artifact files land (RUN/) |
 | `--queue-timeout` | integer | `3600` | Seconds to wait for a slot |
 | `--quiet` | boolean | `False` | Do not stream the build's log |
 | `--json` | boolean | `False` | Print one JSON object on stdout |
