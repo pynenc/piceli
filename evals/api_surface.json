@@ -12946,6 +12946,7 @@
     ],
     "flags": [
      "--approve",
+     "--artifact",
      "--artifacts-dir",
      "--branch",
      "--cluster",
@@ -18141,5 +18142,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.72.0"
+ "version": "0.73.0"
 }

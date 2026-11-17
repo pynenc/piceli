@@ -4,6 +4,22 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.73.0
+
+**Features**
+
+- **`piceli dev nix build --artifact PATH` copies files of the built
+  output back.** Before, a build copied back only a disk image
+  (`--image`), so reading one small file of an output (a manifest, a
+  list) meant building it again outside Piceli, where the build's private
+  inputs are not reachable. `--artifact` (repeat) takes a path or glob
+  relative to the output; the files land under `--artifacts-dir` and the
+  result's new `artifacts` field lists each with its `path`, local
+  `file`, `bytes` and `sha256` (an empty list without `--artifact`). A
+  path that matches nothing fails the build with `dev-nix-no-output`; an
+  absolute path, `..` or `**` is refused before the build
+  (`dev-nix-invalid`).
+
 ## Version 0.72.0
 
 **Fixes**
