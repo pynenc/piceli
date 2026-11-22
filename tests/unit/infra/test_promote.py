@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -119,7 +120,9 @@ def test_a_pinned_commit_without_a_tag_is_offered_a_tag(found: dict[str, Any]) -
     assert _remote(found)["refs/tags/web-v1.0.1^{}"] == head
 
 
-@pytest.mark.parametrize("case", ["dirty", "behind", "ahead", "diverged", "detached"])
+@pytest.mark.parametrize(
+    "case", ["dirty", "behind", "ahead", "lock-ahead", "diverged", "detached"]
+)
 def test_a_working_copy_out_of_sync_is_refused(
     found: dict[str, Any], case: str
 ) -> None:
@@ -132,6 +135,10 @@ def test_a_working_copy_out_of_sync_is_refused(
         (work / "notes.txt").write_text("local\n")
         git(work, "add", "notes.txt")
         git(work, "commit", "-q", "-m", "local")
+    if case == "lock-ahead":  # a lock commit that is not the planned change
+        lock = (work / "flake.lock").read_text()
+        (work / "flake.lock").write_text(lock.replace('"version": 7', '"version":7'))
+        git(work, "commit", "-q", "-am", "edit the lock")
     if case == "detached":
         git(work, "checkout", "-q", "--detach")
     code, body, _ = _promote(found)
@@ -140,6 +147,7 @@ def test_a_working_copy_out_of_sync_is_refused(
         "promote-dirty" if case == "dirty" else "promote-not-in-sync"
     )
     words = {"behind": "is behind", "ahead": "is ahead of", "diverged": "diverged from",
+             "lock-ahead": "is ahead of",
              "detached": "detached HEAD", "dirty": "uncommitted"}[case]  # fmt: skip
     assert words in body["message"]
 
@@ -166,7 +174,9 @@ def test_other_refusals(found: dict[str, Any]) -> None:
     assert (code, body["reason"]) == (2, "promotion-history-unreachable")
 
 
-def test_a_refused_push_leaves_the_remote_unchanged(found: dict[str, Any]) -> None:
+def test_a_refused_push_leaves_the_remote_unchanged_and_the_same_approve_resumes(
+    found: dict[str, Any],
+) -> None:
     hook = Path(found["hosts"].url) / "hooks" / "pre-receive"
     hook.write_text("#!/bin/sh\nexit 1\n")
     hook.chmod(0o755)
@@ -174,8 +184,150 @@ def test_a_refused_push_leaves_the_remote_unchanged(found: dict[str, Any]) -> No
     code, body, _ = _promote(found)
     code, done, _ = _promote(found, "--approve", body["digest"])
     assert (code, done["reason"]) == (1, "promote-push-failed")
-    assert done["tag"] == "web-v1.0.1" and "git push --atomic origin" in done["message"]
+    assert done["tag"] == "web-v1.0.1" and "same --approve command" in done["message"]
+    assert done["approve_command"] == body["approve_command"]
+    assert done["git_retries"] == []  # a refusal is no transport error
     assert _remote(found) == before
+    local = git(found["work"], "rev-parse", "HEAD")
+    assert done["commit"] == local
+
+    # 0.74.0: the plan of the state the failed push left is the same plan
+    code, again, said = _promote(found)
+    assert code == 3 and again["digest"] == body["digest"], again
+    assert again["resume"] == {"commit": local, "tag": "web-v1.0.1"}
+    assert "resumes a push that failed" in said
+    hook.unlink()
+    code, done, _ = _promote(found, "--approve", body["digest"])
+    assert code == 0, done
+    assert done["state"] == "promoted" and done["resumed"] is True
+    assert done["commit"] == local == git(found["work"], "rev-parse", "HEAD")
+    remote = _remote(found)
+    assert remote["refs/heads/main"] == local
+    assert remote["refs/tags/web-v1.0.1^{}"] == local
+    code, current, _ = _promote(found)
+    assert code == 0 and current["state"] == "current" and current["plan"] is None
+
+
+def test_a_refused_tag_push_is_resumed(found: dict[str, Any]) -> None:
+    support.publish_history(
+        found["state"], history(run(found["a"], "r1", "2026-10-20T10:00:00Z"))
+    )
+    found["hosts"].commit({"README.md": "hosts\n"})
+    git(found["work"], "pull", "-q")
+    hook = Path(found["hosts"].url) / "hooks" / "pre-receive"
+    hook.write_text("#!/bin/sh\nexit 1\n")
+    hook.chmod(0o755)
+    code, body, _ = _promote(found)
+    assert body["plan"]["tag"] == "web-v1.0.1"
+    code, done, _ = _promote(found, "--approve", body["digest"])
+    assert (code, done["reason"]) == (1, "promote-push-failed")
+    code, again, _ = _promote(found)  # the local tag is not taken as released
+    assert again["digest"] == body["digest"] and again["resume"]["tag"] == "web-v1.0.1"
+    hook.unlink()
+    code, done, _ = _promote(found, "--approve", body["digest"])
+    assert code == 0 and done["resumed"] is True, done
+    head = git(found["work"], "rev-parse", "HEAD")
+    assert _remote(found)["refs/tags/web-v1.0.1^{}"] == head
+
+
+def test_a_second_verified_run_of_the_same_commit_keeps_the_approval(
+    found: dict[str, Any],
+) -> None:
+    c = found["c"]
+    code, body, _ = _promote(found)
+    assert code == 3 and body["plan"]["pinned"]["verified_run"] == "r3"
+    # another source of the environment moved: a new run verified c again
+    support.publish_history(
+        found["state"],
+        history(
+            run(c, "r4", "2026-10-22T11:00:00Z"),
+            run(c, "r3", "2026-10-22T10:00:00Z"),
+            run(found["a"], "r1", "2026-10-20T10:00:00Z"),
+        ),
+    )
+    code, again, _ = _promote(found)
+    assert again["plan"]["pinned"]["verified_run"] == "r4"
+    assert again["digest"] == body["digest"]
+    code, done, _ = _promote(found, "--approve", body["digest"])
+    assert code == 0, done
+    assert done["state"] == "promoted" and done["verified_run"] == "r4"
+    message = git(found["work"], "log", "-1", "--format=%B")
+    assert "(run r4, 2026-10-22T11:00:00Z)" in message
+    assert _remote(found)["refs/tags/web-v1.0.1^{}"] == done["commit"]
+
+
+def test_a_newer_verified_commit_still_changes_the_plan(found: dict[str, Any]) -> None:
+    code, body, _ = _promote(found)
+    support.publish_history(
+        found["state"],
+        history(
+            run(found["b"], "r4", "2026-10-23T10:00:00Z"),
+            run(found["c"], "r3", "2026-10-22T10:00:00Z"),
+        ),
+    )
+    code, done, _ = _promote(found, "--approve", body["digest"])
+    assert (code, done["reason"]) == (2, "promote-plan-changed")
+
+
+def test_the_digest_leaves_out_the_verifying_run() -> None:
+    body = {"host": "web-1", "tag": "web-v1.0.1", "commit_message": "run r1",
+            "pinned": {"input": "app", "commit": "c" * 40, "environment": "main",
+                       "verified_run": "r1", "verified_at": "t1"},
+            "change": {"to": "c" * 40}}  # fmt: skip
+    other = {**body, "commit_message": "run r2",
+             "pinned": {**body["pinned"], "verified_run": "r2", "verified_at": "t2"}}  # fmt: skip
+    assert promote.digest(body) == promote.digest(other)
+    for key, value in (("tag", "web-v1.0.2"), ("change", {"to": "d" * 40}),
+                       ("pinned", {**body["pinned"], "commit": "d" * 40})):  # fmt: skip
+        assert promote.digest({**body, key: value}) != promote.digest(body)
+
+
+def _flaky_git(
+    monkeypatch: pytest.MonkeyPatch, command: str, stderr: bytes, times: int = 1
+) -> list[list[str]]:
+    """Make the first ``times`` runs of ``git COMMAND`` fail with ``stderr``."""
+    real = subprocess.run
+    calls: list[list[str]] = []
+
+    def fake(args: Any, *rest: Any, **kwargs: Any) -> Any:
+        if list(args[:2]) == ["git", command]:
+            calls.append(list(args))
+            if len(calls) <= times:
+                return subprocess.CompletedProcess(args, 128, b"", stderr)
+        return real(args, *rest, **kwargs)
+
+    monkeypatch.setattr(promote, "RETRY_PAUSE", 0.0)
+    monkeypatch.setattr(promote.subprocess, "run", fake)
+    return calls
+
+
+def test_a_fetch_that_times_out_once_is_retried(
+    found: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _flaky_git(
+        monkeypatch, "fetch",
+        b"fatal: unable to access 'https://example.org/hosts.git/': "
+        b"Failed to connect to example.org port 443: Connection timed out\n",
+    )  # fmt: skip
+    code, body, said = _promote(found)
+    assert code == 3, body
+    assert len(calls) == 2
+    assert body["git_retries"] == [{"command": "git fetch", "pause_seconds": 0.0}]
+    assert "git fetch failed in transport; retried once" in said
+
+
+def test_a_fetch_that_fails_otherwise_is_not_retried(
+    found: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _flaky_git(monkeypatch, "fetch", b"fatal: couldn't find remote ref main\n")
+    code, body, _ = _promote(found)
+    assert (code, body["reason"]) == (2, "promote-git-failed")
+    assert len(calls) == 1
+    calls = _flaky_git(
+        monkeypatch, "fetch", b"ssh: connect to host: Connection refused\n", times=2
+    )
+    code, body, _ = _promote(found)  # one retry only
+    assert (code, body["reason"], len(calls)) == (2, "promote-git-failed", 2)
 
 
 def test_next_tag_bumps_the_highest_release_of_the_pattern() -> None:

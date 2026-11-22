@@ -411,6 +411,24 @@ class ReleaseTarget:
                 "prereleases": self.prereleases}  # fmt: skip
 
 
+_LIVE = ("pending", "approval-required", "waiting-build", "publishing")
+
+
+def _kept_pin(record: Mapping[str, Any], pinned: dict[str, Any]) -> dict[str, Any]:
+    """0.74.0: the ``pinned`` of a re-plan. When the live plan (pending,
+    awaiting or holding an approval) pins the same input, commit and
+    environment, its ``pinned`` stays: a new run of that commit (another
+    ``verified_run``, ``verified_at``) leaves the plan and its approved
+    digest as they were. The gate has just checked the commit again."""
+    before = record.get("pinned")
+    if not isinstance(before, Mapping) or record.get("state") not in _LIVE:
+        return pinned
+    same = all(
+        before.get(key) == pinned.get(key) for key in ("input", "commit", "environment")
+    )
+    return dict(before) if same else pinned
+
+
 def _position(target: ReleaseTarget, latest: tuple[str | None, str]) -> str:
     """What the release last followed: the tag, or (a branch) the head."""
     return str(latest[1] if target.branch is not None else latest[0])
@@ -835,7 +853,7 @@ class Releases:
                     raise PromotionError(
                         "promotion-history-unreachable", "no history to check"
                     )
-                pinned = self._gate(target, commit)
+                pinned = _kept_pin(record, self._gate(target, commit))
             except PromotionError as error:
                 self._refuse(target, record, latest, trigger, error)
                 return
