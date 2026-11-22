@@ -233,6 +233,48 @@ def test_the_controller_publishes_only_a_verified_pin(
     assert f"pinned app {b[:12]} verified on main (run r3)" in shown.stderr
 
 
+def test_a_new_run_of_the_pinned_commit_keeps_the_plan_awaiting_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.gitops.state import approve_request, sync_request
+
+    found = support.world(tmp_path, monkeypatch)
+    infra = found["infra"]
+    infra.write_text(
+        infra.read_text().replace("auto_approve=True", "auto_approve=False")
+    )
+    controller = _controller(found, monkeypatch)
+    hosts, b, c, channel = found["hosts"], found["b"], found["c"], found["channel"]
+    controller.poll_once()
+    found["history"]["value"] = history(run(b, "r3", "2026-10-21T12:00:00Z"))
+    hosts.commit({"flake.lock": support.lock(found["app"].url, b)})
+    hosts.tag("web-v1.1.0")
+    first = controller.poll_once()["nix_releases"]["web-1"]
+    assert first["state"] == "approval-required"
+    digest = first["plan_digest"]
+
+    # the environment verifies b again (another source moved): a new run
+    found["history"]["value"] = history(
+        run(b, "r4", "2026-10-21T13:00:00Z"), run(b, "r3", "2026-10-21T12:00:00Z")
+    )
+    channel.add_request(*sync_request("web-1"))
+    again = controller.poll_once()["nix_releases"]["web-1"]
+    assert again["state"] == "approval-required"
+    assert again["plan_digest"] == digest and again["pinned"]["verified_run"] == "r3"
+    channel.add_request(*approve_request("web-1", digest, via="cli"))
+    status = controller.poll_once()
+    assert status["nix_releases"]["web-1"]["state"] == "waiting-build"
+    assert not status.get("rejected_requests")
+
+    # a newer verified commit is another plan, with its own run
+    found["history"]["value"] = history(run(c, "r5", "2026-10-22T10:00:00Z"))
+    hosts.commit({"flake.lock": support.lock(found["app"].url, c)})
+    hosts.tag("web-v1.2.0")
+    newer = controller.poll_once()["nix_releases"]["web-1"]
+    assert newer["state"] == "approval-required" and newer["plan_digest"] != digest
+    assert (newer["pinned"]["commit"], newer["pinned"]["verified_run"]) == (c, "r5")
+
+
 def test_an_unreadable_history_refuses_the_release(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

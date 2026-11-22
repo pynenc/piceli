@@ -93,9 +93,13 @@ and its OTLP gRPC and HTTP exporters). Installing Piceli yourself:
 **One trace per pipeline run**: one environment's deploy of one revision,
 from the step that starts it to its result. A run that waits for an
 approval stays open: the approval wait is a span of it, and the deploy after
-the approval continues the same trace. A retry after a failure is a run of
-its own (`piceli.run.attempt`). A newer revision arriving while a run waits
-for its approval closes it as `superseded`.
+the approval continues the same trace. A run whose build a build host
+still builds stays open the same way (0.74.0): the steps that find the
+build in progress end no run, and the step after the delivery continues
+the same trace. A retry after a failure is a run of its own
+(`piceli.run.attempt`). A newer revision arriving while a run waits for its
+approval or its build closes it as `superseded` (`cancellation`, status
+unset, its unfinished builds `cancellation`).
 
 | Span | Kind | Parent | When |
 | --- | --- | --- | --- |
@@ -115,7 +119,9 @@ for its approval closes it as `superseded`.
 | `TEARDOWN <composition>/<env>` | SERVER | — | A branch environment removed (or a placement leaving a cluster). |
 
 A span's status is `OK` when its task succeeded, `ERROR` (with the error
-code as message) when it failed, and unset for a skipped stage.
+code as message) when it failed, and unset for a skipped stage or a
+cancelled run or build. Only a build that failed carries
+`error.type = component-build-failed`.
 
 ### Times
 
@@ -126,7 +132,9 @@ Every start and end is a recorded time, never an estimate:
 - `build <image>`: the controller's clock when it started the build Job and
   when the image came back (one Job builds several images, so they share
   its start); a build entry's own `started_at` / `finished_at` win when the
-  record has them;
+  record has them. A build that waited for a build host is one span from
+  the first step that asked for it to its end (the start of the step that
+  found it delivered);
 - `approval wait`: when the plan asked and when the approval arrived;
 - `check <name>`: laid out from the `checks` stage's start in the order the
   checks ran, each as long as its recorded duration;
@@ -194,6 +202,7 @@ belong to. Severity is `INFO`, or `ERROR` for failures.
 | `piceli.deploy.pruned` | `prune` | `piceli.pruned` |
 | `piceli.deploy.checks.failed` | `checks` | `piceli.checks.failed` (names), `piceli.checks.detail` (`name: detail`), `error.type` |
 | `piceli.deploy.rollback` | `rollback` | `piceli.rollback.from`, `piceli.rollback.to` (releases), `piceli.rollback.state` |
+| `piceli.build.waiting` (0.74.0) | root | Once per run, when its build waits for a build host: `piceli.build.images`, `piceli.build.waiting_for` |
 | `piceli.build.failed` | `build <image>` | `piceli.build.images`, `piceli.build.log_tail` (the last 80 lines, 20 before 0.17.0, redacted as the build log is), `piceli.build.kept_job`, `error.type` |
 | `piceli.environment.stopped` | `STOP …` | `piceli.stop.reason` (`declared`, `requested`, `idle-stop`), `piceli.stop.via` |
 | `piceli.environment.started` | `START …` | — |

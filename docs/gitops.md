@@ -1166,7 +1166,7 @@ prints `piceli.builds.v1`, the document the UI's Builds page shows:
              {"stage": "building", "…": "…"}, {"stage": "uploading", "…": "…"}],
   "log_tail": null, "requested_at": "…", "started_at": "…", "finished_at": "…",
   "seconds": 312.4, "plan_digest": "sha256:…", "reason": null, "images": [],
-  "running_on": ["web-1"], "host_switch": "switched",
+  "digests": {}, "running_on": ["web-1"], "host_switch": "switched",
   "actions": {"approve": false, "retry": true, "cancel": false}}]}
 ```
 
@@ -1181,7 +1181,10 @@ when its own agent reports the revision as its current system with its
 checks passed (0.37.0); the controller alone knows only what it published.
 A published NixRelease's `host_switch` says `switched` then, and
 `not-switched-yet` before (the CLI prints "published, host not switched
-yet"); it is `null` for other builds.
+yet"); it is `null` for other builds. `digests` (0.74.0) gives each image
+an environment build made: its `digest` and, for an image built for
+several platforms, the OCI index's `media_type` and `platforms` (each
+platform's manifest digest; see {ref}`pipeline-declared-platforms`).
 
 While a build host builds, it reports its stage and the last 4000
 characters of its log (`build-progress`, at each stage and at most every
@@ -1533,7 +1536,27 @@ and prints the plan with its digest (`piceli.promote.v1`):
 `--approve` recomputes the plan (`promote-plan-changed` when anything
 moved), commits `flake.lock` alone, creates an annotated tag and pushes the
 branch and the tag with `git push --atomic` (`promote-push-failed`, exit
-1, leaves both local). With `nix` on the `PATH` the lock comes from `nix
+1, leaves both local).
+
+What the digest covers (0.74.0): what the promotion changes (the host, the
+input, its old and new commit, the lock's hash, the tag, the base, the
+remote and branch), not which run verified the commit. That the
+environment verified the pinned commit is checked when you plan and again
+when you approve; a newer run that verifies the same commit (another
+source of the environment moved) keeps your approval valid. The run that
+`--approve` finds is named in the commit message, the tag and the
+result's `verified_run`. A newer verified commit still changes the plan.
+
+A push that failed is resumed by the same `--approve` command (0.74.0):
+it finds the local commit and tag, checks that the commit is exactly the
+planned `flake.lock` change, and pushes them (`resume` in the plan,
+`resumed: true` in the result; the output's `approve_command` is the
+command to run again). A `git fetch`, `push`, `ls-remote` or `clone` that
+fails in transport (a timeout, a refused or reset connection, a name not
+resolved) is retried once after 2 seconds; the result lists each retry in
+`git_retries`.
+
+With `nix` on the `PATH` the lock comes from `nix
 flake lock --override-input` in a temporary worktree; without it the input's
 node is edited (`rev`, `lastModified`, `revCount`, and the `narHash`
 computed from a temporary bare clone of the input; a `git`, `github` or

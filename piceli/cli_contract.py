@@ -891,6 +891,27 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "and contacts nothing. Pushes are content-addressed; a version tag "
             "that names another image is refused unless --move-tag.",
         ),
+        "artifacts copy": _C(
+            "Copy an image by digest (index, every platform, SBOM, provenance, signatures) to another registry.",
+            contract="conforms",
+            reads=(
+                "source OCI registry (manifests, blobs, referrers)",
+                "credentials files or Docker configs",
+            ),
+            writes=(
+                "target OCI registry (blobs, manifests, index, referrers, tag)",
+                "--out receipt",
+            ),
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            exit_codes=(0, 1, 2, 3),
+            notes="0.74.0. Without --approve it prints the plan and its digest "
+            "(exit 3) and contacts nothing. Every digest is preserved: the index, "
+            "each platform manifest and each referrer (the referrers API, else the "
+            "sha256-<digest> fallback tag). The tag moves last; one that names "
+            "another digest is refused unless --move-tag. Never prints a credential.",
+        ),
         "artifacts publish-files": _C(
             "Publish local files as one OCI artifact (each file one layer, by its sha256).",
             contract="conforms",
@@ -2976,7 +2997,12 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "tags and pushes the tag. --approve recomputes the plan "
             "(promote-plan-changed when it differs), commits flake.lock alone, "
             "tags and pushes with git push --atomic (promote-push-failed exits "
-            "1; the commit and tag stay local). Refuses a dirty working copy "
+            "1; the commit and tag stay local). 0.74.0: the digest covers what "
+            "the promotion changes, not the run that verified the commit (a "
+            "re-verification keeps the approval); after a failed push the same "
+            "--approve command pushes the local commit and tag (resume, "
+            "resumed); a fetch, push, ls-remote or clone that fails in "
+            "transport is retried once (git_retries). Refuses a dirty working copy "
             "(promote-dirty), one behind, ahead of or diverged from its upstream "
             "(promote-not-in-sync), an environment without a passed run "
             "(promotion-not-verified) and an unreadable history "

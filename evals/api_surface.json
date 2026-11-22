@@ -12261,6 +12261,7 @@
     "subcommands": [
      "build",
      "build-spec",
+     "copy",
      "deliver",
      "execute-command",
      "fetch-file",
@@ -12319,6 +12320,25 @@
      "--platform",
      "--progress",
      "--spec"
+    ],
+    "subcommands": []
+   },
+   "artifacts copy": {
+    "arguments": [],
+    "flags": [
+     "--approve",
+     "--ca-file",
+     "--credentials",
+     "--docker-config",
+     "--from",
+     "--from-ca-file",
+     "--from-credentials",
+     "--from-docker-config",
+     "--move-tag",
+     "--no-referrers",
+     "--out",
+     "--timeout",
+     "--to"
     ],
     "subcommands": []
    },
@@ -15171,6 +15191,11 @@
    "context-empty",
    "context-missing",
    "context-symlink",
+   "copy-failed",
+   "copy-invalid",
+   "copy-not-approved",
+   "copy-tag-exists",
+   "copy-verification-failed",
    "cosign-tool-required",
    "crd-invalid",
    "crd-not-found",
@@ -17723,6 +17748,7 @@
   "piceli.artifacts.host_build",
   "piceli.artifacts.host_execution",
   "piceli.artifacts.host_toolchains",
+  "piceli.artifacts.image_copy",
   "piceli.artifacts.image_manifest",
   "piceli.artifacts.local_import",
   "piceli.artifacts.mirror",
@@ -18142,5 +18168,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.73.0"
+ "version": "0.74.0"
 }

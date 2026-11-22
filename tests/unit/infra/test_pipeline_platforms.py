@@ -184,3 +184,25 @@ def test_the_cluster_fallback_builds_the_requests_platforms() -> None:
     ]["command"]
     assert command.count("--platform") == 1
     assert command[command.index("--platform") + 1] == "linux/arm64"
+
+
+# ------------------------------------------------- declared platforms (0.74.0)
+
+
+def test_a_specs_declared_platforms_are_all_built_with_a_registry() -> None:
+    """0.74.0: ``build.platforms`` wins over the pods' placement: every
+    declared platform is built (one OCI index a release copies by digest)."""
+    placed = ("arm-1", "arm-2")
+    assert build_platforms(BOTH, NODES, placed) == ("linux/arm64",)
+    assert build_platforms(BOTH, NODES, placed, declared=BOTH) == BOTH
+    # Also one the controller does not enable for its nodes.
+    arm = ("linux/arm64",)
+    assert build_platforms(arm, NODES, placed, declared=BOTH) == BOTH
+    # A declared single platform builds only it.
+    assert build_platforms(BOTH, NODES, placed, declared=arm) == arm
+    # A platform the nodes need and the spec does not declare stays, so the
+    # build refuses it (node-platform-mismatch) as before.
+    amd = ("linux/amd64",)
+    assert build_platforms(BOTH, NODES, placed, declared=amd) == ("linux/amd64", *arm)
+    # Delivered into the nodes: nothing keeps the other platforms (0.68.0 rule).
+    assert build_platforms(BOTH, NODES, placed, every_node=True, declared=BOTH) == arm

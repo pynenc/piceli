@@ -33,6 +33,7 @@ from piceli.infra.controller import (
     CompositionConfig,
     CompositionController,
 )
+from piceli.infra.remote_builds import BuildPending
 from piceli.infra.sources import SourceSet
 from tests.unit.infra.git_support import Repo, example_files
 from tests.unit.infra.test_controller import EXAMPLE, FakeBuilder
@@ -57,9 +58,13 @@ class Builder(FakeBuilder):
     def __init__(self, clock: dict[str, float]) -> None:
         super().__init__()
         self.clock = clock
-        self.fail: str | None = None  # "error" or "crash"
+        self.fail: str | None = None  # "error", "crash" or "wait"
+        self.handed: list[BuildItem] = []  # "wait": handed to a build host
 
     def build(self, items: Sequence[BuildItem], checkout: Any) -> dict[str, BuiltImage]:
+        if self.fail == "wait":
+            self.handed = list(items)
+            raise BuildPending("handed to a build host")
         self.clock["now"] += 30  # a build takes time
         if self.fail == "crash":
             raise Crash
@@ -1028,3 +1033,98 @@ def test_a_published_nix_release_sends_a_marker(world: dict[str, Any]) -> None:
     assert first.attributes["piceli.release.seconds"] == 360.0
     assert second.attributes["piceli.release.previous.version"] == "v1.0.0"
     assert second.attributes["piceli.release.previous.id"] == "nix/web-1-v1.0.0-1"
+
+
+# ------------------------------------------------------- build host waits
+
+
+def _wait_for_host(world: dict[str, Any], polls: int) -> int:
+    """``polls`` steps that find their build still on a build host."""
+    world["ports"].builder.fail = "wait"
+    first = int(world["clock"]["now"] * 1e9)
+    for _ in range(polls):
+        status = world["controller"].poll_once()
+        main = status["envs"]["main"]
+        assert (main["state"], main["reason"]) == ("retrying", "build-waiting")
+        world["clock"]["now"] += 60
+    return first
+
+
+def _deliver(world: dict[str, Any]) -> None:
+    """The build host delivers the images between two polls."""
+    controller = world["controller"]
+    for item in world["ports"].builder.handed:
+        image = BuiltImage(
+            f"registry.example:5000/{item.repository}@{item.digest}", item.digest
+        )
+        controller._remember(item.component, item.digest, image)
+
+
+def test_a_wait_for_a_build_host_is_no_failed_run(world: dict[str, Any]) -> None:
+    """0.74.0: one run from the push to the delivery, nothing in it failed."""
+    signals: Signals = world["signals"]
+    first = _wait_for_host(world, polls=3)
+    assert not [r for r in signals.roots() if r.name == "SYNC shop/main"]
+    assert not signals.events("piceli.deploy.retry")
+    (waiting,) = signals.events("piceli.build.waiting")
+    assert waiting.severity_text == "INFO"
+    assert "web" in waiting.attributes["piceli.build.images"]
+    _deliver(world)
+    world["ports"].builder.fail = None
+    status = world["controller"].poll_once()
+    assert status["envs"]["main"]["state"] == "deployed"
+    root = _main_root(signals)
+    assert root.status.status_code.name == "OK"
+    assert root.attributes["cicd.pipeline.result"] == "success"
+    assert root.attributes["piceli.run.attempt"] == 1
+    assert root.start_time == first
+    assert waiting.trace_id == root.context.trace_id
+    tree = signals.tree(root)
+    for image in ("web", "api", "catalog"):
+        build = tree[f"build {image}"]
+        assert build.status.status_code.name == "OK", image
+        assert build.attributes["cicd.pipeline.task.run.result"] == "success"
+        assert "error.type" not in build.attributes
+        assert build.start_time == first  # one span from the first wait
+    builds = [s for s in tree.values() if s.name == "build web"]
+    assert len(builds) == 1
+    errors = [r for r in signals.events() if r.severity_text == "ERROR" and r.trace_id]
+    assert not errors, [r.event_name for r in errors]
+
+
+def test_a_build_that_fails_after_a_wait_is_a_failed_build(
+    world: dict[str, Any],
+) -> None:
+    signals: Signals = world["signals"]
+    first = _wait_for_host(world, polls=2)
+    world["ports"].builder.fail = "error"  # the fallback builds it and fails
+    world["controller"].poll_once()
+    root = _main_root(signals)
+    assert root.status.status_code.name == "ERROR"
+    assert root.attributes["cicd.pipeline.result"] == "failure"
+    assert root.attributes["error.type"] == "component-build-failed"
+    build = signals.tree(root)["build web"]
+    assert build.status.status_code.name == "ERROR"
+    assert build.attributes["error.type"] == "component-build-failed"
+    assert build.start_time == first
+    (failed,) = signals.events("piceli.build.failed")
+    assert failed.span_id == build.context.span_id
+    (retry,) = signals.events("piceli.deploy.retry")
+    assert retry.severity_text == "ERROR"
+
+
+def test_a_push_while_waiting_cancels_the_run_and_its_builds(
+    world: dict[str, Any],
+) -> None:
+    signals: Signals = world["signals"]
+    _wait_for_host(world, polls=2)
+    world["shop"].commit({"web/index.html": "<h1>v2</h1>\n"})
+    world["controller"].poll_once()  # the new revision waits too
+    (root,) = [r for r in signals.roots() if r.name == "SYNC shop/main"]
+    assert root.attributes["cicd.pipeline.result"] == "cancellation"
+    assert root.status.status_code.name == "UNSET"
+    (finished,) = signals.events("piceli.deploy.finished")
+    assert finished.severity_text == "INFO"
+    build = signals.tree(root)["build web"]
+    assert build.attributes["cicd.pipeline.task.run.result"] == "cancellation"
+    assert "error.type" not in build.attributes

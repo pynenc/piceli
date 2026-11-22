@@ -300,6 +300,13 @@ CASES: dict[str, tuple[Argv, str]] = {
         ),
         "publish-invalid",
     ),
+    "artifacts copy": (
+        lambda p: (
+            ["artifacts", "copy", "--from", "oci://127.0.0.1:9/x:latest"]
+            + ["--to", "oci://127.0.0.1:9/y:1.0.0"]
+        ),
+        "copy-invalid",
+    ),
     "artifacts publish-files": (
         lambda p: (
             ["artifacts", "publish-files", str(p / "absent.tar.gz")]

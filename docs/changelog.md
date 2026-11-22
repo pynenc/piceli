@@ -4,6 +4,82 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.74.0
+
+**Features**
+
+- **A pipeline spec's declared platforms are all built and recorded as
+  one OCI index.** Since 0.68.0 a GitOps pipeline build compiled only the
+  platforms of the nodes the pods run on, and `build.platforms` only
+  limited them: an arm64-only environment built arm64 alone, and its
+  recorded digest was one arm64 manifest, so a release had nothing to
+  copy for amd64. Now a spec that declares `platforms` in `[build]`
+  builds every declared platform and pushes one OCI (Open Container
+  Initiative) image index over them; nodes pull their own platform. The
+  status records the index digest with `media_type` and `platforms`
+  (each platform's manifest digest), and so do the history and `piceli
+  gitops builds --json` (new field `digests`). Every platform's manifest
+  stays in the registry under the index. A spec without `platforms`, and
+  `Controller(delivery="nodes")`, keep the 0.68.0 rule. The provenance's
+  `platforms` now lists the platforms built, not every enabled one. See
+  {ref}`pipeline-declared-platforms`.
+- **`piceli artifacts copy` promotes an image by digest.** `--from
+  oci://host/repo@sha256:… --to oci://host/repo:tag` copies the index,
+  every platform's manifest and blob, and the referrers (SBOM, provenance,
+  signatures, and the referrers of those), keeping every digest; `skopeo
+  copy --all --preserve-digests` lost the referrers. Same plan, approve and
+  receipt flow as `artifacts publish`: without `--approve` it prints the
+  plan digest (exit 3) and contacts nothing; the tag moves last, and one
+  that names another digest is refused (`copy-tag-exists`) unless
+  `--move-tag`. New error codes `copy-invalid`, `copy-not-approved`,
+  `copy-tag-exists`, `copy-verification-failed` and `copy-failed`. See
+  {ref}`artifacts-copy`.
+
+The build rule runs in the controller: upgrade the controller. Images of
+a spec that declares `platforms` rebuild once (their platforms are part
+of the image key). `artifacts copy` runs in the client: upgrade the client
+that releases.
+
+**Fixes**
+
+- **A sync waiting for its build is not a failed run.** While a build host
+  built the commit, the controller ended one `SYNC <composition>/<env>`
+  run per poll as failed (`error.type: build-waiting`, status `ERROR`),
+  each with `build <image>` spans marked `component-build-failed`: a
+  dozen failed runs per good deploy, and alerts on failed runs fired for
+  the whole build. Such a run now stays open, like a run waiting for its
+  approval: one trace from the push to the result, one `build <image>`
+  span per image from the first wait to the delivery, and one INFO event
+  `piceli.build.waiting`. `component-build-failed` stays for a build that
+  failed. A run replaced by a newer revision (`superseded`) has status
+  unset and counts no run error; its unfinished builds are
+  `cancellation`.
+- **A re-verification no longer invalidates a `piceli promote`
+  approval.** The plan's digest covered the run that verified the pinned
+  commit, so when the environment ran the same commit again between plan
+  and `--approve` (a push to another of its sources), the approval failed
+  with `promote-plan-changed`. The digest now covers what the promotion
+  changes (host, input, old and new commit, lock hash, tag, base, remote,
+  branch). The commit must still be verified at plan and at approve; the
+  run found at approve is named in the commit message, the tag and the
+  result's new `verified_run`.
+- **A failed promotion push is resumed by the same command.** After
+  `promote-push-failed`, running the same `--approve` command again finds
+  the local commit and tag, checks the commit is exactly the planned
+  `flake.lock` change, and pushes them (`resume` in the plan, `resumed` in
+  the result). Before, the working copy was refused as ahead of its
+  upstream and the push had to be typed by hand.
+- **One transport failure no longer stops a promotion.** A `git fetch`,
+  `push`, `ls-remote` or `clone` that times out or loses its connection
+  is retried once after 2 seconds, listed in the result's new
+  `git_retries`.
+- **A re-verification no longer changes a gated `NixRelease` plan.** When
+  the controller plans the same pinned commit again, the live plan keeps
+  its `pinned` run, so its digest and approval stay valid.
+
+A digest printed by an older client does not match: plan again after the
+upgrade. Build hosts are unchanged.
+
 ## Version 0.73.0
 
 **Features**

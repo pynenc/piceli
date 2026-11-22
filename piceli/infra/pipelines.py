@@ -19,7 +19,8 @@ pipeline's host builds (``Build.spec("host-build.toml", builder="host")``):
 - the build compiles only the platforms the environment's pods can run on
   (0.68.0, :func:`placement` and :func:`build_platforms`): the nodes of its
   ``on_nodes``, else the nodes matching every workload's node selector, else
-  every declared node;
+  every declared node; 0.74.0: a spec that declares ``build.platforms``
+  builds every one of them (one OCI index a release can copy by digest);
 - third-party images (``Registry.in_cluster(mirror=[ref@digest])`` of the
   cluster, and the pipeline's own delivery ``mirror=``) are copied into the
   in-cluster registry when the environment syncs; nodes pull them from there.
@@ -544,6 +545,7 @@ def build_platforms(
     placed: Sequence[str] | None,
     *,
     every_node: bool = False,
+    declared: Sequence[str] = (),
 ) -> tuple[str, ...]:
     """0.68.0: the ``enabled`` platforms (in their order) of the ``nodes``
     the pods can be ``placed`` on (``None``: every node).
@@ -553,12 +555,22 @@ def build_platforms(
     ``None``; else an unknown placement keeps every enabled platform (a
     node the composition does not declare may run the pods). No match
     keeps every enabled platform too: the delivery refuses what is missing.
+
+    0.74.0: ``declared``, the spec's ``build.platforms``, wins with a
+    registry delivery: every declared platform is built, also those no
+    node runs, and pushed as one OCI index (a release copies it by digest).
+    A platform the nodes need that the spec does not declare is kept after
+    them, so the build refuses it (``node-platform-mismatch``) as before.
+    With a delivery into the nodes (``every_node``) nothing would keep the
+    other platforms: the 0.68.0 rule stays.
     """
-    if not nodes or (placed is None and not every_node):
-        return tuple(enabled)
     needed = {
         f"linux/{node.arch}" for node in nodes if placed is None or node.name in placed
     }
+    if declared and not every_node:
+        return tuple(dict.fromkeys((*declared, *sorted(needed))))
+    if not nodes or (placed is None and not every_node):
+        return tuple(enabled)
     return tuple(item for item in enabled if item in needed) or tuple(enabled)
 
 

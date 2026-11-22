@@ -73,6 +73,9 @@ MAX_QUEUE = 2048
 MAX_RUN_EVENTS = 40
 #: Build log lines a ``piceli.build.failed`` event carries.
 BUILD_TAIL_LINES = 80  # 20 before 0.17.0
+#: The reason of a step that waits for a build host
+#: (``piceli.infra.remote_builds.WAITING``): no failure, the run stays open.
+BUILD_WAITING = "build-waiting"
 #: Seconds between heartbeats.
 HEARTBEAT_SECONDS = 15.0
 
@@ -1227,7 +1230,21 @@ class ControllerTelemetry:
             now = self._now()
             builds = run.setdefault("builds", [])
             for name in images:
-                if name and name != "mirror":
+                if not name or name == "mirror":
+                    continue
+                # 0.74.0: a build the run waits for is the same build, looked
+                # at again: one span from its first start to its end.
+                waiting = next(
+                    (
+                        entry
+                        for entry in builds
+                        if entry.get("image") == name and entry.pop("waiting", None)
+                    ),
+                    None,
+                )
+                if waiting is not None:
+                    waiting["step"] = run.get("step")
+                else:
                     builds.append(
                         {"image": name, "start": now, "step": run.get("step")}
                     )
@@ -1334,8 +1351,17 @@ class ControllerTelemetry:
                     {"step": run.get("step"), "data": _journal_view(journal)}
                 )
             state = str(record.get("state") or "")
+            waiting = state == "retrying" and record.get("reason") == BUILD_WAITING
+            self._settle_waiting_builds(run, record, waiting)
             self._step_events(run, record, journal, now)
             self._stage_events(run, journal)
+            if waiting:
+                # 0.74.0: a build host still builds it. Nothing failed: the
+                # run stays open and goes on at the next step, like a run
+                # waiting for its approval.
+                self._waiting_event(run, record, now)
+                self.store.save(self._data)
+                return
             if state == "retrying":
                 self._retry_event(run, record, now)
             if state == "approval-required":
@@ -1616,6 +1642,69 @@ class ControllerTelemetry:
             error=True,
         )
 
+    def _settle_waiting_builds(
+        self, run: dict[str, Any], record: Mapping[str, Any], waiting: bool
+    ) -> None:
+        """Builds of a step that waits for a build host, or of the step after.
+
+        A step that waits marks its open builds ``waiting``. A later step
+        that did not build them again ends them: failed when the step's
+        build failed, done when the image is there (the image came back
+        between the two steps: its end is this step's start, or the build
+        entry's own ``finished_at``), else never finished (``cancellation``).
+        """
+        step = run.get("step")
+        builds = [b for b in run.get("builds") or [] if b.get("end") is None]
+        if waiting:
+            for build in builds:
+                if build.get("step") == step:
+                    build["waiting"] = True
+            return
+        reason = record.get("reason")
+        components = _dict(record.get("components"))
+        for build in builds:
+            if not build.pop("waiting", None):
+                continue
+            component = _dict(components.get(build["image"]))
+            if reason == "component-build-failed":
+                build["step"] = step  # failed in this step (its event, span)
+            elif component.get("digest") and component.get("state") not in {
+                "waiting-build",
+                "building",
+                "failed",
+            }:
+                build.update(
+                    end=int(run.get("step_started_ns") or self._now()),
+                    digest=component["digest"],
+                    result="success",
+                )
+            else:
+                build["result"] = "cancellation"
+
+    def _waiting_event(
+        self, run: dict[str, Any], record: Mapping[str, Any], now: int
+    ) -> None:
+        """``piceli.build.waiting`` (0.74.0): once, when a run starts waiting."""
+        if run.get("build_waiting_ns") is not None:
+            return
+        run["build_waiting_ns"] = now
+        images = [
+            entry["image"]
+            for entry in run.get("builds") or []
+            if entry.get("waiting") and entry.get("end") is None
+        ]
+        self._run_event(
+            run,
+            "piceli.build.waiting",
+            "build-waiting",
+            now,
+            body=f"{run['env']}: waiting for a build host",
+            attributes={
+                "piceli.build.images": images,
+                "piceli.build.waiting_for": _text(record.get("waiting_for"), 200),
+            },
+        )
+
     def _step_events(
         self,
         run: dict[str, Any],
@@ -1839,7 +1928,7 @@ class ControllerTelemetry:
                     "error.type": reason if result != "success" else None,
                     **_cycle_attributes(run, record),
                 },
-                error=result != "success",
+                error=result not in {"success", "superseded"},
             )
             self._release_marker(run, result, end, record)
         self._spans(run, result, end, reason, record)
@@ -2091,7 +2180,13 @@ class ControllerTelemetry:
             last = _iso_ns(component.get("finished_at")) if done else None
             last = last or int(build.get("end") or run.get("step_ended_ns") or end)
             outcome = (
-                "success" if done else "error" if result == "interrupted" else "failure"
+                "success"
+                if done
+                else "error"
+                if result == "interrupted"
+                else "cancellation"  # 0.74.0: waited for, never failed
+                if result == "superseded" or build.get("result") == "cancellation"
+                else "failure"
             )
             self._task(
                 run,
@@ -2104,7 +2199,11 @@ class ControllerTelemetry:
                 {
                     "piceli.image": build["image"],
                     "piceli.image.digest": build.get("digest"),
-                    **({"error.type": "component-build-failed"} if not done else {}),
+                    "error.type": "component-build-failed"
+                    if outcome == "failure"
+                    else reason  # controller-restarted
+                    if outcome == "error"
+                    else None,
                 },
             )
             if self.instruments is not None:
@@ -2209,7 +2308,8 @@ class ControllerTelemetry:
             start,
             end,
             attributes,
-            ok=result == "success",
+            # 0.74.0: a run a newer revision replaced did not fail (unset).
+            ok=None if result == "superseded" else result == "success",
             parent=None,
             root=True,
             message=reason,
@@ -2369,7 +2469,7 @@ class ControllerTelemetry:
             self.instruments.run_duration.record(
                 pending / 1e9, {**base, "cicd.pipeline.run.state": "pending"}
             )
-        if result != "success":
+        if result not in {"success", "superseded"}:  # 0.74.0: replaced, no error
             self.instruments.run_errors.add(
                 1, {**self._env_attrs(run), "error.type": reason or result}
             )
