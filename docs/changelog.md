@@ -27,6 +27,9 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `push`, `ls-remote` or `clone` that times out or loses its connection
   is retried once after 2 seconds, listed in the result's new
   `git_retries`.
+- **A re-verification no longer changes a gated `NixRelease` plan.** When
+  the controller plans the same pinned commit again, the live plan keeps
+  its `pinned` run, so its digest and approval stay valid.
 
 A digest printed by an older client does not match: plan again after the
 upgrade. Build hosts are unchanged.
