@@ -16,6 +16,23 @@ The plan (:data:`PLAN_SCHEMA`) has a digest; ``--approve DIGEST``
 recomputes it, refuses when anything changed, and only then writes,
 commits, tags and pushes (atomically: both refs or none).
 
+**What the digest covers (0.74.0).** What the promotion changes: the host,
+the input, its old and new commit, the lock's hash, the tag, the base, the
+remote and branch. Not which run verified the commit: "the environment
+verified the pinned commit" is checked at plan and again at approve, and a
+later run of the same commit (a re-verification) keeps the approval valid.
+The run is named in the commit message, the tag and the result.
+
+**Resuming (0.74.0).** A push that failed leaves the commit and the tag
+local; the same ``--approve`` command recomputes the plan from the
+upstream commit, checks that the local commit is exactly its lock change,
+and pushes it (``resume`` in the plan, ``resumed`` in the result).
+
+**Transport retries (0.74.0).** A ``git fetch``, ``push``, ``ls-remote`` or
+``clone`` that fails with a transport error (a timeout, a refused or reset
+connection, a name not resolved) is retried once after
+:data:`RETRY_PAUSE` seconds; each retry is listed in ``git_retries``.
+
 **The lock.** With ``nix`` on the ``PATH``, ``nix flake lock
 --override-input NAME URL?rev=REV`` runs in a temporary worktree of the
 working copy's commit (removed afterwards). Without it, the input's node
@@ -35,9 +52,11 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -50,18 +69,68 @@ BUMPS = ("major", "minor", "patch")
 #: The first version of a pattern without a release yet.
 FIRST = (0, 1, 0)
 _GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "LC_ALL": "C"}
+#: Seconds before the one retry of a Git command that failed in transport.
+RETRY_PAUSE = 2.0
+#: The Git commands that reach a remote (and are retried once).
+_NETWORK = frozenset({"fetch", "push", "ls-remote", "clone"})
+_TRANSPORT = re.compile(
+    r"timed out|timeout|connection (?:refused|reset|closed)|could not resolve|"
+    r"temporary failure in name resolution|network is unreachable|"
+    r"no route to host|the remote end hung up|early eof|rpc failed|"
+    r"unexpected disconnect|broken pipe|ssl_|gnutls|tls connection",
+    re.IGNORECASE,
+)
 
 
-def _git(repo: Path, *args: str, check: bool = True, data: bytes | None = None) -> str:
-    done = subprocess.run(
-        ["git", *args],
-        cwd=repo,
-        input=data,
-        capture_output=True,
-        env={**os.environ, **_GIT_ENV},
-        check=False,
-        timeout=600,
-    )
+def _run(
+    args: Sequence[str],
+    cwd: Path | None,
+    *,
+    data: bytes | None = None,
+    timeout: int = 600,
+    retried: list[dict[str, Any]] | None = None,
+    before_retry: Callable[[], None] | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    """``git ARGS``; a command of :data:`_NETWORK` that fails in transport
+    (a timeout, or a transport message on stderr) runs once more after
+    :data:`RETRY_PAUSE` seconds, noted in ``retried``. Git's output is never
+    kept in the note (it may name a remote's credentials)."""
+    attempts = 2 if args[0] in _NETWORK else 1
+    for attempt in range(attempts):
+        try:
+            done = subprocess.run(
+                ["git", *args],
+                cwd=cwd,
+                input=data,
+                capture_output=True,
+                env={**os.environ, **_GIT_ENV},
+                check=False,
+                timeout=timeout,
+            )
+            transport = done.returncode != 0 and bool(
+                _TRANSPORT.search(done.stderr.decode("utf-8", "replace"))
+            )
+        except subprocess.TimeoutExpired:
+            done = subprocess.CompletedProcess(["git", *args], 124, b"", b"")
+            transport = True
+        if not transport or attempt + 1 == attempts:
+            return done
+        if retried is not None:
+            retried.append({"command": f"git {args[0]}", "pause_seconds": RETRY_PAUSE})
+        time.sleep(RETRY_PAUSE)
+        if before_retry is not None:
+            before_retry()
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _git(
+    repo: Path,
+    *args: str,
+    check: bool = True,
+    data: bytes | None = None,
+    retried: list[dict[str, Any]] | None = None,
+) -> str:
+    done = _run(args, repo, data=data, retried=retried)
     if check and done.returncode != 0:
         raise PromotionError(
             "promote-git-failed", f"git {args[0]} failed in the working copy"
@@ -72,10 +141,18 @@ def _git(repo: Path, *args: str, check: bool = True, data: bytes | None = None) 
 # ---------------------------------------------------------------- working copy
 
 
-def working_copy(path: Path) -> dict[str, Any]:
+def working_copy(
+    path: Path, retried: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
     """The flake's working copy, fetched and checked: clean (tracked files;
     untracked ones are ignored, as flakes ignore them), on a branch with an
     upstream, neither behind, ahead of nor diverged from it.
+
+    One exception (0.74.0): ``HEAD`` one commit ahead that changes only
+    ``flake.lock`` on top of the upstream commit is a promotion whose push
+    did not happen. ``head`` is then the upstream commit and ``pending``
+    names the local commit and the tags at it (:func:`plan` checks that
+    the commit is exactly the planned change, else refuses it as ahead).
 
     :raises PromotionError: ``promote-dirty``, ``promote-not-in-sync``."""
     top = Path(_git(path, "rev-parse", "--show-toplevel"))
@@ -96,31 +173,45 @@ def working_copy(path: Path) -> dict[str, Any]:
             f"branch {branch} has no upstream on a remote (git push -u REMOTE {branch})",
         )
     upstream = merge.removeprefix("refs/heads/")
-    _git(top, "fetch", "--quiet", "--tags", remote)
+    _git(top, "fetch", "--quiet", "--tags", remote, retried=retried)
     counts = _git(
         top, "rev-list", "--left-right", "--count", f"HEAD...{remote}/{upstream}"
     ).split()
     ahead, behind = (int(item) for item in counts)
-    if ahead or behind:
-        where = (
-            "diverged from"
-            if ahead and behind
-            else "behind"
-            if behind
-            else "ahead of (the push would publish commits the plan does not show)"
-        )
-        raise PromotionError(
-            "promote-not-in-sync",
-            f"branch {branch} is {where} {remote}/{upstream}: "
-            f"{ahead} ahead, {behind} behind",
-        )
+    head = _git(top, "rev-parse", "HEAD")
+    pending = None
+    if (ahead, behind) == (1, 0) and _git(
+        top, "diff", "--name-only", "HEAD~1", "HEAD"
+    ) == LOCK_FILE:
+        pending = {"commit": head, "tags": _git(top, "tag", "--points-at", head)
+                   .split()}  # fmt: skip
+        head = _git(top, "rev-parse", f"{remote}/{upstream}")
+    elif ahead or behind:
+        raise not_in_sync(branch, f"{remote}/{upstream}", ahead, behind)
     return {
         "path": top,
-        "head": _git(top, "rev-parse", "HEAD"),
+        "head": head,
         "branch": upstream,
         "local_branch": branch,
         "remote": remote,
+        "pending": pending,
     }
+
+
+def not_in_sync(branch: str, upstream: str, ahead: int, behind: int) -> PromotionError:
+    """``promote-not-in-sync`` of a branch ahead of, behind or diverged
+    from its upstream."""
+    where = (
+        "diverged from"
+        if ahead and behind
+        else "behind"
+        if behind
+        else "ahead of (the push would publish commits the plan does not show)"
+    )
+    return PromotionError(
+        "promote-not-in-sync",
+        f"branch {branch} is {where} {upstream}: {ahead} ahead, {behind} behind",
+    )
 
 
 # ---------------------------------------------------------------- tags
@@ -313,7 +404,9 @@ def tree_of(clone: Path, rev: str) -> dict[str, tuple[str, bytes]]:
     return entries
 
 
-def lock_by_edit(lock: bytes, name: str, rev: str) -> bytes:
+def lock_by_edit(
+    lock: bytes, name: str, rev: str, retried: list[dict[str, Any]] | None = None
+) -> bytes:
     """``flake.lock`` with the input's node pinned to ``rev`` (no nix)."""
     from piceli.infra.promotion import lock_node
 
@@ -323,10 +416,11 @@ def lock_by_edit(lock: bytes, name: str, rev: str) -> bytes:
     url = _clone_url(node.get("original") or locked)
     with tempfile.TemporaryDirectory(prefix="piceli-promote-") as work:
         clone = Path(work) / "input.git"
-        done = subprocess.run(
-            ["git", "clone", "--quiet", "--bare", "--", url, str(clone)],
-            capture_output=True, check=False, timeout=1800,
-            env={**os.environ, **_GIT_ENV},
+        done = _run(
+            ["clone", "--quiet", "--bare", "--", url, str(clone)],
+            None, timeout=1800, retried=retried,
+            # a clone that stopped half-way is removed before the retry
+            before_retry=lambda: shutil.rmtree(clone, ignore_errors=True),
         )  # fmt: skip
         if done.returncode != 0:
             raise PromotionError(
@@ -364,6 +458,7 @@ def pinned_lock(
     rev: str,
     *,
     nix: str | None = None,
+    retried: list[dict[str, Any]] | None = None,
 ) -> tuple[bytes, str]:
     """``(new flake.lock, method)``: ``nix`` when it is on the PATH (or
     given), else ``edit``. :raises PromotionError: the lock does not pin
@@ -377,7 +472,7 @@ def pinned_lock(
         url = override_url(node.get("original") or node["locked"], rev)
         found, method = lock_with_nix(repo, head, name, url, tool), "nix"
     else:
-        found, method = lock_by_edit(lock, name, rev), "edit"
+        found, method = lock_by_edit(lock, name, rev, retried), "edit"
     if locked_rev(found, name) != rev:
         raise PromotionError(
             "promote-lock-failed", f"the new {LOCK_FILE} does not pin {rev[:12]}"
@@ -386,6 +481,24 @@ def pinned_lock(
 
 
 # ---------------------------------------------------------------- plan
+
+#: Fields of ``pinned`` that name the run that verified the commit, outside
+#: the digest (0.74.0).
+RUN_FIELDS = ("verified_run", "verified_at")
+
+
+def digest(body: Mapping[str, Any]) -> str:
+    """The digest of a plan: what the promotion changes, not the run that
+    verified the pinned commit (``pinned``'s :data:`RUN_FIELDS` and the
+    commit message, which quotes them, are left out)."""
+    from piceli.dev.nix import plan_digest
+
+    covered = {key: value for key, value in body.items() if key != "commit_message"}
+    if isinstance(body.get("pinned"), Mapping):
+        covered["pinned"] = {
+            key: value for key, value in body["pinned"].items() if key not in RUN_FIELDS
+        }
+    return plan_digest(covered)
 
 
 def plan(
@@ -400,9 +513,12 @@ def plan(
 ) -> dict[str, Any]:
     """The promotion plan (``state``: ``approval-required`` or ``current``).
 
+    ``resume`` (0.74.0): the local commit and tag a failed push left, which
+    :func:`apply` pushes instead of committing again. ``git_retries``: the
+    Git commands retried after a transport error.
+
     :raises PromotionError: a refusal (``promotion-not-verified`` when the
         environment passed no commit, the working copy's refusals)."""
-    from piceli.dev.nix import plan_digest
     from piceli.infra.promotion import locked_rev, newest, pinned
 
     if bump not in BUMPS:
@@ -415,12 +531,28 @@ def plan(
             {"input": gate.input, "environment": gate.environment,
              "commit": None, "newest_passed": None},
         )  # fmt: skip
-    copy = working_copy(repo)
-    top, head = copy["path"], copy["head"]
+    retried: list[dict[str, Any]] = []
+    copy = working_copy(repo, retried)
+    top, head, pending = copy["path"], copy["head"], copy["pending"]
     current = locked_rev(
         _git(top, "show", f"{head}:{LOCK_FILE}", check=False) or None, gate.input
     )
-    tags = _git(top, "tag", "--list").split()
+    # tags only a failed push left are local: the plan was made without them
+    skip = set(pending["tags"]) if pending else set()
+    if current == best["commit"] and not pending:
+        at_head = tags_at(top, head, pattern)
+        if at_head:
+            listed = _git(top, "ls-remote", "--tags", "--refs", copy["remote"],
+                          retried=retried).splitlines()  # fmt: skip
+            remote_tags = {line.rpartition("refs/tags/")[2] for line in listed}
+            published = [item for item in at_head if item in remote_tags]
+            if published:
+                return {"state": "current", "plan": None, "tag": published[-1],
+                        "pinned": pinned(gate, best), "base": head,
+                        "git_retries": retried}  # fmt: skip
+            skip.update(at_head)
+            pending = {"commit": head, "tags": at_head}
+    tags = [item for item in _git(top, "tag", "--list").split() if item not in skip]
     tag, previous = next_tag(tags, pattern, bump)
     body: dict[str, Any] = {
         "schema": PLAN_SCHEMA,
@@ -433,34 +565,58 @@ def plan(
         "previous_tag": previous,
         "bump": bump,
     }
+    found: dict[str, Any]
     if current == best["commit"]:
-        found = tags_at(top, head, pattern)
+        if pending and pending["commit"] != head:  # a lock commit, not this pin
+            raise not_in_sync(
+                copy["local_branch"], f"{copy['remote']}/{copy['branch']}", 1, 0
+            )
         body.update(change=None, commit_message=None)
-        if found:
-            return {"state": "current", "plan": None, "tag": found[-1],
-                    "pinned": body["pinned"], "base": head}  # fmt: skip
-        return {"state": "current", "plan": body, "digest": plan_digest(body)}
-    lock, method = pinned_lock(top, head, gate.input, best["commit"], nix=nix)
-    body["change"] = {
-        "file": LOCK_FILE,
-        "input": gate.input,
-        "from": current,
-        "to": best["commit"],
-        "method": method,
-        "lock_sha256": hashlib.sha256(lock).hexdigest(),
-    }
-    body["commit_message"] = (
-        f"promote {gate.input} to {best['commit'][:12]} from {gate.environment}\n\n"
-        f"{LOCK_FILE} pins {gate.input} to {best['commit']}, which "
-        f"{gate.environment} ran with its release checks passed (run "
-        f"{best['run_id']}, {best['verified_at']}). Released as {tag}.\n"
-    )
-    return {
-        "state": "approval-required",
-        "plan": body,
-        "digest": plan_digest(body),
-        "lock": lock,
-    }
+        found = {"state": "current", "plan": body, "digest": digest(body),
+                 "git_retries": retried}  # fmt: skip
+    else:
+        lock, method = pinned_lock(
+            top, head, gate.input, best["commit"], nix=nix, retried=retried
+        )
+        body["change"] = {
+            "file": LOCK_FILE,
+            "input": gate.input,
+            "from": current,
+            "to": best["commit"],
+            "method": method,
+            "lock_sha256": hashlib.sha256(lock).hexdigest(),
+        }
+        body["commit_message"] = (
+            f"promote {gate.input} to {best['commit'][:12]} from "
+            f"{gate.environment}\n\n{LOCK_FILE} pins {gate.input} to "
+            f"{best['commit']}, which {gate.environment} ran with its release "
+            f"checks passed (run {best['run_id']}, {best['verified_at']}). "
+            f"Released as {tag}.\n"
+        )
+        found = {"state": "approval-required", "plan": body,
+                 "digest": digest(body), "lock": lock,
+                 "git_retries": retried}  # fmt: skip
+        if pending and _git(
+            top, "rev-parse", f"{pending['commit']}:{LOCK_FILE}"
+        ) != _git(top, "hash-object", "--stdin", data=lock):
+            raise not_in_sync(
+                copy["local_branch"], f"{copy['remote']}/{copy['branch']}", 1, 0
+            )
+    if pending:
+        others = [item for item in tags_at(top, pending["commit"], pattern)
+                  if item != tag]  # fmt: skip
+        if others:
+            raise PromotionError(
+                "promote-not-in-sync",
+                f"tag {others[-1]} at {pending['commit'][:12]} is not on "
+                f"{copy['remote']}: run the --approve command that made it "
+                f"again, or delete it (git tag -d {others[-1]})",
+            )
+        found["resume"] = {
+            "commit": pending["commit"],
+            "tag": tag if tag in pending["tags"] else None,
+        }
+    return found
 
 
 def apply(
@@ -469,41 +625,53 @@ def apply(
     *,
     say: Callable[[str], None] = lambda _l: None,
 ) -> dict[str, Any]:
-    """Write, commit, tag and push the (re-computed, approved) plan.
+    """Write, commit, tag and push the (re-computed, approved) plan; with
+    the plan's ``resume``, push the local commit (and tag) a failed push
+    left.
 
     :raises PromotionError: ``promote-push-failed`` (the commit and the tag
-        stay local; ``git push --atomic`` again publishes them)."""
+        stay local; the same ``--approve`` command pushes them)."""
     body = found["plan"]
+    retried: list[dict[str, Any]] = list(found.get("git_retries") or ())
+    resume = found.get("resume")
     top = Path(_git(repo, "rev-parse", "--show-toplevel"))
     commit = body["base"]
-    if body.get("change") is not None:
+    if resume:
+        commit = resume["commit"]
+        say(f"resuming: {LOCK_FILE} is committed as {commit[:12]}, not pushed")
+    elif body.get("change") is not None:
         (top / LOCK_FILE).write_bytes(found["lock"])
         _git(top, "commit", "--quiet", "-m", body["commit_message"], "--", LOCK_FILE)
         commit = _git(top, "rev-parse", "HEAD")
         say(f"committed {LOCK_FILE} as {commit[:12]}")
     pinned = body["pinned"]
-    _git(
-        top, "tag", "-a", body["tag"], commit, "-m",
-        f"{body['tag']}: {pinned['input']} {pinned['commit'][:12]} verified on "
-        f"{pinned['environment']} (run {pinned['verified_run']})",
-    )  # fmt: skip
-    say(f"tagged {body['tag']}")
+    if not (resume and resume.get("tag")):
+        _git(
+            top, "tag", "-a", body["tag"], commit, "-m",
+            f"{body['tag']}: {pinned['input']} {pinned['commit'][:12]} verified on "
+            f"{pinned['environment']} (run {pinned['verified_run']})",
+        )  # fmt: skip
+        say(f"tagged {body['tag']}")
     refs = [f"refs/tags/{body['tag']}"]
     if body.get("change") is not None:
         refs.insert(0, f"{commit}:refs/heads/{body['branch']}")
-    _git(top, "push", "--atomic", "--quiet", body["remote"], *refs, check=False)
+    _git(
+        top, "push", "--atomic", "--quiet", body["remote"], *refs,
+        check=False, retried=retried,
+    )  # fmt: skip
     remote_tag = _git(
         top, "ls-remote", "--tags", body["remote"], f"refs/tags/{body['tag']}^{{}}",
-        check=False,
+        check=False, retried=retried,
     )  # fmt: skip
     result = {"commit": commit, "tag": body["tag"], "remote": body["remote"],
-              "branch": body["branch"]}  # fmt: skip
+              "branch": body["branch"], "verified_run": pinned["verified_run"],
+              "resumed": bool(resume), "git_retries": retried}  # fmt: skip
     if commit not in remote_tag:
         raise PromotionError(
             "promote-push-failed",
-            f"the push to {body['remote']} failed; the commit and tag {body['tag']} "
-            "are local: git push --atomic "
-            f"{body['remote']} {' '.join(refs)}",
+            f"the push to {body['remote']} failed; the commit {commit[:12]} and "
+            f"tag {body['tag']} are local: run the same --approve command again "
+            "to push them",
             result,
         )
     say(f"pushed {', '.join(refs)} to {body['remote']}")

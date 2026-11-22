@@ -1533,7 +1533,27 @@ and prints the plan with its digest (`piceli.promote.v1`):
 `--approve` recomputes the plan (`promote-plan-changed` when anything
 moved), commits `flake.lock` alone, creates an annotated tag and pushes the
 branch and the tag with `git push --atomic` (`promote-push-failed`, exit
-1, leaves both local). With `nix` on the `PATH` the lock comes from `nix
+1, leaves both local).
+
+What the digest covers (0.74.0): what the promotion changes (the host, the
+input, its old and new commit, the lock's hash, the tag, the base, the
+remote and branch), not which run verified the commit. That the
+environment verified the pinned commit is checked when you plan and again
+when you approve; a newer run that verifies the same commit (another
+source of the environment moved) keeps your approval valid. The run that
+`--approve` finds is named in the commit message, the tag and the
+result's `verified_run`. A newer verified commit still changes the plan.
+
+A push that failed is resumed by the same `--approve` command (0.74.0):
+it finds the local commit and tag, checks that the commit is exactly the
+planned `flake.lock` change, and pushes them (`resume` in the plan,
+`resumed: true` in the result; the output's `approve_command` is the
+command to run again). A `git fetch`, `push`, `ls-remote` or `clone` that
+fails in transport (a timeout, a refused or reset connection, a name not
+resolved) is retried once after 2 seconds; the result lists each retry in
+`git_retries`.
+
+With `nix` on the `PATH` the lock comes from `nix
 flake lock --override-input` in a temporary worktree; without it the input's
 node is edited (`rev`, `lastModified`, `revCount`, and the `narHash`
 computed from a temporary bare clone of the input; a `git`, `github` or

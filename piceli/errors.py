@@ -4805,7 +4805,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "promote-plan-changed",
         "Promotion plan changed",
-        "The `--approve` digest is not the digest of the promotion plan computed now: the environment passed a newer commit, the branch or tags moved, or the computed lock differs.",
+        "The `--approve` digest is not the digest of the promotion plan computed now: the environment passed a newer commit, the branch or tags moved, or the computed lock differs. A newer run that verified the same commit does not change the digest (0.74.0).",
         "Run `piceli promote` without `--approve`, review the new plan and approve its digest.",
         False,
         "gitops",
@@ -4821,8 +4821,8 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "promote-git-failed",
         "Git failed in the working copy",
-        "A Git command in the flake's working copy failed (a fetch from its remote, a commit, a tag).",
-        "Run the same Git operation by hand to see Git's message (remote access, hooks, signing), fix it and retry.",
+        "A Git command in the flake's working copy failed (a fetch from its remote, a commit, a tag). A fetch, push, ls-remote or clone that failed in transport (a timeout, a refused or reset connection) was already retried once (0.74.0).",
+        "Run the same Git operation by hand to see Git's message (remote access, hooks, signing), fix it and run the same `piceli promote` command again.",
         True,
         "gitops",
     ),
@@ -4830,7 +4830,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "promote-push-failed",
         "Promotion push failed",
         "The commit and the tag were created locally but the atomic push of both to the remote failed (access, a branch protection, a tag that already exists there). The remote is unchanged.",
-        "Fix the remote access and run the `git push --atomic` the message names, or delete the local tag, reset the commit and plan again.",
+        "Fix the remote access and run the same `piceli promote ... --approve DIGEST` command again (`approve_command` in the output): it finds the local commit and tag and pushes them (0.74.0). Or delete the local tag, reset the commit and plan again.",
         True,
         "gitops",
     ),

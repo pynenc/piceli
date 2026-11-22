@@ -164,6 +164,8 @@ def promote_host(
     )
     document: dict[str, Any] = {"schema": promotion_plan.RESULT_SCHEMA, **found}
     document.pop("lock", None)
+    for item in found.get("git_retries") or ():
+        say(f"  {item['command']} failed in transport; retried once")
     if body is None:  # current, already tagged
         say(f"{host}: {gate.input} already pins {found['pinned']['commit'][:12]}; "
             f"tag {found['tag']} points at it")  # fmt: skip
@@ -196,6 +198,11 @@ def promote_host(
             say(f"  commit: {body['commit_message'].splitlines()[0]}")
         say(f"  tag {body['tag']} (after {body['previous_tag'] or 'none'}); push to "
             f"{body['remote']} {body['branch']}")  # fmt: skip
+        resume = found.get("resume")
+        if resume:
+            say(f"  resumes a push that failed: {resume['commit'][:12]}"
+                + (f" and tag {resume['tag']}" if resume["tag"] else "")
+                + " are local; approving pushes them")  # fmt: skip
         say("approve with:")
         say(f"  {document['approve_command']}")
         emit_json(document)
@@ -210,7 +217,11 @@ def promote_host(
     try:
         result = promotion_plan.apply(found, repo, say=say)
     except PromotionError as error:
-        fail(error.code, str(error), **error.detail)
+        # 0.74.0: the same command resumes (a push that failed is retried)
+        fail(error.code, str(error), **error.detail,
+             approve_command=document["approve_command"])  # fmt: skip
+    for item in result["git_retries"][len(found.get("git_retries") or ()) :]:
+        say(f"  {item['command']} failed in transport; retried once")
     document.update(state="promoted", **result)
     document.pop("approve_command", None)
     say(f"{host}: promoted {document['tag']} at {document['commit'][:12]}")

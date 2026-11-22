@@ -4,6 +4,33 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.74.0 (unreleased)
+
+**Fixes**
+
+- **A re-verification no longer invalidates a `piceli promote`
+  approval.** The plan's digest covered the run that verified the pinned
+  commit, so when the environment ran the same commit again between plan
+  and `--approve` (a push to another of its sources), the approval failed
+  with `promote-plan-changed`. The digest now covers what the promotion
+  changes (host, input, old and new commit, lock hash, tag, base, remote,
+  branch). The commit must still be verified at plan and at approve; the
+  run found at approve is named in the commit message, the tag and the
+  result's new `verified_run`.
+- **A failed promotion push is resumed by the same command.** After
+  `promote-push-failed`, running the same `--approve` command again finds
+  the local commit and tag, checks the commit is exactly the planned
+  `flake.lock` change, and pushes them (`resume` in the plan, `resumed` in
+  the result). Before, the working copy was refused as ahead of its
+  upstream and the push had to be typed by hand.
+- **One transport failure no longer stops a promotion.** A `git fetch`,
+  `push`, `ls-remote` or `clone` that times out or loses its connection
+  is retried once after 2 seconds, listed in the result's new
+  `git_retries`.
+
+A digest printed by an older client does not match: plan again after the
+upgrade. Build hosts are unchanged.
+
 ## Version 0.73.0
 
 **Features**
