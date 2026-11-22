@@ -1166,7 +1166,7 @@ prints `piceli.builds.v1`, the document the UI's Builds page shows:
              {"stage": "building", "…": "…"}, {"stage": "uploading", "…": "…"}],
   "log_tail": null, "requested_at": "…", "started_at": "…", "finished_at": "…",
   "seconds": 312.4, "plan_digest": "sha256:…", "reason": null, "images": [],
-  "running_on": ["web-1"], "host_switch": "switched",
+  "digests": {}, "running_on": ["web-1"], "host_switch": "switched",
   "actions": {"approve": false, "retry": true, "cancel": false}}]}
 ```
 
@@ -1181,7 +1181,10 @@ when its own agent reports the revision as its current system with its
 checks passed (0.37.0); the controller alone knows only what it published.
 A published NixRelease's `host_switch` says `switched` then, and
 `not-switched-yet` before (the CLI prints "published, host not switched
-yet"); it is `null` for other builds.
+yet"); it is `null` for other builds. `digests` (0.74.0) gives each image
+an environment build made: its `digest` and, for an image built for
+several platforms, the OCI index's `media_type` and `platforms` (each
+platform's manifest digest; see {ref}`pipeline-declared-platforms`).
 
 While a build host builds, it reports its stage and the last 4000
 characters of its log (`build-progress`, at each stage and at most every

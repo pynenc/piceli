@@ -819,6 +819,25 @@ def _provenance_of(entry: dict[str, Any], image: BuiltImage) -> None:
         entry.pop("provenance", None)
 
 
+def _index_of(entry: dict[str, Any], image: BuiltImage) -> None:
+    """0.74.0: an image built for several platforms is one OCI index: its
+    component entry says so (``media_type``) and maps each platform to its
+    manifest (``platforms``). One platform keeps the entry as it was."""
+    from piceli.artifacts.image_manifest import OCI_INDEX
+
+    platforms = image.extra.get("platforms")
+    if (
+        isinstance(platforms, Mapping)
+        and len(platforms) > 1
+        and image.extra.get("delivery") != "nodes"  # config digests, no index
+    ):
+        entry["media_type"] = OCI_INDEX
+        entry["platforms"] = {str(k): str(v) for k, v in sorted(platforms.items())}
+    else:
+        entry.pop("media_type", None)
+        entry.pop("platforms", None)
+
+
 class _Quarantined:
     """The in-cluster builder while its node is quarantined (0.22.0): it
     mirrors, but builds nothing (``build-host-quarantined``)."""
@@ -2854,6 +2873,7 @@ class CompositionController:
             entry["digest"] = image.manifest_digest
             entry["image"] = image.pull_ref
             _provenance_of(entry, image)
+            _index_of(entry, image)
             deployed = (previous.get(key) or {}).get("deployed_image")
             entry["deployed_image"] = deployed
             entry["state"] = "unchanged" if deployed == image.pull_ref else "rolling"
@@ -2924,12 +2944,6 @@ class CompositionController:
             placement(env, declared) if instance.cluster in (None, self._home) else None
         )
         delivery = getattr(getattr(cluster, "controller", None), "delivery", None)
-        platforms = build_platforms(
-            self.config.platforms, declared, placed, every_node=delivery == "nodes"
-        )
-        # 0.21: an image built for several platforms deploys as one index;
-        # its key covers them all (one platform keeps its 0.20 key).
-        platform = ",".join(platforms)
         components: dict[str, dict[str, Any]] = {}
         images: dict[str, BuiltImage] = {}
         requests: list[SpecBuildRequest] = []
@@ -2943,6 +2957,18 @@ class CompositionController:
                 )
             facts = None if build.node_facts is None else build.node_facts.to_dict()
             spec = load_spec(text, path, repo=repo, facts=facts)
+            # 0.74.0: a spec's declared build.platforms are all built (one
+            # OCI index a release can copy by digest), see build_platforms.
+            platforms = build_platforms(
+                self.config.platforms,
+                declared,
+                placed,
+                every_node=delivery == "nodes",
+                declared=spec.spec.declared_platforms,
+            )
+            # 0.21: an image built for several platforms deploys as one index;
+            # its key covers them all (one platform keeps its 0.20 key).
+            platform = ",".join(platforms)
             keys = image_keys(spec, revision, self.sources, platform=platform)
             changed: dict[str, dict[str, str]] = {}
             for image in spec.spec.images:
@@ -3042,6 +3068,7 @@ class CompositionController:
             entry["digest"] = image.manifest_digest
             entry["image"] = image.pull_ref
             _provenance_of(entry, image)
+            _index_of(entry, image)
             deployed = (previous.get(key) or {}).get("deployed_image")
             entry["deployed_image"] = deployed
             entry["state"] = "unchanged" if deployed == image.pull_ref else "rolling"

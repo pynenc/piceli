@@ -400,7 +400,7 @@ def _record(**fields: Any) -> dict[str, Any]:
         "stage": "queued", "stages": [], "log_tail": None, "log_complete": False,
         "requested_at": None, "started_at": None, "finished_at": None,
         "seconds": None, "plan_digest": None, "plan": None, "reason": None,
-        "images": [], "running_on": [], "host_switch": None,
+        "images": [], "digests": {}, "running_on": [], "host_switch": None,
         "actions": {"approve": False, "retry": False, "cancel": False},
     }  # fmt: skip
     return base | fields
@@ -621,7 +621,7 @@ def _image_records(
             started = min((t.get("started_at") or "" for t in times), default="")
             finished = max((t.get("finished_at") or "" for t in times), default="")
             failed = any(t.get("state") == "failed" for t in times)
-            components = _dict(run.get("components"))
+            components = _components(run.get("components"))
             # The image's provenance, else (0.31.0) the build's own host.
             hosts = sorted(
                 {
@@ -662,9 +662,40 @@ def _image_records(
                     seconds=_seconds(started, finished, now),
                     reason=_text(run.get("reason")) if failed else None,
                     images=built,
+                    digests=_digests(components, built),
                     actions={"approve": False, "retry": True, "cancel": False},
                 )
             )
+    return found
+
+
+def _components(value: Any) -> dict[str, Any]:
+    """A run's components by name: the history document lists them
+    (``[{"name": ...}]``), the raw history keeps them by name."""
+    if isinstance(value, list):
+        return {
+            str(item["name"]): item
+            for item in value
+            if isinstance(item, Mapping) and item.get("name")
+        }
+    return _dict(value)
+
+
+def _digests(
+    components: Mapping[str, Any], built: Sequence[str]
+) -> dict[str, dict[str, Any]]:
+    """0.74.0: each built image's digest; for one built for several
+    platforms, the OCI index's, its media type and each platform's manifest."""
+    found: dict[str, dict[str, Any]] = {}
+    for name in built:
+        entry = _dict(components.get(name))
+        if not isinstance(entry.get("digest"), str):
+            continue
+        found[name] = {"digest": entry["digest"]}
+        platforms = entry.get("platforms")
+        if isinstance(platforms, Mapping) and platforms:
+            found[name]["media_type"] = entry.get("media_type")
+            found[name]["platforms"] = dict(platforms)
     return found
 
 

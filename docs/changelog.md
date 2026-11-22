@@ -4,6 +4,30 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.74.0 (unreleased)
+
+**Features**
+
+- **A pipeline spec's declared platforms are all built and recorded as
+  one OCI index.** Since 0.68.0 a GitOps pipeline build compiled only the
+  platforms of the nodes the pods run on, and `build.platforms` only
+  limited them: an arm64-only environment built arm64 alone, and its
+  recorded digest was one arm64 manifest, so a release had nothing to
+  copy for amd64. Now a spec that declares `platforms` in `[build]`
+  builds every declared platform and pushes one OCI (Open Container
+  Initiative) image index over them; nodes pull their own platform. The
+  status records the index digest with `media_type` and `platforms`
+  (each platform's manifest digest), and so do the history and `piceli
+  gitops builds --json` (new field `digests`). Every platform's manifest
+  stays in the registry under the index. A spec without `platforms`, and
+  `Controller(delivery="nodes")`, keep the 0.68.0 rule. The provenance's
+  `platforms` now lists the platforms built, not every enabled one. See
+  {ref}`pipeline-declared-platforms`.
+
+The build rule runs in the controller: upgrade the controller. Images of
+a spec that declares `platforms` rebuild once (their platforms are part
+of the image key).
+
 ## Version 0.73.0
 
 **Features**

@@ -713,6 +713,24 @@ def _run(cluster: Any, job: Mapping[str, Any], **options: Any) -> Any:
     return run_build(job, build_key(job), **options)
 
 
+def _platforms(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """``{"platforms": {platform: manifest digest}}`` of a Job receipt's
+    image built for several platforms (one OCI index), else ``{}``."""
+    found = entry.get("platforms")
+    if not isinstance(found, Mapping) or len(found) < 2:
+        return {}
+    return {"platforms": {str(k): str(v) for k, v in sorted(found.items())}}
+
+
+def _built_platforms(entry: Mapping[str, Any]) -> tuple[str, ...]:
+    """The platforms a Job receipt's image was built for."""
+    found = entry.get("platforms")
+    if isinstance(found, Mapping) and found:
+        return tuple(sorted(str(item) for item in found))
+    platform = entry.get("platform")
+    return (str(platform),) if isinstance(platform, str) and platform else ()
+
+
 def build_failed(message: str, error: Any) -> CompositionError:
     """``component-build-failed`` keeping the failing command's output tail.
 
@@ -1314,9 +1332,10 @@ class JobBuilder:
                     str(entry["pull_ref"]),
                     str(entry["manifest_digest"]),
                     {
+                        **_platforms(entry),
                         "provenance": self._provenance(
                             {item.source: item.commit}, began, entry
-                        )
+                        ),
                     },
                 )
             return built
@@ -1339,7 +1358,11 @@ class JobBuilder:
             built[name] = BuiltImage(
                 str(entry["pull_ref"]),
                 str(entry["manifest_digest"]),
-                {"provenance": self._provenance(work.commits, began, entry)},
+                {
+                    # 0.74.0: each platform's manifest under the index.
+                    **_platforms(entry),
+                    "provenance": self._provenance(work.commits, began, entry),
+                },
             )
         return built
 
@@ -1360,7 +1383,8 @@ class JobBuilder:
             started_at=began,
             finished_at=_utc(),
             toolchains=toolchains if isinstance(toolchains, Mapping) else None,
-            platforms=self.settings.platforms,
+            # 0.74.0: the platforms this build made, not every enabled one.
+            platforms=_built_platforms(entry) or self.settings.platforms,
         )
 
     def _claim(self) -> dict[str, Any]:

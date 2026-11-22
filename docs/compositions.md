@@ -120,6 +120,35 @@ on, out of those the controller enables (`piceli gitops enable --platform`):
 - An environment on another cluster than the controller's builds every
   enabled platform, as before.
 
+(pipeline-declared-platforms)=
+#### Declared platforms are all built (0.74.0)
+
+A spec that declares `platforms` in `[build]` builds **every** declared
+platform, whatever nodes the pods run on, and pushes each image as one
+OCI (Open Container Initiative) image index over them:
+
+```toml
+[build]
+platforms = ["linux/amd64", "linux/arm64"]
+```
+
+- The status records the index digest (`digest`, with `media_type` and
+  the per-platform `platforms` map), and so do the history and
+  `piceli gitops builds --json` (`digests`). Nodes pull the index and get
+  their own platform.
+- Every platform's manifest stays in the registry under the index, so
+  retention keeps it with the index. A release copies that digest to
+  another registry with `piceli artifacts copy` ({doc}`publishing_images`):
+  build once, promote by digest.
+- A spec without `platforms` keeps the 0.68.0 rule above. That is the way
+  to build only what the pods run: leave `platforms` out.
+- A platform the nodes need that the spec does not declare fails the
+  build (`node-platform-mismatch`), as before.
+- With `Controller(delivery="nodes")` nothing would keep the other
+  platforms (no registry), so the 0.68.0 rule stays.
+- A declared platform need not be enabled with `piceli gitops enable
+  --platform`: host builds cross-compile.
+
 ### Several images from one source
 
 Two images built from different paths of the **same** repository each get
@@ -203,7 +232,9 @@ an output image is a component:
   it reads), `sources` (every source it reads, at its commit),
   `source_digest` (the change key), `digest` and `image` (the pushed image),
   `state` (`building`, `rolling`, `synced`, `unchanged`, `failed`), `health`
-  and `updated_at`;
+  and `updated_at`; 0.74.0: an image built for several platforms also has
+  `media_type` (`application/vnd.oci.image.index.v1+json`: `digest` is the
+  OCI index) and `platforms` (each platform's manifest digest);
 - `envs.<env>.revision` holds the composition repository's commit too;
 - `controller.composition_repo`: `source`, `branch`, `entry`, `commit` (the
   imported one), `error` and `failed` (a commit that did not import).
