@@ -66,12 +66,17 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.73
+## What's new in 0.74
 
-- **Files of a Nix build come back**: `piceli dev nix build --artifact
-  release.json` copies named files of the built output to this machine,
-  each listed with its sha256; the build's private inputs are fetched as
-  for any build.
+- **Build once, promote by digest**: a pipeline spec that declares
+  `platforms` builds all of them into one OCI (Open Container Initiative)
+  image index, and `piceli artifacts copy` copies that index, every
+  platform and its SBOM and signatures to another registry, digests kept.
+- **Waiting is not failing**: a sync that waits for its build no longer
+  ends as a failed run in OpenTelemetry.
+- **Approvals hold**: a second verification of the same commit keeps a
+  `piceli promote` or gated release approval valid; a failed promotion
+  push resumes with the same command.
 
 ## Web UI
 
