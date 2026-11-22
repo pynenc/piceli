@@ -23,10 +23,22 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `Controller(delivery="nodes")`, keep the 0.68.0 rule. The provenance's
   `platforms` now lists the platforms built, not every enabled one. See
   {ref}`pipeline-declared-platforms`.
+- **`piceli artifacts copy` promotes an image by digest.** `--from
+  oci://host/repo@sha256:… --to oci://host/repo:tag` copies the index,
+  every platform's manifest and blob, and the referrers (SBOM, provenance,
+  signatures, and the referrers of those), keeping every digest; `skopeo
+  copy --all --preserve-digests` lost the referrers. Same plan, approve and
+  receipt flow as `artifacts publish`: without `--approve` it prints the
+  plan digest (exit 3) and contacts nothing; the tag moves last, and one
+  that names another digest is refused (`copy-tag-exists`) unless
+  `--move-tag`. New error codes `copy-invalid`, `copy-not-approved`,
+  `copy-tag-exists`, `copy-verification-failed` and `copy-failed`. See
+  {ref}`artifacts-copy`.
 
 The build rule runs in the controller: upgrade the controller. Images of
 a spec that declares `platforms` rebuild once (their platforms are part
-of the image key).
+of the image key). `artifacts copy` runs in the client: upgrade the client
+that releases.
 
 ## Version 0.73.0
 

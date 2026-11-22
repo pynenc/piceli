@@ -169,6 +169,11 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`context-empty`](#error-context-empty) | build-spec | no |
 | [`context-missing`](#error-context-missing) | build-spec | no |
 | [`context-symlink`](#error-context-symlink) | build-spec | no |
+| [`copy-failed`](#error-copy-failed) | publish | yes |
+| [`copy-invalid`](#error-copy-invalid) | publish | no |
+| [`copy-not-approved`](#error-copy-not-approved) | publish | yes |
+| [`copy-tag-exists`](#error-copy-tag-exists) | publish | no |
+| [`copy-verification-failed`](#error-copy-verification-failed) | publish | yes |
 | [`cosign-tool-required`](#error-cosign-tool-required) | publish | no |
 | [`crd-invalid`](#error-crd-invalid) | codegen | no |
 | [`crd-not-found`](#error-crd-not-found) | codegen | no |
@@ -5666,6 +5671,46 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 
 ## Publishing multi-platform images to a hosted registry (`piceli artifacts publish`)
+
+(error-copy-failed)=
+### `copy-failed`
+
+**Copying an image failed.** The copy stopped for a reason the registry did not name, or the image has more referrers than one copy takes (256).
+
+- **Fix:** Read the receipt's `reason`, fix the registry access and copy again (safe to retry: only missing blobs are sent).
+- **Retry-safe:** yes
+
+(error-copy-invalid)=
+### `copy-invalid`
+
+**Invalid copy request.** `piceli artifacts copy` needs `--from oci://host[:port]/repository@sha256:<digest>` (a digest, not a tag) and `--to oci://host[:port]/repository[:tag]`; `--move-tag` needs a tag, and `--to` cannot be the `--from` repository without a tag.
+
+- **Fix:** Fix the option, for example `--from oci://127.0.0.1:5000/shop/api@sha256:<digest> --to oci://ghcr.io/example/api:1.4.0`.
+- **Retry-safe:** no
+
+(error-copy-not-approved)=
+### `copy-not-approved`
+
+**Copy plan not approved.** `--approve` is not the digest of this exact copy plan (source digest, target, tag, referrers and `--move-tag`).
+
+- **Fix:** Run `piceli artifacts copy` without `--approve`, review the plan and pass its `plan_digest` to `--approve`.
+- **Retry-safe:** yes
+
+(error-copy-tag-exists)=
+### `copy-tag-exists`
+
+**Target tag names another image.** The `--to` tag already names another digest in the target repository. Copying would silently replace what that tag installs. Nothing was pushed.
+
+- **Fix:** Copy under a new tag, or pass `--move-tag` (part of the approved plan) when replacing it is intended; the receipt records the previous digest.
+- **Retry-safe:** no
+
+(error-copy-verification-failed)=
+### `copy-verification-failed`
+
+**Copied image did not verify.** Reading back the target did not match the source: the tag does not name the digest, the bytes differ, a platform manifest is missing or a referrer (SBOM, provenance, signature) is not listed.
+
+- **Fix:** Check that nothing else writes to the repository at the same time and that the registry supports OCI image indexes, then copy again (content-addressed, so a retry is safe).
+- **Retry-safe:** yes
 
 (error-cosign-tool-required)=
 ### `cosign-tool-required`
