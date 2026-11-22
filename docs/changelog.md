@@ -4,6 +4,23 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.74.0
+
+**Fixes**
+
+- **A sync waiting for its build is not a failed run.** While a build host
+  built the commit, the controller ended one `SYNC <composition>/<env>`
+  run per poll as failed (`error.type: build-waiting`, status `ERROR`),
+  each with `build <image>` spans marked `component-build-failed`: a
+  dozen failed runs per good deploy, and alerts on failed runs fired for
+  the whole build. Such a run now stays open, like a run waiting for its
+  approval: one trace from the push to the result, one `build <image>`
+  span per image from the first wait to the delivery, and one INFO event
+  `piceli.build.waiting`. `component-build-failed` stays for a build that
+  failed. A run replaced by a newer revision (`superseded`) has status
+  unset and counts no run error; its unfinished builds are
+  `cancellation`.
+
 ## Version 0.73.0
 
 **Features**
