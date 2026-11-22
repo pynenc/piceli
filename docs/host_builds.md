@@ -421,8 +421,11 @@ in `[build]`. `piceli artifacts build-spec run --spec host-build.toml` then
 builds every platform (without a node: the platform's facts, 4 KiB pages)
 and joins each image's manifests in an OCI image index; `piceli artifacts
 publish` pushes them for other people's clusters. See
-{doc}`publishing_images`. A deploy still builds for its one node, and the
-node's platform must be in the list. Steps that are the same for every
+{doc}`publishing_images`. `piceli deploy` still builds for its one node,
+and the node's platform must be in the list. A GitOps pipeline
+environment (0.74.0) builds every declared platform and records the index
+digest, so a release can copy it by digest (see
+{ref}`pipeline-declared-platforms`). Steps that are the same for every
 platform (a `wasm32` bundle) run once when declared in
 `build.shared_commands` (see above).
 

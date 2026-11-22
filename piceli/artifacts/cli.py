@@ -112,8 +112,43 @@ def build_parser() -> argparse.ArgumentParser:
     add_build_spec_commands(sub)
     add_publish_command(sub)
     add_publish_files_commands(sub)
+    add_copy_command(sub)
     add_retention_command(sub)
     return parser
+
+
+def add_copy_command(sub: Any) -> None:
+    """``artifacts copy`` (0.74.0): one image by digest, every platform and
+    its referrers, to another registry."""
+    cmd = sub.add_parser(
+        "copy",
+        help="copy an image by digest (index, every platform, SBOM, provenance, "
+        "signatures) to another registry",
+    )
+    cmd.add_argument(
+        "--from",
+        dest="source",
+        required=True,
+        help="oci://host[:port]/repository@sha256:<digest>",
+    )
+    cmd.add_argument("--to", required=True, help="oci://host[:port]/repository[:tag]")
+    cmd.add_argument(
+        "--no-referrers",
+        action="store_true",
+        help="copy only the image, not its SBOM, provenance and signatures",
+    )
+    cmd.add_argument("--move-tag", action="store_true")
+    cmd.add_argument("--approve", help="the plan digest printed without --approve")
+    source = cmd.add_mutually_exclusive_group()
+    source.add_argument("--from-credentials", type=Path)
+    source.add_argument("--from-docker-config", type=Path)
+    cmd.add_argument("--from-ca-file", type=Path)
+    credentials = cmd.add_mutually_exclusive_group()
+    credentials.add_argument("--credentials", type=Path)
+    credentials.add_argument("--docker-config", type=Path)
+    cmd.add_argument("--ca-file", type=Path)
+    cmd.add_argument("--out", type=Path, help="write the copy receipt here")
+    cmd.add_argument("--timeout", type=float, default=1800)
 
 
 def add_publish_command(sub: Any) -> None:
@@ -219,6 +254,8 @@ def main(arguments: list[str] | None = None) -> int:
         return run_publish_files_command(args)
     if args.command == "fetch-file":
         return run_fetch_file_command(args)
+    if args.command == "copy":
+        return run_copy_command(args)
     if args.command == "retention":
         return run_retention_command(args)
     try:
@@ -583,6 +620,75 @@ def _registry_credentials(
     if args.docker_config is not None:
         return docker_config_credentials(args.docker_config.absolute(), registry)
     return None
+
+
+def run_copy_command(args: argparse.Namespace, **seams: Any) -> int:
+    """Plan (exit 3), or copy an approved plan (exit 0, or 1 on failure)."""
+    from piceli.artifacts.image_copy import (
+        Copier,
+        CopyError,
+        CopyGrant,
+        CopyPlan,
+        summary,
+    )
+    from piceli.artifacts.registry import docker_config_credentials
+    from piceli.cli_contract import EXIT_APPROVAL, emit_json, say
+
+    try:
+        plan = CopyPlan.parse(
+            args.source,
+            args.to,
+            referrers=not args.no_referrers,
+            move_tag=args.move_tag,
+        )
+        if args.approve is None or args.approve != plan.digest:
+            if args.approve is not None:
+                raise CopyError("copy-not-approved")
+            emit_json(
+                {
+                    "state": "approval-required",
+                    **plan.preview(),
+                    "plan_hash": plan.digest,
+                }
+            )
+            tag = f":{plan.target.tag}" if plan.target.tag else ""
+            say(
+                f"copy: {plan.source.digest} to {plan.target.registry}/"
+                f"{plan.target.repository}{tag}; approve with --approve {plan.digest}"
+            )
+            return EXIT_APPROVAL
+        source_credentials = None
+        if args.from_credentials is not None:
+            source_credentials = _input(
+                "invalid-credentials-file",
+                lambda: RegistryCredentials.load(args.from_credentials.absolute()),
+            )
+        elif args.from_docker_config is not None:
+            source_credentials = docker_config_credentials(
+                args.from_docker_config.absolute(), plan.source.repository.registry
+            )
+        copier = Copier(
+            source_credentials=source_credentials,
+            credentials=_registry_credentials(args, plan.target.registry),
+            source_ca_file=args.from_ca_file.absolute() if args.from_ca_file else None,
+            ca_file=args.ca_file.absolute() if args.ca_file else None,
+            timeout=args.timeout,
+            **seams,
+        )
+        result = copier.copy(plan, CopyGrant(plan.digest, time.time() + args.timeout))
+        if args.out is not None:
+            write_receipt(args.out, result)
+        emit_json(result)
+        if result["state"] != "copied":
+            reason = result["reason"] if result["reason"] in ERRORS else "copy-failed"
+            say(f"copy: failed [{reason}]")
+            return 1
+        say(summary(result))
+        return 0
+    except (CopyError, DeliveryInputError) as error:
+        return rejection(error.code if error.code in ERRORS else "copy-invalid")
+    except (ValueError, KeyError, TypeError, OSError):
+        return rejection("copy-invalid")
 
 
 def run_publish_files_command(args: argparse.Namespace, **seams: Any) -> int:

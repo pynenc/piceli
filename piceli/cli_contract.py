@@ -891,6 +891,27 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "and contacts nothing. Pushes are content-addressed; a version tag "
             "that names another image is refused unless --move-tag.",
         ),
+        "artifacts copy": _C(
+            "Copy an image by digest (index, every platform, SBOM, provenance, signatures) to another registry.",
+            contract="conforms",
+            reads=(
+                "source OCI registry (manifests, blobs, referrers)",
+                "credentials files or Docker configs",
+            ),
+            writes=(
+                "target OCI registry (blobs, manifests, index, referrers, tag)",
+                "--out receipt",
+            ),
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            exit_codes=(0, 1, 2, 3),
+            notes="0.74.0. Without --approve it prints the plan and its digest "
+            "(exit 3) and contacts nothing. Every digest is preserved: the index, "
+            "each platform manifest and each referrer (the referrers API, else the "
+            "sha256-<digest> fallback tag). The tag moves last; one that names "
+            "another digest is refused unless --move-tag. Never prints a credential.",
+        ),
         "artifacts publish-files": _C(
             "Publish local files as one OCI artifact (each file one layer, by its sha256).",
             contract="conforms",

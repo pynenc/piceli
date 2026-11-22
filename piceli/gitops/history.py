@@ -201,6 +201,14 @@ def event(
             "state": _text(item.get("state"), 32),
             "built": name in built_set,
         }
+        platforms = _dict(item.get("platforms"))
+        if platforms:
+            # Added in 0.74.0: an image built for several platforms is one
+            # OCI index; each platform's manifest.
+            entries[str(name)]["media_type"] = _text(item.get("media_type"), 80)
+            entries[str(name)]["platforms"] = {
+                str(k)[:32]: str(v)[:80] for k, v in sorted(platforms.items())[:8]
+            }
         built_on = _provenance(item.get("provenance"))
         if built_on:
             # Added in 0.22.0: where the image was built.

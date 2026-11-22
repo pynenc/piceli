@@ -29,6 +29,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli artifacts build`](#cli-artifacts-build) | Assemble an OCI image layout from a plan without running code. | none | no |
 | [`piceli artifacts build-spec preview`](#cli-artifacts-build-spec-preview) | Preview a containerized build and its plan hash. | none | no |
 | [`piceli artifacts build-spec run`](#cli-artifacts-build-spec-run) | Run an approved containerized build and write a receipt. | none | yes |
+| [`piceli artifacts copy`](#cli-artifacts-copy) | Copy an image by digest (index, every platform, SBOM, provenance, signatures) to another registry. | none | yes |
 | [`piceli artifacts deliver`](#cli-artifacts-deliver) | Deliver a digest-approved image to a registry or node. | reads | yes |
 | [`piceli artifacts execute-command`](#cli-artifacts-execute-command) | Run a pinned external build command under an approved plan. | none | yes |
 | [`piceli artifacts fetch-file`](#cli-artifacts-fetch-file) | Download one published file (a blob) by its digest and check it. | none | no |
@@ -353,6 +354,40 @@ Run an approved containerized build and write a receipt.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
+
+(cli-artifacts-copy)=
+### `piceli artifacts copy`
+
+Copy an image by digest (index, every platform, SBOM, provenance, signatures) to another registry.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--from` | text | required | oci://host[:port]/repository@sha256:<digest> |
+| `--to` | text | required | oci://host[:port]/repository[:tag] |
+| `--no-referrers` | boolean | `False` | copy only the image, not its SBOM, provenance and signatures |
+| `--move-tag` | boolean | `False` |  |
+| `--approve` | text |  | the plan digest printed without --approve |
+| `--from-credentials` | path |  |  |
+| `--from-docker-config` | path |  |  |
+| `--from-ca-file` | path |  |  |
+| `--credentials` | path |  |  |
+| `--docker-config` | path |  |  |
+| `--ca-file` | path |  |  |
+| `--out` | path |  | write the copy receipt here |
+| `--timeout` | float | `1800` |  |
+
+Mutually exclusive: `from_credentials` / `from_docker_config`; `credentials` / `docker_config`.
+
+**Contract**
+
+- **Reads:** source OCI registry (manifests, blobs, referrers), credentials files or Docker configs
+- **Writes:** target OCI registry (blobs, manifests, index, referrers, tag), --out receipt
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** 0.74.0. Without --approve it prints the plan and its digest (exit 3) and contacts nothing. Every digest is preserved: the index, each platform manifest and each referrer (the referrers API, else the sha256-<digest> fallback tag). The tag moves last; one that names another digest is refused unless --move-tag. Never prints a credential.
 
 (cli-artifacts-deliver)=
 ### `piceli artifacts deliver`

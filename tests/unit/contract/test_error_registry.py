@@ -45,6 +45,7 @@ FIRST_ARGUMENT = {
     "CompositionError",
     "_refuse",
     "MirrorError",
+    "CopyError",
     "StateError",
     "SecretSourceError",
     "ServiceError",

@@ -138,6 +138,57 @@ images:
 `helm install … --values dist/images.yaml` render
 `registry.example/shop/api:1.4.0@sha256:…`.
 
+(artifacts-copy)=
+## Promote a built image by digest: `piceli artifacts copy` (0.74.0)
+
+When a GitOps pipeline already built and tested an image, a release need
+not build it again: copy that digest to the release registry. `piceli
+artifacts copy` copies the index, every platform's manifest and blob, and
+its referrers (SBOM, provenance and signatures, also a signature of an
+SBOM), keeping every digest. `skopeo copy --all --preserve-digests` keeps
+the image but not the referrers.
+
+```sh
+# The digest the environment runs (a pipeline spec that declares
+# build.platforms records an OCI index; see compositions).
+piceli gitops status --json | jq -r '.envs.main.components.api.digest'
+
+# Reach the in-cluster registry (plain HTTP is allowed on loopback).
+kubectl -n piceli-system port-forward svc/piceli-registry 5000:5000 &
+
+# Without --approve it prints the plan and its digest (exit 3).
+piceli artifacts copy \
+    --from oci://127.0.0.1:5000/shop/api@sha256:<index digest> \
+    --to oci://ghcr.io/example/api:1.4.0 --docker-config ~/.docker/config.json
+piceli artifacts copy \
+    --from oci://127.0.0.1:5000/shop/api@sha256:<index digest> \
+    --to oci://ghcr.io/example/api:1.4.0 --docker-config ~/.docker/config.json \
+    --approve sha256:<plan digest> --out dist/copy.json
+```
+
+1. **Plan** (no network): the source repository and digest, the target
+   repository and tag, `--no-referrers` and `--move-tag`. Its digest is
+   what `--approve` names.
+2. **The image**: the index (or manifest) by digest, each platform's
+   manifest, and only the blobs the target lacks.
+3. **The referrers** of the index, of each platform manifest and of each
+   referrer, read from the referrers API or the `sha256-<digest>` fallback
+   tag and written the same way.
+4. **The tag**, last. A tag that names another digest is refused
+   (`copy-tag-exists`) before anything is pushed, unless `--move-tag`.
+5. **Read back**: the tag names the digest, each platform manifest is
+   there and each referrer is listed (`copy-verification-failed`
+   otherwise).
+
+`--to` without a tag copies by digest only. The source is read anonymously
+unless `--from-credentials` or `--from-docker-config`; the target uses
+`--credentials` or `--docker-config` (below); `--from-ca-file` and
+`--ca-file` add a CA. The receipt (`piceli.copy-receipt.v1`) gives the
+`digest`, its `media_type`, `platforms` (each platform's manifest digest),
+the blobs uploaded and skipped, each referrer (`subject`, `digest`,
+`artifact_type`, `result`) and `previous` (the digest a moved tag named).
+A second run copies nothing (`result: already-present`).
+
 ## Registries and credentials
 
 - A public registry needs no credentials to pull; pushing always does.
@@ -192,6 +243,9 @@ yourself after publishing if you want it.
 | `publish-tag-exists` | The version tag names another image (use a new version or `--move-tag`) |
 | `publish-input-changed` | An SBOM or provenance file differs from the build receipt |
 | `publish-verification-failed` | What the registry serves differs from what was pushed |
+| `copy-invalid`, `copy-not-approved` | Bad `--from`/`--to` (a digest is required), or `--approve` is not this plan's digest |
+| `copy-tag-exists` | The `--to` tag names another digest (use a new tag or `--move-tag`) |
+| `copy-verification-failed`, `copy-failed` | The target does not serve what was copied, or the copy stopped |
 | `invalid-docker-config`, `credential-helper-failed` | Docker config credentials could not be read |
 | `sign-key-invalid`, `sign-failed`, `cosign-tool-required` | Signing could not run |
 
