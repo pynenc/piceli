@@ -4,6 +4,7 @@ import os
 import shutil
 import tempfile
 import time
+import zlib
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -170,11 +171,40 @@ def _tofu_binary() -> str | None:
     return found if found and Path(found).is_file() else None
 
 
+def _keep_shard(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """``PICELI_TEST_SHARD=I/N`` keeps the I-th of N parts of the suite.
+
+    CI splits the unit and acceptance tests over N runners. A test belongs to
+    the part its node id hashes to (CRC-32, the same in every process and
+    xdist worker), so the N parts together run every test exactly once.
+    """
+    spec = os.environ.get("PICELI_TEST_SHARD", "").strip()
+    if not spec:
+        return
+    try:
+        index, count = (int(part) for part in spec.split("/"))
+    except ValueError:
+        raise pytest.UsageError(
+            f"PICELI_TEST_SHARD={spec!r}: expected I/N, e.g. 1/2"
+        ) from None
+    if not 1 <= index <= count:
+        raise pytest.UsageError(f"PICELI_TEST_SHARD={spec!r}: need 1 <= I <= N")
+    kept: list[pytest.Item] = []
+    dropped: list[pytest.Item] = []
+    for item in items:
+        part = zlib.crc32(item.nodeid.encode()) % count
+        (kept if part == index - 1 else dropped).append(item)
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+        items[:] = kept
+
+
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
     """``tofu`` tests run the real OpenTofu binary, the slowest in the suite:
     only with ``PICELI_TOFU_TESTS=1`` (and a ``tofu`` to run)."""
+    _keep_shard(config, items)
     if os.environ.get("PICELI_TOFU_TESTS") != "1":
         reason = "runs the real OpenTofu binary; set PICELI_TOFU_TESTS=1"
     elif _tofu_binary() is None:

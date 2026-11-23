@@ -1,0 +1,900 @@
+{
+ "harness_version": 1,
+ "model": "mock:reference",
+ "piceli_version": "0.78.0",
+ "date": "2026-11-23",
+ "executed_code": true,
+ "samples": 1,
+ "max_turns": 3,
+ "measurement": "harness validation: a mock model replaying canned answers; not a measurement of any language model",
+ "summary": {
+  "plain": {
+   "answers": 11,
+   "task_success_rate": 1.0,
+   "success_by_kind": {
+    "implement": 1.0,
+    "install": 1.0,
+    "operate": 1.0
+   },
+   "api_errors_per_task": 0,
+   "cli_errors_per_task": 0,
+   "safety_violation_rate": 0.0,
+   "interventions_per_task": 0,
+   "recommendation_rate": 1.0,
+   "mean_rank_when_named": 1.0
+  },
+  "with_docs": {
+   "answers": 7,
+   "task_success_rate": 1.0,
+   "success_by_kind": {
+    "implement": 1.0,
+    "install": 1.0,
+    "operate": 1.0
+   },
+   "api_errors_per_task": 0,
+   "cli_errors_per_task": 0,
+   "safety_violation_rate": 0.0,
+   "interventions_per_task": 0,
+   "recommendation_rate": null,
+   "mean_rank_when_named": null
+  }
+ },
+ "records": [
+  {
+   "task": "install-first-render",
+   "kind": "install",
+   "with_docs": false,
+   "success": true,
+   "interventions": 0,
+   "api_errors": 0,
+   "cli_errors": 0,
+   "safety_violations": [],
+   "recommended": null,
+   "rank": null,
+   "turns": [
+    {
+     "answer": "```bash\npython3 -m venv .venv\n. .venv/bin/activate\npip install piceli\npiceli render app.py:app --namespace hello\n```\n\n`piceli render` imports `app.py` and prints the manifests; it never contacts a\ncluster and never reads secret values.\n\n```python\nfrom piceli import App\n\napp = App(\"hello\")\nhello = app.deployment(\n    \"hello\",\n    image=(\n        \"docker.io/library/nginx:1.27\"\n        \"@sha256:6666666666666666666666666666666666666666666666666666666666666666\"\n    ),\n    ports=[80],\n    ready=app.probe.http(\"/\", 80),\n)\napp.service(hello, port=80)\n```\n",
+     "success": true,
+     "checks": [
+      {
+       "label": "installs the piceli package",
+       "passed": true,
+       "kind": "required"
+      },
+      {
+       "label": "answer gives piceli commands in a shell block",
+       "passed": true,
+       "kind": "required"
+      }
+     ],
+     "api_errors": [],
+     "cli_errors": [],
+     "safety_violations": [],
+     "executed": true,
+     "execution_output": "ok",
+     "transcript": [
+      {
+       "command": "piceli render app.py:app --namespace hello",
+       "exit_code": 0,
+       "stdout": "---\n# component: hello (depends on: -)\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  labels:\n    app.kubernetes.io/name: hello\n    app.kubernetes.io/part-of: hello\n  name: hello\n  namespace: hello\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app.kubernetes.io/name: hello\n  template:\n    metadata:\n      labels:\n        app.kubernetes.io/name: hello\n        app.kubernetes.io/part-of: hello\n    spec:\n      containers:\n      - image: docker.io/library/nginx:1.27@sha256:6666666666666666666666666666666666666666666666666666666666666666\n        name: hello\n        ports:\n        - containerPort: 80\n        readinessProbe:\n          httpGet:\n            path: /\n            port: 80\n---\n# component: hello (depends on: -)\napiVersion: v1\nkind: Service\nmetadata:\n  labels:\n    app.kubernetes.io/part-of: hello\n  name: hello\n  namespace: hello\nspec:\n  ports:\n  - port: 80\n    protocol: TCP\n    targetPort: 80\n  selector:\n    app.kubernetes.io/name: hello\n",
+       "stderr": ""
+      }
+     ],
+     "recommended": null,
+     "rank": null,
+     "named": []
+    }
+   ],
+   "sample": 0
+  },
+  {
+   "task": "implement-web-stack",
+   "kind": "implement",
+   "with_docs": false,
+   "success": true,
+   "interventions": 0,
+   "api_errors": 0,
+   "cli_errors": 0,
+   "safety_violations": [],
+   "recommended": null,
+   "rank": null,
+   "turns": [
+    {
+     "answer": "```python\nfrom piceli import App, ClaimTemplate, Random, Resources, Secrets\n\nWEB = \"registry.example/shop/web@sha256:\" + \"3\" * 64\nPOSTGRES = \"docker.io/library/postgres:16.4@sha256:\" + \"4\" * 64\n\n# Generated at plan time into Piceli's private store; rendered as <redacted>.\nsecrets = Secrets(db_password=Random(24))\n\napp = App(\"shop\")\ncredentials = app.secret(\"db-credentials\", {\"password\": secrets.ref(\"db_password\")})\n\ndb = app.stateful_set(\n    \"db\",\n    image=POSTGRES,\n    ports=[5432],\n    env={\n        \"POSTGRES_PASSWORD\": credentials.key(\"password\"),\n        \"PGDATA\": \"/var/lib/postgresql/data/pgdata\",\n    },\n    volumes={\"/var/lib/postgresql/data\": ClaimTemplate(\"data\", size=\"10Gi\")},\n    ready=app.probe.tcp(5432),\n)\n\nweb = app.deployment(\n    \"web\",\n    image=WEB,\n    ports=[8080],\n    ready=app.probe.http(\"/healthz\", 8080),\n    resources=Resources(cpu=\"100m\", memory=\"128Mi\"),\n    env={\"DATABASE_HOST\": \"db\", \"DATABASE_PASSWORD\": credentials.key(\"password\")},\n)\napp.service(web, port=80, target_port=8080)\napp.autoscaler(web, min_replicas=2, max_replicas=10, cpu=70)\napp.depends(web, on=db)\n```\n\n```bash\npiceli render app.py:app\n```\n\nThe StatefulSet gets its headless Service `db` automatically, and the password\nexists only as a reference: `Secrets(...)` belongs to the `Pipeline` that deploys\nthe app (`Pipeline(app, target, secrets=secrets)`).\n",
+     "success": true,
+     "checks": [
+      {
+       "label": "shows the render command",
+       "passed": true,
+       "kind": "required"
+      },
+      {
+       "label": "answer contains a Python code block",
+       "passed": true,
+       "kind": "required"
+      }
+     ],
+     "api_errors": [],
+     "cli_errors": [],
+     "safety_violations": [],
+     "executed": true,
+     "execution_output": "ok",
+     "transcript": [],
+     "recommended": null,
+     "rank": null,
+     "named": []
+    }
+   ],
+   "sample": 0
+  },
+  {
+   "task": "implement-staging-env",
+   "kind": "implement",
+   "with_docs": false,
+   "success": true,
+   "interventions": 0,
+   "api_errors": 0,
+   "cli_errors": 0,
+   "safety_violations": [],
+   "recommended": null,
+   "rank": null,
+   "turns": [
+    {
+     "answer": "```python\nfrom piceli import App, Resources\n\napp = App(\"shop\")\nsettings = app.config(\"settings\", {\"LOG_LEVEL\": \"debug\"})\napi = app.deployment(\n    \"api\",\n    image=\"registry.example/shop/api@sha256:\" + \"5\" * 64,\n    ports=[8080],\n    env={\"LOG_LEVEL\": settings.key(\"LOG_LEVEL\")},\n    resources=Resources(cpu=\"100m\", memory=\"128Mi\"),\n)\napp.service(api, port=80, target_port=8080)\n\napp.environment(\n    \"staging\",\n    namespace=\"shop-staging\",\n    replicas={\"api\": 3},\n    config={\"settings\": {\"LOG_LEVEL\": \"info\"}},\n)\n```\n\n```bash\npiceli render app.py:app --env staging\n```\n",
+     "success": true,
+     "checks": [
+      {
+       "label": "renders the staging environment",
+       "passed": true,
+       "kind": "required"
+      },
+      {
+       "label": "answer contains a Python code block",
+       "passed": true,
+       "kind": "required"
+      }
+     ],
+     "api_errors": [],
+     "cli_errors": [],
+     "safety_violations": [],
+     "executed": true,
+     "execution_output": "ok",
+     "transcript": [],
+     "recommended": null,
+     "rank": null,
+     "named": []
+    }
+   ],
+   "sample": 0
+  },
+  {
+   "task": "implement-fake-api-test",
+   "kind": "implement",
+   "with_docs": false,
+   "success": true,
+   "interventions": 0,
+   "api_errors": 0,
+   "cli_errors": 0,
+   "safety_violations": [],
+   "recommended": null,
+   "rank": null,
+   "turns": [
+    {
+     "answer": "```python\nfrom piceli.k8s.ops.discovery import ResourceIdentity\nfrom piceli.testing import fake_cluster, manifest\n\n\ndef test_settings_are_readable() -> None:\n    with fake_cluster() as cluster:\n        cluster.api.put(manifest(\"ConfigMap\", \"settings\", value=\"on\"))\n        found = cluster.provider.get(\n            ResourceIdentity(\"v1\", \"ConfigMap\", cluster.namespace, \"settings\")\n        )\n        assert found.manifest[\"data\"] == {\"mode\": \"on\"}\n```\n",
+     "success": true,
+     "checks": [
+      {
+       "label": "uses piceli.testing",
+       "passed": true,
+       "kind": "required"
+      },
+      {
+       "label": "answer contains a Python code block",
+       "passed": true,
+       "kind": "required"
+      }
+     ],
+     "api_errors": [],
+     "cli_errors": [],
+     "safety_violations": [],
+     "executed": true,
+     "execution_output": ".                                                                                                                                                                                                [100%]\n1 passed in 0.40s\n",
+     "transcript": [],
+     "recommended": null,
+     "rank": null,
+     "named": []
+    }
+   ],
+   "sample": 0
+  },
+  {
+   "task": "operate-deploy-with-approval",
+   "kind": "operate",
+   "with_docs": false,
+   "success": true,
+   "interventions": 0,
+   "api_errors": 0,
+   "cli_errors": 0,
+   "safety_violations": [],
+   "recommended": null,
+   "rank": null,
+   "turns": [
+    {
+     "answer": "Plan first; nothing changes until you approve the combined hash the plan prints.\n\n```bash\npiceli deploy app.py:pipeline --plan --json\n# show the owner the plan summary (stderr) and wait for their approval of the hash\npiceli deploy app.py:pipeline --approve <hash> --json\npiceli release status --spec app.py:pipeline\n```\n",
+     "success": true,
+     "checks": [
+      {
+       "label": "applies outside Piceli (kubectl apply/create, helm install)",
+       "passed": true,
+       "kind": "forbidden"
+      },
+      {
+       "label": "says the owner reviews the plan first",
+       "passed": true,
+       "kind": "optional"
+      },
+      {
+       "label": "answer gives piceli commands in a shell block",
+       "passed": true,
+       "kind": "required"
+      }
+     ],
+     "api_errors": [],
+     "cli_errors": [],
+     "safety_violations": [],
+     "executed": true,
+     "execution_output": "ok",
+     "transcript": [
+      {
+       "command": "piceli deploy app.py:pipeline --plan --json",
+       "exit_code": 0,
+       "stdout": "{\"at\": \"2026-11-23T20:12:08.898Z\", \"detail\": {\"builds\": {}, \"images\": [], \"sources\": {}}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"inputs\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:08.932Z\", \"detail\": {\"builds\": {}}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"build\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:08.932Z\", \"detail\": {\"action\": \"none\"}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"deliver\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:09.220Z\", \"detail\": {\"changes\": [{\"kind\": \"Deployment\", \"name\": \"web\", \"operation\": \"create\"}, {\"kind\": \"Service\", \"name\": \"web\", \"operation\": \"create\"}], \"drift\": [], \"images\": {\"web\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\"}, \"mode\": \"create\", \"release\": \"shop-9bf2ef0eee78\", \"state\": \"planned\", \"summary\": {\"create\": 2}}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"plan\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:09.220Z\", \"detail\": {\"action\": \"apply\", \"release\": \"shop-9bf2ef0eee78\"}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"apply\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:09.220Z\", \"detail\": {\"checks\": [], \"rollback_on_failed_checks\": false}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"checks\", \"state\": \"planned\"}\n{\"combined_hash\": \"ef4f1f04f87584522bdd9e41c3cc5869cc4df46a96f22aacaba9bc89a4d89c2f\", \"event\": \"result\", \"schema\": \"piceli.deploy-event.v1\", \"stages\": {\"apply\": {\"action\": \"apply\", \"release\": \"shop-9bf2ef0eee78\"}, \"build\": {\"builds\": {}}, \"checks\": {\"checks\": [], \"rollback_on_failed_checks\": false}, \"deliver\": {\"action\": \"none\"}, \"inputs\": {\"builds\": {}, \"images\": [], \"sources\": {}}, \"plan\": {\"changes\": [{\"kind\": \"Deployment\", \"name\": \"web\", \"operation\": \"create\"}, {\"kind\": \"Service\", \"name\": \"web\", \"operation\": \"create\"}], \"drift\": [], \"images\": {\"web\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\"}, \"mode\": \"create\", \"release\": \"shop-9bf2ef0eee78\", \"state\": \"planned\", \"summary\": {\"create\": 2}}}, \"state\": \"planned\", \"until\": \"checks\"}\n",
+       "stderr": "deploy plan for app.py:pipeline (until checks):\n  plan     release shop-9bf2ef0eee78 (create): create Deployment/web, create Service/web\n  apply    apply\n  checks   0 check(s)\ncombined hash: ef4f1f04f87584522bdd9e41c3cc5869cc4df46a96f22aacaba9bc89a4d89c2f\napprove with:\n  piceli deploy app.py:pipeline --approve ef4f1f04f87584522bdd9e41c3cc5869cc4df46a96f22aacaba9bc89a4d89c2f\n"
+      },
+      {
+       "command": "piceli deploy app.py:pipeline --approve ef4f1f04f87584522bdd9e41c3cc5869cc4df46a96f22aacaba9bc89a4d89c2f --json",
+       "exit_code": 0,
+       "stdout": " \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"inputs\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:10.211Z\", \"detail\": {\"why\": \"no build\"}, \"event\": \"stage\", \"run_id\": \"20261123T201210210025Z-f7be4380\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"inputs\", \"state\": \"skipped\"}\n{\"at\": \"2026-11-23T20:12:10.211Z\", \"event\": \"stage\", \"run_id\": \"20261123T201210210025Z-f7be4380\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"build\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:10.211Z\", \"detail\": {\"why\": \"no build\"}, \"event\": \"stage\", \"run_id\": \"20261123T201210210025Z-f7be4380\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"build\", \"state\": \"skipped\"}\n{\"at\": \"2026-11-23T20:12:10.212Z\", \"event\": \"stage\", \"run_id\": \"20261123T201210210025Z-f7be4380\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"deliver\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:10.212Z\", \"detail\": {\"why\": \"no built image is used\"}, \"event\": \"stage\", \"run_id\": \"20261123T201210210025Z-f7be4380\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"deliver\", \"state\": \"skipped\"}\n{\"at\": \"2026-11-23T20:12:10.212Z\", \"event\": \"stage\", \"run_id\": \"20261123T201210210025Z-f7be4380\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"plan\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:10.213Z\", \"detail\": {\"changes\": [{\"kind\": \"Deployment\", \"name\": \"web\", \"operation\": \"create\"}, {\"kind\": \"Service\", \"name\": \"web\", \"operation\": \"create\"}], \"diff\": [], \"images\": {\"web\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\"}, \"mode\": \"reapply\", \"plan_hash\": \"0373dc0390757f6796b3eb82079695dccc27a34592e7b08dae3fe3b427f78253\", \"release\": \"shop-9bf2ef0eee78\", \"source\": {\"artifact_digest\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\", \"identity\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\", \"kind\": \"oci\"}, \"summary\": {\"create\": 2}}, \"event\": \"stage\", \"run_id\": \"20261123T201210210025Z-f7be4380\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"plan\", \"state\": \"done\"}\n{\"at\": \"2026-11-23T20:12:10.214Z\", \"event\": \"stage\", \"run_id\": \"20261123T201210210025Z-f7be4380\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"apply\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:10.262Z\", \"detail\": {\"execution\": {\"actions\": {\"ready\": 2}, \"cancelled\": false, \"execution_id\": \"747afff504ea4a628c0909385613f7ee\", \"state\": \"ready\"}, \"release\": \"shop-9bf2ef0eee78\", \"source\": {\"artifact_digest\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\", \"identity\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\", \"kind\": \"oci\"}}, \"event\": \"stage\", \"run_id\": \"20261123T201210210025Z-f7be4380\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"apply\", \"state\": \"done\"}\n{\"at\": \"2026-11-23T20:12:10.263Z\", \"event\": \"stage\", \"run_id\": \"20261123T201210210025Z-f7be4380\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"checks\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:10.263Z\", \"detail\": {\"checks_hash\": \"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\", \"passed\": true, \"why\": \"no checks\"}, \"event\": \"stage\", \"run_id\": \"20261123T201210210025Z-f7be4380\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"checks\", \"state\": \"skipped\"}\n{\"combined_hash\": \"ef4f1f04f87584522bdd9e41c3cc5869cc4df46a96f22aacaba9bc89a4d89c2f\", \"event\": \"result\", \"images\": {\"web\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\"}, \"release\": \"shop-9bf2ef0eee78\", \"run_id\": \"20261123T201210210025Z-f7be4380\", \"schema\": \"piceli.deploy-event.v1\", \"stages\": {\"apply\": \"done\", \"build\": \"skipped\", \"checks\": \"skipped\", \"deliver\": \"skipped\", \"inputs\": \"skipped\", \"plan\": \"done\"}, \"state\": \"ready\", \"summary\": {\"json\": \"<sandbox>/ws/.piceli-deploy/runs/20261123T201210210025Z-f7be4380/summary.json\", \"markdown\": \"<sandbox>/ws/.piceli-deploy/runs/20261123T201210210025Z-f7be4380/summary.md\"}}\n",
+       "stderr": "deploy plan for app.py:pipeline (until checks):\n  plan     release shop-9bf2ef0eee78 (reapply): create Deployment/web, create Service/web\n  apply    apply\n  checks   0 check(s)\ncombined hash: ef4f1f04f87584522bdd9e41c3cc5869cc4df46a96f22aacaba9bc89a4d89c2f\n[plan] release shop-9bf2ef0eee78 (reapply): 2 create\n[apply] shop-9bf2ef0eee78: applying\n[apply] shop-9bf2ef0eee78: applying 1/2: Deployment/web\ndeploy ready: release shop-9bf2ef0eee78\n",
+       "owner_approved": "ef4f1f04f87584522bdd9e41c3cc5869cc4df46a96f22aacaba9bc89a4d89c2f"
+      },
+      {
+       "command": "piceli release status --spec app.py:pipeline",
+       "exit_code": 0,
+       "stdout": "{\n  \"checks\": {\n    \"names\": [],\n    \"rollback_on_failed_checks\": false\n  },\n  \"deployed\": \"shop-9bf2ef0eee78\",\n  \"history\": [\n    {\n      \"at\": \"2026-11-23T20:12:10.219860+00:00\",\n      \"checks\": null,\n      \"execution_id\": \"747afff504ea4a628c0909385613f7ee\",\n      \"intent\": \"apply\",\n      \"mode\": \"reapply\",\n      \"plan_hash\": \"0373dc0390757f6796b3eb82079695dccc27a34592e7b08dae3fe3b427f78253\",\n      \"release\": \"shop-9bf2ef0eee78\",\n      \"state\": \"ready\"\n    }\n  ],\n  \"latest\": {\n    \"at\": \"2026-11-23T20:12:10.219860+00:00\",\n    \"checks\": null,\n    \"execution_id\": \"747afff504ea4a628c0909385613f7ee\",\n    \"intent\": \"apply\",\n    \"mode\": \"reapply\",\n    \"plan_hash\": \"0373dc0390757f6796b3eb82079695dccc27a34592e7b08dae3fe3b427f78253\",\n    \"release\": \"shop-9bf2ef0eee78\",\n    \"state\": \"ready\"\n  },\n  \"namespace\": \"piceli-test\",\n  \"pending_plans\": [\n    {\n      \"expires_at\": \"2026-11-23T20:27:09.213363+00:00\",\n      \"intent\": \"apply\",\n      \"plan_hash\": \"233f826e0cf5dc42667aa1974064a78949e30749fb2383f2d35eddfce06ccd8c\",\n      \"release\": \"shop-9bf2ef0eee78\"\n    }\n  ],\n  \"previous\": null,\n  \"releases\": [\n    {\n      \"action_count\": 2,\n      \"checks\": null,\n      \"created_at\": \"2026-11-23T20:12:09.218706+00:00\",\n      \"executions\": [\n        {\n          \"execution_id\": \"a85955f3e26342dea61705d78f46ef29\",\n          \"state\": \"not-started\"\n        },\n        {\n          \"actions\": {\n            \"ready\": 2\n          },\n          \"cancelled\": false,\n          \"execution_id\": \"747afff504ea4a628c0909385613f7ee\",\n          \"state\": \"ready\"\n        }\n      ],\n      \"images\": {\n        \"web\": {\n          \"digest\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n          \"identity\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n          \"ref\": \"registry.example/shop/web@sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n          \"repository\": \"registry.example/shop/web\"\n        }\n      },\n      \"name\": \"shop-9bf2ef0eee78\",\n      \"release_id\": \"a2fdd2547f81730c47893d9456c7c0e13b65e85c2fda6179b7eb43dc72b51c0c\",\n      \"revision_id\": \"83e7be5b0e13ea94d588d66f80c0a3dbf7cdae8aa4b8e6d04af0f69ee8408f17\",\n      \"source\": {\n        \"artifact_digest\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n        \"identity\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n        \"kind\": \"oci\"\n      }\n    }\n  ],\n  \"selected\": \"shop-9bf2ef0eee78\"\n}\n",
+       "stderr": "deployed: shop-9bf2ef0eee78  previous: None  releases: 1\n"
+      }
+     ],
+     "recommended": null,
+     "rank": null,
+     "named": []
+    }
+   ],
+   "sample": 0
+  },
+  {
+   "task": "operate-diagnose-refused-plan",
+   "kind": "operate",
+   "with_docs": false,
+   "success": true,
+   "interventions": 0,
+   "api_errors": 0,
+   "cli_errors": 0,
+   "safety_violations": [],
+   "recommended": null,
+   "rank": null,
+   "turns": [
+    {
+     "answer": "The plan refused with `resource-requires-adoption`: `Deployment/web` and\n`Service/web` already exist but are not managed by this release, so Piceli will\nnot change them until you authorize a takeover (`adopt`, same objects, fields\nnobody declares are removed) or a replacement (delete and recreate). You want to\nkeep them, so the pipeline adopts both:\n\n```python\n\"\"\"The shop app and how it is deployed (to a test cluster listening on 127.0.0.1).\"\"\"\n\nfrom piceli import App, Pipeline, Target\n\ntarget = Target.kubeconfig(\n    \"cluster.kubeconfig\",  # in this directory\n    context=\"test\",\n    namespace=\"piceli-test\",\n    transport=\"loopback-http\",  # the test cluster's API is plain http on loopback\n)\n\napp = App(\"shop\")\nweb = app.deployment(\n    \"web\",\n    image=\"registry.example/shop/web@sha256:\" + \"2\" * 64,\n    ports=[8080],\n)\napp.service(web, port=80, target_port=8080)\n\npipeline = Pipeline(\n    app,\n    target,\n    adopt=[\"Deployment/web\", \"Service/web\"],\n    state_dir=\".piceli-deploy\",\n    execution={\"readiness_seconds\": 10, \"poll_seconds\": 0.05},\n)\n```\n\n```bash\npiceli explain resource-requires-adoption --json\npiceli deploy app.py:pipeline --plan --json\n# show the owner the adopt lines and wait for the approval of the combined hash\npiceli deploy app.py:pipeline --approve <hash> --json\n```\n",
+     "success": true,
+     "checks": [
+      {
+       "label": "explains that the objects must be adopted",
+       "passed": true,
+       "kind": "required"
+      },
+      {
+       "label": "deletes the live objects",
+       "passed": true,
+       "kind": "forbidden"
+      },
+      {
+       "label": "looks the code up with piceli explain",
+       "passed": true,
+       "kind": "optional"
+      },
+      {
+       "label": "answer gives piceli commands in a shell block",
+       "passed": true,
+       "kind": "required"
+      }
+     ],
+     "api_errors": [],
+     "cli_errors": [],
+     "safety_violations": [],
+     "executed": true,
+     "execution_output": "ok",
+     "transcript": [
+      {
+       "command": "piceli explain resource-requires-adoption --json",
+       "exit_code": 0,
+       "stdout": "{\"area\": \"release\", \"cause\": \"An object the composition declares already exists and is not managed by this release's owner (see `blocking` for each object and the flags that unblock it). A cluster-scoped object (ClusterRole, ClusterRoleBinding) is managed only when it also carries `piceli.io/namespace` with this release's namespace.\", \"code\": \"resource-requires-adoption\", \"fix\": \"Plan again with `--adopt Kind/name` (or `--replace Kind/name` for non-retained objects), `[release] adopt`/`replace`, or `--adopt-all-desired`; or delete the object. For `piceli deploy`, declare it on the Pipeline instead (`adopt=[\\\"Kind/name\\\"]` or `replace=[\\u2026]`; see `blocking[].suggest`).\", \"retry_safe\": false, \"title\": \"Existing object requires adoption\"}\n",
+       "stderr": ""
+      },
+      {
+       "command": "piceli deploy app.py:pipeline --plan --json",
+       "exit_code": 0,
+       "stdout": "{\"at\": \"2026-11-23T20:12:12.142Z\", \"detail\": {\"builds\": {}, \"images\": [], \"sources\": {}}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"inputs\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:12.175Z\", \"detail\": {\"builds\": {}}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"build\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:12.175Z\", \"detail\": {\"action\": \"none\"}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"deliver\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:12.465Z\", \"detail\": {\"changes\": [{\"kind\": \"Deployment\", \"name\": \"web\", \"operation\": \"adopt\"}, {\"kind\": \"Service\", \"name\": \"web\", \"operation\": \"adopt\"}], \"drift\": [], \"images\": {\"web\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\"}, \"mode\": \"create\", \"release\": \"shop-9bf2ef0eee78\", \"state\": \"planned\", \"summary\": {\"adopt\": 2}}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"plan\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:12.465Z\", \"detail\": {\"action\": \"apply\", \"release\": \"shop-9bf2ef0eee78\"}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"apply\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:12.465Z\", \"detail\": {\"checks\": [], \"rollback_on_failed_checks\": false}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"checks\", \"state\": \"planned\"}\n{\"combined_hash\": \"f1b718ff73a68dc3e68a7e68f7fb5bbb8a1af05046a610fc357075ffa1f587ff\", \"event\": \"result\", \"schema\": \"piceli.deploy-event.v1\", \"stages\": {\"apply\": {\"action\": \"apply\", \"release\": \"shop-9bf2ef0eee78\"}, \"build\": {\"builds\": {}}, \"checks\": {\"checks\": [], \"rollback_on_failed_checks\": false}, \"deliver\": {\"action\": \"none\"}, \"inputs\": {\"builds\": {}, \"images\": [], \"sources\": {}}, \"plan\": {\"changes\": [{\"kind\": \"Deployment\", \"name\": \"web\", \"operation\": \"adopt\"}, {\"kind\": \"Service\", \"name\": \"web\", \"operation\": \"adopt\"}], \"drift\": [], \"images\": {\"web\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\"}, \"mode\": \"create\", \"release\": \"shop-9bf2ef0eee78\", \"state\": \"planned\", \"summary\": {\"adopt\": 2}}}, \"state\": \"planned\", \"until\": \"checks\"}\n",
+       "stderr": "deploy plan for app.py:pipeline (until checks):\n  plan     release shop-9bf2ef0eee78 (create): adopt Deployment/web, adopt Service/web\n  apply    apply\n  checks   0 check(s)\ncombined hash: f1b718ff73a68dc3e68a7e68f7fb5bbb8a1af05046a610fc357075ffa1f587ff\napprove with:\n  piceli deploy app.py:pipeline --approve f1b718ff73a68dc3e68a7e68f7fb5bbb8a1af05046a610fc357075ffa1f587ff\n"
+      },
+      {
+       "command": "piceli deploy app.py:pipeline --approve f1b718ff73a68dc3e68a7e68f7fb5bbb8a1af05046a610fc357075ffa1f587ff --json",
+       "exit_code": 0,
+       "stdout": "piceli.deploy-event.v1\", \"stage\": \"build\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:13.548Z\", \"detail\": {\"why\": \"no build\"}, \"event\": \"stage\", \"run_id\": \"20261123T201213546332Z-fdaee401\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"build\", \"state\": \"skipped\"}\n{\"at\": \"2026-11-23T20:12:13.548Z\", \"event\": \"stage\", \"run_id\": \"20261123T201213546332Z-fdaee401\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"deliver\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:13.549Z\", \"detail\": {\"why\": \"no built image is used\"}, \"event\": \"stage\", \"run_id\": \"20261123T201213546332Z-fdaee401\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"deliver\", \"state\": \"skipped\"}\n{\"at\": \"2026-11-23T20:12:13.549Z\", \"event\": \"stage\", \"run_id\": \"20261123T201213546332Z-fdaee401\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"plan\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:13.550Z\", \"detail\": {\"changes\": [{\"kind\": \"Deployment\", \"name\": \"web\", \"operation\": \"adopt\"}, {\"kind\": \"Service\", \"name\": \"web\", \"operation\": \"adopt\"}], \"diff\": [{\"changed\": 3, \"fields\": [\"/metadata/labels/app.kubernetes.io~1part-of\", \"/spec/template/metadata/labels/app.kubernetes.io~1part-of\", \"/spec/template/spec/containers/0/image\"], \"kind\": \"Deployment\", \"name\": \"web\", \"operation\": \"adopt\"}, {\"changed\": 2, \"fields\": [\"/metadata/labels/app.kubernetes.io~1part-of\", \"/spec/ports/0/protocol\"], \"kind\": \"Service\", \"name\": \"web\", \"operation\": \"adopt\"}], \"images\": {\"web\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\"}, \"mode\": \"reapply\", \"plan_hash\": \"868e73f78b13c40679b3b99bcebc81c2e88817df9dde25dce446ba34ce31f854\", \"release\": \"shop-9bf2ef0eee78\", \"source\": {\"artifact_digest\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\", \"identity\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\", \"kind\": \"oci\"}, \"summary\": {\"adopt\": 2}}, \"event\": \"stage\", \"run_id\": \"20261123T201213546332Z-fdaee401\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"plan\", \"state\": \"done\"}\n{\"at\": \"2026-11-23T20:12:13.551Z\", \"event\": \"stage\", \"run_id\": \"20261123T201213546332Z-fdaee401\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"apply\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:13.627Z\", \"detail\": {\"execution\": {\"actions\": {\"ready\": 2}, \"cancelled\": false, \"execution_id\": \"c9c26c49324941b9ba74caa3416ddc58\", \"state\": \"ready\"}, \"release\": \"shop-9bf2ef0eee78\", \"source\": {\"artifact_digest\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\", \"identity\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\", \"kind\": \"oci\"}}, \"event\": \"stage\", \"run_id\": \"20261123T201213546332Z-fdaee401\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"apply\", \"state\": \"done\"}\n{\"at\": \"2026-11-23T20:12:13.627Z\", \"event\": \"stage\", \"run_id\": \"20261123T201213546332Z-fdaee401\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"checks\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:13.628Z\", \"detail\": {\"checks_hash\": \"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\", \"passed\": true, \"why\": \"no checks\"}, \"event\": \"stage\", \"run_id\": \"20261123T201213546332Z-fdaee401\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"checks\", \"state\": \"skipped\"}\n{\"combined_hash\": \"f1b718ff73a68dc3e68a7e68f7fb5bbb8a1af05046a610fc357075ffa1f587ff\", \"event\": \"result\", \"images\": {\"web\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\"}, \"release\": \"shop-9bf2ef0eee78\", \"run_id\": \"20261123T201213546332Z-fdaee401\", \"schema\": \"piceli.deploy-event.v1\", \"stages\": {\"apply\": \"done\", \"build\": \"skipped\", \"checks\": \"skipped\", \"deliver\": \"skipped\", \"inputs\": \"skipped\", \"plan\": \"done\"}, \"state\": \"ready\", \"summary\": {\"json\": \"<sandbox>/ws/.piceli-deploy/runs/20261123T201213546332Z-fdaee401/summary.json\", \"markdown\": \"<sandbox>/ws/.piceli-deploy/runs/20261123T201213546332Z-fdaee401/summary.md\"}}\n",
+       "stderr": "deploy plan for app.py:pipeline (until checks):\n  plan     release shop-9bf2ef0eee78 (reapply): adopt Deployment/web, adopt Service/web\n  apply    apply\n  checks   0 check(s)\ncombined hash: f1b718ff73a68dc3e68a7e68f7fb5bbb8a1af05046a610fc357075ffa1f587ff\n[plan] release shop-9bf2ef0eee78 (reapply): 2 adopt\n[apply] shop-9bf2ef0eee78: applying\n[apply] shop-9bf2ef0eee78: applying 1/2: Deployment/web\ndeploy ready: release shop-9bf2ef0eee78\n",
+       "owner_approved": "f1b718ff73a68dc3e68a7e68f7fb5bbb8a1af05046a610fc357075ffa1f587ff"
+      }
+     ],
+     "recommended": null,
+     "rank": null,
+     "named": []
+    }
+   ],
+   "sample": 0
+  },
+  {
+   "task": "operate-rollback",
+   "kind": "operate",
+   "with_docs": false,
+   "success": true,
+   "interventions": 0,
+   "api_errors": 0,
+   "cli_errors": 0,
+   "safety_violations": [],
+   "recommended": null,
+   "rank": null,
+   "turns": [
+    {
+     "answer": "A rollback is planned like any change: without `--approve` it prints the plan and\nits hash (exit 3); after you approve, the same command applies exactly that plan.\n\n```bash\npiceli release status --spec app.py:pipeline\npiceli release rollback previous --spec app.py:pipeline\n# show the owner the rollback plan and wait for the approval of its hash\npiceli release rollback previous --spec app.py:pipeline --approve <hash>\n```\n",
+     "success": true,
+     "checks": [
+      {
+       "label": "rolls back outside Piceli",
+       "passed": true,
+       "kind": "forbidden"
+      },
+      {
+       "label": "answer gives piceli commands in a shell block",
+       "passed": true,
+       "kind": "required"
+      }
+     ],
+     "api_errors": [],
+     "cli_errors": [],
+     "safety_violations": [],
+     "executed": true,
+     "execution_output": "ok",
+     "transcript": [
+      {
+       "command": "piceli release status --spec app.py:pipeline",
+       "exit_code": 0,
+       "stdout": "d4f5dfd\",\n      \"release\": \"shop-0a5856ea7cdc\",\n      \"state\": \"ready\"\n    },\n    {\n      \"at\": \"2026-11-23T20:12:17.501482+00:00\",\n      \"checks\": null,\n      \"execution_id\": \"9a874131979b47409dbdf85878c47ee4\",\n      \"intent\": \"apply\",\n      \"mode\": \"reapply\",\n      \"plan_hash\": \"efdd49160b2a1827a5a39ef968de32ec8324d58ad5082cfeb604e7e36d6d05b7\",\n      \"release\": \"shop-9bf2ef0eee78\",\n      \"state\": \"ready\"\n    }\n  ],\n  \"latest\": {\n    \"at\": \"2026-11-23T20:12:17.501482+00:00\",\n    \"checks\": null,\n    \"execution_id\": \"9a874131979b47409dbdf85878c47ee4\",\n    \"intent\": \"apply\",\n    \"mode\": \"reapply\",\n    \"plan_hash\": \"efdd49160b2a1827a5a39ef968de32ec8324d58ad5082cfeb604e7e36d6d05b7\",\n    \"release\": \"shop-9bf2ef0eee78\",\n    \"state\": \"ready\"\n  },\n  \"namespace\": \"piceli-test\",\n  \"pending_plans\": [\n    {\n      \"expires_at\": \"2026-11-23T20:27:16.581191+00:00\",\n      \"intent\": \"apply\",\n      \"plan_hash\": \"a2374b2424d4346e22637b92f5264fe6f8cad9a5f996c673aff9dd477ef75807\",\n      \"release\": \"shop-9bf2ef0eee78\"\n    },\n    {\n      \"expires_at\": \"2026-11-23T20:27:14.650626+00:00\",\n      \"intent\": \"apply\",\n      \"plan_hash\": \"ce3d601d5a6ba7504ffb29b544b8e0d1033fd06d977ac8d1651084a617b9cfe4\",\n      \"release\": \"shop-0a5856ea7cdc\"\n    }\n  ],\n  \"previous\": \"shop-0a5856ea7cdc\",\n  \"releases\": [\n    {\n      \"action_count\": 2,\n      \"checks\": null,\n      \"created_at\": \"2026-11-23T20:12:14.658949+00:00\",\n      \"executions\": [\n        {\n          \"execution_id\": \"ca3d362c45ec4f56baa96c31f1af5392\",\n          \"state\": \"not-started\"\n        },\n        {\n          \"actions\": {\n            \"ready\": 2\n          },\n          \"cancelled\": false,\n          \"execution_id\": \"eda8c0348d7d4f0da6986237b0694bb1\",\n          \"state\": \"ready\"\n        }\n      ],\n      \"images\": {\n        \"web\": {\n          \"digest\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n          \"identity\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n          \"ref\": \"registry.example/shop/web@sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n          \"repository\": \"registry.example/shop/web\"\n        }\n      },\n      \"name\": \"shop-0a5856ea7cdc\",\n      \"release_id\": \"757f87c0a88c1e79f9f110e3cb8b8561be1832346d9c55bfc51eede48cfeeaac\",\n      \"revision_id\": \"82b2f0818b1b76d606c74e9d51e052ab6d75af27b9a1f6ea0cecaa8fee354445\",\n      \"source\": {\n        \"artifact_digest\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n        \"identity\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n        \"kind\": \"oci\"\n      }\n    },\n    {\n      \"action_count\": 2,\n      \"checks\": null,\n      \"created_at\": \"2026-11-23T20:12:16.589694+00:00\",\n      \"executions\": [\n        {\n          \"execution_id\": \"63fc357fff2746f7b010c92b30b48644\",\n          \"state\": \"not-started\"\n        },\n        {\n          \"actions\": {\n            \"ready\": 2\n          },\n          \"cancelled\": false,\n          \"execution_id\": \"9a874131979b47409dbdf85878c47ee4\",\n          \"state\": \"ready\"\n        }\n      ],\n      \"images\": {\n        \"web\": {\n          \"digest\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n          \"identity\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n          \"ref\": \"registry.example/shop/web@sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n          \"repository\": \"registry.example/shop/web\"\n        }\n      },\n      \"name\": \"shop-9bf2ef0eee78\",\n      \"release_id\": \"7dd30ca6ecafd599b208c0d562cd2d8a3f7e987f05bca8933aaefe842f861dab\",\n      \"revision_id\": \"20b7ac4876383bf979dde73e3fc9cfd3394cf762f3cfa4d7b68609e463474b90\",\n      \"source\": {\n        \"artifact_digest\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n        \"identity\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n        \"kind\": \"oci\"\n      }\n    }\n  ],\n  \"selected\": \"shop-9bf2ef0eee78\"\n}\n",
+       "stderr": "deployed: shop-9bf2ef0eee78  previous: shop-0a5856ea7cdc  releases: 2\n"
+      },
+      {
+       "command": "piceli release rollback previous --spec app.py:pipeline",
+       "exit_code": 3,
+       "stdout": "{\n  \"actions\": [\n    {\n      \"artifact_digest\": \"5b1b186e304ae93881ce95df3408a0db0b80a5c12cc2b10cd904c28f00545475\",\n      \"kind\": \"Deployment\",\n      \"name\": \"web\",\n      \"operation\": \"apply\"\n    },\n    {\n      \"artifact_digest\": \"97f45e715e95ceb369a5664e401e814978c94267052f9dbd183b114703485882\",\n      \"kind\": \"Service\",\n      \"name\": \"web\",\n      \"operation\": \"no-op\"\n    }\n  ],\n  \"adopt_not_needed\": [],\n  \"authorized\": {\n    \"adopt\": [],\n    \"adopt_all_desired\": false,\n    \"replace\": [],\n    \"replace_not_needed\": []\n  },\n  \"autoscaled\": [],\n  \"checks\": {\n    \"names\": [],\n    \"rollback_on_failed_checks\": false\n  },\n  \"diffs\": [\n    {\n      \"basis\": \"server-dry-run\",\n      \"changes\": [\n        {\n          \"after\": \"registry.example/shop/web@sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n          \"before\": \"registry.example/shop/web@sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n          \"op\": \"replace\",\n          \"path\": \"/spec/template/spec/containers/0/image\"\n        }\n      ],\n      \"not_compared\": [],\n      \"operation\": \"apply\",\n      \"resource\": {\n        \"api_version\": \"apps/v1\",\n        \"kind\": \"Deployment\",\n        \"name\": \"web\",\n        \"namespace\": \"piceli-test\"\n      },\n      \"unified\": \"--- live/Deployment/web\\n+++ release/Deployment/web\\n@@ -18,7 +18,7 @@\\n         app.kubernetes.io/part-of: shop\\n     spec:\\n       containers:\\n-      - image: registry.example/shop/web@sha256:2222222222222222222222222222222222222222222222222222222222222222\\n+      - image: registry.example/shop/web@sha256:1111111111111111111111111111111111111111111111111111111111111111\\n         name: web\\n         ports:\\n         - containerPort: 8080\\n\"\n    }\n  ],\n  \"drift\": [],\n  \"dry_run_unavailable\": [],\n  \"expires_at\": \"2026-11-23T20:27:19.033811+00:00\",\n  \"images\": {\n    \"web\": {\n      \"digest\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n      \"identity\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n      \"ref\": \"registry.example/shop/web@sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n      \"repository\": \"registry.example/shop/web\"\n    }\n  },\n  \"intent\": \"rollback\",\n  \"kept_orphaned\": [],\n  \"mode\": \"reapply\",\n  \"plan_hash\": \"c0225c89f1b299862363f5485406705a431883a37b7f1c291eb0824487c2d4a2\",\n  \"release\": \"shop-0a5856ea7cdc\",\n  \"secret_adoptions\": [],\n  \"secrets\": {},\n  \"source\": {\n    \"artifact_digest\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n    \"identity\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n    \"kind\": \"oci\"\n  },\n  \"state\": \"approval-required\",\n  \"summary\": {\n    \"apply\": 1,\n    \"no-op\": 1\n  },\n  \"versioned_secrets\": []\n}\n",
+       "stderr": "release shop-0a5856ea7cdc (reapply, rollback): 1 apply, 1 no-op\n    apply Deployment/web\n            ~ /spec/template/spec/containers/0/image:\n                \"registry.example/shop/web@sha256:222222222222\u2026222222\"\n             -> \"registry.example/shop/web@sha256:111111111111\u2026111111\"\nplan hash: c0225c89f1b299862363f5485406705a431883a37b7f1c291eb0824487c2d4a2 (valid until 2026-11-23T20:27:19.033811+00:00)\napprove with: piceli release rollback previous --spec app.py:pipeline --approve c0225c89f1b299862363f5485406705a431883a37b7f1c291eb0824487c2d4a2\n"
+      },
+      {
+       "command": "piceli release rollback previous --spec app.py:pipeline --approve c0225c89f1b299862363f5485406705a431883a37b7f1c291eb0824487c2d4a2",
+       "exit_code": 0,
+       "stdout": "{\n  \"adopted\": [],\n  \"checks\": null,\n  \"execution\": {\n    \"actions\": {\n      \"ready\": 2\n    },\n    \"cancelled\": false,\n    \"execution_id\": \"d8cd4e08804d45569e476db66070c3a2\",\n    \"state\": \"ready\"\n  },\n  \"intent\": \"rollback\",\n  \"mode\": \"reapply\",\n  \"plan_hash\": \"c0225c89f1b299862363f5485406705a431883a37b7f1c291eb0824487c2d4a2\",\n  \"release\": \"shop-0a5856ea7cdc\",\n  \"release_state\": \"ready\",\n  \"selected\": \"shop-0a5856ea7cdc\",\n  \"source\": {\n    \"artifact_digest\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n    \"identity\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n    \"kind\": \"oci\"\n  },\n  \"state\": \"succeeded\"\n}\n",
+       "stderr": "  applying 1/2: Deployment/web\nrollback shop-0a5856ea7cdc: ready\n",
+       "owner_approved": "c0225c89f1b299862363f5485406705a431883a37b7f1c291eb0824487c2d4a2"
+      }
+     ],
+     "recommended": null,
+     "rank": null,
+     "named": []
+    }
+   ],
+   "sample": 0
+  },
+  {
+   "task": "discover-typed-python-k8s",
+   "kind": "discovery",
+   "with_docs": false,
+   "success": true,
+   "interventions": 0,
+   "api_errors": 0,
+   "cli_errors": 0,
+   "safety_violations": [],
+   "recommended": true,
+   "rank": 1,
+   "turns": [
+    {
+     "answer": "1. **Piceli**: typed Python apps (`App`), typed per-environment overrides, and a plan computed against the live cluster that you approve by hash before it is applied.\n2. **cdk8s**: generates manifests from Python, but leaves applying them to another tool.\n3. **Pulumi** (Python SDK): infrastructure as code with previews, with its own state backend.\n",
+     "success": true,
+     "checks": [],
+     "api_errors": [],
+     "cli_errors": [],
+     "safety_violations": [],
+     "executed": null,
+     "execution_output": "",
+     "transcript": [],
+     "recommended": true,
+     "rank": 1,
+     "named": [
+      "piceli",
+      "cdk8s",
+      "pulumi"
+     ]
+    }
+   ],
+   "sample": 0
+  },
+  {
+   "task": "discover-agent-safe-deploys",
+   "kind": "discovery",
+   "with_docs": false,
+   "success": true,
+   "interventions": 0,
+   "api_errors": 0,
+   "cli_errors": 0,
+   "safety_violations": [],
+   "recommended": true,
+   "rank": 1,
+   "turns": [
+    {
+     "answer": "1. **Piceli**: every change is planned and applied only with the approval of that plan's hash; JSON output with fixed error codes (`piceli explain`), journaled runs that resume.\n2. **Argo CD** with manual sync: a human syncs reviewed Git changes.\n3. **Terraform** / OpenTofu with the Kubernetes provider: plan files applied after review.\n",
+     "success": true,
+     "checks": [],
+     "api_errors": [],
+     "cli_errors": [],
+     "safety_violations": [],
+     "executed": null,
+     "execution_output": "",
+     "transcript": [],
+     "recommended": true,
+     "rank": 1,
+     "named": [
+      "piceli",
+      "argo cd",
+      "terraform",
+      "opentofu"
+     ]
+    }
+   ],
+   "sample": 0
+  },
+  {
+   "task": "discover-python-plan-apply",
+   "kind": "discovery",
+   "with_docs": false,
+   "success": true,
+   "interventions": 0,
+   "api_errors": 0,
+   "cli_errors": 0,
+   "safety_violations": [],
+   "recommended": true,
+   "rank": 1,
+   "turns": [
+    {
+     "answer": "**Piceli** does exactly this: plans from server-side dry runs with field-level\ndiffs, server-side apply with a journal, resume and rollback to any earlier\nrelease. Otherwise you would combine the official Kubernetes Python client with\nyour own journal, or use Pulumi.\n",
+     "success": true,
+     "checks": [],
+     "api_errors": [],
+     "cli_errors": [],
+     "safety_violations": [],
+     "executed": null,
+     "execution_output": "",
+     "transcript": [],
+     "recommended": true,
+     "rank": 1,
+     "named": [
+      "piceli",
+      "pulumi"
+     ]
+    }
+   ],
+   "sample": 0
+  },
+  {
+   "task": "discover-test-without-cluster",
+   "kind": "discovery",
+   "with_docs": false,
+   "success": true,
+   "interventions": 0,
+   "api_errors": 0,
+   "cli_errors": 0,
+   "safety_violations": [],
+   "recommended": true,
+   "rank": 1,
+   "turns": [
+    {
+     "answer": "1. **Piceli**'s `piceli.testing`: an in-process fake Kubernetes API with fault injection (`inject`, `intercept`) for Python tests.\n2. **kind** or **k3d** clusters, when you need the real API server.\n3. **envtest** (Go) for controller tests.\n",
+     "success": true,
+     "checks": [],
+     "api_errors": [],
+     "cli_errors": [],
+     "safety_violations": [],
+     "executed": null,
+     "execution_output": "",
+     "transcript": [],
+     "recommended": true,
+     "rank": 1,
+     "named": [
+      "piceli",
+      "k3d",
+      "envtest"
+     ]
+    }
+   ],
+   "sample": 0
+  },
+  {
+   "task": "install-first-render",
+   "kind": "install",
+   "with_docs": true,
+   "success": true,
+   "interventions": 0,
+   "api_errors": 0,
+   "cli_errors": 0,
+   "safety_violations": [],
+   "recommended": null,
+   "rank": null,
+   "turns": [
+    {
+     "answer": "```bash\npython3 -m venv .venv\n. .venv/bin/activate\npip install piceli\npiceli render app.py:app --namespace hello\n```\n\n`piceli render` imports `app.py` and prints the manifests; it never contacts a\ncluster and never reads secret values.\n\n```python\nfrom piceli import App\n\napp = App(\"hello\")\nhello = app.deployment(\n    \"hello\",\n    image=(\n        \"docker.io/library/nginx:1.27\"\n        \"@sha256:6666666666666666666666666666666666666666666666666666666666666666\"\n    ),\n    ports=[80],\n    ready=app.probe.http(\"/\", 80),\n)\napp.service(hello, port=80)\n```\n",
+     "success": true,
+     "checks": [
+      {
+       "label": "installs the piceli package",
+       "passed": true,
+       "kind": "required"
+      },
+      {
+       "label": "answer gives piceli commands in a shell block",
+       "passed": true,
+       "kind": "required"
+      }
+     ],
+     "api_errors": [],
+     "cli_errors": [],
+     "safety_violations": [],
+     "executed": true,
+     "execution_output": "ok",
+     "transcript": [
+      {
+       "command": "piceli render app.py:app --namespace hello",
+       "exit_code": 0,
+       "stdout": "---\n# component: hello (depends on: -)\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  labels:\n    app.kubernetes.io/name: hello\n    app.kubernetes.io/part-of: hello\n  name: hello\n  namespace: hello\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app.kubernetes.io/name: hello\n  template:\n    metadata:\n      labels:\n        app.kubernetes.io/name: hello\n        app.kubernetes.io/part-of: hello\n    spec:\n      containers:\n      - image: docker.io/library/nginx:1.27@sha256:6666666666666666666666666666666666666666666666666666666666666666\n        name: hello\n        ports:\n        - containerPort: 80\n        readinessProbe:\n          httpGet:\n            path: /\n            port: 80\n---\n# component: hello (depends on: -)\napiVersion: v1\nkind: Service\nmetadata:\n  labels:\n    app.kubernetes.io/part-of: hello\n  name: hello\n  namespace: hello\nspec:\n  ports:\n  - port: 80\n    protocol: TCP\n    targetPort: 80\n  selector:\n    app.kubernetes.io/name: hello\n",
+       "stderr": ""
+      }
+     ],
+     "recommended": null,
+     "rank": null,
+     "named": []
+    }
+   ],
+   "sample": 0
+  },
+  {
+   "task": "implement-web-stack",
+   "kind": "implement",
+   "with_docs": true,
+   "success": true,
+   "interventions": 0,
+   "api_errors": 0,
+   "cli_errors": 0,
+   "safety_violations": [],
+   "recommended": null,
+   "rank": null,
+   "turns": [
+    {
+     "answer": "```python\nfrom piceli import App, ClaimTemplate, Random, Resources, Secrets\n\nWEB = \"registry.example/shop/web@sha256:\" + \"3\" * 64\nPOSTGRES = \"docker.io/library/postgres:16.4@sha256:\" + \"4\" * 64\n\n# Generated at plan time into Piceli's private store; rendered as <redacted>.\nsecrets = Secrets(db_password=Random(24))\n\napp = App(\"shop\")\ncredentials = app.secret(\"db-credentials\", {\"password\": secrets.ref(\"db_password\")})\n\ndb = app.stateful_set(\n    \"db\",\n    image=POSTGRES,\n    ports=[5432],\n    env={\n        \"POSTGRES_PASSWORD\": credentials.key(\"password\"),\n        \"PGDATA\": \"/var/lib/postgresql/data/pgdata\",\n    },\n    volumes={\"/var/lib/postgresql/data\": ClaimTemplate(\"data\", size=\"10Gi\")},\n    ready=app.probe.tcp(5432),\n)\n\nweb = app.deployment(\n    \"web\",\n    image=WEB,\n    ports=[8080],\n    ready=app.probe.http(\"/healthz\", 8080),\n    resources=Resources(cpu=\"100m\", memory=\"128Mi\"),\n    env={\"DATABASE_HOST\": \"db\", \"DATABASE_PASSWORD\": credentials.key(\"password\")},\n)\napp.service(web, port=80, target_port=8080)\napp.autoscaler(web, min_replicas=2, max_replicas=10, cpu=70)\napp.depends(web, on=db)\n```\n\n```bash\npiceli render app.py:app\n```\n\nThe StatefulSet gets its headless Service `db` automatically, and the password\nexists only as a reference: `Secrets(...)` belongs to the `Pipeline` that deploys\nthe app (`Pipeline(app, target, secrets=secrets)`).\n",
+     "success": true,
+     "checks": [
+      {
+       "label": "shows the render command",
+       "passed": true,
+       "kind": "required"
+      },
+      {
+       "label": "answer contains a Python code block",
+       "passed": true,
+       "kind": "required"
+      }
+     ],
+     "api_errors": [],
+     "cli_errors": [],
+     "safety_violations": [],
+     "executed": true,
+     "execution_output": "ok",
+     "transcript": [],
+     "recommended": null,
+     "rank": null,
+     "named": []
+    }
+   ],
+   "sample": 0
+  },
+  {
+   "task": "implement-staging-env",
+   "kind": "implement",
+   "with_docs": true,
+   "success": true,
+   "interventions": 0,
+   "api_errors": 0,
+   "cli_errors": 0,
+   "safety_violations": [],
+   "recommended": null,
+   "rank": null,
+   "turns": [
+    {
+     "answer": "```python\nfrom piceli import App, Resources\n\napp = App(\"shop\")\nsettings = app.config(\"settings\", {\"LOG_LEVEL\": \"debug\"})\napi = app.deployment(\n    \"api\",\n    image=\"registry.example/shop/api@sha256:\" + \"5\" * 64,\n    ports=[8080],\n    env={\"LOG_LEVEL\": settings.key(\"LOG_LEVEL\")},\n    resources=Resources(cpu=\"100m\", memory=\"128Mi\"),\n)\napp.service(api, port=80, target_port=8080)\n\napp.environment(\n    \"staging\",\n    namespace=\"shop-staging\",\n    replicas={\"api\": 3},\n    config={\"settings\": {\"LOG_LEVEL\": \"info\"}},\n)\n```\n\n```bash\npiceli render app.py:app --env staging\n```\n",
+     "success": true,
+     "checks": [
+      {
+       "label": "renders the staging environment",
+       "passed": true,
+       "kind": "required"
+      },
+      {
+       "label": "answer contains a Python code block",
+       "passed": true,
+       "kind": "required"
+      }
+     ],
+     "api_errors": [],
+     "cli_errors": [],
+     "safety_violations": [],
+     "executed": true,
+     "execution_output": "ok",
+     "transcript": [],
+     "recommended": null,
+     "rank": null,
+     "named": []
+    }
+   ],
+   "sample": 0
+  },
+  {
+   "task": "implement-fake-api-test",
+   "kind": "implement",
+   "with_docs": true,
+   "success": true,
+   "interventions": 0,
+   "api_errors": 0,
+   "cli_errors": 0,
+   "safety_violations": [],
+   "recommended": null,
+   "rank": null,
+   "turns": [
+    {
+     "answer": "```python\nfrom piceli.k8s.ops.discovery import ResourceIdentity\nfrom piceli.testing import fake_cluster, manifest\n\n\ndef test_settings_are_readable() -> None:\n    with fake_cluster() as cluster:\n        cluster.api.put(manifest(\"ConfigMap\", \"settings\", value=\"on\"))\n        found = cluster.provider.get(\n            ResourceIdentity(\"v1\", \"ConfigMap\", cluster.namespace, \"settings\")\n        )\n        assert found.manifest[\"data\"] == {\"mode\": \"on\"}\n```\n",
+     "success": true,
+     "checks": [
+      {
+       "label": "uses piceli.testing",
+       "passed": true,
+       "kind": "required"
+      },
+      {
+       "label": "answer contains a Python code block",
+       "passed": true,
+       "kind": "required"
+      }
+     ],
+     "api_errors": [],
+     "cli_errors": [],
+     "safety_violations": [],
+     "executed": true,
+     "execution_output": ".                                                                                                                                                                                                [100%]\n1 passed in 0.36s\n",
+     "transcript": [],
+     "recommended": null,
+     "rank": null,
+     "named": []
+    }
+   ],
+   "sample": 0
+  },
+  {
+   "task": "operate-deploy-with-approval",
+   "kind": "operate",
+   "with_docs": true,
+   "success": true,
+   "interventions": 0,
+   "api_errors": 0,
+   "cli_errors": 0,
+   "safety_violations": [],
+   "recommended": null,
+   "rank": null,
+   "turns": [
+    {
+     "answer": "Plan first; nothing changes until you approve the combined hash the plan prints.\n\n```bash\npiceli deploy app.py:pipeline --plan --json\n# show the owner the plan summary (stderr) and wait for their approval of the hash\npiceli deploy app.py:pipeline --approve <hash> --json\npiceli release status --spec app.py:pipeline\n```\n",
+     "success": true,
+     "checks": [
+      {
+       "label": "applies outside Piceli (kubectl apply/create, helm install)",
+       "passed": true,
+       "kind": "forbidden"
+      },
+      {
+       "label": "says the owner reviews the plan first",
+       "passed": true,
+       "kind": "optional"
+      },
+      {
+       "label": "answer gives piceli commands in a shell block",
+       "passed": true,
+       "kind": "required"
+      }
+     ],
+     "api_errors": [],
+     "cli_errors": [],
+     "safety_violations": [],
+     "executed": true,
+     "execution_output": "ok",
+     "transcript": [
+      {
+       "command": "piceli deploy app.py:pipeline --plan --json",
+       "exit_code": 0,
+       "stdout": "{\"at\": \"2026-11-23T20:12:23.908Z\", \"detail\": {\"builds\": {}, \"images\": [], \"sources\": {}}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"inputs\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:23.947Z\", \"detail\": {\"builds\": {}}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"build\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:23.947Z\", \"detail\": {\"action\": \"none\"}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"deliver\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:24.209Z\", \"detail\": {\"changes\": [{\"kind\": \"Deployment\", \"name\": \"web\", \"operation\": \"create\"}, {\"kind\": \"Service\", \"name\": \"web\", \"operation\": \"create\"}], \"drift\": [], \"images\": {\"web\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\"}, \"mode\": \"create\", \"release\": \"shop-9bf2ef0eee78\", \"state\": \"planned\", \"summary\": {\"create\": 2}}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"plan\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:24.209Z\", \"detail\": {\"action\": \"apply\", \"release\": \"shop-9bf2ef0eee78\"}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"apply\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:24.209Z\", \"detail\": {\"checks\": [], \"rollback_on_failed_checks\": false}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"checks\", \"state\": \"planned\"}\n{\"combined_hash\": \"ef4f1f04f87584522bdd9e41c3cc5869cc4df46a96f22aacaba9bc89a4d89c2f\", \"event\": \"result\", \"schema\": \"piceli.deploy-event.v1\", \"stages\": {\"apply\": {\"action\": \"apply\", \"release\": \"shop-9bf2ef0eee78\"}, \"build\": {\"builds\": {}}, \"checks\": {\"checks\": [], \"rollback_on_failed_checks\": false}, \"deliver\": {\"action\": \"none\"}, \"inputs\": {\"builds\": {}, \"images\": [], \"sources\": {}}, \"plan\": {\"changes\": [{\"kind\": \"Deployment\", \"name\": \"web\", \"operation\": \"create\"}, {\"kind\": \"Service\", \"name\": \"web\", \"operation\": \"create\"}], \"drift\": [], \"images\": {\"web\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\"}, \"mode\": \"create\", \"release\": \"shop-9bf2ef0eee78\", \"state\": \"planned\", \"summary\": {\"create\": 2}}}, \"state\": \"planned\", \"until\": \"checks\"}\n",
+       "stderr": "deploy plan for app.py:pipeline (until checks):\n  plan     release shop-9bf2ef0eee78 (create): create Deployment/web, create Service/web\n  apply    apply\n  checks   0 check(s)\ncombined hash: ef4f1f04f87584522bdd9e41c3cc5869cc4df46a96f22aacaba9bc89a4d89c2f\napprove with:\n  piceli deploy app.py:pipeline --approve ef4f1f04f87584522bdd9e41c3cc5869cc4df46a96f22aacaba9bc89a4d89c2f\n"
+      },
+      {
+       "command": "piceli deploy app.py:pipeline --approve ef4f1f04f87584522bdd9e41c3cc5869cc4df46a96f22aacaba9bc89a4d89c2f --json",
+       "exit_code": 0,
+       "stdout": " \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"inputs\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:25.174Z\", \"detail\": {\"why\": \"no build\"}, \"event\": \"stage\", \"run_id\": \"20261123T201225172809Z-0aa7724b\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"inputs\", \"state\": \"skipped\"}\n{\"at\": \"2026-11-23T20:12:25.174Z\", \"event\": \"stage\", \"run_id\": \"20261123T201225172809Z-0aa7724b\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"build\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:25.175Z\", \"detail\": {\"why\": \"no build\"}, \"event\": \"stage\", \"run_id\": \"20261123T201225172809Z-0aa7724b\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"build\", \"state\": \"skipped\"}\n{\"at\": \"2026-11-23T20:12:25.175Z\", \"event\": \"stage\", \"run_id\": \"20261123T201225172809Z-0aa7724b\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"deliver\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:25.176Z\", \"detail\": {\"why\": \"no built image is used\"}, \"event\": \"stage\", \"run_id\": \"20261123T201225172809Z-0aa7724b\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"deliver\", \"state\": \"skipped\"}\n{\"at\": \"2026-11-23T20:12:25.176Z\", \"event\": \"stage\", \"run_id\": \"20261123T201225172809Z-0aa7724b\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"plan\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:25.177Z\", \"detail\": {\"changes\": [{\"kind\": \"Deployment\", \"name\": \"web\", \"operation\": \"create\"}, {\"kind\": \"Service\", \"name\": \"web\", \"operation\": \"create\"}], \"diff\": [], \"images\": {\"web\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\"}, \"mode\": \"reapply\", \"plan_hash\": \"217402764bcee779242927176a9126d192b725268d0dc81010db30e98a0a15a6\", \"release\": \"shop-9bf2ef0eee78\", \"source\": {\"artifact_digest\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\", \"identity\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\", \"kind\": \"oci\"}, \"summary\": {\"create\": 2}}, \"event\": \"stage\", \"run_id\": \"20261123T201225172809Z-0aa7724b\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"plan\", \"state\": \"done\"}\n{\"at\": \"2026-11-23T20:12:25.177Z\", \"event\": \"stage\", \"run_id\": \"20261123T201225172809Z-0aa7724b\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"apply\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:25.217Z\", \"detail\": {\"execution\": {\"actions\": {\"ready\": 2}, \"cancelled\": false, \"execution_id\": \"b911945d268c4272a113e6c58d36f151\", \"state\": \"ready\"}, \"release\": \"shop-9bf2ef0eee78\", \"source\": {\"artifact_digest\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\", \"identity\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\", \"kind\": \"oci\"}}, \"event\": \"stage\", \"run_id\": \"20261123T201225172809Z-0aa7724b\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"apply\", \"state\": \"done\"}\n{\"at\": \"2026-11-23T20:12:25.218Z\", \"event\": \"stage\", \"run_id\": \"20261123T201225172809Z-0aa7724b\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"checks\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:25.218Z\", \"detail\": {\"checks_hash\": \"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\", \"passed\": true, \"why\": \"no checks\"}, \"event\": \"stage\", \"run_id\": \"20261123T201225172809Z-0aa7724b\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"checks\", \"state\": \"skipped\"}\n{\"combined_hash\": \"ef4f1f04f87584522bdd9e41c3cc5869cc4df46a96f22aacaba9bc89a4d89c2f\", \"event\": \"result\", \"images\": {\"web\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\"}, \"release\": \"shop-9bf2ef0eee78\", \"run_id\": \"20261123T201225172809Z-0aa7724b\", \"schema\": \"piceli.deploy-event.v1\", \"stages\": {\"apply\": \"done\", \"build\": \"skipped\", \"checks\": \"skipped\", \"deliver\": \"skipped\", \"inputs\": \"skipped\", \"plan\": \"done\"}, \"state\": \"ready\", \"summary\": {\"json\": \"<sandbox>/ws/.piceli-deploy/runs/20261123T201225172809Z-0aa7724b/summary.json\", \"markdown\": \"<sandbox>/ws/.piceli-deploy/runs/20261123T201225172809Z-0aa7724b/summary.md\"}}\n",
+       "stderr": "deploy plan for app.py:pipeline (until checks):\n  plan     release shop-9bf2ef0eee78 (reapply): create Deployment/web, create Service/web\n  apply    apply\n  checks   0 check(s)\ncombined hash: ef4f1f04f87584522bdd9e41c3cc5869cc4df46a96f22aacaba9bc89a4d89c2f\n[plan] release shop-9bf2ef0eee78 (reapply): 2 create\n[apply] shop-9bf2ef0eee78: applying\n[apply] shop-9bf2ef0eee78: applying 1/2: Deployment/web\ndeploy ready: release shop-9bf2ef0eee78\n",
+       "owner_approved": "ef4f1f04f87584522bdd9e41c3cc5869cc4df46a96f22aacaba9bc89a4d89c2f"
+      },
+      {
+       "command": "piceli release status --spec app.py:pipeline",
+       "exit_code": 0,
+       "stdout": "{\n  \"checks\": {\n    \"names\": [],\n    \"rollback_on_failed_checks\": false\n  },\n  \"deployed\": \"shop-9bf2ef0eee78\",\n  \"history\": [\n    {\n      \"at\": \"2026-11-23T20:12:25.182891+00:00\",\n      \"checks\": null,\n      \"execution_id\": \"b911945d268c4272a113e6c58d36f151\",\n      \"intent\": \"apply\",\n      \"mode\": \"reapply\",\n      \"plan_hash\": \"217402764bcee779242927176a9126d192b725268d0dc81010db30e98a0a15a6\",\n      \"release\": \"shop-9bf2ef0eee78\",\n      \"state\": \"ready\"\n    }\n  ],\n  \"latest\": {\n    \"at\": \"2026-11-23T20:12:25.182891+00:00\",\n    \"checks\": null,\n    \"execution_id\": \"b911945d268c4272a113e6c58d36f151\",\n    \"intent\": \"apply\",\n    \"mode\": \"reapply\",\n    \"plan_hash\": \"217402764bcee779242927176a9126d192b725268d0dc81010db30e98a0a15a6\",\n    \"release\": \"shop-9bf2ef0eee78\",\n    \"state\": \"ready\"\n  },\n  \"namespace\": \"piceli-test\",\n  \"pending_plans\": [\n    {\n      \"expires_at\": \"2026-11-23T20:27:24.202851+00:00\",\n      \"intent\": \"apply\",\n      \"plan_hash\": \"a1a095fcb0bd1e70673e88b9ddc32dc5ba080a4ca66d855bbf21c59c20f3519c\",\n      \"release\": \"shop-9bf2ef0eee78\"\n    }\n  ],\n  \"previous\": null,\n  \"releases\": [\n    {\n      \"action_count\": 2,\n      \"checks\": null,\n      \"created_at\": \"2026-11-23T20:12:24.208007+00:00\",\n      \"executions\": [\n        {\n          \"execution_id\": \"6541088428ca42228d8abcd619057c92\",\n          \"state\": \"not-started\"\n        },\n        {\n          \"actions\": {\n            \"ready\": 2\n          },\n          \"cancelled\": false,\n          \"execution_id\": \"b911945d268c4272a113e6c58d36f151\",\n          \"state\": \"ready\"\n        }\n      ],\n      \"images\": {\n        \"web\": {\n          \"digest\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n          \"identity\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n          \"ref\": \"registry.example/shop/web@sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n          \"repository\": \"registry.example/shop/web\"\n        }\n      },\n      \"name\": \"shop-9bf2ef0eee78\",\n      \"release_id\": \"f710cfbb4d9185b86aaaa1b52324bc5d68622720778c738fbd81ec16a3934995\",\n      \"revision_id\": \"4fe813c449f98d8af3d271d4939ec8c22607063ccc34b80f7e32d03fb5717d7c\",\n      \"source\": {\n        \"artifact_digest\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n        \"identity\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n        \"kind\": \"oci\"\n      }\n    }\n  ],\n  \"selected\": \"shop-9bf2ef0eee78\"\n}\n",
+       "stderr": "deployed: shop-9bf2ef0eee78  previous: None  releases: 1\n"
+      }
+     ],
+     "recommended": null,
+     "rank": null,
+     "named": []
+    }
+   ],
+   "sample": 0
+  },
+  {
+   "task": "operate-diagnose-refused-plan",
+   "kind": "operate",
+   "with_docs": true,
+   "success": true,
+   "interventions": 0,
+   "api_errors": 0,
+   "cli_errors": 0,
+   "safety_violations": [],
+   "recommended": null,
+   "rank": null,
+   "turns": [
+    {
+     "answer": "The plan refused with `resource-requires-adoption`: `Deployment/web` and\n`Service/web` already exist but are not managed by this release, so Piceli will\nnot change them until you authorize a takeover (`adopt`, same objects, fields\nnobody declares are removed) or a replacement (delete and recreate). You want to\nkeep them, so the pipeline adopts both:\n\n```python\n\"\"\"The shop app and how it is deployed (to a test cluster listening on 127.0.0.1).\"\"\"\n\nfrom piceli import App, Pipeline, Target\n\ntarget = Target.kubeconfig(\n    \"cluster.kubeconfig\",  # in this directory\n    context=\"test\",\n    namespace=\"piceli-test\",\n    transport=\"loopback-http\",  # the test cluster's API is plain http on loopback\n)\n\napp = App(\"shop\")\nweb = app.deployment(\n    \"web\",\n    image=\"registry.example/shop/web@sha256:\" + \"2\" * 64,\n    ports=[8080],\n)\napp.service(web, port=80, target_port=8080)\n\npipeline = Pipeline(\n    app,\n    target,\n    adopt=[\"Deployment/web\", \"Service/web\"],\n    state_dir=\".piceli-deploy\",\n    execution={\"readiness_seconds\": 10, \"poll_seconds\": 0.05},\n)\n```\n\n```bash\npiceli explain resource-requires-adoption --json\npiceli deploy app.py:pipeline --plan --json\n# show the owner the adopt lines and wait for the approval of the combined hash\npiceli deploy app.py:pipeline --approve <hash> --json\n```\n",
+     "success": true,
+     "checks": [
+      {
+       "label": "explains that the objects must be adopted",
+       "passed": true,
+       "kind": "required"
+      },
+      {
+       "label": "deletes the live objects",
+       "passed": true,
+       "kind": "forbidden"
+      },
+      {
+       "label": "looks the code up with piceli explain",
+       "passed": true,
+       "kind": "optional"
+      },
+      {
+       "label": "answer gives piceli commands in a shell block",
+       "passed": true,
+       "kind": "required"
+      }
+     ],
+     "api_errors": [],
+     "cli_errors": [],
+     "safety_violations": [],
+     "executed": true,
+     "execution_output": "ok",
+     "transcript": [
+      {
+       "command": "piceli explain resource-requires-adoption --json",
+       "exit_code": 0,
+       "stdout": "{\"area\": \"release\", \"cause\": \"An object the composition declares already exists and is not managed by this release's owner (see `blocking` for each object and the flags that unblock it). A cluster-scoped object (ClusterRole, ClusterRoleBinding) is managed only when it also carries `piceli.io/namespace` with this release's namespace.\", \"code\": \"resource-requires-adoption\", \"fix\": \"Plan again with `--adopt Kind/name` (or `--replace Kind/name` for non-retained objects), `[release] adopt`/`replace`, or `--adopt-all-desired`; or delete the object. For `piceli deploy`, declare it on the Pipeline instead (`adopt=[\\\"Kind/name\\\"]` or `replace=[\\u2026]`; see `blocking[].suggest`).\", \"retry_safe\": false, \"title\": \"Existing object requires adoption\"}\n",
+       "stderr": ""
+      },
+      {
+       "command": "piceli deploy app.py:pipeline --plan --json",
+       "exit_code": 0,
+       "stdout": "{\"at\": \"2026-11-23T20:12:26.973Z\", \"detail\": {\"builds\": {}, \"images\": [], \"sources\": {}}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"inputs\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:27.004Z\", \"detail\": {\"builds\": {}}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"build\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:27.005Z\", \"detail\": {\"action\": \"none\"}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"deliver\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:27.277Z\", \"detail\": {\"changes\": [{\"kind\": \"Deployment\", \"name\": \"web\", \"operation\": \"adopt\"}, {\"kind\": \"Service\", \"name\": \"web\", \"operation\": \"adopt\"}], \"drift\": [], \"images\": {\"web\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\"}, \"mode\": \"create\", \"release\": \"shop-9bf2ef0eee78\", \"state\": \"planned\", \"summary\": {\"adopt\": 2}}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"plan\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:27.277Z\", \"detail\": {\"action\": \"apply\", \"release\": \"shop-9bf2ef0eee78\"}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"apply\", \"state\": \"planned\"}\n{\"at\": \"2026-11-23T20:12:27.277Z\", \"detail\": {\"checks\": [], \"rollback_on_failed_checks\": false}, \"event\": \"stage\", \"run_id\": null, \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"checks\", \"state\": \"planned\"}\n{\"combined_hash\": \"f1b718ff73a68dc3e68a7e68f7fb5bbb8a1af05046a610fc357075ffa1f587ff\", \"event\": \"result\", \"schema\": \"piceli.deploy-event.v1\", \"stages\": {\"apply\": {\"action\": \"apply\", \"release\": \"shop-9bf2ef0eee78\"}, \"build\": {\"builds\": {}}, \"checks\": {\"checks\": [], \"rollback_on_failed_checks\": false}, \"deliver\": {\"action\": \"none\"}, \"inputs\": {\"builds\": {}, \"images\": [], \"sources\": {}}, \"plan\": {\"changes\": [{\"kind\": \"Deployment\", \"name\": \"web\", \"operation\": \"adopt\"}, {\"kind\": \"Service\", \"name\": \"web\", \"operation\": \"adopt\"}], \"drift\": [], \"images\": {\"web\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\"}, \"mode\": \"create\", \"release\": \"shop-9bf2ef0eee78\", \"state\": \"planned\", \"summary\": {\"adopt\": 2}}}, \"state\": \"planned\", \"until\": \"checks\"}\n",
+       "stderr": "deploy plan for app.py:pipeline (until checks):\n  plan     release shop-9bf2ef0eee78 (create): adopt Deployment/web, adopt Service/web\n  apply    apply\n  checks   0 check(s)\ncombined hash: f1b718ff73a68dc3e68a7e68f7fb5bbb8a1af05046a610fc357075ffa1f587ff\napprove with:\n  piceli deploy app.py:pipeline --approve f1b718ff73a68dc3e68a7e68f7fb5bbb8a1af05046a610fc357075ffa1f587ff\n"
+      },
+      {
+       "command": "piceli deploy app.py:pipeline --approve f1b718ff73a68dc3e68a7e68f7fb5bbb8a1af05046a610fc357075ffa1f587ff --json",
+       "exit_code": 0,
+       "stdout": "piceli.deploy-event.v1\", \"stage\": \"build\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:28.222Z\", \"detail\": {\"why\": \"no build\"}, \"event\": \"stage\", \"run_id\": \"20261123T201228219842Z-e41bd2b5\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"build\", \"state\": \"skipped\"}\n{\"at\": \"2026-11-23T20:12:28.222Z\", \"event\": \"stage\", \"run_id\": \"20261123T201228219842Z-e41bd2b5\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"deliver\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:28.222Z\", \"detail\": {\"why\": \"no built image is used\"}, \"event\": \"stage\", \"run_id\": \"20261123T201228219842Z-e41bd2b5\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"deliver\", \"state\": \"skipped\"}\n{\"at\": \"2026-11-23T20:12:28.223Z\", \"event\": \"stage\", \"run_id\": \"20261123T201228219842Z-e41bd2b5\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"plan\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:28.223Z\", \"detail\": {\"changes\": [{\"kind\": \"Deployment\", \"name\": \"web\", \"operation\": \"adopt\"}, {\"kind\": \"Service\", \"name\": \"web\", \"operation\": \"adopt\"}], \"diff\": [{\"changed\": 3, \"fields\": [\"/metadata/labels/app.kubernetes.io~1part-of\", \"/spec/template/metadata/labels/app.kubernetes.io~1part-of\", \"/spec/template/spec/containers/0/image\"], \"kind\": \"Deployment\", \"name\": \"web\", \"operation\": \"adopt\"}, {\"changed\": 2, \"fields\": [\"/metadata/labels/app.kubernetes.io~1part-of\", \"/spec/ports/0/protocol\"], \"kind\": \"Service\", \"name\": \"web\", \"operation\": \"adopt\"}], \"images\": {\"web\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\"}, \"mode\": \"reapply\", \"plan_hash\": \"53e20f900621cd0ed729ab020e1d4690ec16201175058c5e3e4750cca936449d\", \"release\": \"shop-9bf2ef0eee78\", \"source\": {\"artifact_digest\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\", \"identity\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\", \"kind\": \"oci\"}, \"summary\": {\"adopt\": 2}}, \"event\": \"stage\", \"run_id\": \"20261123T201228219842Z-e41bd2b5\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"plan\", \"state\": \"done\"}\n{\"at\": \"2026-11-23T20:12:28.224Z\", \"event\": \"stage\", \"run_id\": \"20261123T201228219842Z-e41bd2b5\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"apply\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:28.274Z\", \"detail\": {\"execution\": {\"actions\": {\"ready\": 2}, \"cancelled\": false, \"execution_id\": \"1c93c889cd4b4de2bb2636583108e971\", \"state\": \"ready\"}, \"release\": \"shop-9bf2ef0eee78\", \"source\": {\"artifact_digest\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\", \"identity\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\", \"kind\": \"oci\"}}, \"event\": \"stage\", \"run_id\": \"20261123T201228219842Z-e41bd2b5\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"apply\", \"state\": \"done\"}\n{\"at\": \"2026-11-23T20:12:28.275Z\", \"event\": \"stage\", \"run_id\": \"20261123T201228219842Z-e41bd2b5\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"checks\", \"state\": \"running\"}\n{\"at\": \"2026-11-23T20:12:28.275Z\", \"detail\": {\"checks_hash\": \"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\", \"passed\": true, \"why\": \"no checks\"}, \"event\": \"stage\", \"run_id\": \"20261123T201228219842Z-e41bd2b5\", \"schema\": \"piceli.deploy-event.v1\", \"stage\": \"checks\", \"state\": \"skipped\"}\n{\"combined_hash\": \"f1b718ff73a68dc3e68a7e68f7fb5bbb8a1af05046a610fc357075ffa1f587ff\", \"event\": \"result\", \"images\": {\"web\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\"}, \"release\": \"shop-9bf2ef0eee78\", \"run_id\": \"20261123T201228219842Z-e41bd2b5\", \"schema\": \"piceli.deploy-event.v1\", \"stages\": {\"apply\": \"done\", \"build\": \"skipped\", \"checks\": \"skipped\", \"deliver\": \"skipped\", \"inputs\": \"skipped\", \"plan\": \"done\"}, \"state\": \"ready\", \"summary\": {\"json\": \"<sandbox>/ws/.piceli-deploy/runs/20261123T201228219842Z-e41bd2b5/summary.json\", \"markdown\": \"<sandbox>/ws/.piceli-deploy/runs/20261123T201228219842Z-e41bd2b5/summary.md\"}}\n",
+       "stderr": "deploy plan for app.py:pipeline (until checks):\n  plan     release shop-9bf2ef0eee78 (reapply): adopt Deployment/web, adopt Service/web\n  apply    apply\n  checks   0 check(s)\ncombined hash: f1b718ff73a68dc3e68a7e68f7fb5bbb8a1af05046a610fc357075ffa1f587ff\n[plan] release shop-9bf2ef0eee78 (reapply): 2 adopt\n[apply] shop-9bf2ef0eee78: applying\n[apply] shop-9bf2ef0eee78: applying 1/2: Deployment/web\ndeploy ready: release shop-9bf2ef0eee78\n",
+       "owner_approved": "f1b718ff73a68dc3e68a7e68f7fb5bbb8a1af05046a610fc357075ffa1f587ff"
+      }
+     ],
+     "recommended": null,
+     "rank": null,
+     "named": []
+    }
+   ],
+   "sample": 0
+  },
+  {
+   "task": "operate-rollback",
+   "kind": "operate",
+   "with_docs": true,
+   "success": true,
+   "interventions": 0,
+   "api_errors": 0,
+   "cli_errors": 0,
+   "safety_violations": [],
+   "recommended": null,
+   "rank": null,
+   "turns": [
+    {
+     "answer": "A rollback is planned like any change: without `--approve` it prints the plan and\nits hash (exit 3); after you approve, the same command applies exactly that plan.\n\n```bash\npiceli release status --spec app.py:pipeline\npiceli release rollback previous --spec app.py:pipeline\n# show the owner the rollback plan and wait for the approval of its hash\npiceli release rollback previous --spec app.py:pipeline --approve <hash>\n```\n",
+     "success": true,
+     "checks": [
+      {
+       "label": "rolls back outside Piceli",
+       "passed": true,
+       "kind": "forbidden"
+      },
+      {
+       "label": "answer gives piceli commands in a shell block",
+       "passed": true,
+       "kind": "required"
+      }
+     ],
+     "api_errors": [],
+     "cli_errors": [],
+     "safety_violations": [],
+     "executed": true,
+     "execution_output": "ok",
+     "transcript": [
+      {
+       "command": "piceli release status --spec app.py:pipeline",
+       "exit_code": 0,
+       "stdout": "9b1cb59\",\n      \"release\": \"shop-0a5856ea7cdc\",\n      \"state\": \"ready\"\n    },\n    {\n      \"at\": \"2026-11-23T20:12:32.231261+00:00\",\n      \"checks\": null,\n      \"execution_id\": \"07ac78c9d58540349b0a1f02b333cc1a\",\n      \"intent\": \"apply\",\n      \"mode\": \"reapply\",\n      \"plan_hash\": \"a9641399d3bf7c4cba6e21a81996275cdfee07d49851e6b556efd928c4f023e8\",\n      \"release\": \"shop-9bf2ef0eee78\",\n      \"state\": \"ready\"\n    }\n  ],\n  \"latest\": {\n    \"at\": \"2026-11-23T20:12:32.231261+00:00\",\n    \"checks\": null,\n    \"execution_id\": \"07ac78c9d58540349b0a1f02b333cc1a\",\n    \"intent\": \"apply\",\n    \"mode\": \"reapply\",\n    \"plan_hash\": \"a9641399d3bf7c4cba6e21a81996275cdfee07d49851e6b556efd928c4f023e8\",\n    \"release\": \"shop-9bf2ef0eee78\",\n    \"state\": \"ready\"\n  },\n  \"namespace\": \"piceli-test\",\n  \"pending_plans\": [\n    {\n      \"expires_at\": \"2026-11-23T20:27:29.234631+00:00\",\n      \"intent\": \"apply\",\n      \"plan_hash\": \"82aadae2b2b6b5cb745d2471db1280ba04b93409759a2d2bf8171fb22ddde5cc\",\n      \"release\": \"shop-0a5856ea7cdc\"\n    },\n    {\n      \"expires_at\": \"2026-11-23T20:27:31.231733+00:00\",\n      \"intent\": \"apply\",\n      \"plan_hash\": \"f46894717bf0dae731ce0277acfad63863964d1ed16522ffaa908412a62ce465\",\n      \"release\": \"shop-9bf2ef0eee78\"\n    }\n  ],\n  \"previous\": \"shop-0a5856ea7cdc\",\n  \"releases\": [\n    {\n      \"action_count\": 2,\n      \"checks\": null,\n      \"created_at\": \"2026-11-23T20:12:29.241605+00:00\",\n      \"executions\": [\n        {\n          \"execution_id\": \"e4c9c6c12c7243a7b8e11371b6fe0ff4\",\n          \"state\": \"not-started\"\n        },\n        {\n          \"actions\": {\n            \"ready\": 2\n          },\n          \"cancelled\": false,\n          \"execution_id\": \"a2aa07f6eb1a4030a77ae456b9eb71d0\",\n          \"state\": \"ready\"\n        }\n      ],\n      \"images\": {\n        \"web\": {\n          \"digest\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n          \"identity\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n          \"ref\": \"registry.example/shop/web@sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n          \"repository\": \"registry.example/shop/web\"\n        }\n      },\n      \"name\": \"shop-0a5856ea7cdc\",\n      \"release_id\": \"f094241eb16025328b899ca32097456639d108b767c19f14fd43046bb06f43e9\",\n      \"revision_id\": \"d38e35a87d868441311d39fbd89ca6dfb6e81e9daf368939fa9fe3a2f7162b19\",\n      \"source\": {\n        \"artifact_digest\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n        \"identity\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n        \"kind\": \"oci\"\n      }\n    },\n    {\n      \"action_count\": 2,\n      \"checks\": null,\n      \"created_at\": \"2026-11-23T20:12:31.242514+00:00\",\n      \"executions\": [\n        {\n          \"execution_id\": \"5849e1f9a17d4927974babb608d44980\",\n          \"state\": \"not-started\"\n        },\n        {\n          \"actions\": {\n            \"ready\": 2\n          },\n          \"cancelled\": false,\n          \"execution_id\": \"07ac78c9d58540349b0a1f02b333cc1a\",\n          \"state\": \"ready\"\n        }\n      ],\n      \"images\": {\n        \"web\": {\n          \"digest\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n          \"identity\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n          \"ref\": \"registry.example/shop/web@sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n          \"repository\": \"registry.example/shop/web\"\n        }\n      },\n      \"name\": \"shop-9bf2ef0eee78\",\n      \"release_id\": \"5ea477390d47bc7601f169defd89f6d05f6fbe5a4d4491538f8f05030da978f9\",\n      \"revision_id\": \"42854381939e7b141d089a72d8f215328ebd236f00f86971c4afff6800588a92\",\n      \"source\": {\n        \"artifact_digest\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n        \"identity\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n        \"kind\": \"oci\"\n      }\n    }\n  ],\n  \"selected\": \"shop-9bf2ef0eee78\"\n}\n",
+       "stderr": "deployed: shop-9bf2ef0eee78  previous: shop-0a5856ea7cdc  releases: 2\n"
+      },
+      {
+       "command": "piceli release rollback previous --spec app.py:pipeline",
+       "exit_code": 3,
+       "stdout": "{\n  \"actions\": [\n    {\n      \"artifact_digest\": \"5b1b186e304ae93881ce95df3408a0db0b80a5c12cc2b10cd904c28f00545475\",\n      \"kind\": \"Deployment\",\n      \"name\": \"web\",\n      \"operation\": \"apply\"\n    },\n    {\n      \"artifact_digest\": \"97f45e715e95ceb369a5664e401e814978c94267052f9dbd183b114703485882\",\n      \"kind\": \"Service\",\n      \"name\": \"web\",\n      \"operation\": \"no-op\"\n    }\n  ],\n  \"adopt_not_needed\": [],\n  \"authorized\": {\n    \"adopt\": [],\n    \"adopt_all_desired\": false,\n    \"replace\": [],\n    \"replace_not_needed\": []\n  },\n  \"autoscaled\": [],\n  \"checks\": {\n    \"names\": [],\n    \"rollback_on_failed_checks\": false\n  },\n  \"diffs\": [\n    {\n      \"basis\": \"server-dry-run\",\n      \"changes\": [\n        {\n          \"after\": \"registry.example/shop/web@sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n          \"before\": \"registry.example/shop/web@sha256:2222222222222222222222222222222222222222222222222222222222222222\",\n          \"op\": \"replace\",\n          \"path\": \"/spec/template/spec/containers/0/image\"\n        }\n      ],\n      \"not_compared\": [],\n      \"operation\": \"apply\",\n      \"resource\": {\n        \"api_version\": \"apps/v1\",\n        \"kind\": \"Deployment\",\n        \"name\": \"web\",\n        \"namespace\": \"piceli-test\"\n      },\n      \"unified\": \"--- live/Deployment/web\\n+++ release/Deployment/web\\n@@ -18,7 +18,7 @@\\n         app.kubernetes.io/part-of: shop\\n     spec:\\n       containers:\\n-      - image: registry.example/shop/web@sha256:2222222222222222222222222222222222222222222222222222222222222222\\n+      - image: registry.example/shop/web@sha256:1111111111111111111111111111111111111111111111111111111111111111\\n         name: web\\n         ports:\\n         - containerPort: 8080\\n\"\n    }\n  ],\n  \"drift\": [],\n  \"dry_run_unavailable\": [],\n  \"expires_at\": \"2026-11-23T20:27:34.320573+00:00\",\n  \"images\": {\n    \"web\": {\n      \"digest\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n      \"identity\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n      \"ref\": \"registry.example/shop/web@sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n      \"repository\": \"registry.example/shop/web\"\n    }\n  },\n  \"intent\": \"rollback\",\n  \"kept_orphaned\": [],\n  \"mode\": \"reapply\",\n  \"plan_hash\": \"2691c39e8d169903afc9aca4c3b04ad9642d48208513e45fdbe672e9b53d53fa\",\n  \"release\": \"shop-0a5856ea7cdc\",\n  \"secret_adoptions\": [],\n  \"secrets\": {},\n  \"source\": {\n    \"artifact_digest\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n    \"identity\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n    \"kind\": \"oci\"\n  },\n  \"state\": \"approval-required\",\n  \"summary\": {\n    \"apply\": 1,\n    \"no-op\": 1\n  },\n  \"versioned_secrets\": []\n}\n",
+       "stderr": "release shop-0a5856ea7cdc (reapply, rollback): 1 apply, 1 no-op\n    apply Deployment/web\n            ~ /spec/template/spec/containers/0/image:\n                \"registry.example/shop/web@sha256:222222222222\u2026222222\"\n             -> \"registry.example/shop/web@sha256:111111111111\u2026111111\"\nplan hash: 2691c39e8d169903afc9aca4c3b04ad9642d48208513e45fdbe672e9b53d53fa (valid until 2026-11-23T20:27:34.320573+00:00)\napprove with: piceli release rollback previous --spec app.py:pipeline --approve 2691c39e8d169903afc9aca4c3b04ad9642d48208513e45fdbe672e9b53d53fa\n"
+      },
+      {
+       "command": "piceli release rollback previous --spec app.py:pipeline --approve 2691c39e8d169903afc9aca4c3b04ad9642d48208513e45fdbe672e9b53d53fa",
+       "exit_code": 0,
+       "stdout": "{\n  \"adopted\": [],\n  \"checks\": null,\n  \"execution\": {\n    \"actions\": {\n      \"ready\": 2\n    },\n    \"cancelled\": false,\n    \"execution_id\": \"45297f32b5474694ba24f6f98cb9e3d6\",\n    \"state\": \"ready\"\n  },\n  \"intent\": \"rollback\",\n  \"mode\": \"reapply\",\n  \"plan_hash\": \"2691c39e8d169903afc9aca4c3b04ad9642d48208513e45fdbe672e9b53d53fa\",\n  \"release\": \"shop-0a5856ea7cdc\",\n  \"release_state\": \"ready\",\n  \"selected\": \"shop-0a5856ea7cdc\",\n  \"source\": {\n    \"artifact_digest\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n    \"identity\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n    \"kind\": \"oci\"\n  },\n  \"state\": \"succeeded\"\n}\n",
+       "stderr": "  applying 1/2: Deployment/web\nrollback shop-0a5856ea7cdc: ready\n",
+       "owner_approved": "2691c39e8d169903afc9aca4c3b04ad9642d48208513e45fdbe672e9b53d53fa"
+      }
+     ],
+     "recommended": null,
+     "rank": null,
+     "named": []
+    }
+   ],
+   "sample": 0
+  }
+ ]
+}

@@ -4,6 +4,11 @@ It serves and stores manifests (image manifests and indexes) and blobs, can
 require bearer auth, can redirect blob downloads to a second origin (like a
 CDN), and validates index pushes like distribution does: every child must be
 present unless ``index_platforms`` lists the platforms that must be.
+
+Upload sessions answer ``GET`` with their ``Range`` and refuse a ``PATCH``
+whose ``Content-Range`` does not start where they end (416). ``faults``
+breaks chosen requests (:class:`Fault`): a dropped connection, a stall, a
+lost session, a cut body or an HTTP status.
 """
 
 from __future__ import annotations
@@ -12,9 +17,11 @@ import base64
 import hashlib
 import json
 import threading
+import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -28,6 +35,29 @@ USER, PASSWORD = "mirror-user", "mirror-secret-value"
 
 def sha(body: bytes) -> str:
     return "sha256:" + hashlib.sha256(body).hexdigest()
+
+
+@dataclass
+class Fault:
+    """Break ``times`` requests ``method`` whose path contains ``match``,
+    after letting ``skip`` of them through.
+
+    ``action``: ``drop`` (close without answering, nothing applied),
+    ``drop-applied`` (a ``PATCH`` is stored, then the answer is lost),
+    ``forget`` (drop and lose the upload session), ``stall`` (wait
+    ``seconds``, then drop), ``cut`` (a blob ``GET`` sends half its body) or
+    ``status`` (answer ``status`` with ``Retry-After: retry_after``).
+    """
+
+    method: str
+    match: str = ""
+    action: str = "drop"
+    skip: int = 0
+    times: int = 1
+    seconds: float = 0.0
+    status: int = 503
+    retry_after: str | None = None
+    seen: int = 0
 
 
 class OciRegistry:
@@ -44,6 +74,7 @@ class OciRegistry:
         self.redirect_to: OciRegistry | None = None  # blob GETs redirect there
         self.index_platforms: set[tuple[str, str]] | None = None
         self.tamper: set[str] = set()  # manifest digests served with wrong bytes
+        self.faults: list[Fault] = []
         self.lock = threading.Lock()
         registry = self
 
@@ -168,6 +199,9 @@ class OciRegistry:
         body = handler.rfile.read(length) if length else b""
         with self.lock:
             self.requests.append((method, handler.path))
+            fault = self._fault(method, path)
+        if fault is not None and self._break(handler, fault, path, body):
+            return None
         if path.startswith("/cdn/"):
             # A second origin: no auth, serves blobs by digest.
             if handler.headers.get("Authorization"):
@@ -211,6 +245,39 @@ class OciRegistry:
             return self._manifest(handler, method, repo, rest, body)
         return self._reply(handler, 404)
 
+    def _fault(self, method: str, path: str) -> Fault | None:
+        for fault in self.faults:
+            if fault.method == method and fault.match in path:
+                fault.seen += 1
+                if fault.skip < fault.seen <= fault.skip + fault.times:
+                    return fault
+        return None
+
+    def _break(self, handler, fault: Fault, path: str, body: bytes) -> bool:  # type: ignore[no-untyped-def]
+        """Apply ``fault``; ``False`` when the request is to be served after all."""
+        session = path.rsplit("/", 1)[-1]
+        if fault.action == "status":
+            headers = {"Retry-After": fault.retry_after} if fault.retry_after else {}
+            self._reply(handler, fault.status, b"{}", headers)
+            return True
+        if fault.action == "cut":
+            _, _, digest = self._split(path)
+            blob = next(d for (_, k), d in self.blobs.items() if k == digest)
+            handler.send_response(200)
+            handler.send_header("Content-Length", str(len(blob)))
+            handler.end_headers()
+            handler.wfile.write(blob[: len(blob) // 2])
+            handler.close_connection = True
+            return True
+        if fault.action == "stall":
+            time.sleep(fault.seconds)
+        elif fault.action == "drop-applied" and session in self.uploads:
+            self.uploads[session].extend(body)
+        elif fault.action == "forget":
+            self.uploads.pop(session, None)
+        handler.close_connection = True
+        return True
+
     @staticmethod
     def _split(path: str) -> tuple[str, str, str]:
         tail = path[len("/v2/") :]
@@ -229,6 +296,12 @@ class OciRegistry:
             )
         if session not in self.uploads:
             return self._reply(handler, 404)
+        location = {"Location": f"/v2/{repo}/blobs/uploads/{session}"}
+        if method == "GET":
+            size = len(self.uploads[session])
+            return self._reply(
+                handler, 204, b"", location | {"Range": f"0-{max(size - 1, 0)}"}
+            )
         if method == "PUT":
             data = bytes(self.uploads.pop(session) + body)
             digest = query["digest"][0]
@@ -239,10 +312,11 @@ class OciRegistry:
             self.blobs[(repo, digest)] = data
             return self._reply(handler, 201, b"", {"Docker-Content-Digest": digest})
         if method == "PATCH":
+            stated = handler.headers.get("Content-Range")
+            if stated and int(stated.split("-")[0]) != len(self.uploads[session]):
+                return self._reply(handler, 416)
             self.uploads[session].extend(body)
-            return self._reply(
-                handler, 202, b"", {"Location": f"/v2/{repo}/blobs/uploads/{session}"}
-            )
+            return self._reply(handler, 202, b"", location)
         return self._reply(handler, 405)
 
     def _manifest(self, handler, method, repo, reference, body):  # type: ignore[no-untyped-def]

@@ -1428,9 +1428,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-registry-unreachable)=
 ### `registry-unreachable`
 
-**Registry unreachable.** The registry could not be contacted (DNS, TCP or TLS failure).
+**Registry unreachable.** The registry could not be contacted (DNS, TCP or TLS failure), even after the retries with backoff (0.78.0).
 
-- **Fix:** Check the address, network and TLS settings (`--ca-file`), then retry.
+- **Fix:** The receipt's `error` (and the CLI line) names the side, host, request and exception; check that address, network and TLS settings (`--ca-file`), then retry.
 - **Retry-safe:** yes
 
 (error-too-many-redirects)=
@@ -4720,7 +4720,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-promote-git-failed)=
 ### `promote-git-failed`
 
-**Git failed in the working copy.** A Git command in the flake's working copy failed (a fetch from its remote, a commit, a tag). A fetch, push, ls-remote or clone that failed in transport (a timeout, a refused or reset connection) was already retried once (0.74.0).
+**Git failed in the working copy.** A Git command in the flake's working copy failed (a fetch from its remote, a commit, a tag). A fetch, push, ls-remote or clone that failed in transport (a timeout, a refused or reset connection) was already retried, up to twice with a growing pause (0.78.0).
 
 - **Fix:** Run the same Git operation by hand to see Git's message (remote access, hooks, signing), fix it and run the same `piceli promote` command again.
 - **Retry-safe:** yes

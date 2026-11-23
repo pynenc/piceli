@@ -189,6 +189,30 @@ the blobs uploaded and skipped, each referrer (`subject`, `digest`,
 `artifact_type`, `result`) and `previous` (the digest a moved tag named).
 A second run copies nothing (`result: already-present`).
 
+**A flaky network (0.78.0).** One dropped connection no longer fails the
+copy. A transient failure (a refused, reset or aborted connection, a
+timeout, a name not resolved, a TLS connection cut short, or HTTP 429, 502,
+503 or 504) is tried again up to 5 times per request, after about 1, 2, 4
+and 8 seconds (half fixed, half random; a `Retry-After` up to 60 seconds is
+honoured), and never past `--timeout`. A `GET`, `HEAD` or monolithic `PUT`
+is simply repeated. A failed chunk of a large blob is not: Piceli asks the
+upload session how much it holds (its `Range`) and goes on from the next
+byte; when the session is gone it starts that blob again (up to 3 times).
+The receipt lists each retry in `retries` (`side`, `host`, `method`, `path`
+without its query, `attempt`, `cause`, `action`: `resume` or `restart`, and
+the blob's `digest` and `offset`). When the copy still fails, `error` says
+where, and so does the last line:
+
+```text
+copy: failed [registry-unreachable] target ghcr.io PATCH blob sha256:9072a3f9… at 33554432: ConnectionResetError(54)
+```
+
+`error` holds `side` (`source` or `target`), `host`, `method`, `path`,
+`digest`, `offset`, `exception` and `errno` (or the HTTP `status`); never
+a credential, a token or a query string. The same retries cover
+`artifacts publish`, `artifacts deliver`, mirrors and every other command
+that talks to a registry.
+
 ## Registries and credentials
 
 - A public registry needs no credentials to pull; pushing always does.

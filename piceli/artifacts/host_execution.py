@@ -10,6 +10,20 @@ target directory keeps everything else.
 ``build.shared_commands`` (0.23) run first, into ``<cache>/target/shared``,
 unless ``run_shared`` is false (a later platform of a multi-platform build).
 
+With ``build.shared_commands_alongside`` (0.78.0) they run in a thread of
+their own, started with the platform's commands; the two sides use different
+target directories, so cargo's build-directory lock never makes one wait for
+the other. An image is assembled once the platform's commands and every
+shared command naming it (every one, for a plain argv entry) have finished;
+the platform's ``[[output.files]]`` need only its commands. The first
+failure on either side stops the other: its running command's process group
+gets ``SIGTERM``, then ``SIGKILL`` after a grace period (a runner that takes
+``cancel``, as the default one does), its step is recorded ``cancelled``,
+and the build fails with the failing command's error, its step last.
+
+Each step records ``start_seconds`` (0.78.0): when it started, in seconds
+from the start of the whole build, so a reader sees which steps overlapped.
+
 Importing this module runs nothing.
 """
 
@@ -17,6 +31,7 @@ from __future__ import annotations
 
 import collections
 import hashlib
+import inspect
 import os
 import re
 import shutil
@@ -217,6 +232,108 @@ def _remove(path: Path) -> None:
         path.unlink()
 
 
+def _takes_cancel(runner: Any) -> bool:
+    """Whether ``runner`` takes ``cancel=`` (0.78.0: the default one does)."""
+    try:
+        parameters = inspect.signature(runner).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        item.name == "cancel" or item.kind is inspect.Parameter.VAR_KEYWORD
+        for item in parameters
+    )
+
+
+class _Stopped(Exception):
+    """A side of an overlapped build stopped because the other one failed."""
+
+
+class _SideLog:
+    """One side's view of a shared `_BuildLog` (0.78.0): whole lines only,
+    under one lock, so two commands' output never mixes inside a line."""
+
+    def __init__(self, log: _BuildLog, lock: threading.Lock) -> None:
+        self.log = log
+        self.lock = lock
+        self.pending: dict[str, bytes] = {}
+
+    def line(self, text: str) -> None:
+        with self.lock:
+            self.log.line(text)
+
+    def say(self, text: str) -> None:
+        with self.lock:
+            self.log.say(text)
+
+    def feed(self, stream: str, block: bytes) -> None:
+        with self.lock:
+            if self.log.raw is not None:
+                self.log.raw(block)
+            data = self.pending.pop(stream, b"") + block
+            cut = data.rfind(b"\n") + 1
+            self.log._write(data[:cut])
+            if data[cut:]:
+                self.pending[stream] = data[cut:]
+
+    def end_step(self) -> None:
+        with self.lock:
+            for stream in sorted(self.pending):
+                self.log._write(self.pending.pop(stream) + b"\n")
+
+
+class _SharedSide:
+    """The shared commands of an overlapped build, in a thread (0.78.0)."""
+
+    def __init__(
+        self, execution: HostExecution, cwd: Path, env: Mapping[str, str]
+    ) -> None:
+        self.execution = execution
+        self.cwd = cwd
+        self.env = env
+        self.done = 0  # how many shared commands have succeeded
+        self.finished = False
+        self.error: BaseException | None = None
+        self.condition = threading.Condition()
+        self.thread = threading.Thread(
+            target=self._run, name="piceli-shared-commands", daemon=True
+        )
+
+    def start(self) -> None:
+        self.execution.shared_target.mkdir(parents=True, exist_ok=True)
+        self.thread.start()
+
+    def _run(self) -> None:
+        try:
+            commands = self.execution.plan.shared_commands
+            for index, command in enumerate(commands, start=1):
+                self.execution._command(index, command, self.cwd, self.env, shared=True)
+                with self.condition:
+                    self.done = index
+                    self.condition.notify_all()
+        except BaseException as error:
+            with self.condition:
+                self.error = error
+            self.execution._stop(None)
+        finally:
+            with self.condition:
+                self.finished = True
+                self.condition.notify_all()
+
+    def wait(self, count: int) -> None:
+        """Until the first ``count`` shared commands succeeded; raises the
+        shared side's error when it failed first."""
+        with self.condition:
+            self.condition.wait_for(
+                lambda: self.done >= count or self.finished or self.error is not None
+            )
+            error = self.error
+        if error is not None:
+            raise error
+
+    def join(self) -> None:
+        self.thread.join()
+
+
 class HostExecution:
     """Runs a `HostBuildPlan`; see the module docstring."""
 
@@ -230,13 +347,14 @@ class HostExecution:
         cancel: threading.Event | None,
         client_factory: Callable[[str], Any] | None = None,
         run_shared: bool = True,
+        build_start: float | None = None,
     ) -> None:
         self.plan = plan
         self.spec: HostBuildSpec = plan.spec
         self.grant = grant
         self.cache = cache
         self.runner = runner
-        self.log = log
+        self.log: Any = log  # 0.78.0: a _SideLog when overlapped
         self.cancel = cancel
         self.client_factory = client_factory
         self.steps: list[dict[str, Any]] = []
@@ -259,6 +377,33 @@ class HostExecution:
         self.run_shared = run_shared
         #: 0.22: what provisioning did per pinned tool (the receipt's ``toolchains``).
         self.toolchains: dict[str, dict[str, Any]] = {}
+        #: 0.78.0: the whole build's start (``time.time()``), for ``start_seconds``.
+        self.build_start = time.time() if build_start is None else build_start
+        #: 0.78.0: overlapped shared commands: set to stop the other side.
+        self.stop = threading.Event()
+        self.failing: str | None = None  # the first failing command's label
+        self.overlap = bool(
+            self.spec.shared_commands_alongside and run_shared and plan.shared_commands
+        )
+        self.logs: dict[bool, Any] = {False: log, True: log}
+        if self.overlap:
+            lock = threading.Lock()
+            self.logs = {False: _SideLog(log, lock), True: _SideLog(log, lock)}
+            # Every line of this side, not only its commands', under the lock.
+            self.log = self.logs[False]
+        self._lock = threading.Lock()
+        self._runner_stops = _takes_cancel(runner)
+
+    def _offset(self) -> float:
+        """0.78.0: seconds since the build started (a step's ``start_seconds``)."""
+        return round(max(0.0, time.time() - self.build_start), 3)
+
+    def _stop(self, label: str | None) -> None:
+        """Stop the other side of an overlapped build; the first label wins."""
+        with self._lock:
+            if self.failing is None and label is not None:
+                self.failing = label
+        self.stop.set()
 
     def _discarded(self, value: str, reason: str) -> None:
         text = (
@@ -293,29 +438,15 @@ class HostExecution:
                 if before.get(key) != value
             )
             cwd = self.stage.joinpath(*PurePosixPath(self.spec.workdir).parts)
-            self._shared_commands(cwd, shared)
-            for index, command in enumerate(self.plan.commands, start=1):
-                self._command(index, command, cwd, environment)
-            self._verify_consumed()
-            files, details = self._files(output_dir)
-            images_dir = output_dir / "images"
-            if images_dir.exists():
-                shutil.rmtree(images_dir)
-            images_dir.mkdir(parents=True)
-            bases: dict[str, BaseImage] = {}
-            images = {}
-            for image in self.plan.images:
-                began = time.monotonic()
-                images[image.name] = self._image(image, images_dir, bases)
-                # 0.17.0: each image's assembly time (base pull, layers, archive).
-                self.steps.append(
-                    {
-                        "platform": self.plan.platform,
-                        "kind": f"image-{image.name}",
-                        "state": "succeeded",
-                        "seconds": round(time.monotonic() - began, 3),
-                    }
+            if self.overlap:
+                files, details, images = self._overlapped(
+                    cwd, environment, shared, output_dir
                 )
+            else:
+                self._shared_commands(cwd, shared)
+                for index, command in enumerate(self.plan.commands, start=1):
+                    self._command(index, command, cwd, environment)
+                files, details, images = self._outputs(output_dir, None)
         except LayerError as error:
             raise BuildSpecError(
                 error.code, str(error), steps=tuple(self.steps)
@@ -325,6 +456,100 @@ class HostExecution:
         if not details:
             return {"files": files, "images": images}
         return {"files": files, "images": images, "file_details": details}
+
+    def _outputs(
+        self, output_dir: Path, side: _SharedSide | None
+    ) -> tuple[dict[str, str], dict[str, dict[str, Any]], dict[str, Any]]:
+        """Files and images, after the commands; ``side``: each image first
+        waits for the shared commands it needs (0.78.0)."""
+        self._verify_consumed()
+        files, details = self._files(output_dir)
+        images_dir = output_dir / "images"
+        if images_dir.exists():
+            shutil.rmtree(images_dir)
+        images_dir.mkdir(parents=True)
+        bases: dict[str, BaseImage] = {}
+        images = {}
+        for image in self.plan.images:
+            if side is not None:
+                needed = self._shared_needed(image.name)
+                if needed > side.done:
+                    self.log.say(
+                        f"[piceli] image {image.name}: waiting for shared "
+                        f"command(s) 1-{needed}"
+                    )
+                side.wait(needed)
+            start = self._offset()
+            began = time.monotonic()
+            images[image.name] = self._image(image, images_dir, bases)
+            # 0.17.0: each image's assembly time (base pull, layers, archive).
+            self.steps.append(
+                {
+                    "platform": self.plan.platform,
+                    "kind": f"image-{image.name}",
+                    "state": "succeeded",
+                    "seconds": round(time.monotonic() - began, 3),
+                    "start_seconds": start,
+                }
+            )
+        return files, details, images
+
+    def _shared_needed(self, image: str) -> int:
+        """How many shared commands (from the first) must have finished
+        before ``image`` is assembled: up to the last one naming it (any
+        plain argv entry names every image)."""
+        tags = self.plan.shared_images or tuple(() for _ in self.plan.shared_commands)
+        needed = 0
+        for index, images in enumerate(tags, start=1):
+            if not images or image in images:
+                needed = index
+        return needed
+
+    def _overlapped(
+        self,
+        cwd: Path,
+        environment: Mapping[str, str],
+        shared: Mapping[str, str],
+        output_dir: Path,
+    ) -> tuple[dict[str, str], dict[str, dict[str, Any]], dict[str, Any]]:
+        """0.78.0: the shared commands in a thread, beside the platform's."""
+        side = _SharedSide(self, cwd, shared)
+        text = (
+            f"[piceli] {self.plan.platform}: {len(self.plan.shared_commands)} "
+            "shared command(s) run alongside the platform's commands"
+        )
+        self.log.line(text)
+        self.log.say(text)
+        side.start()
+        try:
+            for index, command in enumerate(self.plan.commands, start=1):
+                self._command(index, command, cwd, environment)
+            result = self._outputs(output_dir, side)
+            side.wait(len(self.plan.shared_commands))
+        except BaseException as error:
+            self._stop(None)
+            side.join()
+            if isinstance(error, _Stopped) and side.error is not None:
+                raise self._last(side.error) from None
+            raise self._last(error) from None
+        side.join()
+        return result
+
+    def _last(self, error: BaseException) -> BaseException:
+        """``error`` with every step recorded so far, its failing step last."""
+        if not isinstance(error, BuildSpecError):
+            return error
+        failing = error.steps[-1] if error.steps else None
+        steps = [step for step in self.steps if step is not failing]
+        if failing is not None:
+            steps.append(failing)
+        return BuildSpecError(
+            error.code,
+            str(error),
+            steps=tuple(steps),
+            output_tail=error.output_tail,
+            first_error=error.first_error,
+        )
 
     def _files(
         self, output_dir: Path
@@ -341,6 +566,7 @@ class HostExecution:
         if files_dir.exists():
             shutil.rmtree(files_dir)
         for item in self.plan.files:
+            start = self._offset()
             began = time.monotonic()
             directory = files_dir / item.name
             directory.mkdir(parents=True)
@@ -377,6 +603,7 @@ class HostExecution:
                     "kind": f"files-{item.name}",
                     "state": "succeeded",
                     "seconds": round(time.monotonic() - began, 3),
+                    "start_seconds": start,
                 }
             )
         return files, details
@@ -441,6 +668,7 @@ class HostExecution:
             return
         from piceli.artifacts.host_toolchains import provision
 
+        start = self._offset()
         began = time.monotonic()
         try:
             self.toolchains = provision(
@@ -459,6 +687,7 @@ class HostExecution:
                 "kind": "toolchains",
                 "state": "succeeded",
                 "seconds": round(time.monotonic() - began, 3),
+                "start_seconds": start,
             }
         )
 
@@ -477,6 +706,8 @@ class HostExecution:
             )
         if self.grant.expires_at <= time.time():
             raise BuildSpecError("grant-expired", "build grant expired")
+        if self.overlap and self.stop.is_set():
+            raise _Stopped()
         path, pin = self.plan.tools[command[0]]
         self._verify_tools()
         if shared:
@@ -492,14 +723,20 @@ class HostExecution:
             }
             label = f"{self.plan.platform} command {index}/{self.total} ({command[0]})"
         target = self.shared_target if shared else self.target
-        self.log.line(f"### {label} started")
-        self.log.say(f"[piceli] {label}: running")
+        log = self.logs[shared]
+        log.line(f"### {label} started")
+        log.say(f"[piceli] {label}: running")
         tail = OutputTail()
 
         def output(stream: str, block: bytes) -> None:
-            self.log.feed(stream, block)
+            log.feed(stream, block)
             tail.feed(block)
 
+        # 0.78.0: overlapped, the other side's failure stops this command.
+        stop: dict[str, Any] = (
+            {"cancel": self.stop} if self.overlap and self._runner_stops else {}
+        )
+        start = self._offset()
         receipt, stdout, stderr = self.runner(
             [str(path), *command[1:]],
             cwd,
@@ -507,6 +744,7 @@ class HostExecution:
             dict(env),
             self.grant.expires_at,
             on_output=output,
+            **stop,
         )
         if not tail.data:  # a runner that only returns the output
             tail.feed(bytes(stdout or b"") + bytes(stderr or b""))
@@ -519,11 +757,19 @@ class HostExecution:
                 "state": state,
                 "exit_code": receipt["exit_code"],
                 "seconds": seconds,
+                "start_seconds": start,
             }
         )
-        self.log.end_step()
-        self.log.line(f"### {label} {state} {seconds}s")
-        self.log.say(f"[piceli] {label}: {state} in {seconds}s")
+        log.end_step()
+        if self.overlap and self.stop.is_set() and state == "cancelled":
+            text = f"[piceli] {label}: stopped after {seconds}s" + (
+                f" because {self.failing} failed" if self.failing else ""
+            )
+            log.line(f"### {text}")
+            log.say(text)
+            raise _Stopped()
+        log.line(f"### {label} {state} {seconds}s")
+        log.say(f"[piceli] {label}: {state} in {seconds}s")
         if state != "succeeded":
             from piceli.dev.pod import clear_crates, clear_incremental, corrupt_crates
 
@@ -541,7 +787,7 @@ class HostExecution:
                     if damage == "incremental"
                     else clear_crates(target, crates)
                 )
-                self.log.say(
+                log.say(
                     f"[piceli] {label}: corrupted cache ({damage}): cleared "
                     f"{', '.join(crates)} ({removed} entries); running once more"
                 )
@@ -550,9 +796,13 @@ class HostExecution:
                 return
             code = "build-timed-out" if state == "timed-out" else "build-failed"
             secrets = [value for key, value in env.items() if _SECRET_NAME.search(key)]
+            if self.overlap:
+                self._stop(label)  # 0.78.0: stop the other side now
             raise BuildSpecError(
                 code,
-                "host build step failed",
+                f"host build step failed: {label}"
+                if self.overlap
+                else "host build step failed",
                 steps=tuple(self.steps),
                 output_tail=tail.text(secrets),
                 first_error=tail.first_error(secrets),

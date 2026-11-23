@@ -639,6 +639,7 @@ def run_spec_build(
     installed: dict[str, str] = {}
     ran_steps: list[dict[str, Any]] = []
     declared = NodeFacts.from_dict(request.facts) if request.facts else None
+    build_start = time.time()  # 0.78.0: every step's start_seconds counts from it
     for platform in platforms:
         facts = (
             declared
@@ -661,6 +662,7 @@ def run_spec_build(
                 progress=say,
                 # The shared commands run with the first platform only.
                 shared=platform == platforms[0],
+                build_start=build_start,
             ).to_dict()
         except BuildSpecError as error:
             from piceli.infra.builders import build_failed

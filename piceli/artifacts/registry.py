@@ -18,6 +18,20 @@ Transport rules:
 - Credentials come from :class:`RegistryCredentials` (a private file) and are
   never part of ``repr``, errors or receipts.
 
+Retries (0.78.0): a transient failure (a refused, reset or aborted
+connection, a timeout, a name not resolved, a TLS connection cut short, or an
+HTTP 429/502/503/504) is retried with a bounded exponential backoff and
+jitter (:class:`RetryPolicy`), honouring ``Retry-After`` within bounds and
+never past the client's ``deadline``. Only a repeatable request is sent
+again (``GET``, ``HEAD``, ``DELETE``, a ``PUT`` with a body in memory, the
+``POST`` that opens an upload session). A failed chunk ``PATCH`` is never
+resent blindly: the upload session is asked for its ``Range`` and the upload
+resumes from the next byte, or the blob starts again in a new session. Each
+retry is listed in :attr:`StreamedOciRegistryClient.retries`; a failure
+that remains carries its cause in :attr:`RegistryError.detail` (side, host,
+method, path without query, digest, offset, exception and errno, status),
+never a credential.
+
 Importing this module opens no socket and reads no file.
 """
 
@@ -29,15 +43,17 @@ import io
 import ipaddress
 import json
 import os
+import random
 import re
 import stat
 import threading
+import time
 import urllib.parse
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO
+from typing import TYPE_CHECKING, BinaryIO, Protocol, TypeVar
 
 if TYPE_CHECKING:  # networking modules load only when a client connects
     import http.client
@@ -66,6 +82,16 @@ _MAX_MANIFEST = 4 * 1024 * 1024
 _MAX_RESPONSE = 1024 * 1024
 _CHUNK = 16 * 1024 * 1024
 _MONOLITHIC_MAX = 32 * 1024 * 1024
+
+
+class _Answer(Protocol):
+    @property
+    def status(self) -> int: ...
+    @property
+    def headers(self) -> Mapping[str, str]: ...
+
+
+_R = TypeVar("_R", bound=_Answer)
 
 
 def is_loopback(host: str) -> bool:
@@ -120,13 +146,214 @@ def host_port(host: str, port: int | None) -> str:
     return shown if port is None else f"{shown}:{port}"
 
 
-class RegistryError(RuntimeError):
-    """A registry call failed. ``reason`` is a fixed, secret-free phrase."""
+#: HTTP statuses that mean "try again later" (rate limit, gateway, unavailable).
+RETRY_STATUSES = frozenset({429, 502, 503, 504})
+_DETAIL_KEYS = (
+    "side",
+    "host",
+    "method",
+    "path",
+    "digest",
+    "offset",
+    "exception",
+    "errno",
+    "status",
+    "cause",
+)
 
-    def __init__(self, reason: str, status: int | None = None) -> None:
+
+class RegistryError(RuntimeError):
+    """A registry call failed. ``reason`` is a fixed, secret-free phrase.
+
+    ``detail`` says where and why (0.78.0): ``side`` (``source`` or
+    ``target``), ``host``, ``method``, ``path`` (never a query string),
+    ``digest`` and ``offset`` of a blob, ``exception`` and ``errno``,
+    ``status``. ``transient`` is whether trying again may succeed; unless
+    given, it is judged from the exception that caused the error.
+    """
+
+    def __init__(
+        self,
+        reason: str,
+        status: int | None = None,
+        *,
+        detail: Mapping[str, object] | None = None,
+        transient: bool | None = None,
+    ) -> None:
         super().__init__(reason if status is None else f"{reason} ({status})")
         self.reason = reason
         self.status = status
+        self.detail: dict[str, object] = dict(detail or {})
+        self._transient = transient
+
+    @property
+    def transient(self) -> bool:
+        if self._transient is not None:
+            return self._transient
+        return is_transient(self.__cause__)
+
+    def public(self) -> dict[str, object]:
+        """The detail in a fixed order, ``None`` values left out."""
+        values = dict(self.detail)
+        cause = self.__cause__
+        if cause is not None:
+            values.setdefault("exception", type(cause).__name__)
+            values.setdefault("errno", _errno(cause))
+        if self.status is not None:
+            values.setdefault("status", self.status)
+        return {key: values[key] for key in _DETAIL_KEYS if values.get(key) is not None}
+
+
+def is_transient(error: BaseException | None, _depth: int = 0) -> bool:
+    """Whether ``error`` is a network failure that trying again may cure."""
+    if error is None or _depth > 4:
+        return False
+    import errno as errnos
+    import http.client
+    import socket
+    import ssl
+
+    if isinstance(error, RegistryError):
+        return error.transient
+    if isinstance(error, (ssl.SSLEOFError, ssl.SSLZeroReturnError)):
+        return True
+    if isinstance(error, ssl.SSLError):  # a certificate or protocol refusal
+        return False
+    if isinstance(
+        error,
+        (
+            ConnectionError,
+            TimeoutError,
+            socket.gaierror,
+            http.client.IncompleteRead,
+            http.client.BadStatusLine,
+        ),
+    ):
+        return True
+    if isinstance(error, OSError) and error.errno in {
+        errnos.ECONNRESET,
+        errnos.ECONNREFUSED,
+        errnos.ECONNABORTED,
+        errnos.ETIMEDOUT,
+        errnos.EPIPE,
+        errnos.ENETUNREACH,
+        errnos.ENETDOWN,
+        errnos.EHOSTUNREACH,
+        errnos.EHOSTDOWN,
+    }:
+        return True
+    if type(error).__name__ in {  # urllib3, used by the proxied client
+        "ProtocolError",
+        "NewConnectionError",
+        "ConnectTimeoutError",
+        "ReadTimeoutError",
+        "NameResolutionError",
+    }:
+        return True
+    return any(
+        is_transient(arg, _depth + 1)
+        for arg in getattr(error, "args", ())
+        if isinstance(arg, BaseException)
+    ) or is_transient(error.__cause__, _depth + 1)
+
+
+def _errno(error: BaseException) -> int | None:
+    value = getattr(error, "errno", None)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _cause(error: BaseException | str) -> str:
+    """``ConnectionResetError(54)``, ``TimeoutError`` or ``HTTP 503``."""
+    if isinstance(error, str):
+        return error
+    if isinstance(error, RegistryError):
+        found = error.public()
+        if "exception" in found:
+            number = found.get("errno")
+            return f"{found['exception']}" + (f"({number})" if number else "")
+        if "cause" in found:
+            return str(found["cause"])
+        return f"HTTP {error.status}" if error.status else error.reason
+    number = _errno(error)
+    return type(error).__name__ + (f"({number})" if number else "")
+
+
+def describe(detail: Mapping[str, object] | None) -> str:
+    """One line for a failure's detail, e.g.
+    ``target ghcr.io PATCH blob sha256:9072a3f9… at 33554432: ConnectionResetError(54)``.
+    """
+    if not detail:
+        return ""
+    words = [str(detail[key]) for key in ("side", "host", "method") if key in detail]
+    found = detail.get("digest")
+    if isinstance(found, str):
+        words.append(f"blob {found[:15]}…")
+    elif "path" in detail:
+        words.append(str(detail["path"]))
+    if detail.get("offset") is not None:
+        words.append(f"at {detail['offset']}")
+    text = " ".join(words)
+    if "exception" in detail:
+        number = detail.get("errno")
+        why = f"{detail['exception']}" + (f"({number})" if number else "")
+    elif "cause" in detail:
+        why = str(detail["cause"])
+    elif "status" in detail:
+        why = f"HTTP {detail['status']}"
+    else:
+        return text
+    return f"{text}: {why}" if text else why
+
+
+def _shown(path: str) -> str:
+    """A request path as recorded: no scheme, host or query (it may hold a token)."""
+    return urllib.parse.urlsplit(path).path or "/"
+
+
+def _retry_after(value: str | None) -> float | None:
+    """Seconds of a ``Retry-After`` header (seconds or an HTTP date)."""
+    if not value:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return float(value)
+    try:
+        import email.utils
+
+        when = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if when is None:
+        return None
+    return max(0.0, when.timestamp() - time.time())
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """How a client retries a transient failure.
+
+    ``attempts`` tries per request (so ``attempts - 1`` retries); the pause
+    before retry ``n`` is ``min(cap, base * 2**(n-1))``, half of it fixed and
+    half random (jitter). A ``Retry-After`` longer than that is honoured up
+    to ``retry_after_max`` seconds. ``blob_attempts`` bounds how often a
+    whole blob starts again. Nothing waits past the client's deadline.
+    """
+
+    attempts: int = 5
+    base: float = 1.0
+    cap: float = 20.0
+    retry_after_max: float = 60.0
+    blob_attempts: int = 3
+
+    def __post_init__(self) -> None:
+        if self.attempts < 1 or self.blob_attempts < 1:
+            raise ValueError("a retry policy needs at least one attempt")
+        if min(self.base, self.cap, self.retry_after_max) < 0:
+            raise ValueError("retry pauses cannot be negative")
+
+    def pause(self, attempt: int) -> float:
+        delay = min(self.cap, self.base * 2 ** (attempt - 1))
+        return delay / 2 + random.uniform(0, delay / 2)
 
 
 @dataclass(frozen=True)
@@ -402,8 +629,69 @@ class _Hashing:
         return "sha256:" + self.hash.hexdigest()
 
 
+class _BlobStream:
+    """A blob ``GET`` response whose read failures name the source request."""
+
+    def __init__(
+        self, response: http.client.HTTPResponse, detail: dict[str, object]
+    ) -> None:
+        self.response = response
+        self.detail = detail
+        self.count = 0
+
+    def read(self, limit: int = -1) -> bytes:
+        import http.client
+
+        try:
+            block = self.response.read(limit) if limit >= 0 else self.response.read()
+        except (OSError, http.client.HTTPException) as error:
+            raise RegistryError(
+                "registry-unreachable", detail={**self.detail, "offset": self.count}
+            ) from error
+        remaining = getattr(self.response, "length", None)
+        if not block and limit != 0 and isinstance(remaining, int) and remaining > 0:
+            # The connection closed before the promised Content-Length.
+            raise RegistryError(
+                "registry-unreachable", detail={**self.detail, "offset": self.count}
+            ) from http.client.IncompleteRead(b"", remaining)
+        self.count += len(block)
+        return block
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self.response, name)
+
+
+@dataclass
+class _Hop:
+    """One blob ``GET`` hop: its open connection and response."""
+
+    connection: http.client.HTTPConnection
+    response: http.client.HTTPResponse
+
+    @property
+    def status(self) -> int:
+        return self.response.status
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return {key.lower(): value for key, value in self.response.getheaders()}
+
+    def release(self) -> None:
+        try:
+            self.response.read(_MAX_RESPONSE)
+        except Exception:  # the connection is closed anyway
+            pass
+        self.connection.close()
+
+
 class StreamedOciRegistryClient:
-    """Stream blobs and manifests to an OCI Distribution v2 registry."""
+    """Stream blobs and manifests to an OCI Distribution v2 registry.
+
+    ``side`` (``source`` or ``target``) names this client in failures and
+    retries; ``deadline`` (a ``time.time()`` value) is when retrying stops;
+    ``retry`` is the :class:`RetryPolicy`; ``sleep`` is a test seam. Every
+    retry is appended to ``retries`` (a list callers may share).
+    """
 
     def __init__(
         self,
@@ -412,6 +700,10 @@ class StreamedOciRegistryClient:
         chunk_size: int = _CHUNK,
         monolithic_max: int = _MONOLITHIC_MAX,
         actions: str = "pull,push",
+        retry: RetryPolicy | None = None,
+        side: str | None = None,
+        deadline: float | None = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if actions not in {"pull", "pull,push", "pull,delete"}:
             raise ValueError(
@@ -421,6 +713,11 @@ class StreamedOciRegistryClient:
         self.actions = actions
         self.chunk_size = chunk_size
         self.monolithic_max = monolithic_max
+        self.retry = retry or RetryPolicy()
+        self.side = side
+        self.deadline = deadline
+        self.retries: list[dict[str, object]] = []
+        self._sleep = sleep
         self._authorization: str | None = None
         self._scoped: set[str] = set()
         if endpoint.auth_token is not None:
@@ -525,6 +822,125 @@ class StreamedOciRegistryClient:
         finally:
             connection.close()
 
+    # --- retries -----------------------------------------------------------------
+
+    @property
+    def _host(self) -> str:
+        default = 443 if self.endpoint.use_tls else 80
+        port = None if self.endpoint.port == default else self.endpoint.port
+        return host_port(self.endpoint.host, port)
+
+    def retry_pause(
+        self,
+        attempt: int,
+        cause: BaseException | str,
+        method: str,
+        path: str,
+        *,
+        limit: int | None = None,
+        retry_after: float | None = None,
+        **context: object,
+    ) -> bool:
+        """Record a retry after failed ``attempt`` and wait; ``False`` when the
+        attempts are used up or the pause would pass the deadline."""
+        if attempt >= (limit or self.retry.attempts):
+            return False
+        pause = self.retry.pause(attempt)
+        if retry_after is not None:
+            pause = max(pause, min(retry_after, self.retry.retry_after_max))
+        if self.deadline is not None and time.time() + pause >= self.deadline:
+            return False
+        entry: dict[str, object] = {
+            "side": context.pop("side", None) or self.side,
+            "host": context.pop("host", None) or self._host,
+            "method": method,
+            "path": _shown(path),
+            **context,
+            "attempt": attempt,
+            "cause": _cause(cause),
+            "pause_seconds": round(pause, 3),
+        }
+        self.retries.append({k: v for k, v in entry.items() if v is not None})
+        self._sleep(pause)
+        return True
+
+    def _describe(
+        self,
+        error: RegistryError,
+        method: str,
+        path: str,
+        host: str | None = None,
+        **context: object,
+    ) -> RegistryError:
+        """Fill in where ``error`` happened (keeps what is already there)."""
+        found = error.detail
+        if self.side is not None:
+            found.setdefault("side", self.side)
+        found.setdefault("host", host or self._host)
+        found.setdefault("method", method)
+        found.setdefault("path", _shown(path))
+        for key, value in context.items():
+            if value is not None:
+                found.setdefault(key, value)
+        return error
+
+    def _retrying(
+        self,
+        method: str,
+        path: str,
+        once: Callable[[], _R],
+        *,
+        may_retry: bool,
+        host: str | None = None,
+    ) -> _R:
+        """``once()``, repeated on a transient failure while ``may_retry``."""
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                response = once()
+            except RegistryError as error:
+                self._describe(error, method, path, host)
+                if not (
+                    may_retry
+                    and error.transient
+                    and self.retry_pause(attempt, error, method, path, host=host)
+                ):
+                    raise
+                continue
+            if (
+                may_retry
+                and response.status in RETRY_STATUSES
+                and self.retry_pause(
+                    attempt,
+                    f"HTTP {response.status}",
+                    method,
+                    path,
+                    host=host,
+                    retry_after=_retry_after(response.headers.get("retry-after")),
+                )
+            ):
+                release = getattr(response, "release", None)
+                if release is not None:
+                    release()
+                continue
+            return response
+
+    def _request(
+        self, method: str, path: str, *, retry: bool | None = None, **kwargs: object
+    ) -> Response:
+        """:meth:`_send`, retried when the request is repeatable: ``GET``,
+        ``HEAD``, ``DELETE`` or ``PUT`` with a body in memory, or ``retry``."""
+        replayable = not isinstance(kwargs.get("body"), Iterator)
+        if retry is None:
+            retry = replayable and method in {"GET", "HEAD", "PUT", "DELETE"}
+        return self._retrying(
+            method,
+            path,
+            lambda: self._send(method, path, **kwargs),  # type: ignore[arg-type]
+            may_retry=retry and replayable,
+        )
+
     def _call(
         self,
         method: str,
@@ -532,19 +948,22 @@ class StreamedOciRegistryClient:
         repository: str | None = None,
         **kwargs: object,
     ) -> Response:
-        """Send once; on a 401 with a replayable body, authenticate and resend."""
+        """Send (retrying a repeatable request); on a 401 with a replayable
+        body, authenticate and resend."""
         if repository is not None and repository not in self._scoped:
             # Authenticate before a streamed body: it cannot be resent.
             self.authenticate(repository)
-        response = self._send(method, path, **kwargs)  # type: ignore[arg-type]
+        response = self._request(method, path, **kwargs)  # type: ignore[arg-type]
         replayable = not isinstance(kwargs.get("body"), Iterator)
         if response.status == 401 and replayable:
             if self._answer(response, repository):
-                response = self._send(method, path, **kwargs)  # type: ignore[arg-type]
+                response = self._request(method, path, **kwargs)  # type: ignore[arg-type]
         if response.status == 401:
-            raise RegistryError("registry-unauthorized", 401)
+            error = RegistryError("registry-unauthorized", 401)
+            raise self._describe(error, method, path)
         if response.status == 403:
-            raise RegistryError("registry-forbidden", 403)
+            error = RegistryError("registry-forbidden", 403)
+            raise self._describe(error, method, path)
         return response
 
     def _answer(self, response: Response, repository: str | None) -> bool:
@@ -587,19 +1006,29 @@ class StreamedOciRegistryClient:
         headers = {}
         if creds is not None and creds.scheme == "basic":
             headers["Authorization"] = creds.basic_header()
-        connection = self._connection(
-            realm.scheme, realm.hostname, realm.port or _default_port(realm.scheme)
+        host, port = realm.hostname, realm.port or _default_port(realm.scheme)
+
+        def once() -> Response:
+            connection = self._connection(realm.scheme, host, port)
+            try:
+                connection.request(
+                    "GET", path + ("?" + encoded if encoded else ""), headers=headers
+                )
+                answer = connection.getresponse()
+                return Response(
+                    answer.status,
+                    {key.lower(): value for key, value in answer.getheaders()},
+                    answer.read(_MAX_RESPONSE + 1),
+                )
+            except (OSError, http.client.HTTPException) as error:
+                raise RegistryError("registry-unreachable") from error
+            finally:
+                connection.close()
+
+        response = self._retrying(
+            "GET", path, once, may_retry=True, host=host_port(host, realm.port)
         )
-        try:
-            connection.request(
-                "GET", path + ("?" + encoded if encoded else ""), headers=headers
-            )
-            response = connection.getresponse()
-            body = response.read(_MAX_RESPONSE + 1)
-        except (OSError, http.client.HTTPException) as error:
-            raise RegistryError("registry-unreachable") from error
-        finally:
-            connection.close()
+        body = response.body
         if response.status != 200 or len(body) > _MAX_RESPONSE:
             raise RegistryError("registry-unauthorized", response.status)
         try:
@@ -614,9 +1043,9 @@ class StreamedOciRegistryClient:
     def authenticate(self, repository: str) -> None:
         """Probe ``/v2/`` and answer its challenge for ``repository`` (``actions`` scope)."""
         self._scoped.add(repository)
-        response = self._send("GET", "/v2/")
+        response = self._request("GET", "/v2/")
         if response.status == 401 and self._answer(response, repository):
-            response = self._send("GET", "/v2/")
+            response = self._request("GET", "/v2/")
         if response.status == 401:
             raise RegistryError("registry-unauthorized", 401)
         if response.status != 200:
@@ -674,33 +1103,43 @@ class StreamedOciRegistryClient:
         for _ in range(max_redirects + 1):
             assert host is not None
             same = (scheme, host, port) == origin
-            if same:
-                connection = self._connection(scheme, host, port)
-            elif scheme == "https":
-                import ssl
+            shown = self._host if same else host_port(host, port)
 
-                connection = http.client.HTTPSConnection(
-                    host,
-                    port,
-                    timeout=self.endpoint.timeout,
-                    context=ssl.create_default_context(),
-                )
-            else:
-                connection = self._connection(scheme, host, port)
+            def once(
+                scheme: str = scheme, host: str = host, port: int = port,
+                path: str = path, same: bool = same,
+            ) -> _Hop:  # fmt: skip
+                if same or scheme != "https":
+                    connection = self._connection(scheme, host, port)
+                else:
+                    import ssl
+
+                    connection = http.client.HTTPSConnection(
+                        host,
+                        port,
+                        timeout=self.endpoint.timeout,
+                        context=ssl.create_default_context(),
+                    )
+                try:
+                    headers = {}
+                    if same and self._authorization is not None:
+                        headers["Authorization"] = self._authorization
+                    connection.request("GET", path, headers=headers)
+                    return _Hop(connection, connection.getresponse())
+                except (OSError, http.client.HTTPException) as error:
+                    connection.close()
+                    raise RegistryError("registry-unreachable") from error
+
             try:
-                headers = {}
-                if same and self._authorization is not None:
-                    headers["Authorization"] = self._authorization
-                connection.request("GET", path, headers=headers)
-                response = connection.getresponse()
-            except (OSError, http.client.HTTPException) as error:
-                connection.close()
-                raise RegistryError("registry-unreachable") from error
+                hop = self._retrying("GET", path, once, may_retry=True, host=shown)
+            except RegistryError as error:
+                self._describe(error, "GET", path, shown, digest=digest)
+                raise
+            connection, response = hop.connection, hop.response
             status = response.status
             if status in {301, 302, 303, 307, 308}:
                 location = response.getheader("location") or ""
-                response.read(_MAX_RESPONSE)
-                connection.close()
+                hop.release()
                 current = f"{scheme}://{host_port(host, port)}{path}"
                 parts = urllib.parse.urlsplit(urllib.parse.urljoin(current, location))
                 if parts.scheme not in {"http", "https"} or not parts.hostname:
@@ -712,34 +1151,39 @@ class StreamedOciRegistryClient:
                 path = (parts.path or "/") + ("?" + parts.query if parts.query else "")
                 continue
             if status == 401 and same and not answered:
-                challenge = Response(
-                    status, {k.lower(): v for k, v in response.getheaders()}, b""
-                )
-                response.read(_MAX_RESPONSE)
-                connection.close()
+                challenge = Response(status, hop.headers, b"")
+                hop.release()
                 answered = True
                 if self._answer(challenge, repository):
                     continue
                 raise RegistryError("registry-unauthorized", 401)
             if status != 200:
-                response.read(_MAX_RESPONSE)
-                connection.close()
+                hop.release()
                 if status == 401:
-                    raise RegistryError("registry-unauthorized", 401)
-                if status == 403:
-                    raise RegistryError("registry-forbidden", 403)
-                if status == 404:
-                    raise RegistryError("blob-not-found", 404)
-                raise RegistryError("registry-error", status)
+                    refused = RegistryError("registry-unauthorized", 401)
+                elif status == 403:
+                    refused = RegistryError("registry-forbidden", 403)
+                elif status == 404:
+                    refused = RegistryError("blob-not-found", 404)
+                else:
+                    refused = RegistryError("registry-error", status)
+                raise self._describe(refused, "GET", path, shown, digest=digest)
+            detail: dict[str, object] = {"side": self.side, "host": shown}
+            detail |= {"method": "GET", "path": _shown(path), "digest": digest}
             try:
-                yield response  # type: ignore[misc]
+                yield _BlobStream(  # type: ignore[misc]
+                    response, {k: v for k, v in detail.items() if v is not None}
+                )
             finally:
                 connection.close()
             return
         raise RegistryError("too-many-redirects")
 
     def _start_upload(self, repository: str) -> str:
-        response = self._call("POST", f"/v2/{repository}/blobs/uploads/", repository)
+        # A repeated POST at worst leaves an empty session the registry expires.
+        response = self._call(
+            "POST", f"/v2/{repository}/blobs/uploads/", repository, retry=True
+        )
         location = response.headers.get("location")
         if response.status != 202 or not location:
             raise RegistryError("upload-rejected", response.status)
@@ -770,49 +1214,186 @@ class StreamedOciRegistryClient:
         The bytes are hashed while they are sent. A chunked upload is only
         committed (the final ``PUT ?digest=``) after the hash matched; a
         monolithic upload carries the digest and the registry verifies it.
+
+        A failed chunk resumes from the session's ``Range``; when the session
+        is gone, a seekable ``source`` starts the blob again here, and any
+        other raises a transient :class:`RegistryError` for the caller to
+        start again with a fresh source.
         """
         validate_digest(digest)
         if isinstance(size, bool) or not isinstance(size, int) or size < 0:
             raise ValueError("invalid blob size")
-        reader = _Hashing(source, size, cancel)
+        try:
+            start = source.tell() if source.seekable() else None
+        except (AttributeError, OSError, ValueError):
+            start = None
+        attempt = 0
+        while True:
+            reader = _Hashing(source, size, cancel)
+            try:
+                return self._push_blob(repository, digest, size, reader)
+            except RegistryError as error:
+                error.detail.setdefault("digest", digest)
+                attempt += 1
+                if (
+                    start is None
+                    or not error.transient
+                    or not self.retry_pause(
+                        attempt,
+                        error,
+                        "POST",
+                        f"/v2/{repository}/blobs/uploads/",
+                        limit=self.retry.blob_attempts,
+                        digest=digest,
+                        action="restart",
+                    )
+                ):
+                    raise
+                source.seek(start)
+
+    def _push_blob(
+        self, repository: str, digest: str, size: int, reader: _Hashing
+    ) -> BlobUpload:
         location = self._start_upload(repository)
         if size <= self.monolithic_max:
-            self._monolithic(repository, location, digest, size, reader, b"")
+            # Small enough to hold: the PUT can then be repeated.
+            data = bytearray()
+            while len(data) < size:
+                data += reader.read(min(1024 * 1024, size - len(data)))
+            self._commit(repository, location, digest, bytes(data))
             return self._verified(reader, digest, size, "monolithic")
-        offset = 0
+        offset = 0  # bytes the registry acknowledged
+        pending = b""  # bytes read but not acknowledged; they start at offset
+        first, failures = True, 0
         while offset < size:
-            chunk = reader.read(self.chunk_size)
-            response = self._call(
+            if not pending:
+                pending = reader.read(self.chunk_size)
+            end = offset + len(pending)
+            failure: RegistryError
+            try:
+                response = self._call(
+                    "PATCH",
+                    location,
+                    repository,
+                    body=pending,
+                    headers={
+                        "Content-Type": "application/octet-stream",
+                        "Content-Range": f"{offset}-{end - 1}",
+                    },
+                )
+            except RegistryError as error:
+                self._describe(error, "PATCH", location, digest=digest, offset=offset)
+                if not error.transient:
+                    raise
+                failure, retry_after = error, None
+            else:
+                if response.status in {404, 405, 416, 501} and first:
+                    # This registry does not take chunks: restart as one PUT.
+                    self._cancel_upload(location)
+                    location = self._start_upload(repository)
+                    self._monolithic(
+                        repository, location, digest, size, reader, pending
+                    )
+                    return self._verified(reader, digest, size, "monolithic-fallback")
+                new_location = response.headers.get("location")
+                if response.status == 202 and new_location:
+                    location = self._target(new_location)
+                    offset, pending, first = end, b"", False
+                    continue
+                failure = self._describe(
+                    RegistryError("upload-rejected", response.status),
+                    "PATCH",
+                    location,
+                    digest=digest,
+                    offset=offset,
+                )
+                if response.status not in RETRY_STATUSES:
+                    self._cancel_upload(location)
+                    raise failure
+                retry_after = _retry_after(response.headers.get("retry-after"))
+            failures += 1
+            first = False
+            if not self.retry_pause(
+                failures,
+                failure,
                 "PATCH",
                 location,
-                repository,
-                body=chunk,
-                headers={
-                    "Content-Type": "application/octet-stream",
-                    "Content-Range": f"{offset}-{offset + len(chunk) - 1}",
-                },
-            )
-            if response.status in {404, 405, 416, 501} and offset == 0:
-                # This registry does not take chunks: restart as one PUT.
-                self._cancel_upload(location)
+                retry_after=retry_after,
+                digest=digest,
+                offset=offset,
+                action="resume",
+            ):
+                raise failure
+            state = self._upload_state(repository, location, offset)
+            if state is not None and offset <= state[1] <= end:
+                location, acknowledged = state
+                pending = pending[acknowledged - offset :]
+                offset = acknowledged
+                continue
+            gone = "gone" if state is None else f"at {state[1]}, not {offset}-{end}"
+            if offset == 0:  # every byte read so far is still held: new session
                 location = self._start_upload(repository)
-                self._monolithic(repository, location, digest, size, reader, chunk)
-                return self._verified(reader, digest, size, "monolithic-fallback")
-            new_location = response.headers.get("location")
-            if response.status != 202 or not new_location:
-                self._cancel_upload(location)
-                raise RegistryError("upload-rejected", response.status)
-            location = self._target(new_location)
-            offset += len(chunk)
+                continue
+            raise self._describe(
+                RegistryError(
+                    "registry-unreachable",
+                    detail={"cause": f"upload session {gone}"},
+                    transient=True,
+                ),
+                "PATCH",
+                location,
+                digest=digest,
+                offset=offset,
+            )
         if reader.digest != digest:
             self._cancel_upload(location)
             raise RegistryError("blob-digest-mismatch")
-        response = self._call(
-            "PUT", self._with_digest(location, digest), repository, body=b""
-        )
-        if response.status not in {201, 204}:
-            raise RegistryError("upload-rejected", response.status)
+        self._commit(repository, location, digest, b"")
         return self._verified(reader, digest, size, "chunked")
+
+    def _upload_state(
+        self, repository: str, location: str, offset: int
+    ) -> tuple[str, int] | None:
+        """``(location, bytes received)`` of an upload session (``GET`` on it,
+        answered with ``Range: 0-<last byte>``); ``None`` when it is gone or
+        says nothing usable."""
+        response = self._call("GET", location, repository)
+        if response.status not in {200, 204}:
+            return None
+        found = re.fullmatch(
+            r"(?:bytes=)?0-(\d+)", response.headers.get("range", "").strip()
+        )
+        if found is None:
+            return None
+        last = int(found.group(1))
+        # "0-0" is how registries say "nothing yet" (and, rarely, one byte).
+        received = 0 if last == 0 and offset == 0 else last + 1
+        new_location = response.headers.get("location")
+        return (self._target(new_location) if new_location else location), received
+
+    def _commit(self, repository: str, location: str, digest: str, data: bytes) -> None:
+        """The final ``PUT ?digest=`` (with the whole blob, or the rest).
+
+        It is repeated on a transient failure; when a repeat finds the
+        session closed, the blob being there means the first one landed.
+        """
+        response = self._call(
+            "PUT",
+            self._with_digest(location, digest),
+            repository,
+            body=data,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        if response.status in {201, 204}:
+            return
+        if response.status == 404 and self.blob_size(repository, digest) is not None:
+            return
+        raise self._describe(
+            RegistryError("upload-rejected", response.status),
+            "PUT",
+            location,
+            digest=digest,
+        )
 
     def _monolithic(
         self,
@@ -823,6 +1404,8 @@ class StreamedOciRegistryClient:
         reader: _Hashing,
         head: bytes,
     ) -> None:
+        """One streamed ``PUT`` (a registry that refuses chunks; not repeatable)."""
+
         def body() -> Iterator[bytes]:
             if head:
                 yield head

@@ -165,7 +165,8 @@ MAX_STEPS = 64
 
 def _steps(value: Any) -> list[dict[str, Any]]:
     """A build's steps (0.75.0), bounded: ``platform``, ``kind``, ``tool``,
-    ``state``, ``exit_code`` and ``seconds``, as a host build's receipt."""
+    ``state``, ``exit_code``, ``seconds`` and (0.78.0) ``start_seconds``,
+    as a host build's receipt."""
     found = []
     for item in value if isinstance(value, list | tuple) else ():
         if not isinstance(item, Mapping) or not _text(item.get("kind"), 64):
@@ -184,6 +185,9 @@ def _steps(value: Any) -> list[dict[str, Any]]:
         code = item.get("exit_code")
         if isinstance(code, int) and not isinstance(code, bool):
             step["exit_code"] = code
+        start = item.get("start_seconds")
+        if isinstance(start, int | float) and not isinstance(start, bool):
+            step["start_seconds"] = round(float(start), 3)
         found.append(step)
     return found[:MAX_STEPS]
 

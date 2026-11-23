@@ -165,7 +165,10 @@ def promote_host(
     document: dict[str, Any] = {"schema": promotion_plan.RESULT_SCHEMA, **found}
     document.pop("lock", None)
     for item in found.get("git_retries") or ():
-        say(f"  {item['command']} failed in transport; retried once")
+        say(
+            f"  {item['command']} failed in transport; retry {item.get('attempt', 1)}"
+            f" after {item['pause_seconds']} s"
+        )
     if body is None:  # current, already tagged
         say(f"{host}: {gate.input} already pins {found['pinned']['commit'][:12]}; "
             f"tag {found['tag']} points at it")  # fmt: skip
@@ -221,7 +224,10 @@ def promote_host(
         fail(error.code, str(error), **error.detail,
              approve_command=document["approve_command"])  # fmt: skip
     for item in result["git_retries"][len(found.get("git_retries") or ()) :]:
-        say(f"  {item['command']} failed in transport; retried once")
+        say(
+            f"  {item['command']} failed in transport; retry {item.get('attempt', 1)}"
+            f" after {item['pause_seconds']} s"
+        )
     document.update(state="promoted", **result)
     document.pop("approve_command", None)
     say(f"{host}: promoted {document['tag']} at {document['commit'][:12]}")

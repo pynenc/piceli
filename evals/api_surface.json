@@ -11290,13 +11290,18 @@
     "push_blob_stream",
     "push_manifest",
     "put_manifest",
-    "referrers"
+    "referrers",
+    "retry_pause"
    ],
    "init": [
     "actions",
     "chunk_size",
+    "deadline",
     "endpoint",
-    "monolithic_max"
+    "monolithic_max",
+    "retry",
+    "side",
+    "sleep"
    ],
    "methods": {
     "authenticate": [
@@ -11359,7 +11364,8 @@
     "referrers": [
      "digest",
      "repository"
-    ]
+    ],
+    "retry_pause": null
    },
    "returns": {
     "push_blob": "BlobUpload"
@@ -18178,5 +18184,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.77.0"
+ "version": "0.78.0"
 }

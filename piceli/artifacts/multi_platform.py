@@ -23,6 +23,10 @@ and each node pulls the manifest of its own platform.
 * ``build.shared_commands`` (0.23) run once, with the first platform, into
   the shared target directory; the later platforms skip them and their images
   copy the same outputs. The receipt's ``shared_commands`` holds their steps.
+  With ``build.shared_commands_alongside`` (0.78.0) they start with the
+  first platform's commands instead of before them; that platform's images
+  wait for them, so the next platform starts once they are done. Each
+  step's ``start_seconds`` counts from the start of the whole build.
 * A Docker ``build.toml`` already builds every platform of its ``platforms``
   list; its per-platform images are joined in an index when they are
   published (:mod:`piceli.artifacts.publish`).
@@ -255,6 +259,7 @@ class MultiPlatformHostBuild:
         if len(specs) == 1:
             return specs[0].run(grant, output_dir, **options)
         started_at = _now()
+        options["build_start"] = time.time()
         receipts: dict[str, dict[str, Any]] = {}
         for position, (item, item_plan) in enumerate(
             zip(specs, plan.plans, strict=True)

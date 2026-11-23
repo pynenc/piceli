@@ -201,7 +201,8 @@ def host_steps(value: Any) -> list[dict[str, Any]]:
     ``state`` (text, bounded), ``exit_code`` (an integer) and ``seconds``
     (a finite number from 0 to a week). A step with a field of another
     type, a text too long, no ``kind`` or no ``seconds`` is dropped;
-    anything else of it is ignored."""
+    anything else of it is ignored. 0.78.0: ``start_seconds`` (when the
+    step started, from the build's start; same bounds) is kept when valid."""
     import math
 
     if not isinstance(value, list):
@@ -236,6 +237,14 @@ def host_steps(value: Any) -> list[dict[str, Any]]:
                     continue
                 step["exit_code"] = code
             step["seconds"] = round(float(seconds), 3)
+            start = item.get("start_seconds")
+            if (
+                isinstance(start, int | float)
+                and not isinstance(start, bool)
+                and math.isfinite(start)
+                and 0 <= start <= _MAX_STEP_SECONDS
+            ):
+                step["start_seconds"] = round(float(start), 3)
             found.append(step)
             if len(found) == MAX_STEPS:
                 break

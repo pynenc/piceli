@@ -29,6 +29,14 @@ same bytes, it builds nothing. Every digest is kept:
 The receipt (``piceli.copy-receipt.v1``) gives the digest, its media type,
 each platform's manifest, the blobs uploaded and skipped and each referrer.
 Credentials are never printed. Importing this module runs nothing.
+
+**Retries (0.78.0).** A transient registry failure on either side is retried
+with a bounded backoff within the copy's deadline; a chunk upload resumes
+from the registry's ``Range``, else the blob starts again (see
+:mod:`piceli.artifacts.registry`). ``retries`` lists each retry (side, host,
+method, path, attempt, cause); a copy that still fails says where in
+``error`` (side, host, method, path, digest, offset, exception, errno or
+status) and in its CLI line. Never a credential or a query string.
 """
 
 from __future__ import annotations
@@ -199,6 +207,9 @@ class Copier:
     ca_file: Path | None = field(default=None, repr=False)
     client_factory: ClientFactory = field(default=StreamedOciRegistryClient, repr=False)
     timeout: float = 1800.0
+    _retries: list[dict[str, object]] = field(
+        default_factory=list, init=False, repr=False
+    )
 
     def copy(
         self,
@@ -241,6 +252,8 @@ class Copier:
             "result": None,
             "state": "copied",
             "reason": None,
+            "error": None,
+            "retries": [],
             "started_at": started,
         }
         try:
@@ -250,7 +263,8 @@ class Copier:
         except MirrorError as error:
             receipt.update(state="failed", reason=error.code)
         except RegistryError as error:
-            receipt.update(state="failed", reason=error.reason)
+            receipt.update(state="failed", reason=error.reason, error=error.public())
+        receipt["retries"] = list(self._retries)
         receipt["finished_at"] = _now()
         receipt["seconds"] = round(time.monotonic() - clock, 3)
         return receipt
@@ -261,11 +275,16 @@ class Copier:
         credentials: RegistryCredentials | None,
         ca_file: Path | None,
         actions: str,
+        side: str,
+        deadline: float,
     ) -> StreamedOciRegistryClient:
         endpoint: RegistryEndpoint = repository.endpoint(
             credentials=credentials, ca_file=ca_file, timeout=120.0
         )
-        return self.client_factory(endpoint, actions=actions)
+        client = self.client_factory(endpoint, actions=actions)
+        client.side, client.deadline = side, deadline
+        client.retries = self._retries  # one list, in the order they happened
+        return client
 
     def _copy(
         self,
@@ -277,10 +296,18 @@ class Copier:
         source_repo = plan.source.repository
         target = plan.target
         wanted = plan.source.digest
+        self._retries.clear()
         source = self._client(
-            source_repo, self.source_credentials, self.source_ca_file, "pull"
+            source_repo,
+            self.source_credentials,
+            self.source_ca_file,
+            "pull",
+            "source",
+            deadline,
         )
-        sink = self._client(target, self.credentials, self.ca_file, "pull,push")
+        sink = self._client(
+            target, self.credentials, self.ca_file, "pull,push", "target", deadline
+        )
         sink.authenticate(target.repository)
         previous = (
             sink.manifest_digest(target.repository, target.tag)
@@ -304,6 +331,7 @@ class Copier:
             cancel=cancel,
         )
         if mirrored.get("state") != "succeeded":
+            receipt["error"] = mirrored.get("error")
             raise CopyError(str(mirrored.get("reason") or "copy-failed"))
         blobs = dict(mirrored["blobs"])
         blobs.pop("items", None)

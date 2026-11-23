@@ -4,6 +4,70 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.78.0
+
+### Shared commands run alongside the platform commands (ops#99)
+
+- **New opt-in `[build] shared_commands_alongside = true` in
+  `host-build.toml`.** A multi-platform host build ran its shared commands,
+  then the first platform's commands, then the second platform's. With the
+  field, the shared commands start at the same time as the first platform's
+  commands; a build whose shared step takes 453 s and whose platforms take
+  252 s and 251 s goes from about 1012 s to about 704 s. Without it, nothing
+  changes: a platform command may still read the shared outputs.
+- An image is assembled once its platform's commands and every shared
+  command that names it (`images`, or every one for a plain entry) have
+  finished. The two sides keep separate target directories
+  (`<cache>/target/shared` and `<cache>/target/<arch>-<page size>`), so
+  cargo never makes one wait for the other's build lock.
+- The first failure on either side fails the build and stops the other
+  side (`SIGTERM` to its process group, `SIGKILL` five seconds later; its
+  step is `cancelled`). The error, the receipt's `steps` (failing step
+  last) and the log name the failing command. A cancelled host command now
+  gets `SIGTERM` before `SIGKILL` in every build.
+- **Every host build step records `start_seconds`**, its start in seconds
+  from the start of the whole build, so overlapping steps show. `piceli
+  gitops builds` prints the commands' wall time and, when they overlapped,
+  their sum (`3 command(s) in 706s (956s of work)`).
+- **Upgrade:** the overlap runs inside the build: the builder image (what
+  `piceli builder serve` and in-cluster build Jobs run, the controller's)
+  and the client, for local host builds. `start_seconds` reaches `piceli
+  gitops builds` when the controller and `builder serve` on the build hosts
+  are 0.78.0 (they must match already); an older one drops the field. An
+  older Piceli refuses a spec with the field (`invalid-spec`), so set it
+  only after the upgrade.
+
+### Faster CI
+
+- CI runs each Python version's unit tests in two halves on two runners
+  (`PICELI_TEST_SHARD=I/N`) and the kind tests in five shards; release images
+  build while PyPI publishes, so they are out about two minutes sooner.
+
+### A flaky request no longer fails a copy or a promotion (ops#100)
+
+- A registry request that fails in transit (a refused, reset or aborted
+  connection, a timeout, a name not resolved, a TLS connection cut short,
+  HTTP 429, 502, 503 or 504) is tried again: up to 5 times, with a growing,
+  partly random pause (about 1, 2, 4, 8 seconds; `Retry-After` honoured up
+  to 60 seconds), never past the command's deadline. Before, one dropped
+  connection failed a whole `artifacts copy` with `registry-unreachable`.
+- A failed chunk of a large upload resumes where the registry's upload
+  session says it stopped (its `Range`); when the session is gone, the
+  blob starts again (up to 3 times). A chunk is never resent blindly.
+- The copy receipt lists each retry (`retries`) and, on failure, where it
+  failed (`error`: side, host, method, path, blob digest and offset,
+  exception and errno or HTTP status; never a credential). The CLI line
+  says it too: `copy: failed [registry-unreachable] target ghcr.io PATCH
+  blob sha256:9072a3f9… at 33554432: ConnectionResetError(54)`. The error
+  codes are unchanged. Mirror receipts get the same `retries` and `error`.
+- The same retries cover every command that talks to a registry through
+  Piceli's client: `artifacts publish`, `publish-files`, `deliver`,
+  `copy`, mirrors, retention and the in-cluster registry.
+- `piceli promote`: a `git fetch`, `push`, `ls-remote` or `clone` that fails
+  in transport (such as `ssh: connect to host … Operation timed out`) now
+  runs up to three times, after 2 seconds and then 4 to 8 seconds (0.74.0
+  retried once). `git_retries` entries gain `attempt`.
+
 ## Version 0.77.0
 
 ### A damaged cargo registry source is repaired (ops#95)

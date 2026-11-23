@@ -622,11 +622,15 @@ def _default_runner(
     /,
     *,
     on_output: OutputSink | None = None,
+    cancel: threading.Event | None = None,
 ) -> tuple[dict[str, Any], bytes, bytes]:
+    """The process runner; ``cancel`` (0.78.0) stops the running command
+    (its process group: ``SIGTERM``, then ``SIGKILL``)."""
     return _run_process(
         argv,
         cwd,
         limits,
+        cancel=cancel,
         expires_at=expires_at,
         environment=environment,
         on_output=on_output,
