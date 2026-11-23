@@ -903,10 +903,22 @@ def _build_hosts(state: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     return public_hosts(state)
 
 
-def _source_quarantine(state: Mapping[str, Any]) -> dict[str, Any]:
+def _source_quarantine(state: Mapping[str, Any], now: float) -> dict[str, Any]:
     from piceli.infra.remote_builds import public_source_quarantine
 
-    return public_source_quarantine(state)
+    return public_source_quarantine(state, now)
+
+
+def _engine_backoff(state: Mapping[str, Any], now: float) -> dict[str, Any]:
+    from piceli.infra.remote_builds import public_engine
+
+    return public_engine(state, now)
+
+
+def _builds_fallback(state: Mapping[str, Any]) -> dict[str, Any]:
+    from piceli.infra.remote_builds import public_fallbacks
+
+    return public_fallbacks(state)
 
 
 def _standby(state: Mapping[str, Any], now: float) -> dict[str, Any]:
@@ -1733,6 +1745,8 @@ class CompositionController:
         )
         images = remote_builds.delivered(self.state, body, self._in_registry)
         host = str(body.get("host"))
+        # 0.75.0: its engine works; the environment's fallback run ends.
+        remote_builds.host_delivered(self.state, host, asked.get("owner"))
         receipt = body.get("receipt")
         receipt = receipt if isinstance(receipt, Mapping) else {}
         self._host_build_times(asked, receipt, host)
@@ -1927,10 +1941,23 @@ class CompositionController:
 
                     self._refuse_undeclared(body)
                     if remote_builds.failed(self.state, body, self.clock()):
+                        cause = remote_builds.early_cause(body)
                         self.log(
                             f"build host {body.get('host')}: handed build "
-                            f"{body.get('id')} over before it ran: {body.get('reason')}"
+                            f"{body.get('id')} over before it ran "
+                            f"({'container engine' if cause == 'engine' else 'source'}): "
+                            f"{body.get('reason')}"
                         )
+                        held = remote_builds.engine_hold(
+                            self.state, str(body.get("host") or "?")[:64], self.clock()
+                        )
+                        if cause == "engine" and held is not None:
+                            self.log(
+                                "build health: "
+                                + remote_builds.describe_engine(
+                                    str(body.get("host")), held
+                                )
+                            )
                     self._build_failed_health(body)
                     self._wake_waiting()
                 elif kind == "build-standby":  # 0.29.0: builder serve --take-next
@@ -4800,7 +4827,21 @@ class CompositionController:
                 ),
                 **(
                     {"source_quarantine": blocked}
-                    if (blocked := _source_quarantine(self.state))
+                    if (blocked := _source_quarantine(self.state, self.clock()))
+                    else {}
+                ),
+                # Added in 0.75.0: the hosts whose container engine could not
+                # start a build (backed off, or blocked until release-host),
+                # and the environments whose image builds went to the
+                # in-cluster fallback in a row.
+                **(
+                    {"engine_backoff": engine}
+                    if (engine := _engine_backoff(self.state, self.clock()))
+                    else {}
+                ),
+                **(
+                    {"builds_fallback": fallbacks}
+                    if (fallbacks := _builds_fallback(self.state))
                     else {}
                 ),
                 **(

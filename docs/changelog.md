@@ -6,6 +6,37 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.75.0
 
+### A container-engine failure does not block a host (ops#97)
+
+- **A build host whose container engine fails once is backed off, not
+  blocked.** When `docker run` exited 125 (the engine could not start the
+  build container, for example a runtime hook error), the controller
+  quarantined the host for every source of the build, with no end: the
+  host refused every build until `piceli gitops release-host`, every image
+  build went to the in-cluster fallback, and nothing said so. Now the
+  early `build-failed` answer names its cause (`engine` or `source`); an
+  engine failure hands the build over as before but quarantines no
+  source. The host claims no image build for 5 minutes, then twice as
+  long at each next engine failure in a row (at most 1 hour); after 3 in
+  a row it is blocked until `release-host`. Its next build that starts
+  clears the count. An older builder sends no cause: an early failure
+  that names no source counts as `engine`. See
+  {ref}`engine backoff <build-host-engine-backoff>`.
+- **A source quarantine ends after 24 hours.** The host then tries the
+  source again (`until` in `controller.source_quarantine`).
+- **`piceli gitops hosts` shows every block.** Each source block and
+  engine backoff or block, with its reason, cause and times
+  (`source_quarantine` and `engine_backoff` in `--json`, new
+  `controller.engine_backoff` in the status). Before, it showed only health
+  events, so a blocked host read `0 recent health event(s)`.
+- **Two new alarms.** `build-host-blocked` fires for a host blocked by
+  its engine (`build-host-engine-failed`) or by a source
+  (`build-host-source-failed`). `builds-fallback` fires when an
+  environment's image builds all went to the in-cluster fallback:
+  `Alarms(fallback_after=3)` builds in a row, or at least two over
+  `Alarms(fallback_for="6h")` (`build-host-fallback-only`; new
+  `controller.builds_fallback` in the status).
+
 ### In-cluster builds keep their step times (ops#97)
 
 - **`piceli gitops builds --json` shows each command's seconds of an

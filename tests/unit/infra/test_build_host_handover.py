@@ -302,6 +302,7 @@ def test_builder_serve_marks_fetch_and_engine_failures_early(
     finally:
         builder_serve.export_source = original  # type: ignore[assignment]
     assert caught.value.early and caught.value.source in {"catalog", "shop"}
+    assert caught.value.cause == "source"  # 0.75.0
 
     worker.git = lambda *_a, **_k: None  # never reached: export is faked
     builder_serve.export_source = lambda *_a, **_k: None  # type: ignore[assignment]
@@ -310,6 +311,7 @@ def test_builder_serve_marks_fetch_and_engine_failures_early(
         with pytest.raises(BuildFailed) as caught:
             worker.build(entry, deque())
         assert caught.value.early and caught.value.source is None
+        assert caught.value.cause == "engine"  # 0.75.0: no source quarantined
         worker.container = lambda *_a: 101
         with pytest.raises(BuildFailed) as caught:
             worker.build(entry, deque())

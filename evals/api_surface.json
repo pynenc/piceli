@@ -193,6 +193,9 @@
   },
   "Alarms": {
    "attrs": [
+    "fallback",
+    "fallback_after",
+    "fallback_for",
     "from_dict",
     "secret",
     "targets",
@@ -202,6 +205,8 @@
     "waiting_seconds"
    ],
    "init": [
+    "fallback_after",
+    "fallback_for",
     "secret",
     "targets",
     "waiting_after"
@@ -15086,7 +15091,10 @@
    "blob-source-truncated",
    "build-builder-mismatch",
    "build-failed",
+   "build-host-engine-failed",
+   "build-host-fallback-only",
    "build-host-quarantined",
+   "build-host-source-failed",
    "build-platforms-invalid",
    "build-timed-out",
    "builder-not-approved",
