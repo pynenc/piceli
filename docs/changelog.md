@@ -4,6 +4,12 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.77.0
+
+### A damaged cargo registry source is repaired (ops#95)
+
+### A resumed or finished deploy names its commits (ops#98)
+
 ## Version 0.76.0
 
 ### Host builds send their step times (ops#97 follow-up)
