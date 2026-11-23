@@ -273,10 +273,10 @@ def test_the_wrapper_imports_nothing_but_the_standard_library() -> None:
     shared = Path(pod.__file__).with_name("toolchains.py").read_text()
     assert "import piceli" not in shared and "from piceli" not in shared
     # Shipped as one compressed `python3 -c` argument (Linux caps one
-    # argument at 128 KiB); the source itself may grow.
+    # argument at 128 KiB); the source itself may grow. 0.77.0: 63 KB.
     from piceli.dev.jobs import wrapper_source
 
-    assert len(wrapper_source()) < 60_000
+    assert len(wrapper_source()) < 72_000
 
 
 def test_no_code_runs_while_the_api_server_is_reachable(
@@ -620,3 +620,102 @@ def test_a_lineage_still_damaged_after_the_cold_retry_is_removed(
     last, _ = _run(tmp_path, always, _spec(always, ["true"]), "last")
     assert last["cache"]["warm"] is False and "seed" not in last["cache"]
     assert not (Path(last["cache"]["lineage_dir"]) / "target" / "marker").exists()
+
+
+_INDEX = "index.crates.io-1949cf8c6b5b557f"
+
+
+def _registry_script(marker: str) -> str:
+    """A build that fails reading chrono's extracted source while ``marker``
+    (a file in chrono's directory) is there, or always with ``BREAK_AGAIN``
+    (a host that damages the fresh copy too); else it extracts chrono."""
+    src = f'"$CARGO_HOME/registry/src/{_INDEX}/chrono-0.4.45'
+    return "\n".join(
+        [
+            f'if [ -f {src}/{marker}" ] || [ -n "$BREAK_AGAIN" ]; then',
+            "  echo '   Compiling chrono v0.4.45'",
+            f"  echo \"error: couldn't read \\`$CARGO_HOME/registry/src/{_INDEX}/"
+            'chrono-0.4.45/src/naive/date/mod.rs\\`: stream did not contain valid UTF-8"',
+            "  exit 101",
+            "fi",
+            f'mkdir -p {src}/src" && echo extracted > {src}/src/lib.rs"',
+            "echo '    Finished `dev` profile [unoptimized] target(s) in 1.0s'",
+        ]
+    )
+
+
+def _damaged_home(tmp_path: Path) -> Path:
+    home = tmp_path / "cache" / "cargo-home" / "none"
+    crate = home / "registry" / "src" / _INDEX / "chrono-0.4.45"
+    (crate / "src").mkdir(parents=True)
+    (crate / "damaged").write_bytes(b"\x14")
+    (crate / "src" / "lib.rs").write_text("pub fn f() {}")
+    (home / "registry" / "src" / _INDEX / "serde-1.0.0").mkdir()
+    (home / "registry" / "cache" / _INDEX).mkdir(parents=True)
+    (home / "registry" / "cache" / _INDEX / "chrono-0.4.45.crate").write_text("c")
+    return home
+
+
+def test_a_damaged_registry_source_is_extracted_again_and_run_once_more(
+    tmp_path: Path,
+) -> None:
+    """0.77.0 (ops#95): rustc cannot read chrono's extracted source in the
+    cargo home; its directory goes, the run passes on the retry."""
+    home = _damaged_home(tmp_path)
+    data = _archive({"app/build.sh": _registry_script("damaged")})
+    result, lines = _run(tmp_path, data, _spec(data, ["sh", "build.sh"]))
+    assert result["state"] == "passed", result
+    repaired = result["cache"]["repaired"]
+    assert repaired["kind"] == "registry-src-reextracted"
+    assert repaired["crates"] == ["chrono-0.4.45"]
+    assert repaired["paths"] == [f"registry/src/{_INDEX}/chrono-0.4.45"]
+    assert "stream did not contain valid UTF-8" in repaired["first_error"][0]
+    assert result["health"]["kind"] == "cache-registry-src-reextracted"
+    assert any("registry-src-reextracted" in line for line in lines)
+    src = home / "registry" / "src" / _INDEX
+    assert (src / "chrono-0.4.45" / "src" / "lib.rs").read_text() == "extracted\n"
+    assert (src / "serde-1.0.0").is_dir()  # the others stay
+    assert (home / "registry" / "cache" / _INDEX / "chrono-0.4.45.crate").is_file()
+
+
+def test_a_registry_source_damaged_again_fails_and_points_at_the_host(
+    tmp_path: Path,
+) -> None:
+    home = _damaged_home(tmp_path)
+    data = _archive({"app/build.sh": _registry_script("damaged")})
+    spec = _spec(data, ["sh", "build.sh"], env={"BREAK_AGAIN": "1"})
+    result, lines = _run(tmp_path, data, spec)
+    assert result["state"] == "failed"
+    assert result["reason"] == "dev-registry-src-damaged"
+    assert "may be corrupting files" in result["message"]
+    assert "disk and memory" in result["message"]
+    assert result["cache"]["repaired"]["kind"] == "registry-src-reextracted"
+    output = [line for line in lines if not line.startswith(pod.RESULT_MARKER)]
+    assert sum("Compiling chrono" in line for line in output) == 2  # once more only
+    assert not (home / "registry" / "src" / _INDEX / "chrono-0.4.45").exists()
+    assert (home / "registry" / "src" / _INDEX / "serde-1.0.0").is_dir()
+
+
+def test_a_path_outside_registry_src_in_the_error_is_never_removed(
+    tmp_path: Path,
+) -> None:
+    home = _damaged_home(tmp_path)
+    keep = tmp_path / "cache" / "lineages-elsewhere" / "chrono-0.4.45"
+    keep.mkdir(parents=True)
+    script = "\n".join(
+        [
+            "echo \"error: couldn't read \\`$CARGO_HOME/registry/src/../cache/"
+            f'{_INDEX}/chrono-0.4.45.crate\\`: stream did not contain valid UTF-8"',
+            f"echo \"error: couldn't read \\`{keep}/src/lib.rs\\`: stream did not "
+            'contain valid UTF-8"',
+            "exit 101",
+        ]
+    )
+    data = _archive({"app/build.sh": script})
+    result, _ = _run(tmp_path, data, _spec(data, ["sh", "build.sh"]))
+    assert result["state"] == "failed"
+    assert result["reason"] == "dev-command-failed"
+    assert "repaired" not in result["cache"]
+    assert keep.is_dir()
+    assert (home / "registry" / "cache" / _INDEX / "chrono-0.4.45.crate").is_file()
+    assert (home / "registry" / "src" / _INDEX / "chrono-0.4.45").is_dir()

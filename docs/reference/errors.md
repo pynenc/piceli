@@ -223,6 +223,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`dev-profile-unknown`](#error-dev-profile-unknown) | dev | no |
 | [`dev-queue-timeout`](#error-dev-queue-timeout) | dev | yes |
 | [`dev-ref-unknown`](#error-dev-ref-unknown) | dev | no |
+| [`dev-registry-src-damaged`](#error-dev-registry-src-damaged) | dev | yes |
 | [`dev-run-abandoned`](#error-dev-run-abandoned) | dev | yes |
 | [`dev-run-cancelled`](#error-dev-run-cancelled) | dev | yes |
 | [`dev-run-failed`](#error-dev-run-failed) | dev | yes |
@@ -5476,6 +5477,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** `git fetch` the commit (or branch) first, then run again.
 - **Retry-safe:** no
+
+(error-dev-registry-src-damaged)=
+### `dev-registry-src-damaged`
+
+**A crate's extracted source is damaged.** 0.77.0: cargo or rustc could not read or parse a file of a crate cargo extracted into the cache's cargo home (`registry/src/`): a byte that changed at rest. The run removes that crate's directory (cargo extracts it again from its checked `.crate` file) and runs once more; this error means the fresh copy was damaged again, so the build host is likely corrupting files, or the directory could not be removed (cargo's package cache lock stayed held).
+
+- **Fix:** Check the build host's disk and memory (a memory test, the kernel log for disk or machine-check errors, a filesystem check). `piceli dev cache clear --registry-src` (or `--crate NAME`) removes extracted sources by hand; then run again.
+- **Retry-safe:** yes
 
 (error-dev-run-abandoned)=
 ### `dev-run-abandoned`

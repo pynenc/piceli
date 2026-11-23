@@ -12915,6 +12915,7 @@
      "--host",
      "--json",
      "--lineage",
+     "--registry-src",
      "--transport"
     ],
     "subcommands": []
@@ -15250,6 +15251,7 @@
    "dev-profile-unknown",
    "dev-queue-timeout",
    "dev-ref-unknown",
+   "dev-registry-src-damaged",
    "dev-run-abandoned",
    "dev-run-cancelled",
    "dev-run-failed",
