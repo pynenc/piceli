@@ -312,8 +312,37 @@ def test_a_fetch_that_times_out_once_is_retried(
     code, body, said = _promote(found)
     assert code == 3, body
     assert len(calls) == 2
-    assert body["git_retries"] == [{"command": "git fetch", "pause_seconds": 0.0}]
-    assert "git fetch failed in transport; retried once" in said
+    assert body["git_retries"] == [
+        {"command": "git fetch", "attempt": 1, "pause_seconds": 0.0}
+    ]
+    assert "git fetch failed in transport; retry 1 after 0.0 s" in said
+
+
+def test_an_ssh_fetch_that_times_out_twice_is_retried_with_backoff(
+    found: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _flaky_git(
+        monkeypatch, "fetch",
+        b"ssh: connect to host example.org port 22: Operation timed out\r\n"
+        b"fatal: Could not read from remote repository.\n",
+        times=2,
+    )  # fmt: skip
+    pauses: list[float] = []
+    monkeypatch.setattr(promote.time, "sleep", pauses.append)
+    code, body, said = _promote(found)
+    assert code == 3, body
+    assert len(calls) == 3
+    assert [(r["command"], r["attempt"]) for r in body["git_retries"]] == [
+        ("git fetch", 1),
+        ("git fetch", 2),
+    ]
+    assert "retry 2" in said
+
+
+def test_git_retry_pauses_grow_with_jitter(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(promote, "RETRY_PAUSE", 2.0)
+    assert promote._pause(1) == 2.0
+    assert all(4.0 <= promote._pause(2) <= 8.0 for _ in range(50))
 
 
 def test_a_fetch_that_fails_otherwise_is_not_retried(
@@ -324,10 +353,10 @@ def test_a_fetch_that_fails_otherwise_is_not_retried(
     assert (code, body["reason"]) == (2, "promote-git-failed")
     assert len(calls) == 1
     calls = _flaky_git(
-        monkeypatch, "fetch", b"ssh: connect to host: Connection refused\n", times=2
+        monkeypatch, "fetch", b"ssh: connect to host: Connection refused\n", times=3
     )
-    code, body, _ = _promote(found)  # one retry only
-    assert (code, body["reason"], len(calls)) == (2, "promote-git-failed", 2)
+    code, body, _ = _promote(found)  # three runs at most
+    assert (code, body["reason"], len(calls)) == (2, "promote-git-failed", 3)
 
 
 def test_next_tag_bumps_the_highest_release_of_the_pattern() -> None:

@@ -28,10 +28,13 @@ local; the same ``--approve`` command recomputes the plan from the
 upstream commit, checks that the local commit is exactly its lock change,
 and pushes it (``resume`` in the plan, ``resumed`` in the result).
 
-**Transport retries (0.74.0).** A ``git fetch``, ``push``, ``ls-remote`` or
-``clone`` that fails with a transport error (a timeout, a refused or reset
-connection, a name not resolved) is retried once after
-:data:`RETRY_PAUSE` seconds; each retry is listed in ``git_retries``.
+**Transport retries (0.74.0, a backoff since 0.78.0).** A ``git fetch``,
+``push``, ``ls-remote`` or ``clone`` that fails with a transport error (a
+timeout such as ``ssh: connect to host … Operation timed out``, a refused or
+reset connection, a name not resolved) runs up to :data:`GIT_ATTEMPTS`
+times: after :data:`RETRY_PAUSE` seconds, then after two to four times
+that (jitter). Each retry is listed in ``git_retries`` (command, attempt,
+pause); Git's output never is.
 
 **The lock.** With ``nix`` on the ``PATH``, ``nix flake lock
 --override-input NAME URL?rev=REV`` runs in a temporary worktree of the
@@ -52,6 +55,7 @@ import base64
 import hashlib
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -69,9 +73,12 @@ BUMPS = ("major", "minor", "patch")
 #: The first version of a pattern without a release yet.
 FIRST = (0, 1, 0)
 _GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "LC_ALL": "C"}
-#: Seconds before the one retry of a Git command that failed in transport.
+#: Seconds before the first retry of a Git command that failed in transport;
+#: the second waits two to four times as long.
 RETRY_PAUSE = 2.0
-#: The Git commands that reach a remote (and are retried once).
+#: Runs of a Git command that keeps failing in transport (the first included).
+GIT_ATTEMPTS = 3
+#: The Git commands that reach a remote (and are retried).
 _NETWORK = frozenset({"fetch", "push", "ls-remote", "clone"})
 _TRANSPORT = re.compile(
     r"timed out|timeout|connection (?:refused|reset|closed)|could not resolve|"
@@ -92,10 +99,11 @@ def _run(
     before_retry: Callable[[], None] | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     """``git ARGS``; a command of :data:`_NETWORK` that fails in transport
-    (a timeout, or a transport message on stderr) runs once more after
-    :data:`RETRY_PAUSE` seconds, noted in ``retried``. Git's output is never
-    kept in the note (it may name a remote's credentials)."""
-    attempts = 2 if args[0] in _NETWORK else 1
+    (a timeout, or a transport message on stderr) runs again, up to
+    :data:`GIT_ATTEMPTS` runs, after a growing pause (:func:`_pause`), each
+    noted in ``retried``. Git's output is never kept in the note (it may
+    name a remote's credentials)."""
+    attempts = GIT_ATTEMPTS if args[0] in _NETWORK else 1
     for attempt in range(attempts):
         try:
             done = subprocess.run(
@@ -115,12 +123,26 @@ def _run(
             transport = True
         if not transport or attempt + 1 == attempts:
             return done
+        pause = _pause(attempt + 1)
         if retried is not None:
-            retried.append({"command": f"git {args[0]}", "pause_seconds": RETRY_PAUSE})
-        time.sleep(RETRY_PAUSE)
+            retried.append(
+                {
+                    "command": f"git {args[0]}",
+                    "attempt": attempt + 1,
+                    "pause_seconds": pause,
+                }
+            )
+        time.sleep(pause)
         if before_retry is not None:
             before_retry()
     raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _pause(attempt: int) -> float:
+    """Seconds before retry ``attempt``: :data:`RETRY_PAUSE`, then 2-4 times it."""
+    if attempt <= 1:
+        return RETRY_PAUSE
+    return round(RETRY_PAUSE * 2 ** (attempt - 1) * random.uniform(1.0, 2.0), 3)
 
 
 def _git(
