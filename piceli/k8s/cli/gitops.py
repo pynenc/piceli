@@ -1693,7 +1693,8 @@ def builds(
     as_json: JsonOption = False,
 ) -> None:
     """List every build the controller knows (NixRelease publishes, image
-    builds, train handoffs): trigger, commit, host, stage, log tail, targets."""
+    builds, train handoffs): trigger, commit, host, stage, step times, log
+    tail, targets."""
     import time
 
     from piceli.infra import builds as projection
@@ -1733,9 +1734,24 @@ def builds(
                 if item.get("host_switch") == "not-switched-yet"
                 else ""
             )
+            + _commands_line(item.get("steps") or ())
         )
     if as_json:
         emit_json(document)
+
+
+def _commands_line(steps: Any) -> str:
+    """0.75.0: a build's command steps and their seconds, for ``gitops builds``."""
+    ran = [
+        step
+        for step in steps
+        if str(step.get("kind") or "").startswith(("command-", "shared-"))
+        and isinstance(step.get("seconds"), int | float)
+    ]
+    if not ran:
+        return ""
+    total = sum(float(step["seconds"]) for step in ran)
+    return f"; {len(ran)} command(s) in {total:.0f}s"
 
 
 HostArgument = Annotated[

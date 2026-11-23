@@ -4,6 +4,25 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.75.0
+
+### In-cluster builds keep their step times (ops#97)
+
+- **`piceli gitops builds --json` shows each command's seconds of an
+  in-cluster build.** When no build host took an image build, the
+  in-cluster build Job (the fallback) printed its steps only in its pod
+  log, and its record had none, so a script summing command times saw
+  nothing. The Job's receipt now lists every platform's `steps` (the
+  shape of a host build's receipt: `platform`, `kind`, `tool`, `state`,
+  `exit_code`, `seconds`); the controller keeps them in the history
+  (`builds.<image>.steps`) and the build record shows them in the new
+  field `steps`. The CLI line adds "N command(s) in Ss". A failed build
+  Job prints a last receipt line with the steps that ran, so a failed
+  build is a record too (stage `failed`), with those steps and the end
+  of its log in `log_tail`. Upgrade the controller and the builder image;
+  with an older builder image a passed build shows its first platform's
+  commands, a failed one no steps. See {ref}`gitops-builds`.
+
 ## Version 0.74.0
 
 **Features**

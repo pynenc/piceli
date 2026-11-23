@@ -1164,7 +1164,7 @@ prints `piceli.builds.v1`, the document the UI's Builds page shows:
   "stages": [{"stage": "approval-required", "started_at": "…", "finished_at": "…", "seconds": 40.0},
              {"stage": "queued", "…": "…"}, {"stage": "fetching-inputs", "…": "…"},
              {"stage": "building", "…": "…"}, {"stage": "uploading", "…": "…"}],
-  "log_tail": null, "requested_at": "…", "started_at": "…", "finished_at": "…",
+  "steps": [], "log_tail": null, "log_complete": false, "requested_at": "…", "started_at": "…", "finished_at": "…",
   "seconds": 312.4, "plan_digest": "sha256:…", "reason": null, "images": [],
   "digests": {}, "running_on": ["web-1"], "host_switch": "switched",
   "actions": {"approve": false, "retry": true, "cancel": false}}]}
@@ -1185,6 +1185,27 @@ yet"); it is `null` for other builds. `digests` (0.74.0) gives each image
 an environment build made: its `digest` and, for an image built for
 several platforms, the OCI index's `media_type` and `platforms` (each
 platform's manifest digest; see {ref}`pipeline-declared-platforms`).
+
+`steps` (0.75.0) lists each step of an environment image build that ran
+in the cluster (the in-cluster fallback), with its seconds, in the shape
+of a host build's receipt:
+
+```json
+"steps": [
+  {"platform": "any", "kind": "shared-1", "tool": "sh", "state": "succeeded", "exit_code": 0, "seconds": 2.5},
+  {"platform": "linux/amd64", "kind": "command-1", "tool": "cargo", "state": "succeeded", "exit_code": 0, "seconds": 301.2},
+  {"platform": "linux/amd64", "kind": "image-api", "state": "succeeded", "seconds": 4.1}
+]
+```
+
+`kind` is `command-N` (the spec's Nth command on that platform), `shared-N`
+(a shared command, run once, platform `any`), `toolchains`, `files-NAME`
+or `image-NAME` (assembling an output). Sum the `command-` and `shared-`
+seconds for the time the commands took. A failed build keeps the steps
+that ran, the failing one last, and the end of its log in `log_tail`
+(the CLI line ends with "N command(s) in Ss"). A build Job's steps need a
+0.75.0 controller and builder image; with an older builder image a passed
+build shows only its first platform's commands, a failed one none.
 
 While a build host builds, it reports its stage and the last 4000
 characters of its log (`build-progress`, at each stage and at most every

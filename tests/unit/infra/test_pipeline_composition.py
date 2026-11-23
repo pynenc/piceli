@@ -639,6 +639,9 @@ def test_a_failed_composition_build_keeps_the_commands_output(tmp_path: Path) ->
             node_registry="registry.example:5000",
         )
     assert failed.value.code == "component-build-failed"
+    # 0.75.0: the steps that ran, the failing command last.
+    assert failed.value.steps[-1]["kind"] == "command-1"  # type: ignore[attr-defined]
+    assert failed.value.steps[-1]["state"] == "failed"  # type: ignore[attr-defined]
     tail = failed.value.output_tail
     assert "compiling" in tail and "error: expected item" in tail
     assert "s3cr3t-not-printed" not in tail
@@ -674,6 +677,15 @@ def test_the_composition_build_job_prints_the_failing_commands_tail(
     # The pod log (the Job's output) holds what the command printed last.
     assert "error: expected item" in result.stderr
     assert "s3cr3t-not-printed" not in result.output + result.stderr
+    # 0.75.0: its last line, a receipt of the steps that ran.
+    from piceli.artifacts.cluster_build import RECEIPT_MARKER, decode_receipt
+
+    last = result.stdout.strip().splitlines()[-1]
+    assert last.startswith(RECEIPT_MARKER)
+    receipt = decode_receipt(last[len(RECEIPT_MARKER) :])
+    assert receipt["state"] == "failed"
+    assert receipt["steps"][-1]["kind"] == "command-1"
+    assert receipt["steps"][-1]["state"] == "failed"
 
 
 #: Two contexts of the one ``api`` source, each with its own ``include``: the
@@ -842,6 +854,10 @@ def test_the_job_run_reports_each_images_build_times(tmp_path: Path) -> None:
     assert commands and all(
         set(item) == {"index", "tool", "seconds", "state"} for item in commands
     )
+    # 0.75.0: every platform's steps, as a host build's receipt lists them.
+    (step,) = [item for item in receipt["steps"] if item["kind"] == "command-1"]
+    assert step["platform"] == "linux/arm64" and step["state"] == "succeeded"
+    assert step["seconds"] == commands[0]["seconds"]
     for name in ("api", "worker"):
         timings = receipt["images"][name]["timings"]
         assert set(timings) == {"commands_seconds", "assemble_seconds", "push_seconds"}
@@ -878,6 +894,67 @@ def test_the_history_shows_each_images_build_times(world: dict[str, Any]) -> Non
         "push 0.5s)" in line
         for line in lines
     )
+
+
+STEPS = [
+    {"platform": "any", "kind": "shared-1", "tool": "sh", "state": "succeeded",
+     "exit_code": 0, "seconds": 2.5},
+    {"platform": "linux/amd64", "kind": "command-1", "tool": "cargo",
+     "state": "succeeded", "exit_code": 0, "seconds": 30.0},
+    {"platform": "linux/amd64", "kind": "image-api", "state": "succeeded",
+     "seconds": 1.25},
+]  # fmt: skip
+
+
+def _shown_builds(world: dict[str, Any]) -> list[dict[str, Any]]:
+    from typer.testing import CliRunner
+
+    from piceli.k8s.cli import app
+
+    shown = CliRunner().invoke(
+        app, ["gitops", "builds", "--json", "--state-dir", str(world["state"])]
+    )
+    assert shown.exit_code == 0, shown.output
+    world["shown"] = shown.stderr
+    return [b for b in json.loads(shown.stdout)["builds"] if b["kind"] == "images"]
+
+
+def test_gitops_builds_shows_an_in_cluster_builds_step_times(
+    world: dict[str, Any],
+) -> None:
+    """0.75.0: an in-cluster build's command seconds, as a host build's."""
+    ports = world["ports"]
+    ports.builder.steps = {"api": [dict(step) for step in STEPS]}
+    world["controller"].poll_once()
+    (record,) = _shown_builds(world)
+    assert record["stage"] == "published" and record["steps"] == STEPS
+    assert "; 2 command(s) in 32s" in world["shown"]
+    assert ports.builder.steps == {}  # taken once, by the build that made them
+
+
+def test_a_failed_in_cluster_build_keeps_the_times_of_the_steps_that_ran(
+    world: dict[str, Any],
+) -> None:
+    from piceli.infra import CompositionError
+
+    ran = [*STEPS[:1], {**STEPS[1], "state": "failed", "exit_code": 101}]
+
+    def fail(request: SpecBuildRequest, checkout: Any) -> Any:
+        error = CompositionError(
+            "component-build-failed",
+            "the image build Job ended failed",
+            details={"outcome": {"log_tail": "error[E0308]: mismatched types"}},
+        )
+        error.steps = ran  # type: ignore[attr-defined]
+        raise error
+
+    world["ports"].builder.build_spec = fail
+    world["controller"].poll_once()
+    # Each environment's step tried it (main and rc).
+    (record,) = [b for b in _shown_builds(world) if b["target"] == "main"]
+    assert record["stage"] == "failed" and record["steps"] == ran
+    assert record["images"] == ["api", "worker"]
+    assert "error[E0308]" in (record["log_tail"] or "")
 
 
 def test_the_build_job_keeps_cargos_downloads_on_its_cache_claim() -> None:

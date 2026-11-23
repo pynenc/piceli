@@ -200,7 +200,8 @@ noted.
 - `piceli gitops builds [--target NAME] [--state STAGE|active] [--json]`
   (0.26.0): every build the controller knows (NixRelease publishes, image
   builds, train handoffs) with its trigger, commit, tag, host, stages, log
-  tail and the targets that run it now (`piceli.builds.v1`); read-only.
+  tail and the targets that run it now (`piceli.builds.v1`); an in-cluster
+  image build's `steps` give each command's seconds (0.75.0); read-only.
 - `piceli explain`, `piceli help-json`; `piceli explain --run ID --spec …`
   reads why a past execution failed from local state (same as
   `release status --run`).

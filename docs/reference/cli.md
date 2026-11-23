@@ -81,7 +81,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli gitops alarms`](#cli-gitops-alarms) | The controller's alarms: failed or waiting environments, failed Nix releases, a composition that does not import, a new version. With --follow, each new one also as a desktop notification. | reads | no |
 | [`piceli gitops approve`](#cli-gitops-approve) | Approve the pending plan of ENV; the controller applies it on its next poll. | writes | yes |
 | [`piceli gitops build`](#cli-gitops-build) | Ask the controller to build NAME now: a NixRelease plans --ref, an environment rebuilds its images; the same gate, plan and approval apply. | writes | no |
-| [`piceli gitops builds`](#cli-gitops-builds) | List every build the controller knows (NixRelease publishes, image builds, train handoffs): trigger, commit, host, stage, log tail, targets. | reads | no |
+| [`piceli gitops builds`](#cli-gitops-builds) | List every build the controller knows (NixRelease publishes, image builds, train handoffs): trigger, commit, host, stage, step times, log tail, targets. | reads | no |
 | [`piceli gitops cache clear`](#cli-gitops-cache-clear) | Ask the controller to empty its build cache (a corrupted cargo cache). | writes | no |
 | [`piceli gitops cancel`](#cli-gitops-cancel) | Cancel NAME's queued or running build: unclaimed it is dropped, claimed the build host stops at its next stage. | writes | no |
 | [`piceli gitops compare`](#cli-gitops-compare) | Two runs side by side: commits, changed images, objects, time windows. | reads | no |
@@ -1840,7 +1840,7 @@ Ask the controller to build NAME now: a NixRelease plans --ref, an environment r
 (cli-gitops-builds)=
 ### `piceli gitops builds`
 
-List every build the controller knows (NixRelease publishes, image builds, train handoffs): trigger, commit, host, stage, log tail, targets.
+List every build the controller knows (NixRelease publishes, image builds, train handoffs): trigger, commit, host, stage, step times, log tail, targets.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |

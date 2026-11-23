@@ -618,6 +618,10 @@ def run_spec_build(
     ``seconds`` and ``state``. ``build.shared_commands`` (0.23) run once,
     with the first platform; their steps are ``shared_commands`` (same keys)
     and their time counts in the first platform's ``commands_seconds``.
+    ``steps`` (0.75.0): every platform's steps as a host build's receipt
+    lists them (``platform``, ``kind``, ``tool``, ``state``, ``exit_code``,
+    ``seconds``). A failed build's error carries the steps that ran in its
+    ``steps``.
     """
     import time
 
@@ -633,6 +637,7 @@ def run_spec_build(
     commands: list[dict[str, Any]] = []
     shared: list[dict[str, Any]] = []
     installed: dict[str, str] = {}
+    ran_steps: list[dict[str, Any]] = []
     declared = NodeFacts.from_dict(request.facts) if request.facts else None
     for platform in platforms:
         facts = (
@@ -668,15 +673,22 @@ def run_spec_build(
                 or error.code == "host-build-path-not-staged"
                 else ""
             )
-            raise build_failed(
+            failed = build_failed(
                 f"build {request.spec}: host build failed ({error.code}){detail}",
                 error,
-            ) from None
+            )
+            # 0.75.0: the steps that ran, the failing one last.
+            failed.steps = [  # type: ignore[attr-defined]
+                *ran_steps,
+                *(dict(item) for item in error.steps if isinstance(item, dict)),
+            ]
+            raise failed from None
         if receipt.get("toolchains"):  # 0.22: the versions, for provenance
             from piceli.dev.toolchains import versions
 
             installed.update(versions(receipt["toolchains"]))
         steps = [item for item in receipt.get("steps") or () if isinstance(item, dict)]
+        ran_steps.extend(dict(item) for item in steps)
         ran: list[dict[str, Any]] = [
             {
                 "index": int(str(item["kind"]).partition("-")[2]),
@@ -748,7 +760,11 @@ def run_spec_build(
                 platform=None,
                 platforms=dict(sorted(digests.items())),
             )
-    built: dict[str, Any] = {"images": results, "commands": commands}
+    built: dict[str, Any] = {
+        "images": results,
+        "commands": commands,
+        "steps": ran_steps,
+    }
     if shared:
         built["shared_commands"] = shared
     if installed:

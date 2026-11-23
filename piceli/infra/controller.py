@@ -3054,12 +3054,14 @@ class CompositionController:
                     self._remember(image_name, wanted["key"], built[image_name])
                     images[image_name] = built[image_name]
                 self._build_times(name, sorted(request.images))
+                self._build_steps(sorted(request.images))
         except BuildPending:
             raise  # a build host builds them: not failed (see _step)
         except Exception as error:
             for entry in components.values():
                 if entry["state"] == "building":
                     entry["state"] = "failed"
+            self._build_steps([], error)
             self._job_failure_health(error)
             raise
         (self.state.get("rebuild") or {}).pop(name, None)
@@ -3157,6 +3159,30 @@ class CompositionController:
                     pass
 
         return seen
+
+    def _build_steps(self, names: list[str], error: Any = None) -> None:
+        """0.75.0: a build's steps (each command's seconds, as a host build's
+        receipt lists them) on its first image's ``builds`` entry: the
+        builder's for ``names``, or those a failed build's ``error`` carries
+        on its first failed image. ``piceli gitops builds`` shows them."""
+        if error is not None:
+            ran = getattr(error, "steps", None)
+            names = sorted(
+                key
+                for key, item in self._builds.items()
+                if key != "mirror" and item.get("state") == "failed"
+            )[:1]
+            found = {names[0]: list(ran)} if names and ran else {}
+        else:
+            found = getattr(self.ports.builder, "steps", None)
+        if not isinstance(found, dict):
+            return
+        for name in names:
+            steps = found.pop(name, None)
+            if isinstance(steps, list) and steps and name in self._builds:
+                self._builds[name]["steps"] = [
+                    dict(item) for item in steps if isinstance(item, Mapping)
+                ]
 
     def _build_times(self, env: str, names: list[str]) -> None:
         """Each image's timings from the builder (0.17.0), in ``builds`` and the log.
