@@ -66,17 +66,14 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.74
+## What's new in 0.75
 
-- **Build once, promote by digest**: a pipeline spec that declares
-  `platforms` builds all of them into one OCI (Open Container Initiative)
-  image index, and `piceli artifacts copy` copies that index, every
-  platform and its SBOM and signatures to another registry, digests kept.
-- **Waiting is not failing**: a sync that waits for its build no longer
-  ends as a failed run in OpenTelemetry.
-- **Approvals hold**: a second verification of the same commit keeps a
-  `piceli promote` or gated release approval valid; a failed promotion
-  push resumes with the same command.
+- **One engine hiccup no longer blocks a build host**: a container engine
+  that fails to start a build backs the host off for minutes; only
+  repeated failures block it, and `gitops hosts` and `gitops alarms` show
+  every block and when builds keep falling back to the cluster.
+- **In-cluster builds keep their step times**: `gitops builds --json`
+  lists each command's seconds, also for a failed build.
 
 ## Web UI
 
