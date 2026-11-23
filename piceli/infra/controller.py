@@ -1765,6 +1765,11 @@ class CompositionController:
                 "host": host[:64],
                 "via": "host",  # its times are the host build's (piceli.cycle)
             }
+        # 0.76.0: the host build's steps, on its first image as a build Job's
+        # (none from a builder before 0.76.0; invalid ones are dropped).
+        steps = remote_builds.host_steps(body.get("steps"))
+        if steps and images:
+            pending[sorted(images)[0]]["steps"] = steps
         for name, item in images.items():
             extra: dict[str, Any] = {"host": host, "provenance": record}
             if item["platforms"]:
@@ -2892,6 +2897,7 @@ class CompositionController:
             for entry in components.values():
                 if entry["state"] == "building":
                     entry["state"] = "failed"
+            self._build_steps([], error)  # 0.76.0: a host's, the steps that ran
             self._job_failure_health(error)
             raise
         (self.state.get("rebuild") or {}).pop(name, None)

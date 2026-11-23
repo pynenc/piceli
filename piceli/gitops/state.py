@@ -395,17 +395,30 @@ def built_request(
     host: str,
     images: Mapping[str, Mapping[str, Any]],
     receipt: Mapping[str, Any],
+    steps: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[str, dict[str, Any]]:
     """The wanted build ``build`` is delivered: each image's key, pull
     reference, digest and platforms, and a short receipt (host, times,
-    toolchain, commits)."""
+    toolchain, commits). 0.76.0: ``steps``, each command's seconds as the
+    build's receipt lists them, at most 64 (a controller before 0.76.0
+    ignores them)."""
     return request(
         "built",
         id=_build_id(build),
         host=str(host)[:64],
         images={name: dict(item) for name, item in images.items()},
         receipt=dict(receipt),
+        **_steps_field(steps),
     )
+
+
+def _steps_field(steps: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """0.76.0: ``{"steps": [...]}`` of a host's answer, bounded as the
+    controller keeps them; none without steps."""
+    from piceli.infra.remote_builds import host_steps
+
+    found = host_steps([dict(item) for item in steps])
+    return {"steps": found} if found else {}
 
 
 def prebuilt_request(
@@ -435,6 +448,7 @@ def build_failed_request(
     source: str | None = None,
     stage: str | None = None,
     cause: str | None = None,
+    steps: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[str, dict[str, Any]]:
     """The wanted build ``build`` failed on ``host`` (its output's tail).
 
@@ -443,8 +457,10 @@ def build_failed_request(
     build): the controller hands the build to another host or its fallback.
     0.41.0: ``stage``, the host's stage when it failed (``fetch``, ``build``,
     ``push``). 0.75.0: ``cause`` of an early failure, ``engine`` or
-    ``source`` (a controller before 0.75.0 ignores it)."""
-    extra: dict[str, Any] = {}
+    ``source`` (a controller before 0.75.0 ignores it). 0.76.0: ``steps``,
+    those that ran when the build ran commands (a controller before 0.76.0
+    ignores them)."""
+    extra: dict[str, Any] = _steps_field(steps)
     if early:
         extra["early"] = True
         if source:
