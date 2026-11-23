@@ -1185,10 +1185,13 @@ def clear_host_cache(
     *,
     lineage: str | None = None,
     crates: Sequence[str] = (),
+    registry_src: bool = False,
     cache_volume: str = CACHE_VOLUME,
 ) -> dict[str, Any]:
     """``piceli dev cache clear --host``: empty a docker or native host's free
     lineages (or only ``crates``); a lineage a run holds is skipped (busy).
+    0.77.0: and ``crates``' extracted sources, or with ``registry_src`` only
+    extracted sources (:func:`piceli.dev.pod.clear_cache`).
 
     :raises DevError: ``dev-host-unavailable``, ``dev-cache-clear-failed``.
     """
@@ -1198,7 +1201,9 @@ def clear_host_cache(
         root = Path(
             host.state_dir or Path.home() / ".cache" / "piceli" / "dev" / host.name
         ).expanduser()
-        return clear_cache(root / "cache", lineage, list(crates))
+        return clear_cache(
+            root / "cache", lineage, list(crates), registry_src=registry_src
+        )
     from piceli.dev.jobs import wrapper_source
 
     cli = ContainerCli(host)
@@ -1206,7 +1211,13 @@ def clear_host_cache(
         # 0.56.0: no volume, nothing to clear (and never create it root's)
         return {"schema": CLEAR_SCHEMA, "cleared": [], "busy": []}
     image = host.image or dev.image
-    spec = json.dumps({"lineage": lineage, "crates": list(crates)})
+    spec = json.dumps(
+        {
+            "lineage": lineage,
+            "crates": list(crates),
+            **({"registry_src": True} if registry_src else {}),
+        }
+    )
     done = cli.run(
         "run", "--rm", "--user", "65532:65532", "--network", "none",
         "-v", f"{cache_volume}:/cache",

@@ -8,6 +8,21 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ### A damaged cargo registry source is repaired (ops#95)
 
+- A dev run whose build cannot read or parse a file of an extracted crate
+  in the cache's cargo home (`` couldn't read `…/registry/src/…`: stream did
+  not contain valid UTF-8 ``, `failed to parse manifest at`, `unknown start
+  of token`) removes that crate's `registry/src/<index>/<crate>` directory
+  and runs once more: cargo extracts it again from its checked `.crate`.
+  The result says `cache.repaired {kind: "registry-src-reextracted"}`. Only
+  a real directory strictly inside `registry/src/` goes, under cargo's own
+  package cache lock. Damaged again after the fresh extraction, the run
+  fails with the new `dev-registry-src-damaged`: the host is likely
+  corrupting files (check its disk and memory).
+- `piceli dev cache clear --crate NAME` also removes that crate's extracted
+  sources (`NAME`: every version; `NAME-VERSION`: one); the new
+  `--registry-src` removes only extracted sources (all, or `--crate`'s),
+  no target. Never `registry/cache` nor `registry/index`.
+
 ### A resumed or finished deploy names its commits (ops#98)
 
 - **The controller's end-of-deploy lines name the commits, as the push line

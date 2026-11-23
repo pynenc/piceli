@@ -100,6 +100,7 @@ DYNAMIC = {
     "access-operator-unknown",
     # dev.pod.main and dev.cluster.ended: a run's outcome, set in its result
     "dev-command-failed",
+    "dev-registry-src-damaged",
     "dev-run-timed-out",
     "dev-run-out-of-memory",
     "dev-run-failed",
