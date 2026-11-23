@@ -1751,6 +1751,15 @@ def _commands_line(steps: Any) -> str:
     if not ran:
         return ""
     total = sum(float(step["seconds"]) for step in ran)
+    starts = [step.get("start_seconds") for step in ran]
+    if all(isinstance(item, int | float) for item in starts):
+        # 0.78.0: overlapping steps (shared commands run alongside): the
+        # wall time from the first start to the last end, then the sum.
+        span = max(float(s["start_seconds"]) + float(s["seconds"]) for s in ran) - min(
+            float(s["start_seconds"]) for s in ran
+        )
+        if span < total - 1:
+            return f"; {len(ran)} command(s) in {span:.0f}s ({total:.0f}s of work)"
     return f"; {len(ran)} command(s) in {total:.0f}s"
 
 

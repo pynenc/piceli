@@ -295,8 +295,9 @@ target_files = { "{rust_arch}-unknown-linux-gnu/release/server" = "/usr/local/bi
 shared_files = { "site" = "/srv/site" }      # from the shared target directory
 ```
 
-- Shared commands run before `build.commands`, from the same working
-  directory, with the same tools and toolchains. A build for several
+- Shared commands run before `build.commands` (or alongside them, see
+  below), from the same working directory, with the same tools and
+  toolchains. A build for several
   platforms runs them once, with its first platform; the other platforms
   skip them (their log says so) and copy the same outputs into their images.
   A build for one platform (a deploy) runs them every time, first.
@@ -324,6 +325,46 @@ Piceli does not find such steps by itself: a command whose arguments are the
 same for every platform still sees its platform's `$CARGO_TARGET_DIR` and
 `build.env`, and its outputs land in that platform's target directory, so
 running it once is only correct when the spec says so.
+
+### Shared commands alongside the platform commands (0.78.0)
+
+By default the shared commands finish before the first platform's commands
+start, so a platform command may read their outputs. When no platform
+command reads them (only images do, through `shared_files`), the build can
+run both at once:
+
+```toml
+[build]
+shared_commands_alongside = true
+```
+
+- The shared commands start at the same time as the first platform's
+  commands, in a thread of their own. They keep their own target directory
+  (`<cache>/target/shared`, the platform's is `<cache>/target/<arch>-<page
+  size>`), so cargo's build-directory lock never makes one side wait for the
+  other. Both share `CARGO_HOME`; cargo's package-cache lock covers that
+  (you may see a short "waiting for file lock" line).
+- An image is assembled once its platform's commands have finished and
+  every shared command that names it has finished (every shared command,
+  for a plain argv entry; see the next section for `images`). The
+  platform's `[[output.files]]` need only its commands. The next platform
+  starts once the first platform's images are assembled, so a two-platform
+  build takes about the longer of the two sides plus the second platform.
+- The first failure on either side fails the build as before and stops the
+  other side: its running command gets `SIGTERM`, then `SIGKILL` five
+  seconds later, and is recorded with state `cancelled`. The error, the
+  receipt's `steps` (the failing step last) and the log name the failing
+  command; the log also says which command was stopped and why.
+- A platform command must then not read the shared outputs: they may not
+  exist yet. Leave the field out when one does.
+- The field is part of the spec digest and the plan hash (and the plan
+  preview shows it) only when it is `true`; it needs `build.shared_commands`
+  (`invalid-spec` otherwise).
+
+Every step of a host build records `start_seconds` (0.78.0): when it started,
+in seconds from the start of the whole build (all platforms), next to its
+`seconds`. Steps that overlap show it: `piceli gitops builds` prints the
+wall time of the commands and, when they overlapped, the sum as `of work`.
 
 ## Steps for some images only (0.68.0)
 

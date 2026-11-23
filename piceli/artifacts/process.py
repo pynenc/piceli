@@ -182,6 +182,10 @@ def run_process(
     return receipt
 
 
+#: 0.78.0: how long a cancelled command has between SIGTERM and SIGKILL.
+STOP_GRACE_SECONDS = 5.0
+
+
 def _run_process(
     argv: list[str],
     cwd: Path,
@@ -250,6 +254,14 @@ def _run_process(
                         break
             if state != "succeeded":
                 break
+        if state == "cancelled" and proc.poll() is None:
+            # 0.78.0: a cancelled command gets SIGTERM first, a grace to
+            # clean up, then SIGKILL like any other stop.
+            try:
+                signal_group(proc.pid, signal.SIGTERM)
+                proc.wait(timeout=STOP_GRACE_SECONDS)
+            except (ProcessLookupError, PermissionError, subprocess.TimeoutExpired):
+                pass
         if state != "succeeded" or proc.poll() is None:
             try:
                 signal_group(proc.pid, signal.SIGKILL)

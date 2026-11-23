@@ -127,6 +127,50 @@ def test_host_steps_are_bounded() -> None:
     assert remote_builds.host_steps(None) == []
 
 
+#: 0.78.0: steps with their start offsets; the shared command overlapped
+#: the platform's command.
+TIMED = [
+    {**STEPS[0], "seconds": 40.0, "start_seconds": 0.5},
+    {**STEPS[1], "start_seconds": 0.75},
+    {**STEPS[2], "start_seconds": 40.5},
+]
+
+
+def test_step_start_offsets_reach_gitops_builds(world: dict[str, Any]) -> None:
+    controller, channel = world["controller"], world["channel"]
+    wanted = _claimed(world)
+    channel.add_request(
+        *built_request(
+            wanted["id"], "laptop", _images(wanted), {"host": "laptop"}, TIMED
+        )
+    )
+    assert controller.poll_once()["envs"]["main"]["state"] == "deployed"
+    (built,) = [item for item in _image_builds(world) if item["stage"] == "published"]
+    assert built["steps"] == TIMED
+
+
+def test_host_steps_keep_only_a_valid_start_offset() -> None:
+    steps = [
+        {"kind": f"command-{i}", "seconds": 1, "start_seconds": start}
+        for i, start in enumerate([-1, float("inf"), True, "2", 2])
+    ]
+    found = remote_builds.host_steps(steps)
+    assert [item.get("start_seconds") for item in found] == [None] * 4 + [2.0]
+
+
+def test_gitops_builds_shows_the_wall_time_of_overlapping_commands() -> None:
+    from piceli.k8s.cli.gitops import _commands_line
+
+    assert _commands_line(TIMED) == "; 2 command(s) in 40s (70s of work)"
+    # Without offsets (a builder before 0.78.0), or one after the other: the sum.
+    assert _commands_line(STEPS) == "; 2 command(s) in 32s"
+    sequential = [
+        {**STEPS[0], "start_seconds": 0.0},
+        {**STEPS[1], "start_seconds": 2.5},
+    ]
+    assert _commands_line(sequential) == "; 2 command(s) in 32s"
+
+
 # ------------------------------------------------------------ builder serve
 
 
