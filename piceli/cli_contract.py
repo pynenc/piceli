@@ -2339,7 +2339,8 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         ),
         "dev cache clear": _C(
             "Empty the development builds' cargo cache: every free lineage, one "
-            "(--lineage), or only some crates' artifacts (--crate).",
+            "(--lineage), or only some crates' artifacts and extracted sources "
+            "(--crate); or only the extracted sources (--registry-src).",
             reads=(
                 "MODULE:ATTR (piceli.infra.Cluster with dev=)",
                 "credential profile",
@@ -2350,7 +2351,14 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             exit_codes=(0, 1, 2),
             notes="0.19.0. A lineage a run holds is skipped and listed under busy. "
             "The next run on a cleared lineage is cold. Exit 1: "
-            "dev-cache-clear-failed (the Job printed no result).",
+            "dev-cache-clear-failed (the Job printed no result). 0.77.0: --crate "
+            "also removes that crate's directories under registry/src of the "
+            "cache's cargo homes (NAME: every version; NAME-VERSION: one), "
+            "listed under sources; --registry-src removes only those (all, or "
+            "--crate's) and no target. Never registry/cache nor registry/index: "
+            "cargo extracts them again on the next build. A cargo home a build "
+            "still holds (cargo's package cache lock, 60 s) is listed under "
+            "sources_busy.",
         ),
         "dev cancel": _C(
             "Cancel a queued or running development run: its Job and pod are deleted.",

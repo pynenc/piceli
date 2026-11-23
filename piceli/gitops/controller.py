@@ -79,6 +79,12 @@ def _iso(seconds: float) -> str:
     return datetime.fromtimestamp(seconds, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _at(record: Mapping[str, Any]) -> str:
+    """`` at 610572993f71``: the commit a step deploys, if known (ops#98)."""
+    commit = record.get("commit")
+    return f" at {str(commit)[:12]}" if commit else ""
+
+
 def slug(branch: str) -> str:
     """A cache key / file name for a branch (not the namespace: WP envs own that)."""
     return _SLUG.sub("-", branch.lower()).strip("-")[:48] or "branch"
@@ -535,7 +541,10 @@ class Controller:
                 reason=reason,
                 next_attempt_at=None,
             )
-            self.log(f"{record['branch']}: failed ({reason}); waiting for a new push")
+            self.log(
+                f"{record['branch']}: failed ({reason}){_at(record)}; "
+                "waiting for a new push"
+            )
             return
         # A teardown is never given up: it backs off (capped) and retries.
         delay = backoff(self.config, attempts)
@@ -916,7 +925,8 @@ class Controller:
                 failure=None,
             )
             self.log(
-                f"{record['branch']}: approval required; piceli gitops approve "
+                f"{record['branch']}: approval required{_at(record)}; "
+                "piceli gitops approve "
                 f"{record['branch']} {outcome.plan_hash}"
             )
         else:
@@ -946,8 +956,8 @@ class Controller:
         )
         names = ", ".join(item["check"] for item in verification["failed"]) or "checks"
         self.log(
-            f"{record['branch']}: verification failed ({names}); the release keeps "
-            "running (not rolled back: its manifests did not change)"
+            f"{record['branch']}: verification failed ({names}){_at(record)}; the "
+            "release keeps running (not rolled back: its manifests did not change)"
         )
 
     def _teardown(self, record: dict[str, Any], refs: RemoteRefs) -> None:
@@ -1206,7 +1216,10 @@ class Controller:
         from piceli.gitops.recovery import interrupt_runs, interrupted_steps
 
         for name, step in interrupted_steps(self._envs(), _iso(self.clock())):
-            self.log(f"{name}: its {step.get('action')} was interrupted (restart)")
+            action = step.get("action")
+            commit = self._envs()[name].get("commit") if action == "deploy" else None
+            of = f" of {str(commit)[:12]}" if commit else ""
+            self.log(f"{name}: its {action}{of} was interrupted (restart)")
         try:
             marked = interrupt_runs(self.state_dir)
         except OSError as error:  # never fail a start on it

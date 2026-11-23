@@ -206,3 +206,167 @@ def test_a_damaged_lineage_is_told_from_the_codes_own_errors() -> None:
     assert lineage_damage(ICE, target, persisted=True)
     assert lineage_damage(METADATA, target, persisted=True)
     assert lineage_damage(UNDEFINED, target, persisted=True) is None
+
+
+# ---------------------------------------- damaged registry sources (0.77.0)
+HOME = "/cache/cargo-home/ac31499b59"
+INDEX = "index.crates.io-1949cf8c6b5b557f"
+NOT_UTF8 = [
+    "   Compiling chrono v0.4.45",
+    f"error: couldn't read `{HOME}/registry/src/{INDEX}/chrono-0.4.45/src/naive/"
+    "date/mod.rs`: stream did not contain valid UTF-8",
+    "error: could not compile `chrono` (lib) due to 1 previous error",
+]
+MANIFEST = [
+    "error: failed to download `base16ct v0.2.0`",
+    "Caused by:",
+    f"  failed to parse manifest at `{HOME}/registry/src/{INDEX}/base16ct-0.2.0/Cargo.toml`",
+]
+TOKEN = [
+    "error: unknown start of token: \\u{14}",
+    f"  --> {HOME}/registry/src/{INDEX}/serde-json-1.0.140/src/de.rs:12:3",
+]
+
+
+def test_unreadable_registry_sources_name_their_crates() -> None:
+    from piceli.dev.pod import registry_src_damage
+
+    home = Path(HOME)
+    found = registry_src_damage(NOT_UTF8 + MANIFEST + TOKEN, home)
+    assert [(item["index"], item["crate"]) for item in found] == [
+        (INDEX, "base16ct-0.2.0"),
+        (INDEX, "chrono-0.4.45"),
+        (INDEX, "serde-json-1.0.140"),
+    ]
+    assert "stream did not contain valid UTF-8" in found[1]["line"]
+    # The code's own errors, another cargo home, a path that leaves src/.
+    assert registry_src_damage(PLAIN, home) == []
+    assert registry_src_damage(NOT_UTF8, Path("/cache/cargo-home/other")) == []
+    assert (
+        registry_src_damage(
+            [
+                f"error: couldn't read `{HOME}/registry/src/../cache/{INDEX}/x-1.0.0.crate`",
+                f"error: couldn't read `{HOME}/registry/src/{INDEX}/../../index`",
+                f"error: couldn't read `/evil{HOME}/registry/src/{INDEX}/chrono-0.4.45/x`",
+            ],
+            home,
+        )
+        == []
+    )
+    # A registry path in an ordinary error is no damage.
+    assert (
+        registry_src_damage(
+            [
+                "error[E0658]: use of unstable library feature",
+                f"  --> {HOME}/registry/src/{INDEX}/chrono-0.4.45/src/lib.rs:1:1",
+            ],
+            home,
+        )
+        == []
+    )
+
+
+def _cargo_home(cache: Path, key: str = "ac31499b59") -> Path:
+    home = cache / "cargo-home" / key
+    for crate in ("chrono-0.4.44", "chrono-0.4.45", "base16ct-0.2.0", "serde-1.0.0"):
+        (home / "registry" / "src" / INDEX / crate / "src").mkdir(parents=True)
+        (home / "registry" / "src" / INDEX / crate / "src" / "lib.rs").write_text("x")
+        (home / "registry" / "cache" / INDEX).mkdir(parents=True, exist_ok=True)
+        (home / "registry" / "cache" / INDEX / f"{crate}.crate").write_text("c")
+    (home / "registry" / "index" / INDEX).mkdir(parents=True)
+    (home / "registry" / "index" / INDEX / "config.json").write_text("{}")
+    return home
+
+
+def _left(home: Path) -> list[str]:
+    return sorted(
+        str(path.relative_to(home))
+        for path in home.rglob("*")
+        if path.is_file() and not path.name.startswith(".package-cache")
+    )
+
+
+def test_cache_clear_removes_the_chosen_registry_sources_and_nothing_else(
+    tmp_path: Path,
+) -> None:
+    from piceli.dev.pod import clear_cache
+
+    cache = tmp_path / "cache"
+    home = _cargo_home(cache)
+    lineage = _lineage(cache, "shop-rust-1a2b", 0)
+    before = _left(home)
+    # --crate NAME: every version of it, and its artifacts as before.
+    result = clear_cache(cache, crates=["chrono"], lock_wait=0)
+    assert result["sources"] == [
+        {
+            "cargo_home": "ac31499b59",
+            "removed": [f"{INDEX}/chrono-0.4.44", f"{INDEX}/chrono-0.4.45"],
+        }
+    ]
+    assert result["sources_busy"] == []
+    assert [
+        line for line in before if not line.startswith(f"registry/src/{INDEX}/chrono-")
+    ] == _left(home)
+    assert (home / "registry" / "cache" / INDEX / "chrono-0.4.45.crate").is_file()
+    # NAME-VERSION: that one; --registry-src: no lineage's target.
+    result = clear_cache(
+        cache, crates=["base16ct-0.2.0"], registry_src=True, lock_wait=0
+    )
+    assert result["sources"][0]["removed"] == [f"{INDEX}/base16ct-0.2.0"]
+    assert result["cleared"] == []
+    assert (lineage / "target" / "debug" / "deps" / "libgeometry-1.rlib").exists()
+    # --registry-src alone: every extracted crate; .crate files and index stay.
+    result = clear_cache(cache, registry_src=True, lock_wait=0)
+    assert result["sources"][0]["removed"] == [f"{INDEX}/serde-1.0.0"]
+    assert not list((home / "registry" / "src" / INDEX).iterdir())
+    assert len(list((home / "registry" / "cache" / INDEX).iterdir())) == 4
+    assert (home / "registry" / "index" / INDEX / "config.json").is_file()
+    assert (lineage / "target").is_dir()
+
+
+def test_a_cargo_home_a_build_uses_is_not_cleared(tmp_path: Path) -> None:
+    import fcntl
+    import os
+
+    from piceli.dev.pod import clear_cache
+
+    cache = tmp_path / "cache"
+    home = _cargo_home(cache)
+    held = os.open(home / ".package-cache-mutate", os.O_RDWR | os.O_CREAT, 0o644)
+    fcntl.flock(held, fcntl.LOCK_SH)  # what cargo holds through a build
+    try:
+        result = clear_cache(cache, registry_src=True, lock_wait=0)
+    finally:
+        os.close(held)
+    assert result["sources"] == [] and result["sources_busy"] == ["ac31499b59"]
+    assert (home / "registry" / "src" / INDEX / "chrono-0.4.45").is_dir()
+
+
+def test_only_a_real_directory_inside_registry_src_is_removed(tmp_path: Path) -> None:
+    from piceli.dev.pod import remove_registry_src
+
+    cache = tmp_path / "cache"
+    home = _cargo_home(cache)
+    outside = tmp_path / "outside" / "chrono-9.9.9"
+    outside.mkdir(parents=True)
+    (outside / "keep").write_text("x")
+    src = home / "registry" / "src"
+    (src / INDEX / "linked-1.0.0").symlink_to(outside)
+    (src / "linked-index").symlink_to(outside.parent)
+    assert not remove_registry_src(home, INDEX, "linked-1.0.0")
+    assert not remove_registry_src(home, "linked-index", "chrono-9.9.9")
+    assert not remove_registry_src(home, "..", "cache")
+    assert not remove_registry_src(home, INDEX, "..")
+    assert not remove_registry_src(home, f"{INDEX}/../..", "outside")
+    assert (outside / "keep").is_file()
+    # registry/src itself a link elsewhere: nothing goes.
+    other = _cargo_home(tmp_path / "other")
+    moved = tmp_path / "elsewhere-src"
+    (other / "registry" / "src").rename(moved)
+    (other / "registry" / "src").symlink_to(moved)
+    assert not remove_registry_src(other, INDEX, "chrono-0.4.45")
+    assert (moved / INDEX / "chrono-0.4.45").is_dir()
+    # The real one goes; one already gone counts as gone.
+    assert remove_registry_src(home, INDEX, "chrono-0.4.45")
+    assert not (src / INDEX / "chrono-0.4.45").exists()
+    assert remove_registry_src(home, INDEX, "chrono-0.4.45")

@@ -6110,6 +6110,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "dev",
     ),
     _E(
+        "dev-registry-src-damaged",
+        "A crate's extracted source is damaged",
+        "0.77.0: cargo or rustc could not read or parse a file of a crate cargo extracted into the cache's cargo home (`registry/src/`): a byte that changed at rest. The run removes that crate's directory (cargo extracts it again from its checked `.crate` file) and runs once more; this error means the fresh copy was damaged again, so the build host is likely corrupting files, or the directory could not be removed (cargo's package cache lock stayed held).",
+        "Check the build host's disk and memory (a memory test, the kernel log for disk or machine-check errors, a filesystem check). `piceli dev cache clear --registry-src` (or `--crate NAME`) removes extracted sources by hand; then run again.",
+        True,
+        "dev",
+    ),
+    _E(
         "dev-tree-mismatch",
         "Run's tree does not match the uploaded commit",
         "0.72.0: after the sync of a delta upload (the commit plus the uncommitted diff), the run's lineage still lacked a file the commit tracks, also after re-reading the files that differed from the head. The command did not run on the wrong tree. `missing` lists a few of the paths.",

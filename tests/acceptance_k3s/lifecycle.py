@@ -1463,9 +1463,13 @@ class Lifecycle(
                 )
         except StageFailed as error:
             problems.append(str(error))
-        if "main: verified (checks changed); rolled nothing" not in text:
+        if not any(
+            "main: verified " in line and "(checks changed); rolled nothing" in line
+            for line in text.splitlines()
+        ):
             problems.append(
-                "no 'main: verified (checks changed); rolled nothing' log line"
+                "no 'main: verified <commits> (checks changed); rolled nothing' "
+                "log line"
             )
         expected = {"state": "verified", "trigger": "checks-changed", "rolled": []}
         for key, value in expected.items():

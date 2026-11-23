@@ -201,7 +201,9 @@ class OpsStages:
             f"the controller log does not say {env} skipped the push",
         )
         rolled = [
-            line for line in text.splitlines() if "main: deployed; rolled" in line
+            line
+            for line in text.splitlines()
+            if "main: deployed " in line and "; rolled " in line
         ]
         log(f"main on a push that changed no image: {rolled[-1:] or 'no deploy line'}")
 

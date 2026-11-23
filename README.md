@@ -66,11 +66,14 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.76
+## What's new in 0.77
 
-- **Every build's step times in one place**: build hosts now send each
-  command's seconds with their result, so `gitops builds --json` lists
-  step times for host and in-cluster builds, passed or failed.
+- **Damaged cargo sources repair themselves**: a dev run that fails on a
+  damaged extracted crate source removes it and retries once (cargo
+  extracts it again); `piceli dev cache clear --registry-src` removes
+  extracted sources by hand.
+- **Deploy lines name their commits**: the lines that end or resume a
+  deploy name each source's commit, as the push line does.
 
 ## Web UI
 

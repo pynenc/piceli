@@ -930,6 +930,17 @@ def _standby(state: Mapping[str, Any], now: float) -> dict[str, Any]:
     }
 
 
+def _commits(revision: Any) -> str:
+    """``shop@610572993f71, workspace@c5f6c1059cf8``: a revision's commits."""
+    return ", ".join(f"{k}@{str(v)[:12]}" for k, v in sorted(_dict(revision).items()))
+
+
+def _at(record: Mapping[str, Any]) -> str:
+    """`` at shop@..., workspace@...`` of the revision a step deploys, if known."""
+    commits = _commits(record.get("revision"))
+    return f" at {commits}" if commits else ""
+
+
 def _failing(record: Mapping[str, Any], reason: str) -> str:
     """``; failing: name: detail, ...`` of a check failure's checks (0.19)."""
     checks = record.get("checks") or {}
@@ -1114,10 +1125,7 @@ class CompositionController:
             "pushed_at": _iso(now),
             "updated_at": _iso(now),
         }
-        self.log(
-            f"{name}: {trigger} -> "
-            + ", ".join(f"{k}@{v[:12]}" for k, v in sorted(revision.items()))
-        )
+        self.log(f"{name}: {trigger} -> {_commits(revision)}")
 
     def _fail(
         self,
@@ -1160,14 +1168,15 @@ class CompositionController:
                 # attempt before: a retry would fail the same way.
                 record["stopped"] = "same-failure"
                 self.log(
-                    f"{record['branch']}: failed ({reason}); the same failure as "
+                    f"{record['branch']}: failed ({reason}){_at(record)}; the same "
+                    "failure as "
                     f"attempt {same} on the same inputs, not retried; waiting for "
                     "a new revision or piceli gitops sync"
                 )
                 return
             self.log(
-                f"{record['branch']}: failed ({reason}){_failing(record, reason)}; "
-                "waiting for a new revision"
+                f"{record['branch']}: failed ({reason}){_at(record)}"
+                f"{_failing(record, reason)}; waiting for a new revision"
             )
             return
         delay = backoff(self.config, attempts)  # type: ignore[arg-type]
@@ -3409,16 +3418,15 @@ class CompositionController:
             if action == "unchanged":
                 self._settle_checks(record)
             changed = sorted(rolled)
-            if action == "verified":
-                self.log(
-                    f"{record['branch']}: verified (checks changed); rolled "
-                    f"{', '.join(changed) or 'nothing'}"
-                )
-            else:
-                self.log(
-                    f"{record['branch']}: deployed; rolled "
-                    f"{', '.join(changed) or 'nothing'}"
-                )
+            # ops#98: the line names the commits, as the push line does (a
+            # restarted controller's log alone shows what was deployed).
+            commits = _commits(record.get("revision"))
+            verb = "verified" if action == "verified" else "deployed"
+            self.log(
+                f"{record['branch']}: {verb}{f' {commits}' if commits else ''}"
+                + (" (checks changed)" if action == "verified" else "")
+                + f"; rolled {', '.join(changed) or 'nothing'}"
+            )
             line = pruned_line(record["branch"], pruned)
             if line:
                 self.log(line)
@@ -3434,7 +3442,8 @@ class CompositionController:
                 failure=None,
             )
             self.log(
-                f"{record['branch']}: approval required; piceli gitops approve "
+                f"{record['branch']}: approval required{_at(record)}; "
+                "piceli gitops approve "
                 f"{record['branch']} {outcome.plan_hash}"
             )
         else:
@@ -3644,8 +3653,8 @@ class CompositionController:
             or "checks"
         )
         self.log(
-            f"{record['branch']}: verification failed ({names}); rolled nothing, "
-            "the release keeps running"
+            f"{record['branch']}: verification failed ({names}){_at(record)}; "
+            "rolled nothing, the release keeps running"
         )
 
     def _teardown(self, record: dict[str, Any]) -> None:
@@ -5117,8 +5126,13 @@ class CompositionController:
         at = _iso(self.clock())
         for name, step in interrupted_steps(self._envs(), at):
             record = self._envs()[name]
-            self.log(f"{name}: its {step.get('action')} was interrupted (restart)")
-            if step.get("action") != "deploy":
+            action = step.get("action")
+            commits = _commits(record.get("revision")) if action == "deploy" else ""
+            self.log(
+                f"{name}: its {action}{f' of {commits}' if commits else ''} "
+                "was interrupted (restart)"
+            )
+            if action != "deploy":
                 continue
             entry = history.event(
                 record,

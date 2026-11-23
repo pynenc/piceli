@@ -531,7 +531,35 @@ To clear by hand:
 piceli dev cache clear --cluster infra.py:lab                      # every free lineage
 piceli dev cache clear --cluster infra.py:lab --lineage shop       # every lineage of a root source
 piceli dev cache clear --cluster infra.py:lab --lineage shop-rust-1a2b3c4d5e/0 --crate geometry
+piceli dev cache clear --cluster infra.py:lab --registry-src --crate chrono   # its extracted sources only
+piceli dev cache clear --cluster infra.py:lab --registry-src                  # every extracted source
 ```
+
+**A damaged crate source** (0.77.0). Cargo extracts each crate it downloads
+into the cache's cargo home, under `cargo-home/<toolchain>/registry/src/`.
+A disk or memory that changes bytes at rest can damage those files, and then
+every build fails the same way although the `.crate` archives in
+`registry/cache/` still match their checksums. When the build fails because
+cargo or rustc cannot read or parse a file there (`` couldn't read
+`…/registry/src/…/chrono-0.4.45/src/lib.rs`: stream did not contain valid
+UTF-8 ``, `` failed to parse manifest at `…/registry/src/…/Cargo.toml` ``,
+`unknown start of token`), the wrapper removes that crate's directory, runs
+the command once more (cargo extracts the crate again from its `.crate`),
+and reports `cache.repaired {kind: "registry-src-reextracted", crates:
+["chrono-0.4.45"], paths}`. It removes only a real directory strictly inside
+the cargo home's `registry/src/<index>/` (no `..`, no symbolic link), while
+it holds cargo's own package cache lock, so never while a cargo extracts
+there. When the fresh copy fails the same way the run fails with
+`dev-registry-src-damaged`: the host is likely corrupting files; check its
+disk and memory.
+
+`--crate NAME` removes that crate's extracted sources too (`NAME` every
+version, `NAME-VERSION` one), in every cargo home of the cache;
+`--registry-src` removes only extracted sources (all, or `--crate`'s) and
+no lineage's target. Neither touches `registry/cache/` (the `.crate` files)
+nor `registry/index/`, so the next build extracts them again without
+downloading. A cargo home a build still uses (cargo's lock, held for 60 s)
+is skipped and listed under `sources_busy`.
 
 **A lineage on a damaged disk** (0.71.0). When preparing the lineage
 (the tree sync) fails with a filesystem error on a path inside it
@@ -961,6 +989,7 @@ push another's out. The plan lists them under `tag_patterns`.
 | --- | --- | --- |
 | `dev-command-failed` | The command exited non-zero | Read `first_error` and `log_tail`, fix, run again; with `cache.suspect`, `piceli dev cache clear --lineage NAME` |
 | `dev-cache-clear-failed` | `dev cache clear`'s Job ended without a result | Check its pod in `piceli-dev`; run it again |
+| `dev-registry-src-damaged` | A crate's extracted source in the cargo home was damaged again after a fresh extraction, or could not be removed (0.77.0) | Check the build host's disk and memory; `piceli dev cache clear --registry-src` |
 | `dev-run-timed-out` | Over the profile's `timeout` (process group killed) | Split the command or find what hangs |
 | `dev-cache-over-cap` | The run's lineage grew past its cap (the budget less the rest of the cache), or grew while the cache's disk was under 15% free, and no other run held a lineage (0.53.0: while others do, the run pauses or continues instead); the run was stopped and the lineage evicted | Run again (cold); if it repeats, raise `cache_size` or `cache_budget`, or give the build host its own `BuildHost(cache_max="300Gi")` (0.48.0) |
 | `dev-run-out-of-memory` | Killed at the memory limit | Lower `CARGO_BUILD_JOBS` or ask for a bigger profile |

@@ -373,6 +373,7 @@ def cache_clear_job(
     lineage: str | None,
     crates: list[str],
     evict: bool = False,
+    registry_src: bool = False,
 ) -> dict[str, Any]:
     """A short Job that empties free lineages' cargo targets (0.19.0).
 
@@ -381,9 +382,13 @@ def cache_clear_job(
     ``evict`` (0.38.0): instead, evict least recently used free lineages to
     the cache's budget, as a run does before it starts (the controller's
     answer to a node under disk pressure); its result has the ``budget``.
+    ``registry_src`` (0.77.0): only the crates cargo extracted into the
+    cache's cargo homes (``crates``' or all), no lineage's target.
     """
     labels = {**MANAGED, CLEAR_LABEL: name}
     spec: dict[str, Any] = {"lineage": lineage, "crates": list(crates)}
+    if registry_src:
+        spec["registry_src"] = True
     if evict:
         spec.update(
             evict=True,

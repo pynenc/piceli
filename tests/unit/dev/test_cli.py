@@ -318,6 +318,38 @@ def test_cache_clear_empties_the_lineages_a_run_left(stand_in: dict[str, Any]) -
     assert not (lineages[0] / "0" / "target").exists()
 
 
+def test_cache_clear_registry_src_removes_extracted_crates_only(
+    stand_in: dict[str, Any],
+) -> None:
+    """0.77.0 (ops#95): ``--registry-src [--crate]``, through the Job."""
+    import json
+
+    assert invoke("--ref", "HEAD", "--", "sh", "ok.sh").exit_code == 0
+    port = stand_in["ports"][-1]
+    lineage = sorted((port.root / "cache" / "lineages").iterdir())[0] / "0"
+    (lineage / "target" / "debug").mkdir(parents=True, exist_ok=True)
+    (lineage / "target" / "debug" / "kept").write_text("x")
+    index = port.root / "cache" / "cargo-home" / "k1" / "registry" / "src" / "idx"
+    for crate in ("chrono-0.4.45", "serde-1.0.0"):
+        (index / crate).mkdir(parents=True)
+    crates = port.root / "cache" / "cargo-home" / "k1" / "registry" / "cache" / "idx"
+    crates.mkdir(parents=True)
+    (crates / "chrono-0.4.45.crate").write_text("c")
+    args = ["dev", "cache", "clear", "--cluster", "infra.py:c", "--registry-src"]
+    clear = CliRunner().invoke(cli, [*args, "--crate", "chrono", "--json"])
+    assert clear.exit_code == 0, clear.stdout + clear.stderr
+    body = json.loads(clear.stdout)
+    assert body["sources"] == [{"cargo_home": "k1", "removed": ["idx/chrono-0.4.45"]}]
+    assert body["cleared"] == []
+    assert "removed cargo-home/k1: 1 extracted crate(s), chrono-0.4.45" in clear.stderr
+    job = stand_in["ports"][-1].cleared_jobs[-1]
+    spec = job["spec"]["template"]["spec"]["containers"][0]["env"]
+    assert json.loads(spec[1]["value"])["registry_src"] is True
+    assert not (index / "chrono-0.4.45").exists() and (index / "serde-1.0.0").is_dir()
+    assert (crates / "chrono-0.4.45.crate").is_file()
+    assert (lineage / "target" / "debug" / "kept").is_file()
+
+
 def test_status_says_why_the_queue_is_held(queue: QueuePort) -> None:
     """0.54.0: the scheduler's ``held`` and each run's ``waiting_for``."""
     published = queue.status()

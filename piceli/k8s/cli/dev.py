@@ -109,6 +109,15 @@ def run_summary(result: dict[str, Any]) -> str:
         )
         if cache.get("damaged"):
             line += "; the lineage was still damaged and is removed"
+    elif (cache.get("suspect") or {}).get("kind") == "registry-src":
+        # 0.77.0: a damaged extracted crate the run could not remove.
+        line += (
+            "; a crate's extracted source looks damaged: piceli dev cache clear "
+            "--registry-src "
+            + " ".join(
+                f"--crate {name}" for name in cache["suspect"].get("crates") or ()
+            )
+        )
     elif (cache.get("suspect") or {}).get("kind"):
         line += (
             f"; the cache looks corrupted ({cache['suspect']['kind']}): "
@@ -817,8 +826,20 @@ def cache_clear(
     ] = None,
     crate: Annotated[
         list[str] | None,
-        typer.Option("--crate", help="Only this crate's artifacts (repeat)"),
+        typer.Option(
+            "--crate",
+            help="Only this crate's artifacts and extracted sources (NAME: every "
+            "version, or NAME-VERSION; repeat)",
+        ),
     ] = None,
+    registry_src: Annotated[
+        bool,
+        typer.Option(
+            "--registry-src",
+            help="Only the crates cargo extracted into the cache's cargo homes "
+            "(registry/src; all, or --crate's), no lineage's target (0.77.0)",
+        ),
+    ] = False,
     host: Annotated[
         str | None,
         typer.Option(
@@ -832,7 +853,12 @@ def cache_clear(
     transport: TransportOption = "https",
     as_json: JsonOption = False,
 ) -> None:
-    """Empty free lineages' cargo targets (a corrupted cache); busy ones are skipped."""
+    """Empty free lineages' cargo targets (a corrupted cache); busy ones are skipped.
+
+    0.77.0: --crate also removes that crate's extracted sources from the
+    cache's cargo homes (cargo extracts them again from its checked .crate
+    files); --registry-src removes only extracted sources. Never the .crate
+    files nor the registry index."""
     import secrets
 
     from piceli.dev.jobs import cache_clear_job
@@ -848,15 +874,23 @@ def cache_clear(
 
         try:
             result = clear_host_cache(
-                chosen, local, lineage=lineage, crates=list(crate or ())
+                chosen,
+                local,
+                lineage=lineage,
+                crates=list(crate or ()),
+                registry_src=registry_src,
             )
         except DevError as error:
             reject(error.code, str(error))
-        _report_cleared(result, crate, as_json)
+        _report_cleared(result, crate, as_json, registry_src=registry_src)
         return
     with _port(cluster, transport, allow_exec, exec_sha256) as (port, dev):
         job = cache_clear_job(
-            dev, name=secrets.token_hex(4), lineage=lineage, crates=list(crate or ())
+            dev,
+            name=secrets.token_hex(4),
+            lineage=lineage,
+            crates=list(crate or ()),
+            registry_src=registry_src,
         )
         try:
             result = port.clear_cache(job)
@@ -864,12 +898,32 @@ def cache_clear(
             reject(error.code, str(error), exit_code=EXIT_FAILED)
     if result is None:
         reject("dev-cache-clear-failed", "the cache-clear Job printed no result")
-    _report_cleared(result, crate, as_json)
+    _report_cleared(result, crate, as_json, registry_src=registry_src)
 
 
 def _report_cleared(
-    result: dict[str, Any], crate: list[str] | None, as_json: bool
+    result: dict[str, Any],
+    crate: list[str] | None,
+    as_json: bool,
+    *,
+    registry_src: bool = False,
 ) -> None:
+    sources = result.get("sources") or []
+    for item in sources:  # 0.77.0
+        say(
+            f"removed cargo-home/{item['cargo_home']}: {len(item['removed'])} "
+            "extracted crate(s), "
+            + ", ".join(path.rsplit("/", 1)[-1] for path in item["removed"][:5])
+            + (" ..." if len(item["removed"]) > 5 else "")
+        )
+    for name in result.get("sources_busy") or ():
+        say(f"busy    cargo-home/{name}: a build still uses it; not cleared")
+    if (crate or registry_src) and not sources and not result.get("sources_busy"):
+        say("no extracted crate source matched")
+    if registry_src:
+        if as_json:
+            emit_json(result)
+        return
     for item in result.get("cleared") or ():
         what = (
             f"{item['entries']} entries of {', '.join(crate or ())}"

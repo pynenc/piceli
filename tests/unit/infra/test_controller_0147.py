@@ -167,8 +167,10 @@ def test_the_log_names_only_components_that_rolled(world: dict[str, Any]) -> Non
     controller, channel = world["controller"], world["channel"]
     lines: list[str] = []
     controller.log = lines.append
-    controller.poll_once()
-    assert any("deployed; rolled api, cache, catalog, web" in line for line in lines)
+    revision = controller.poll_once()["envs"]["main"]["revision"]
+    commits = ", ".join(f"{k}@{v[:12]}" for k, v in sorted(revision.items()))
+    # ops#98: the line names the commits it deployed, as the push line does.
+    assert f"main: deployed {commits}; rolled api, cache, catalog, web" in lines
     # The same digests under another registry name: nothing rolls.
     for path in (controller.state_dir / "components").rglob("*.json"):
         cached = json.loads(path.read_text())
@@ -179,7 +181,7 @@ def test_the_log_names_only_components_that_rolled(world: dict[str, Any]) -> Non
     lines.clear()
     channel.add_request(*sync_request("main"))
     status = controller.poll_once()
-    assert any("deployed; rolled nothing" in line for line in lines), lines
+    assert f"main: deployed {commits}; rolled nothing" in lines, lines
     states = {k: v["state"] for k, v in status["envs"]["main"]["components"].items()}
     assert set(states.values()) == {"unchanged"}
 

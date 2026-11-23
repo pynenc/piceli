@@ -435,7 +435,8 @@ def test_a_changed_check_set_is_a_verification_and_a_failure_degrades(
         "at": main["verification"]["at"],
     }
     assert set(_components(status, "main").values()) == {"unchanged"}
-    assert "main: verified (checks changed); rolled nothing" in lines
+    commits = ", ".join(f"{k}@{v[:12]}" for k, v in sorted(main["revision"].items()))
+    assert f"main: verified {commits} (checks changed); rolled nothing" in lines
 
     # A failing changed check: degraded, still deployed, no retry.
     ports.env_up = _verification_up(calls, fail=True)

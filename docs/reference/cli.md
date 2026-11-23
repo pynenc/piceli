@@ -1241,7 +1241,8 @@ Empty free lineages' cargo targets (a corrupted cache); busy ones are skipped.
 | --- | --- | --- | --- |
 | `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster with dev=DevBuilds(...) (or PICELI_DEV_CLUSTER) |
 | `--lineage` | text |  | KEY/N, KEY, or a root source name (every lineage of it); default: all |
-| `--crate` | text (repeatable) |  | Only this crate's artifacts (repeat) |
+| `--crate` | text (repeatable) |  | Only this crate's artifacts and extracted sources (NAME: every version, or NAME-VERSION; repeat) |
+| `--registry-src` | boolean | `False` | Only the crates cargo extracted into the cache's cargo homes (registry/src; all, or --crate's), no lineage's target (0.77.0) |
 | `--host` | text |  | A declared docker or native build host's cache (0.20.0; default: the in-cluster builder's) |
 | `--allow-exec` | boolean | `False` | Allow the profile's exec credential plugin |
 | `--exec-sha256` | text |  | Pin the exec credential plugin's sha256 |
@@ -1257,7 +1258,7 @@ Empty free lineages' cargo targets (a corrupted cache); busy ones are skipped.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** 0.19.0. A lineage a run holds is skipped and listed under busy. The next run on a cleared lineage is cold. Exit 1: dev-cache-clear-failed (the Job printed no result).
+- **Notes:** 0.19.0. A lineage a run holds is skipped and listed under busy. The next run on a cleared lineage is cold. Exit 1: dev-cache-clear-failed (the Job printed no result). 0.77.0: --crate also removes that crate's directories under registry/src of the cache's cargo homes (NAME: every version; NAME-VERSION: one), listed under sources; --registry-src removes only those (all, or --crate's) and no target. Never registry/cache nor registry/index: cargo extracts them again on the next build. A cargo home a build still holds (cargo's package cache lock, 60 s) is listed under sources_busy.
 
 (cli-dev-cancel)=
 ### `piceli dev cancel`

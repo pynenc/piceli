@@ -246,8 +246,13 @@ def test_a_run_the_controller_died_under_is_interrupted_after_its_restart(
 
     clock["now"] = time.time() + 60
     restarted = _restart(journaled)
+    lines: list[str] = []
+    restarted.log = lines.append  # type: ignore[method-assign]
     status = restarted.poll_once()
     main = status["envs"]["main"]
+    # ops#98: the new pod's log alone names the commits of the deploy.
+    commits = ", ".join(f"{k}@{v[:12]}" for k, v in sorted(main["revision"].items()))
+    assert f"main: its deploy of {commits} was interrupted (restart)" in lines
     assert "in_progress" not in main
     assert main["interrupted"]["action"] == "deploy"
     assert _iso(main["interrupted"]["at"])
@@ -269,6 +274,9 @@ def test_a_run_the_controller_died_under_is_interrupted_after_its_restart(
     status = restarted.poll_once()
     assert "interrupted" not in status["envs"]["main"]
     assert status["envs"]["main"]["state"] == "deployed"
+    assert any(line.startswith(f"main: deployed {commits}; rolled") for line in lines)
+    # status --json has the deployed commit of each source.
+    assert status["envs"]["main"]["deployed_revision"] == main["revision"]
 
 
 def test_a_run_another_process_holds_is_not_marked(tmp_path: Path) -> None:

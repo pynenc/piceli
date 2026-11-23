@@ -2054,6 +2054,189 @@ def clear_crates(target: Path, crates: list[str]) -> int:
     return removed
 
 
+# --------------------------------------- damaged registry sources (0.77.0)
+#: 0.77.0: cargo or rustc could not read or parse a file (rustc's
+#: ``couldn't read `PATH`: stream did not contain valid UTF-8``, cargo's
+#: ``failed to parse manifest at `PATH```, a lexer refusing a byte). It is a
+#: damaged extracted crate only when that file is under the cargo home's
+#: ``registry/src/``: in the same line or in the few that follow it (cargo's
+#: ``Caused by:``, rustc's `` --> PATH``).
+_UNREADABLE = re.compile(
+    r"couldn't read |failed to (?:read|parse manifest at|load manifest)"
+    r"|stream did not contain valid UTF-8|invalid UTF-8|invalid character"
+    r"|unknown start of token"
+)
+#: How many lines after such a line may name its file.
+_UNREADABLE_SPAN = 4
+#: An extracted crate's directory: ``NAME-VERSION``.
+_SRC_DIR = re.compile(r"^([A-Za-z0-9_-]+?)-(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?)$")
+#: 0.77.0: cargo's package cache locks in a cargo home, in the order its
+#: ``MutateExclusive`` mode (``cargo clean gc``) takes them. Cargo holds the
+#: first while it downloads and extracts crates, and the second (shared)
+#: through a whole build.
+CARGO_LOCKS = (".package-cache", ".package-cache-mutate")
+#: 0.77.0: how long a run's repair waits for cargo's extraction lock.
+REGISTRY_LOCK_SECONDS = 120.0
+#: 0.77.0: how long ``piceli dev cache clear`` waits for a cargo home's
+#: builds to end before it reports that home busy.
+REGISTRY_CLEAR_LOCK_SECONDS = 60.0
+
+
+def registry_src_damage(lines: list[str], home: Path) -> list[dict[str, str]]:
+    """0.77.0: the extracted crates under ``home/registry/src/`` that a
+    failed build could not read or parse, each once, as ``{"index",
+    "crate", "line"}`` (``crate`` is ``NAME-VERSION``); ``[]`` when none."""
+    root = str(home).rstrip("/") + "/registry/src/"
+    pattern = re.compile(
+        r"(?<![^\s`'\"(])" + re.escape(root) + r"([A-Za-z0-9_.+-]+)/([A-Za-z0-9_.+-]+)"
+    )
+    found: dict[tuple[str, str], str] = {}
+    for at, line in enumerate(lines):
+        if not _UNREADABLE.search(line):
+            continue
+        for offset, near in enumerate(lines[at : at + 1 + _UNREADABLE_SPAN]):
+            if offset and FirstError._START.match(near):
+                break  # the next error is another one's
+            hit = pattern.search(near)
+            if hit is None:
+                continue
+            index, crate = hit.group(1), hit.group(2)
+            if index not in (".", "..") and _SRC_DIR.match(crate):
+                found.setdefault((index, crate), line.strip()[:300])
+            break
+    return [
+        {"index": index, "crate": crate, "line": line}
+        for (index, crate), line in sorted(found.items())
+    ]
+
+
+def _cargo_lock(home: Path, wait: float, *, mutate: bool) -> list[int] | None:
+    """0.77.0: hold cargo's own package cache lock of ``home`` exclusively:
+    the extraction lock, and with ``mutate`` also the one every build holds
+    shared (as ``cargo clean gc`` does). The descriptors, or ``None`` when
+    not held within ``wait`` seconds (or ``home`` cannot hold them)."""
+    deadline = time.monotonic() + wait
+    held: list[int] = []
+    try:
+        for name in CARGO_LOCKS[: 2 if mutate else 1]:
+            descriptor = os.open(home / name, os.O_RDWR | os.O_CREAT, 0o644)
+            held.append(descriptor)
+            while True:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.2)
+    except OSError:
+        for descriptor in held:
+            os.close(descriptor)
+        return None
+    return held
+
+
+def remove_registry_src(home: Path, index: str, crate: str) -> bool:
+    """0.77.0: remove one extracted crate, ``home/registry/src/INDEX/CRATE``;
+    cargo extracts it again from its ``.crate`` in ``registry/cache/`` on the
+    next build. Only a real directory strictly inside ``registry/src/INDEX/``
+    goes: no ``..``, no symbolic link on the way (``registry``, ``src``, the
+    index or the crate). ``True`` when it is gone (or already was)."""
+    if index in ("", ".", "..") or "/" in index or not _SRC_DIR.match(crate):
+        return False
+    src = home / "registry" / "src"
+    try:
+        real = src.resolve(strict=True)
+        if real != home.resolve(strict=True) / "registry" / "src":
+            return False  # registry/ or src/ is a link elsewhere
+    except OSError:
+        return False
+    path = src / index / crate
+    if (src / index).is_symlink() or path.is_symlink():
+        return False
+    if not path.exists():
+        return True
+    if not path.is_dir() or path.resolve().parent.parent != real:
+        return False
+    _remove_tree(path)
+    return not path.exists()
+
+
+def reextract_registry_src(
+    home: Path, damaged: list[dict[str, str]], wait: float
+) -> dict[str, Any] | None:
+    """0.77.0: remove the damaged extracted crates of a cargo home under
+    cargo's extraction lock (never while a cargo extracts there); the
+    repair's record, or ``None`` when the lock was not free in time."""
+    held = _cargo_lock(home, wait, mutate=False)
+    if held is None:
+        return None
+    try:
+        removed = [
+            item["crate"]
+            for item in damaged
+            if remove_registry_src(home, item["index"], item["crate"])
+        ]
+    finally:
+        for descriptor in held:
+            os.close(descriptor)
+    return {
+        "kind": "registry-src-reextracted",
+        "crates": removed,
+        "entries": len(removed),
+        "paths": [f"registry/src/{item['index']}/{item['crate']}" for item in damaged],
+    }
+
+
+def _src_wanted(name: str, crates: list[str] | tuple[str, ...]) -> bool:
+    found = _SRC_DIR.match(name)
+    if found is None:
+        return False
+    if not crates:
+        return True
+    return any(
+        name == wanted or _crate(found.group(1)) == _crate(wanted) for wanted in crates
+    )
+
+
+def clear_registry_src(
+    cache: Path,
+    crates: list[str] | tuple[str, ...] = (),
+    wait: float = REGISTRY_CLEAR_LOCK_SECONDS,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """0.77.0: remove extracted crates (``registry/src/*/NAME-VERSION``) from
+    every cargo home of the cache: all, or only ``crates`` (a name: every
+    version; ``NAME-VERSION``: that one). Never ``registry/cache`` (the
+    ``.crate`` files) nor ``registry/index``. A cargo home whose builds still
+    hold cargo's lock after ``wait`` seconds is skipped. ``(removed, busy)``."""
+    removed: list[dict[str, Any]] = []
+    busy: list[str] = []
+    homes = cache / "cargo-home"
+    for home in sorted(homes.iterdir()) if homes.is_dir() else ():
+        src = home / "registry" / "src"
+        if home.is_symlink() or not src.is_dir():
+            continue
+        held = _cargo_lock(home, wait, mutate=True)
+        if held is None:
+            busy.append(home.name)
+            continue
+        try:
+            gone = [
+                f"{index.name}/{entry.name}"
+                for index in sorted(src.iterdir())
+                if index.is_dir() and not index.is_symlink()
+                for entry in sorted(index.iterdir())
+                if _src_wanted(entry.name, crates)
+                and remove_registry_src(home, index.name, entry.name)
+            ]
+        finally:
+            for descriptor in held:
+                os.close(descriptor)
+        if gone:
+            removed.append({"cargo_home": home.name, "removed": gone})
+    return removed, busy
+
+
 # ------------------------------------------- quarantined lineages (0.71.0)
 #: 0.71.0: where a lineage whose files the filesystem cannot read goes, under
 #: the cache's root. Never read nor removed by Piceli: a person removes it.
@@ -2197,12 +2380,29 @@ def _selected(cache: Path, lineage: str | None) -> list[Path]:
 
 
 def clear_cache(
-    cache: Path, lineage: str | None = None, crates: list[str] | tuple[str, ...] = ()
+    cache: Path,
+    lineage: str | None = None,
+    crates: list[str] | tuple[str, ...] = (),
+    *,
+    registry_src: bool = False,
+    lock_wait: float = REGISTRY_CLEAR_LOCK_SECONDS,
 ) -> dict[str, Any]:
     """Empty the cargo target of free lineages (0.19.0), or only ``crates``'
-    artifacts; a lineage a run holds is skipped (``busy``)."""
+    artifacts; a lineage a run holds is skipped (``busy``).
+
+    0.77.0: ``crates`` also removes those crates' extracted sources from the
+    cache's cargo homes (``sources``); ``registry_src`` removes only
+    extracted sources (all, or ``crates``'), no lineage's target. A cargo
+    home some build still uses is skipped (``sources_busy``)."""
     cleared: list[dict[str, Any]] = []
     busy: list[str] = []
+    result: dict[str, Any] = {"schema": CLEAR_SCHEMA, "cleared": cleared, "busy": busy}
+    if crates or registry_src:
+        result["sources"], result["sources_busy"] = clear_registry_src(
+            cache, crates, lock_wait
+        )
+    if registry_src:
+        return result
     for path in _selected(cache, lineage):
         name = f"{path.parent.name}/{path.name}"
         if _read_meta(path).get("quarantined"):
@@ -2225,7 +2425,7 @@ def clear_cache(
             cleared.append({"lineage": name, "bytes": size})
         finally:
             os.close(descriptor)
-    return {"schema": CLEAR_SCHEMA, "cleared": cleared, "busy": busy}
+    return result
 
 
 def clear_main(
@@ -2243,7 +2443,10 @@ def clear_main(
         emit(RESULT_MARKER + json.dumps(result, sort_keys=True))
         return result
     result = clear_cache(
-        cache, spec.get("lineage"), [str(c) for c in spec.get("crates") or ()]
+        cache,
+        spec.get("lineage"),
+        [str(c) for c in spec.get("crates") or ()],
+        registry_src=bool(spec.get("registry_src")),
     )
     emit(RESULT_MARKER + json.dumps(result, sort_keys=True))
     return result
@@ -2953,15 +3156,92 @@ def main(
             assert watch is not None
             return bool(code) and not timed_out and not watch.stopped
 
+        # 0.77.0: a crate cargo extracted into the cache's cargo home is
+        # damaged (a byte flipped at rest): cargo or rustc cannot read or
+        # parse a file under registry/src/. Remove that crate's directory
+        # (cargo extracts it again from its .crate) and run once more.
+        home = None if spec.get("own_cargo_home") else Path(env["CARGO_HOME"])
+        src_damage = (
+            registry_src_damage(list(building), home)
+            if home is not None and build_failed()
+            else []
+        )
+        src_failed: str | None = None
+        if src_damage and home is not None:
+            timeline.phase("repair")
+            names = ", ".join(item["crate"] for item in src_damage)
+            left = max(1.0, timeout - (clock() - step) + watch.paused_seconds)
+            repair = reextract_registry_src(
+                home, src_damage, min(REGISTRY_LOCK_SECONDS, left)
+            )
+            if repair is None or not repair["crates"]:
+                src_failed = (
+                    f"the cargo home's extracted source of {names} is damaged "
+                    + (
+                        "and cargo's package cache lock stayed held"
+                        if repair is None
+                        else "and could not be removed"
+                    )
+                    + f": {src_damage[0]['line']}; run piceli dev cache clear "
+                    "--registry-src "
+                    + " ".join(f"--crate {item['crate']}" for item in src_damage)
+                    + ", then again"
+                )
+                result["cache"]["suspect"] = {
+                    "kind": "registry-src",
+                    "crates": [item["crate"] for item in src_damage],
+                }
+                emit(f"[piceli-dev] {src_failed}")
+            else:
+                emit(
+                    f"[piceli-dev] corrupted cache (registry-src-reextracted): "
+                    f"removed the extracted source of {', '.join(repair['crates'])} "
+                    "from the cargo home; running once more"
+                )
+                result["cache"]["repaired"] = {
+                    **repair,
+                    "first_error": list(errors.lines),
+                }
+                cargo = CargoOutput(clock)
+                errors.lines.clear()
+                building.clear()
+                tail.clear()
+                left = max(1.0, timeout - (clock() - step) + watch.paused_seconds)
+                timeline.phase("command")
+                attempt_step = clock()
+                code, timed_out = run_command(
+                    command, cwd, env, left, emit, seen, watch, paused
+                )
+                watch.close()
+                again = (
+                    registry_src_damage(list(building), home) if build_failed() else []
+                )
+                if again:
+                    # Once per run: damaged again right after a fresh
+                    # extraction points at the machine, not the cache.
+                    src_failed = (
+                        "the cargo home's extracted source of "
+                        + ", ".join(item["crate"] for item in again)
+                        + " is damaged again after it was extracted afresh "
+                        f"({again[0]['line']}): this build host may be corrupting "
+                        "files; check its disk and memory (a memory test, the "
+                        "kernel log, a filesystem check)"
+                    )
+                    emit(f"[piceli-dev] {src_failed}")
         # 0.69.0: a lineage that held a build before (warm or seeded) can
         # carry damage its repairs below do not reach.
         held_build = bool(lineage.warm or seeded)
         crates, damage = (
-            corrupt_crates(list(building)) if build_failed() else ([], None)
+            corrupt_crates(list(building))
+            if build_failed() and src_failed is None
+            else ([], None)
         )
         damaged = (
             lineage_damage(list(building), target)
-            if held_build and build_failed() and damage != "incremental"
+            if held_build
+            and build_failed()
+            and damage != "incremental"
+            and src_failed is None
             else None
         )
         if damaged:
@@ -2981,11 +3261,13 @@ def main(
                 f"{', '.join(crates) or 'incremental/'} ({removed} entries); "
                 "running once more"
             )
+            prior = result["cache"].get("repaired")
             result["cache"]["repaired"] = {
                 "kind": damage,
                 "crates": crates,
                 "entries": removed,
                 "first_error": list(errors.lines),
+                **({"after": prior["kind"]} if prior else {}),
             }
             cargo = CargoOutput(clock)
             errors.lines.clear()
@@ -3142,6 +3424,11 @@ def main(
             result.update(state="timed-out", reason="dev-run-timed-out")
         elif code == 0:
             result["state"] = "passed"
+        elif src_failed is not None:
+            # 0.77.0: a damaged registry source the repair could not cure.
+            result.update(
+                state="failed", reason="dev-registry-src-damaged", message=src_failed
+            )
         else:
             result.update(state="failed", reason="dev-command-failed")
         timeline.phase("artifacts")
