@@ -38,12 +38,15 @@ jobs:
       - run: uv run pre-commit run --all-files --show-diff-on-failure
 
   test:
-    name: test (py${{ matrix.python }})
+    name: test (py${{ matrix.python }}, ${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python: ["3.12", "3.13", "3.14"]
+        # Each version's tests in two halves on two runners
+        # (PICELI_TEST_SHARD, tests/conftest.py): together every test once.
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v5
         with:
@@ -97,15 +100,18 @@ jobs:
           sudo install -m 0755 /tmp/sops /usr/local/bin/sops
       # Coverage only on 3.12, the run whose data is combined (sysmon core,
       # see pyproject; the C tracer made this job twice as slow as the others).
+      # worksteal: an idle worker takes queued tests from a busy one, so a
+      # few slow tests at the end do not keep one worker running alone.
       - name: Unit and acceptance tests
         env:
           COV: ${{ matrix.python == '3.12' && '--cov --cov-report=term' || '' }}
-        run: uv run pytest -n auto $COV
+          PICELI_TEST_SHARD: ${{ matrix.shard }}/2
+        run: uv run pytest -n auto --dist worksteal $COV
       - name: Store coverage data
         if: matrix.python == '3.12'
         uses: actions/upload-artifact@v6
         with:
-          name: coverage-data-unit
+          name: coverage-data-unit-${{ matrix.shard }}
           path: .coverage
           include-hidden-files: true
 
@@ -185,11 +191,10 @@ jobs:
           echo "nodes=$(jq -c "$select" .github/kind-nodes.json)" >> "$GITHUB_OUTPUT"
 
   integration:
-    name: integration (k8s ${{ matrix.node.minor }}, shard ${{ matrix.shard }}/4)
+    name: integration (k8s ${{ matrix.node.minor }}, shard ${{ matrix.shard }}/5)
     needs: kind-nodes
     # Every event, also pushes to main (a skipped matrix job shows its name
-    # unexpanded); in four shards it ends with the unit tests. Nightly and
-    # manual runs cover every Kubernetes version.
+    # unexpanded). Nightly and manual runs cover every Kubernetes version.
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -197,8 +202,9 @@ jobs:
       matrix:
         node: ${{ fromJSON(needs.kind-nodes.outputs.nodes) }}
         # The kind tests run serially on one cluster (some change
-        # cluster-wide objects); four shards, each on its own cluster.
-        shard: [1, 2, 3, 4]
+        # cluster-wide objects); five shards, each on its own cluster. The
+        # Flux test (about five minutes) has one to itself.
+        shard: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
@@ -268,14 +274,15 @@ jobs:
           SHARD: ${{ matrix.shard }}
         run: |
           # Files split by their measured time (scripts/kind_shard.py);
-          # --durations shows when to refresh the numbers.
-          files=$(python3 scripts/kind_shard.py "$SHARD" 4)
+          # --durations lists every test phase of a second or more, the
+          # numbers to refresh it with.
+          files=$(python3 scripts/kind_shard.py "$SHARD" 5)
           # The Rust image build (up to 25 min) runs nightly and on demand only.
           args=""
           if [ "$EVENT" = pull_request ] || [ "$EVENT" = push ]; then
             args="--deselect tests/integration/test_release_pipeline_kind.py"
           fi
-          uv run pytest $files --cov --cov-report=term --durations=15 $args
+          uv run pytest $files --cov --cov-report=term --durations=0 --durations-min=1 $args
       - name: Store coverage data
         uses: actions/upload-artifact@v6
         with:

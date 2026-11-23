@@ -10,6 +10,10 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ### Faster CI
 
+- CI runs each Python version's unit tests in two halves on two runners
+  (`PICELI_TEST_SHARD=I/N`) and the kind tests in five shards; release images
+  build while PyPI publishes, so they are out about two minutes sooner.
+
 ### A flaky request no longer fails a copy or a promotion (ops#100)
 
 ## Version 0.77.0
