@@ -10,6 +10,8 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ### Faster CI
 
+### A flaky request no longer fails a copy or a promotion (ops#100)
+
 ## Version 0.77.0
 
 ### A damaged cargo registry source is repaired (ops#95)
