@@ -31,6 +31,12 @@ placeholder, run before ``build.commands`` with their own target directory,
 outputs with ``shared_files``. A multi-platform build runs them once, with its
 first platform (:mod:`piceli.artifacts.multi_platform`).
 
+``build.shared_commands_alongside = true`` (0.78.0, opt-in) starts them at
+the same time as the platform's commands instead of before them
+(:mod:`piceli.artifacts.host_execution`): an image is assembled once its
+platform's commands and the shared commands it needs have finished. A
+platform command must then not read the shared outputs.
+
 A command for some images only (0.68.0): an entry of ``build.commands`` or
 ``build.shared_commands`` may be ``{ run = [...], images = ["web"] }``. A
 build of some images (`HostBuildSpec.for_images`, what a pipeline build of
@@ -313,6 +319,9 @@ class HostBuildSpec:
     """0.68.0: the same for ``build.shared_commands``."""
     selected: tuple[str, ...] | None = None
     """0.68.0: the images this build makes (`for_images`); ``None``: all."""
+    shared_commands_alongside: bool = False
+    """``build.shared_commands_alongside`` (0.78.0): run the shared commands at
+    the same time as the platform's commands, not before them."""
 
     builder_kind: ClassVar[str] = "host"
     network: ClassVar[str] = "host"
@@ -387,6 +396,10 @@ class HostBuildSpec:
             unknown = sorted(set(self.selected) - declared)
             if unknown:
                 raise _fail(f"the build asks for image {unknown[0]!r}, not declared")
+        if not isinstance(self.shared_commands_alongside, bool):
+            raise _fail("build.shared_commands_alongside must be true or false")
+        if self.shared_commands_alongside and not self.shared_commands:
+            raise _fail("build.shared_commands_alongside needs build.shared_commands")
         for image in self.images:
             if image.shared_files and not self.shared_commands:
                 raise _fail(
@@ -466,6 +479,7 @@ class HostBuildSpec:
                 "timeout_seconds",
                 "toolchains",
                 "shared_commands",
+                "shared_commands_alongside",
             },
             "build",
         )
@@ -528,6 +542,7 @@ class HostBuildSpec:
             shared_commands=shared_commands,
             command_images=command_images,
             shared_command_images=shared_command_images,
+            shared_commands_alongside=build.get("shared_commands_alongside", False),
             tools=tuple(tools),
             platform=build.get("platform"),
             declared_platforms=tuple(platforms),
@@ -575,6 +590,12 @@ class HostBuildSpec:
                     )
                 }
                 if self.shared_commands
+                else {}
+            ),
+            # 0.78.0: only when on, so every other digest is unchanged.
+            **(
+                {"shared_commands_alongside": True}
+                if self.shared_commands_alongside
                 else {}
             ),
             **(
@@ -632,6 +653,14 @@ class HostBuildSpec:
             for command, images in zip(commands, tags, strict=True)
             if self._runs(images)
         )
+
+    def _kept_images(
+        self, commands: tuple[tuple[str, ...], ...], tags: tuple[tuple[str, ...], ...]
+    ) -> tuple[tuple[str, ...], ...]:
+        """The images of each command `_kept` keeps (``()``: every image)."""
+        if not tags:
+            return tuple(() for _ in commands)
+        return tuple(images for images in tags if self._runs(images))
 
     def with_cache_dir(self, path: Path) -> HostBuildSpec:
         return dataclasses.replace(self, cache_dir=path)
@@ -767,6 +796,7 @@ class HostBuildSpec:
             self._kept(self.shared_commands, self.shared_command_images),
             shared_env,
             files,
+            self._kept_images(self.shared_commands, self.shared_command_images),
         )
 
     # --- execution -------------------------------------------------------
@@ -785,11 +815,14 @@ class HostBuildSpec:
         raw_output: Callable[[bytes], None] | None = None,
         client_factory: Callable[[str], Any] | None = None,
         shared: bool = True,
+        build_start: float | None = None,
     ) -> BuildReceipt:
         """Build under ``grant``; write the image archives; return the receipt.
 
         ``shared=False`` skips ``build.shared_commands``: an earlier platform
         of the same build ran them into the shared target directory.
+        ``build_start`` (0.78.0, ``time.time()``) is when the whole build
+        began, for each step's ``start_seconds``; default: now.
         """
         from piceli.artifacts.host_execution import HostExecution
 
@@ -822,6 +855,7 @@ class HostBuildSpec:
                 cancel,
                 client_factory,
                 run_shared=shared,
+                build_start=build_start,
             )
             with heavy.section(f"host build {self.name}"):
                 outputs = execution.execute(output_dir)
@@ -1184,6 +1218,9 @@ class HostBuildPlan:
     shared_env: Mapping[str, str] = field(default_factory=dict)
     #: 0.39: ``[[output.files]]`` with the node's facts substituted.
     files: tuple[HostFileOutput, ...] = ()
+    #: 0.78.0: per shared command, the images it is for (``()``: every one).
+    #: The spec digest covers it; not hashed again.
+    shared_images: tuple[tuple[str, ...], ...] = ()
 
     @property
     def platform(self) -> str:
@@ -1235,6 +1272,12 @@ class HostBuildPlan:
         return {
             "shared_commands": [list(item) for item in self.shared_commands],
             "shared_env": dict(self.shared_env),
+            # 0.78.0: only when on, so every other plan hash is unchanged.
+            **(
+                {"shared_commands_alongside": True}
+                if self.spec.shared_commands_alongside
+                else {}
+            ),
         }
 
     def preview(self) -> dict[str, Any]:

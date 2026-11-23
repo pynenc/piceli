@@ -8,6 +8,35 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ### Shared commands run alongside the platform commands (ops#99)
 
+- **New opt-in `[build] shared_commands_alongside = true` in
+  `host-build.toml`.** A multi-platform host build ran its shared commands,
+  then the first platform's commands, then the second platform's. With the
+  field, the shared commands start at the same time as the first platform's
+  commands; a build whose shared step takes 453 s and whose platforms take
+  252 s and 251 s goes from about 1012 s to about 704 s. Without it, nothing
+  changes: a platform command may still read the shared outputs.
+- An image is assembled once its platform's commands and every shared
+  command that names it (`images`, or every one for a plain entry) have
+  finished. The two sides keep separate target directories
+  (`<cache>/target/shared` and `<cache>/target/<arch>-<page size>`), so
+  cargo never makes one wait for the other's build lock.
+- The first failure on either side fails the build and stops the other
+  side (`SIGTERM` to its process group, `SIGKILL` five seconds later; its
+  step is `cancelled`). The error, the receipt's `steps` (failing step
+  last) and the log name the failing command. A cancelled host command now
+  gets `SIGTERM` before `SIGKILL` in every build.
+- **Every host build step records `start_seconds`**, its start in seconds
+  from the start of the whole build, so overlapping steps show. `piceli
+  gitops builds` prints the commands' wall time and, when they overlapped,
+  their sum (`3 command(s) in 706s (956s of work)`).
+- **Upgrade:** the overlap runs inside the build: the builder image (what
+  `piceli builder serve` and in-cluster build Jobs run, the controller's)
+  and the client, for local host builds. `start_seconds` reaches `piceli
+  gitops builds` when the controller and `builder serve` on the build hosts
+  are 0.78.0 (they must match already); an older one drops the field. An
+  older Piceli refuses a spec with the field (`invalid-spec`), so set it
+  only after the upgrade.
+
 ### Faster CI
 
 - CI runs each Python version's unit tests in two halves on two runners

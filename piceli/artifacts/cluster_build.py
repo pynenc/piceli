@@ -925,6 +925,7 @@ def job_run(
     prefix = registry_url.rstrip("/")
     receipts: dict[str, dict[str, Any]] = {}
     delivered: dict[str, dict[str, Any]] = {}
+    build_start = time.time()  # 0.78.0: every step's start_seconds counts from it
     for platform, node in facts.items():
         merged: dict[str, Any] | None = None
         for relative in specs:
@@ -941,7 +942,13 @@ def job_run(
             grant = HostBuildGrant(plan.plan_hash, time.time() + timeout_seconds + 600)
             directory = out / platform.replace("/", "-") / spec.name
             say(f"[build] {spec.name} for {platform} ({node.page_size} byte pages)")
-            receipt = spec.run(grant, directory, runner=runner, progress=say).to_dict()
+            receipt = spec.run(
+                grant,
+                directory,
+                runner=runner,
+                progress=say,
+                build_start=build_start,
+            ).to_dict()
             for name, entry in receipt["outputs"]["images"].items():
                 url = f"{prefix}/{name}"
                 target = RegistryTarget.parse(url)
