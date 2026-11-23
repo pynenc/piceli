@@ -60,6 +60,10 @@ host claims no image build while it is backed off or blocked.
 :func:`check_sources` and :func:`scratch_check` are ``--check``'s
 ``git ls-remote`` of every source and write test inside the container.
 
+0.76.0: both answers carry the build's ``steps`` (each command's seconds,
+from its container's receipt; a failed build's last line lists those that
+ran), so ``piceli gitops builds`` shows a host build's step times.
+
 0.33.0: the host claims only while it runs the controller's Piceli version
 (``controller.version`` in its status). On a mismatch it claims nothing
 (the controller falls back to its in-cluster build), tells the controller
@@ -191,6 +195,33 @@ class BuildFailed(Exception):
 ENGINE_FAILED = 125
 #: 0.75.0: how the log names the cause of an early failure.
 _CAUSE_TEXT = {"engine": "container engine", "source": "source"}
+
+
+def _receipt_steps(
+    receipt: Mapping[str, Any], entry: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """0.76.0: a passed build's steps (its receipt's, as a build Job's)."""
+    from piceli.infra.builders import receipt_steps
+
+    platforms = list(entry.get("platforms") or ())
+    return receipt_steps(receipt, str(platforms[0]) if platforms else "linux/amd64")
+
+
+def _failed_steps(lines: Sequence[str]) -> list[dict[str, Any]]:
+    """0.76.0: the steps of a failed build's last receipt line (``state``
+    ``failed``, as ``piceli build job-run`` prints it); none without one."""
+    from piceli.artifacts.cluster_build import RECEIPT_MARKER, decode_receipt
+
+    if not lines:
+        return []
+    try:
+        receipt = decode_receipt(lines[-1][len(RECEIPT_MARKER) :])
+    except (ValueError, OSError, EOFError):
+        return []
+    found = receipt.get("steps")
+    if receipt.get("state") != "failed" or not isinstance(found, list):
+        return []
+    return [dict(item) for item in found if isinstance(item, Mapping)]
 
 
 def failing_output(lines: Sequence[str]) -> str:
@@ -530,6 +561,9 @@ class BuilderServe:
     attest: Callable[[str, str, bytes], Any] | None = None
     #: Machine-health signals seen in the current build's output.
     signals: list[dict[str, str]] = field(default_factory=list)
+    #: 0.76.0: the current build's steps (each command's seconds), from its
+    #: build container's receipt, passed or failed; sent with the answer.
+    steps: list[dict[str, Any]] = field(default_factory=list)
     #: 0.71.0: sources of the current build whose corrupt mirror was
     #: re-cloned, by name (``{"mirror", "error"}``).
     repaired: dict[str, dict[str, str]] = field(default_factory=dict)
@@ -989,6 +1023,7 @@ class BuilderServe:
         began = self.clock()
         tail: deque[str] = deque(maxlen=TAIL_LINES)
         self.signals = []
+        self.steps = []
         self.repaired = {}
         self._progress = self._reporter(build, tail)
         try:
@@ -1011,6 +1046,8 @@ class BuilderServe:
                     early=error.early, source=error.source,
                     stage=stage,  # 0.41.0: fetch, build or push
                     cause=error.cause,  # 0.75.0: engine or source
+                    # 0.76.0: the steps that ran (none before the first)
+                    steps=() if error.early else self.steps,
                 )
             )  # fmt: skip
             self.answered.add(build)
@@ -1056,7 +1093,9 @@ class BuilderServe:
         referrers = self.attach(entry, images, record)
         if referrers:
             receipt["referrers"] = referrers
-        self.channel.add_request(*built_request(build, self.host, images, receipt))
+        self.channel.add_request(
+            *built_request(build, self.host, images, receipt, self.steps)
+        )
         self.answered.add(build)
         self.say(f"builder: {build} delivered in {receipt['seconds']:.0f}s")
         return build
@@ -1281,9 +1320,12 @@ class BuilderServe:
                     cause="engine",  # 0.75.0: no source is to blame
                 )
             if code != 0 or not receipt_line:
+                # 0.76.0: a failed build's last line lists the steps that ran.
+                self.steps = _failed_steps(receipt_line[-1:])
                 raise BuildFailed(f"the build exited {code}", "\n".join(tail))
             receipt = decode_receipt(receipt_line[-1][len(RECEIPT_MARKER) :])
             self.toolchains = dict(receipt.get("toolchains") or {})
+            self.steps = _receipt_steps(receipt, entry)
             self._stage("push")
             return self.deliver(entry, receipt, out)
 

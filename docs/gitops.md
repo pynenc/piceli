@@ -629,7 +629,10 @@ registry through a port-forward (only the blobs it lacks) and one OCI
 index per image, and answers `built` (each image's key, pull reference,
 digest and platforms, and a receipt: host, times, builder image, commits).
 A failure answers `build-failed` with the output's tail: the environment's
-step fails with it, as an in-cluster build would.
+step fails with it, as an in-cluster build would. Since 0.76.0 both answers
+also carry the build's `steps` (each command's seconds; a failed build
+sends the steps that ran), shown by `piceli gitops builds` (see
+{ref}`its step times <gitops-build-steps>`).
 
 (build-host-handover)=
 **A failure before the build runs is handed over (0.29.0).** When a host
@@ -1214,9 +1217,11 @@ an environment build made: its `digest` and, for an image built for
 several platforms, the OCI index's `media_type` and `platforms` (each
 platform's manifest digest; see {ref}`pipeline-declared-platforms`).
 
-`steps` (0.75.0) lists each step of an environment image build that ran
-in the cluster (the in-cluster fallback), with its seconds, in the shape
-of a host build's receipt:
+(gitops-build-steps)=
+`steps` (0.75.0) lists each step of an environment image build, with its
+seconds, in the shape of a host build's receipt. 0.75.0 filled it for
+builds that ran in the cluster (the in-cluster fallback); since 0.76.0 a
+build host sends its steps with its answer, so host builds have them too:
 
 ```json
 "steps": [
@@ -1233,7 +1238,11 @@ seconds for the time the commands took. A failed build keeps the steps
 that ran, the failing one last, and the end of its log in `log_tail`
 (the CLI line ends with "N command(s) in Ss"). A build Job's steps need a
 0.75.0 controller and builder image; with an older builder image a passed
-build shows only its first platform's commands, a failed one none.
+build shows only its first platform's commands, a failed one none. A host
+build's steps need a 0.76.0 controller and `builder serve`: an older host
+sends none (the build is recorded without steps), an older controller
+ignores them. The controller keeps at most 64 steps of a host's answer and
+drops any step whose fields have the wrong type or are too long.
 
 While a build host builds, it reports its stage and the last 4000
 characters of its log (`build-progress`, at each stage and at most every

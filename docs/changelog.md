@@ -4,6 +4,25 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.76.0
+
+### Host builds send their step times (ops#97 follow-up)
+
+- **`piceli gitops builds --json` shows step times for host builds too.**
+  `piceli builder serve` now sends the build's `steps` (each command's
+  seconds, from its build container's receipt) with its `built` answer, and
+  with `build-failed` when the build ran commands (the steps that ran, the
+  failing one last). The controller keeps them where an in-cluster build's
+  go, so `steps` is filled for every build: host or in-cluster, passed or
+  failed. No more reading a host's journal over SSH for step times.
+- **Compatible both ways.** A 0.76.0 controller records a build from an
+  older `builder serve` without steps; an older controller ignores the new
+  field. Upgrade both the controller and the build hosts to see host steps.
+- **Steps from a host are checked.** The controller keeps at most 64 steps
+  and only their known fields (`platform`, `kind`, `tool`, `state`,
+  `exit_code`, `seconds`); a step with a wrong type, a text too long or
+  seconds out of range is dropped.
+
 ## Version 0.75.0
 
 ### A container-engine failure does not block a host (ops#97)

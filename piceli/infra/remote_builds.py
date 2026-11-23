@@ -52,6 +52,14 @@ starts clears the count. A source quarantine ends after
 to the in-cluster fallback in a row are counted (:data:`FALLBACKS_KEY`,
 ``controller.builds_fallback``) for the ``builds-fallback`` alarm.
 
+0.76.0: a host's ``built`` and ``build-failed`` answers carry ``steps``,
+each command's seconds as its build container's receipt lists them (a
+``build-failed`` only when the build ran commands: the steps that ran).
+The controller keeps the valid ones (:func:`host_steps`) where an
+in-cluster build's go, so ``piceli gitops builds`` shows them for every
+build. A builder before 0.76.0 sends none: the build is recorded without
+steps. A controller before 0.76.0 ignores the field.
+
 0.71.0: the fallback no longer waits ``host_wait`` for hosts that cannot
 build. At once when no declared host may take the build, also without a
 hand-over in this build (a host quarantined for a source by an earlier
@@ -177,6 +185,63 @@ _OUTCOMES = {
     "nix-published": "published",
     "build-failed": "failed",
 }
+#: 0.76.0: steps kept of a host's answer (as the history keeps).
+MAX_STEPS = 64
+#: 0.76.0: a step longer than this (seconds) is not a real step.
+_MAX_STEP_SECONDS = 7 * 24 * 3600.0
+#: 0.76.0: each text field of a step and its longest value.
+_STEP_TEXTS = {"platform": 32, "kind": 64, "tool": 64, "state": 32}
+
+
+def host_steps(value: Any) -> list[dict[str, Any]]:
+    """0.76.0: the valid steps of a host's answer, at most :data:`MAX_STEPS`.
+
+    A build host is less trusted than the controller: only a list of
+    objects is read, and only their ``platform``, ``kind``, ``tool``,
+    ``state`` (text, bounded), ``exit_code`` (an integer) and ``seconds``
+    (a finite number from 0 to a week). A step with a field of another
+    type, a text too long, no ``kind`` or no ``seconds`` is dropped;
+    anything else of it is ignored."""
+    import math
+
+    if not isinstance(value, list):
+        return []
+    found: list[dict[str, Any]] = []
+    for item in value[: MAX_STEPS * 4]:
+        if not isinstance(item, Mapping):
+            continue
+        step: dict[str, Any] = {}
+        for name, limit in _STEP_TEXTS.items():
+            text = item.get(name)
+            if text is None:
+                continue
+            if not isinstance(text, str) or not 0 < len(text) <= limit:
+                break
+            step[name] = text
+        else:
+            code = item.get("exit_code")
+            seconds = item.get("seconds")
+            if (
+                "kind" not in step
+                or isinstance(seconds, bool)
+                or not isinstance(seconds, int | float)
+                or not math.isfinite(seconds)
+                or not 0 <= seconds <= _MAX_STEP_SECONDS
+            ):
+                continue
+            if code is not None:
+                if isinstance(code, bool) or not isinstance(code, int):
+                    continue
+                if not -(2**31) <= code < 2**31:
+                    continue
+                step["exit_code"] = code
+            step["seconds"] = round(float(seconds), 3)
+            found.append(step)
+            if len(found) == MAX_STEPS:
+                break
+    return found
+
+
 #: The registry domain of images imported into the nodes: ``.invalid``
 #: never resolves, so a node without the image never pulls one from elsewhere.
 NODE_DOMAIN = "node.piceli.invalid"
@@ -1034,6 +1099,9 @@ def _failure_error(failure: Mapping[str, Any], build: str = "") -> CompositionEr
     )
     error.output_tail = str(failure.get("log_tail") or "")  # type: ignore[attr-defined]
     error.from_host = str(failure.get("host") or "?")  # type: ignore[attr-defined]
+    steps = host_steps(failure.get("steps"))
+    if steps:  # 0.76.0: as a failed build Job's (the controller keeps them)
+        error.steps = steps  # type: ignore[attr-defined]
     return error
 
 
@@ -1192,6 +1260,9 @@ def failed(
         )[:16]
         or None,
     }
+    steps = host_steps(body.get("steps"))
+    if steps:  # 0.76.0: the steps that ran, for gitops builds
+        entry["failed"]["steps"] = steps
     return False
 
 

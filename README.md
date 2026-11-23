@@ -66,14 +66,11 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.75
+## What's new in 0.76
 
-- **One engine hiccup no longer blocks a build host**: a container engine
-  that fails to start a build backs the host off for minutes; only
-  repeated failures block it, and `gitops hosts` and `gitops alarms` show
-  every block and when builds keep falling back to the cluster.
-- **In-cluster builds keep their step times**: `gitops builds --json`
-  lists each command's seconds, also for a failed build.
+- **Every build's step times in one place**: build hosts now send each
+  command's seconds with their result, so `gitops builds --json` lists
+  step times for host and in-cluster builds, passed or failed.
 
 ## Web UI
 
