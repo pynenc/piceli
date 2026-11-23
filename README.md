@@ -66,14 +66,16 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.77
+## What's new in 0.78
 
-- **Damaged cargo sources repair themselves**: a dev run that fails on a
-  damaged extracted crate source removes it and retries once (cargo
-  extracts it again); `piceli dev cache clear --registry-src` removes
-  extracted sources by hand.
-- **Deploy lines name their commits**: the lines that end or resume a
-  deploy name each source's commit, as the push line does.
+- **Shared steps run alongside**: with `shared_commands_alongside = true`
+  in a host build's `[build]`, the shared commands run at the same time as
+  the first platform's commands; each image is packaged once its inputs
+  are done.
+- **One flaky request no longer fails a copy**: registry requests retry
+  transient errors with backoff, a chunked upload resumes from the
+  registry's `Range`, and a failure names its side, host, request and
+  error. `piceli promote` retries Git up to three times.
 
 ## Web UI
 
