@@ -482,8 +482,13 @@ A component's `commit` is the commit of the source whose change triggered
 its build (the run's trigger first when several changed; an image whose
 change key did not move keeps the source and commit it was built at), and
 `sources` lists the commit of every source it reads. The controller's log
-says `rolled web` only for components whose image digest or workload
-changed, else `rolled nothing`. A failed attempt (code, time and the build
+names the commits a deploy deploys, as its push line does
+(`main: deployed shop@610572993f71, workspace@c5f6c1059cf8; rolled web`),
+and says `rolled web` only for components whose image digest or workload
+changed, else `rolled nothing`. The lines that end or resume a deploy name
+them too (`failed (code) at ...`, `approval required at ...`, `its deploy
+of ... was interrupted (restart)`), so the log of a restarted controller
+alone tells which commits it deployed. A failed attempt (code, time and the build
 log's tail, at most 2000 characters) stays in `failed_attempts` until the
 revision deploys; the run that then succeeds lists them in the history.
 

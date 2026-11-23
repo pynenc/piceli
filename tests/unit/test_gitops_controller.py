@@ -748,8 +748,12 @@ def test_a_restart_marks_the_step_it_died_in_and_publishes_a_heartbeat(
     clock.now += 120
     restarted, channel, _ = make(tmp_path, repo, ports)
     restarted.clock = clock
+    lines: list[str] = []
+    restarted.log = lines.append  # type: ignore[method-assign]
     status = restarted.poll_once()
     entry = status["envs"]["wp-1"]
+    commit = str(entry["commit"])[:12]
+    assert f"wp-1: its deploy of {commit} was interrupted (restart)" in lines
     assert "in_progress" not in entry
     assert entry["interrupted"] == {
         "action": "deploy",
