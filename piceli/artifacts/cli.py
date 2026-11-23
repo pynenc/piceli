@@ -631,7 +631,7 @@ def run_copy_command(args: argparse.Namespace, **seams: Any) -> int:
         CopyPlan,
         summary,
     )
-    from piceli.artifacts.registry import docker_config_credentials
+    from piceli.artifacts.registry import describe, docker_config_credentials
     from piceli.cli_contract import EXIT_APPROVAL, emit_json, say
 
     try:
@@ -681,7 +681,8 @@ def run_copy_command(args: argparse.Namespace, **seams: Any) -> int:
         emit_json(result)
         if result["state"] != "copied":
             reason = result["reason"] if result["reason"] in ERRORS else "copy-failed"
-            say(f"copy: failed [{reason}]")
+            where = describe(result.get("error"))
+            say(f"copy: failed [{reason}]" + (f" {where}" if where else ""))
             return 1
         say(summary(result))
         return 0

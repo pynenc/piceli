@@ -12,6 +12,29 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ### A flaky request no longer fails a copy or a promotion (ops#100)
 
+- A registry request that fails in transit (a refused, reset or aborted
+  connection, a timeout, a name not resolved, a TLS connection cut short,
+  HTTP 429, 502, 503 or 504) is tried again: up to 5 times, with a growing,
+  partly random pause (about 1, 2, 4, 8 seconds; `Retry-After` honoured up
+  to 60 seconds), never past the command's deadline. Before, one dropped
+  connection failed a whole `artifacts copy` with `registry-unreachable`.
+- A failed chunk of a large upload resumes where the registry's upload
+  session says it stopped (its `Range`); when the session is gone, the
+  blob starts again (up to 3 times). A chunk is never resent blindly.
+- The copy receipt lists each retry (`retries`) and, on failure, where it
+  failed (`error`: side, host, method, path, blob digest and offset,
+  exception and errno or HTTP status; never a credential). The CLI line
+  says it too: `copy: failed [registry-unreachable] target ghcr.io PATCH
+  blob sha256:9072a3f9… at 33554432: ConnectionResetError(54)`. The error
+  codes are unchanged. Mirror receipts get the same `retries` and `error`.
+- The same retries cover every command that talks to a registry through
+  Piceli's client: `artifacts publish`, `publish-files`, `deliver`,
+  `copy`, mirrors, retention and the in-cluster registry.
+- `piceli promote`: a `git fetch`, `push`, `ls-remote` or `clone` that fails
+  in transport (such as `ssh: connect to host … Operation timed out`) now
+  runs up to three times, after 2 seconds and then 4 to 8 seconds (0.74.0
+  retried once). `git_retries` entries gain `attempt`.
+
 ## Version 0.77.0
 
 ### A damaged cargo registry source is repaired (ops#95)

@@ -24,6 +24,13 @@ A manifest already present in the destination is only verified
 (``piceli.mirror-delivery.v1``) records the digests, platforms and blob
 counts; never credentials.
 
+A transient registry failure is retried (0.78.0, see
+:mod:`piceli.artifacts.registry`); a blob whose source stream was cut or
+whose upload session was lost starts again, up to
+:attr:`~piceli.artifacts.registry.RetryPolicy.blob_attempts` times. The
+receipt lists each retry (``retries``) and, for a failure, where and why it
+failed (``error``: side, host, method, path, digest, offset, exception).
+
 Importing this module opens no socket and reads no file.
 """
 
@@ -299,19 +306,61 @@ class _Copy:
             self.blobs["skipped_bytes"] += size
             self.blobs["items"].append(entry | {"action": "skipped"})
             return
-        with self.source.open_blob(self.source_repository, digest) as stream:
-            upload = self.target.push_blob(
-                self.target_repository, digest, size, stream, cancel=self.cancel
-            )
+        attempt = 0
+        while True:
+            try:
+                with self.source.open_blob(self.source_repository, digest) as stream:
+                    upload = self.target.push_blob(
+                        self.target_repository, digest, size, stream, cancel=self.cancel
+                    )
+                break
+            except RegistryError as error:
+                attempt += 1
+                if not self.again(error, attempt, digest):
+                    raise
         self.blobs["uploaded"] += 1
         self.blobs["uploaded_bytes"] += size
         self.blobs["items"].append(entry | {"action": "uploaded", "mode": upload.mode})
 
+    def again(self, error: RegistryError, attempt: int, digest: str) -> bool:
+        """Whether to start blob ``digest`` again after ``error`` (0.78.0):
+        a transient failure the request-level retries did not cure (a source
+        stream cut, an upload session lost), within the blob attempts."""
+        error.detail.setdefault("digest", digest)
+        pause = getattr(self.target, "retry_pause", None)
+        if not error.transient or pause is None or time.time() > self.deadline:
+            return False
+        found = error.detail
+        return bool(
+            pause(
+                attempt,
+                error,
+                str(found.get("method") or "GET"),
+                str(
+                    found.get("path") or f"/v2/{self.source_repository}/blobs/{digest}"
+                ),
+                limit=self.target.retry.blob_attempts,
+                side=found.get("side"),
+                host=found.get("host"),
+                digest=digest,
+                offset=found.get("offset"),
+                action="restart",
+            )
+        )
+
     def config_platform(self, digest: str, size: int) -> str | None:
         if size > _MAX_CONFIG:
             raise MirrorError("mirror-manifest-invalid")
-        with self.source.open_blob(self.source_repository, digest) as stream:
-            body = stream.read(size + 1)
+        attempt = 0
+        while True:
+            try:
+                with self.source.open_blob(self.source_repository, digest) as stream:
+                    body = stream.read(size + 1)
+                break
+            except RegistryError as error:
+                attempt += 1
+                if not self.again(error, attempt, digest):
+                    raise
         if len(body) != size or _sha(body) != digest:
             raise MirrorError("mirror-digest-mismatch")
         try:
@@ -422,6 +471,7 @@ def mirror_image(
         cancel,
         blobs,
     )
+    marks = prepare_clients(source_client, target_client, copy.deadline)
     try:
         result = _mirror(copy, source, platform, receipt)
         receipt.update(
@@ -439,10 +489,38 @@ def mirror_image(
             message=str(error) if str(error) != error.code else None,
         )
     except RegistryError as error:
-        receipt.update(result="failed", state="failed", reason=error.reason)
+        receipt.update(
+            result="failed", state="failed", reason=error.reason, error=error.public()
+        )
+    receipt["retries"] = retries_since(marks)
     receipt["finished_at"] = _now()
     receipt["seconds"] = round(time.monotonic() - clock, 3)
     return receipt
+
+
+def prepare_clients(
+    source: StreamedOciRegistryClient,
+    target: StreamedOciRegistryClient,
+    deadline: float,
+) -> list[tuple[list[dict[str, object]], int]]:
+    """Name the two clients ``source`` and ``target`` (unless named), bound
+    their retries by ``deadline``, and mark where their retry lists stand."""
+    marks: list[tuple[list[dict[str, object]], int]] = []
+    for client, side in ((source, "source"), (target, "target")):
+        if not isinstance(client, StreamedOciRegistryClient):
+            continue
+        client.side = client.side or side
+        client.deadline = min(client.deadline or deadline, deadline)
+        if all(found is not client.retries for found, _ in marks):
+            marks.append((client.retries, len(client.retries)))
+    return marks
+
+
+def retries_since(
+    marks: list[tuple[list[dict[str, object]], int]],
+) -> list[dict[str, object]]:
+    """The retries recorded after :func:`prepare_clients` marked the lists."""
+    return [entry for found, start in marks for entry in found[start:]]
 
 
 def _mirror(

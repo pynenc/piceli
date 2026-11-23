@@ -1615,9 +1615,11 @@ it finds the local commit and tag, checks that the commit is exactly the
 planned `flake.lock` change, and pushes them (`resume` in the plan,
 `resumed: true` in the result; the output's `approve_command` is the
 command to run again). A `git fetch`, `push`, `ls-remote` or `clone` that
-fails in transport (a timeout, a refused or reset connection, a name not
-resolved) is retried once after 2 seconds; the result lists each retry in
-`git_retries`.
+fails in transport (a timeout such as `ssh: connect to host … Operation
+timed out`, a refused or reset connection, a name not resolved) runs up to
+three times: again after 2 seconds, then after 4 to 8 seconds (0.78.0;
+0.74.0 retried once). The result lists each retry in `git_retries`
+(`command`, `attempt`, `pause_seconds`).
 
 With `nix` on the `PATH` the lock comes from `nix
 flake lock --override-input` in a temporary worktree; without it the input's
