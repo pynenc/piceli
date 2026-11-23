@@ -10,6 +10,10 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ### Faster CI
 
+- CI runs each Python version's unit tests in two halves on two runners
+  (`PICELI_TEST_SHARD=I/N`) and the kind tests in five shards; release images
+  build while PyPI publishes, so they are out about two minutes sooner.
+
 ## Version 0.77.0
 
 ### A damaged cargo registry source is repaired (ops#95)
