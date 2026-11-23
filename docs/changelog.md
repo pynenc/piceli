@@ -4,6 +4,12 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.78.0
+
+### Shared commands run alongside the platform commands (ops#99)
+
+### Faster CI
+
 ## Version 0.77.0
 
 ### A damaged cargo registry source is repaired (ops#95)
