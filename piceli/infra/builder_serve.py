@@ -53,6 +53,10 @@ host or its fallback at once and quarantines this host for that source
 until ``piceli gitops release-host``; this host skips the builds that need
 it. :meth:`BuilderServe.take_next` (``--once --take-next``) stands by for
 the next build and claims it before the in-cluster fallback.
+0.75.0: the early failure names its ``cause``: ``engine`` (``docker run``
+exited 125) or ``source``. For ``engine`` the controller quarantines no
+source but backs the host off (``controller.engine_backoff``), and this
+host claims no image build while it is backed off or blocked.
 :func:`check_sources` and :func:`scratch_check` are ``--check``'s
 ``git ls-remote`` of every source and write test inside the container.
 
@@ -163,7 +167,9 @@ def _iso(seconds: float) -> str:
 
 class BuildFailed(Exception):
     """The build failed; ``tail`` is its output's end. ``early`` (0.29.0):
-    before its first command (``source``: the one it could not fetch)."""
+    before its first command (``source``: the one it could not fetch).
+    ``cause`` (0.75.0) of an early failure: ``source`` (default) or
+    ``engine`` (the container engine could not start the build)."""
 
     def __init__(
         self,
@@ -172,15 +178,19 @@ class BuildFailed(Exception):
         *,
         early: bool = False,
         source: str | None = None,
+        cause: str | None = None,
     ) -> None:
         super().__init__(reason)
         self.tail = tail
         self.early = early
         self.source = source
+        self.cause = (cause or "source") if early else None
 
 
 #: ``docker run``'s own failure (the engine could not start the container).
 ENGINE_FAILED = 125
+#: 0.75.0: how the log names the cause of an early failure.
+_CAUSE_TEXT = {"engine": "container engine", "source": "source"}
 
 
 def failing_output(lines: Sequence[str]) -> str:
@@ -556,6 +566,9 @@ class BuilderServe:
     #: sources, from its status.
     declared: list[str] = field(default_factory=list)
     blocked: dict[str, Any] = field(default_factory=dict)
+    #: 0.75.0: the controller's record of this host's container engine
+    #: (``controller.engine_backoff``): backed off or blocked.
+    engine: dict[str, Any] = field(default_factory=dict)
     _undeclared_said: bool = False
     #: 0.33.0: this host's Piceli version (default: the running one), the
     #: controller's (``controller.version``) and the one the controller last
@@ -592,6 +605,8 @@ class BuilderServe:
         self.declared = [str(h) for h in controller.get("build_hosts_declared") or ()]
         blocked = (controller.get("source_quarantine") or {}).get(self.host)
         self.blocked = dict(blocked) if isinstance(blocked, Mapping) else {}
+        engine = (controller.get("engine_backoff") or {}).get(self.host)
+        self.engine = dict(engine) if isinstance(engine, Mapping) else {}
         version = controller.get("version")
         self.controller_version = str(version) if version else None
         image = controller.get("builder_image")
@@ -728,6 +743,22 @@ class BuilderServe:
                         f"builder: {self.host} only publishes NixReleases; "
                         "it leaves every image build to the other build hosts"
                     )
+                continue
+            if self.engine and entry.get("kind") != "nix-publish":
+                # 0.75.0: its container engine failed to start builds.
+                record = self.engine
+                self._skip(
+                    str(entry.get("id")),
+                    f"the container engine of this host could not start "
+                    f"{record.get('failures')} build(s) in a row "
+                    f"({record.get('reason')}); "
+                    + (
+                        f"blocked: piceli gitops release-host {self.host} "
+                        "lets it try again"
+                        if record.get("state") == "blocked"
+                        else f"backed off until {record.get('until')}"
+                    ),
+                )
                 continue
             blocked = sorted(set(self.blocked) & set(_commits(entry)))
             if blocked:  # 0.29.0: it could not fetch one of them
@@ -979,13 +1010,15 @@ class BuilderServe:
                     build, self.host, str(error), text,
                     early=error.early, source=error.source,
                     stage=stage,  # 0.41.0: fetch, build or push
+                    cause=error.cause,  # 0.75.0: engine or source
                 )
             )  # fmt: skip
             self.answered.add(build)
             self.say(
                 f"builder: {build} failed: {error}"
                 + (
-                    "; handed to another host or the in-cluster fallback"
+                    f" (cause: {_CAUSE_TEXT.get(error.cause or '', error.cause)}); "
+                    "handed to another host or the in-cluster fallback"
                     if error.early
                     else ""
                 )
@@ -1245,6 +1278,7 @@ class BuilderServe:
                     f"the container engine could not start the build (exit {code})",
                     "\n".join(tail),
                     early=True,
+                    cause="engine",  # 0.75.0: no source is to blame
                 )
             if code != 0 or not receipt_line:
                 raise BuildFailed(f"the build exited {code}", "\n".join(tail))

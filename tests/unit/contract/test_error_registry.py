@@ -198,6 +198,11 @@ DYNAMIC |= {
     # train.engine: the reason of a run that raised midway (run-failed)
     "train-run-failed",
     "train-run-cancelled",
+    # gitops/alarms.py: reasons of the build-host-blocked and builds-fallback
+    # alarms (0.75.0)
+    "build-host-engine-failed",
+    "build-host-source-failed",
+    "build-host-fallback-only",
 }
 # Registered for the CLI contract itself (piceli/cli_contract.py users).
 CONTRACT = {"unknown-error-code"}

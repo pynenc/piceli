@@ -40,6 +40,18 @@ next declared host, or to the in-cluster fallback at once when no other
 host may take it (within :data:`HANDOVER_SECONDS` when one may). With
 ``builds=("hosts",)`` and no host left, the step fails with the host's reason.
 
+0.75.0: the ``build-failed`` request names its ``cause`` (:func:`early_cause`;
+a builder before 0.75.0 names none: a fetch failure names its source, an
+engine failure none). A container engine that could not start the build
+(``engine``) quarantines no source: the host is backed off for its image
+builds, :data:`ENGINE_BACKOFF_SECONDS` and twice as long at each next
+failure in a row, and blocked at :data:`ENGINE_BLOCK_AFTER`
+(:data:`ENGINE_KEY`, ``controller.engine_backoff``); its next build that
+starts clears the count. A source quarantine ends after
+:data:`SOURCE_QUARANTINE_SECONDS`. Image builds of an environment that went
+to the in-cluster fallback in a row are counted (:data:`FALLBACKS_KEY`,
+``controller.builds_fallback``) for the ``builds-fallback`` alarm.
+
 0.71.0: the fallback no longer waits ``host_wait`` for hosts that cannot
 build. At once when no declared host may take the build, also without a
 hand-over in this build (a host quarantined for a source by an earlier
@@ -130,6 +142,26 @@ HOSTS_KEPT = 32
 #: build}}}``: its claims of builds that need them are refused until
 #: ``piceli gitops release-host``.
 SOURCE_QUARANTINE_KEY = "host_sources_quarantined"
+#: 0.75.0: a source quarantine ends this long after it began (the host
+#: tries the source again then; ``release-host`` ends it sooner).
+SOURCE_QUARANTINE_SECONDS = 24 * 3600.0
+#: 0.75.0: hosts whose container engine could not start a build,
+#: ``{host: {failures, reason, at, since, build, until, until_at, blocked}}``;
+#: cleared by the host's next build that started.
+ENGINE_KEY = "host_engine_failures"
+#: 0.75.0: the first engine failure backs a host off this long, each next
+#: one in a row twice as long, at most :data:`ENGINE_BACKOFF_MAX`.
+ENGINE_BACKOFF_SECONDS = 300.0
+ENGINE_BACKOFF_MAX = 3600.0
+#: 0.75.0: this many engine failures in a row block the host until
+#: ``piceli gitops release-host``.
+ENGINE_BLOCK_AFTER = 3
+#: 0.75.0: why a host handed a build over (``cause`` of ``build-failed``).
+CAUSES = ("engine", "source")
+#: 0.75.0: image builds of an environment that went to the in-cluster
+#: fallback in a row, ``{env: {builds, since, since_epoch, last_at}}``;
+#: cleared when a host delivers one of its builds.
+FALLBACKS_KEY = "builds_fallback"
 #: 0.29.0: after a host handed a build over, how long the in-cluster
 #: fallback leaves it to another declared host that may take it.
 HANDOVER_SECONDS = 60.0
@@ -212,15 +244,48 @@ def sources_of(entry: Mapping[str, Any]) -> dict[str, str]:
     return {str(k): str(v) for k, v in (entry.get("commits") or {}).items()}
 
 
+def _epoch(text: Any) -> float | None:
+    if not isinstance(text, str) or not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _source_until(record: Mapping[str, Any]) -> float | None:
+    """When a source quarantine ends (0.75.0); one an older controller
+    wrote (no ``until``) ends :data:`SOURCE_QUARANTINE_SECONDS` after it
+    began; ``None``: its time is unreadable (it holds)."""
+    if record.get("until") is not None:
+        try:
+            return float(record["until"])
+        except (TypeError, ValueError):
+            return None
+    began = _epoch(record.get("at"))
+    return None if began is None else began + SOURCE_QUARANTINE_SECONDS
+
+
+def _source_held(record: Any, now: float | None) -> bool:
+    if not isinstance(record, Mapping):
+        return False
+    until = _source_until(record)
+    return now is None or until is None or now < until
+
+
 def blocked_sources(
-    state: Mapping[str, Any], host: str, entry: Mapping[str, Any]
+    state: Mapping[str, Any],
+    host: str,
+    entry: Mapping[str, Any],
+    now: float | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """The sources of ``entry`` that ``host`` is quarantined for (0.29.0)."""
+    """The sources of ``entry`` that ``host`` is quarantined for (0.29.0);
+    with ``now`` (0.75.0) only the quarantines that have not ended."""
     held = (state.get(SOURCE_QUARANTINE_KEY) or {}).get(host) or {}
     return {
         source: dict(held[source])
         for source in sorted(sources_of(entry))
-        if source in held
+        if source in held and _source_held(held[source], now)
     }
 
 
@@ -230,6 +295,145 @@ def describe_blocked(host: str, blocked: Mapping[str, Mapping[str, Any]]) -> str
         f"build host {host} cannot fetch source {source} (since {record.get('at')}: "
         f"{record.get('reason')}); piceli gitops release-host {host} clears it"
     )
+
+
+def early_cause(body: Mapping[str, Any]) -> str:
+    """Why a host handed a build over (0.75.0): ``engine`` (its container
+    engine could not start the build) or ``source`` (it could not fetch
+    one). A builder before 0.75.0 sends no ``cause``: a fetch failure names
+    its source, an engine failure names none."""
+    cause = body.get("cause")
+    if cause in CAUSES:
+        return str(cause)
+    return "source" if body.get("source") else "engine"
+
+
+def engine_hold(
+    state: Mapping[str, Any], host: str, now: float
+) -> dict[str, Any] | None:
+    """``host``'s engine record while it holds the host's image builds back
+    (0.75.0): blocked, or backed off until a time still ahead."""
+    record = (state.get(ENGINE_KEY) or {}).get(host)
+    if not isinstance(record, Mapping):
+        return None
+    if record.get("blocked") or now < float(record.get("until") or 0):
+        return dict(record)
+    return None
+
+
+def describe_engine(host: str, record: Mapping[str, Any]) -> str:
+    failures = int(record.get("failures") or 1)
+    what = (
+        f"build host {host}: its container engine could not start a build "
+        f"{failures} time(s) in a row (last at {record.get('at')}: "
+        f"{record.get('reason')})"
+    )
+    if record.get("blocked"):
+        return f"{what}; blocked, piceli gitops release-host {host} clears it"
+    return (
+        f"{what}; backed off until {record.get('until_at')} "
+        f"(piceli gitops release-host {host} clears it sooner)"
+    )
+
+
+def refused(
+    state: Mapping[str, Any], host: str, entry: Mapping[str, Any], now: float
+) -> str | None:
+    """Why ``host`` may not take ``entry`` now, or ``None``: a source it
+    could not fetch (0.29.0), or (0.75.0, image builds only) its container
+    engine is backed off or blocked."""
+    blocked = blocked_sources(state, host, entry, now)
+    if blocked:
+        return describe_blocked(host, blocked)
+    if entry.get("kind") != "nix-publish":
+        record = engine_hold(state, host, now)
+        if record is not None:
+            return describe_engine(host, record)
+    return None
+
+
+def engine_failed(
+    state: dict[str, Any], host: str, reason: str, build: str, now: float
+) -> dict[str, Any]:
+    """One more engine failure of ``host`` in a row (0.75.0): backed off
+    :data:`ENGINE_BACKOFF_SECONDS`, doubled at each next one (at most
+    :data:`ENGINE_BACKOFF_MAX`), blocked at :data:`ENGINE_BLOCK_AFTER`."""
+    found = state.setdefault(ENGINE_KEY, {})
+    before = found.get(host) if isinstance(found.get(host), Mapping) else {}
+    failures = int((before or {}).get("failures") or 0) + 1
+    wait = min(ENGINE_BACKOFF_SECONDS * 2 ** (failures - 1), ENGINE_BACKOFF_MAX)
+    found[host] = record = {
+        "failures": failures,
+        "reason": reason,
+        "cause": "engine",
+        "at": _iso(now),
+        "since": (before or {}).get("since") or _iso(now),
+        "build": build,
+        "until": now + wait,
+        "until_at": _iso(now + wait),
+        "blocked": failures >= ENGINE_BLOCK_AFTER,
+    }
+    return record
+
+
+def engine_started(state: dict[str, Any], host: str) -> bool:
+    """``host`` started a build (0.75.0: it built, or its build ran and
+    failed): its engine works, its engine failures are forgotten."""
+    return (state.get(ENGINE_KEY) or {}).pop(host, None) is not None
+
+
+def public_engine(state: Mapping[str, Any], now: float) -> dict[str, Any]:
+    """``controller.engine_backoff`` in the status (0.75.0): the hosts whose
+    engine holds their image builds back, with ``state`` ``backoff`` or
+    ``blocked``."""
+    found: dict[str, Any] = {}
+    for host in sorted(state.get(ENGINE_KEY) or {}):
+        record = engine_hold(state, host, now)
+        if record is None:
+            continue
+        found[host] = {
+            "state": "blocked" if record.get("blocked") else "backoff",
+            "cause": "engine",
+            **{
+                key: record.get(key)
+                for key in ("failures", "reason", "at", "since", "build")
+            },
+            **({} if record.get("blocked") else {"until": record.get("until_at")}),
+        }
+    return found
+
+
+def fell_back(state: dict[str, Any], owner: str | None, now: float) -> None:
+    """``owner``'s image build went to the in-cluster fallback (0.75.0)."""
+    if not owner:
+        return
+    found = state.setdefault(FALLBACKS_KEY, {})
+    before = found.get(owner) if isinstance(found.get(owner), Mapping) else {}
+    found[owner] = {
+        "builds": int((before or {}).get("builds") or 0) + 1,
+        "since": (before or {}).get("since") or _iso(now),
+        "since_epoch": float((before or {}).get("since_epoch") or now),
+        "last_at": _iso(now),
+    }
+
+
+def host_delivered(state: dict[str, Any], host: str, owner: str | None) -> None:
+    """A host delivered ``owner``'s build (0.75.0): its engine works and the
+    environment's run of fallback builds ends."""
+    engine_started(state, host)
+    if owner:
+        (state.get(FALLBACKS_KEY) or {}).pop(owner, None)
+
+
+def public_fallbacks(state: Mapping[str, Any]) -> dict[str, Any]:
+    """``controller.builds_fallback`` in the status (0.75.0): per
+    environment, how many image builds in a row went to the in-cluster
+    fallback and since when."""
+    return {
+        owner: {k: v for k, v in item.items() if k != "since_epoch"}
+        for owner, item in sorted((state.get(FALLBACKS_KEY) or {}).items())
+        if isinstance(item, Mapping)
+    }
 
 
 def live_standby(state: Mapping[str, Any], now: float) -> dict[str, dict[str, Any]]:
@@ -265,17 +469,35 @@ def standby(state: dict[str, Any], body: Mapping[str, Any], now: float) -> None:
 
 
 def release_sources(state: dict[str, Any], host: str) -> bool:
-    """``piceli gitops release-host``: ``host`` may fetch every source again."""
-    return (state.get(SOURCE_QUARANTINE_KEY) or {}).pop(host, None) is not None
+    """``piceli gitops release-host``: ``host`` may fetch every source again
+    (0.75.0: and its container engine failures are forgotten)."""
+    engine = engine_started(state, host)
+    return (state.get(SOURCE_QUARANTINE_KEY) or {}).pop(
+        host, None
+    ) is not None or engine
 
 
-def public_source_quarantine(state: Mapping[str, Any]) -> dict[str, Any]:
-    """``controller.source_quarantine`` in the status (0.29.0)."""
-    return {
-        host: {source: dict(item) for source, item in sorted(held.items())}
-        for host, held in sorted((state.get(SOURCE_QUARANTINE_KEY) or {}).items())
-        if held
-    }
+def public_source_quarantine(
+    state: Mapping[str, Any], now: float | None = None
+) -> dict[str, Any]:
+    """``controller.source_quarantine`` in the status (0.29.0); with ``now``
+    (0.75.0) only the quarantines that have not ended, each with its end
+    (``until``) and ``cause``."""
+    found: dict[str, Any] = {}
+    for host, held in sorted((state.get(SOURCE_QUARANTINE_KEY) or {}).items()):
+        items = {}
+        for source, item in sorted((held or {}).items()):
+            if not _source_held(item, now):
+                continue
+            until = _source_until(item)
+            items[source] = {
+                **{k: v for k, v in item.items() if k not in ("until", "until_at")},
+                "cause": "source",
+                **({"until": _iso(until)} if until is not None else {}),
+            }
+        if items:
+            found[host] = items
+    return found
 
 
 def build_id(kind: str, body: Mapping[str, Any]) -> str:
@@ -528,10 +750,11 @@ class HostBuilds:
         if not self.hosts:
             return None
         handed = {str(item.get("host")) for item in entry.get("handed_over") or ()}
+        now = self.clock()
         return [
             host
             for host in self.hosts
-            if host not in handed and not blocked_sources(self.state, host, entry)
+            if host not in handed and refused(self.state, host, entry, now) is None
         ]
 
     def _live(self, host: str, now: float) -> bool:
@@ -603,7 +826,7 @@ class HostBuilds:
             return None
         if host in {str(i.get("host")) for i in entry.get("handed_over") or ()}:
             return None
-        if blocked_sources(self.state, host, entry):
+        if refused(self.state, host, entry, now) is not None:
             return None
         for other in self._wanted().values():
             if other is entry or other.get("id") == entry.get("id"):
@@ -629,7 +852,7 @@ class HostBuilds:
         for host, item in live_standby(self.state, now).items():
             if eligible is not None and host not in eligible:
                 continue
-            if blocked_sources(self.state, host, entry):
+            if refused(self.state, host, entry, now) is not None:
                 continue
             return host, min(limit, float(item.get("until") or 0))
         return None
@@ -757,6 +980,8 @@ class HostBuilds:
         entry = self._ask(kind, body, names, stopped_jobs=stopped, **placement)
         if self._fallback_due(entry, method):
             del self._wanted()[entry["id"]]
+            # 0.75.0: counted, so a run of fallback builds raises an alarm.
+            fell_back(self.state, self.owner(), self.clock())
             return fallback()
         raise BuildPending(
             self.waiting(entry, method, names),
@@ -892,9 +1117,9 @@ def claim(state: dict[str, Any], body: Mapping[str, Any], now: float) -> None:
         raise GitOpsError("gitops-request-invalid", "no such wanted build")
     held = live_claim(entry, now) or {}
     host = str(body.get("host") or "")
-    blocked = blocked_sources(state, host, entry)
-    if blocked:  # 0.29.0: it could not fetch one of them
-        raise GitOpsError("gitops-request-invalid", describe_blocked(host, blocked))
+    why = refused(state, host, entry, now)
+    if why is not None:  # 0.29.0: a source it could not fetch; 0.75.0: its engine
+        raise GitOpsError("gitops-request-invalid", why)
     if held and held.get("host") != host:
         raise GitOpsError(
             "gitops-request-invalid",
@@ -914,20 +1139,33 @@ def failed(
     """A host could not build it (``build-failed``): the step fails with its
     tail. 0.29.0: with ``early`` (it failed before the build's first
     command) the build is handed over instead (see the module doc): the
-    claim goes, the host is quarantined for ``source`` (every source of the
-    build when it names none); returns whether it was handed over."""
+    claim goes; returns whether it was handed over.
+
+    0.75.0: by its ``cause`` (:func:`early_cause`). ``source``: the host is
+    quarantined for ``source`` (every source of the build when it names
+    none) for :data:`SOURCE_QUARANTINE_SECONDS`. ``engine``: no source is
+    quarantined; the host is backed off (:func:`engine_failed`). A failure
+    after the first command proves the engine works (:func:`engine_started`)."""
     entry = (state.get(STATE_KEY) or {}).get(str(body.get("id")))
     if entry is None:
         raise GitOpsError("gitops-request-invalid", "no such wanted build")
     host = str(body.get("host") or "?")[:64]
     if body.get("early") and now is not None:
         reason = str(body.get("reason") or "the build failed")[:300]
-        source = body.get("source")
-        sources = sources_of(entry)
-        quarantined = [str(source)] if source in sources else sorted(sources)
-        held = state.setdefault(SOURCE_QUARANTINE_KEY, {}).setdefault(host, {})
-        for name in quarantined:
-            held[name] = {"reason": reason, "at": _iso(now), "build": entry["id"]}
+        cause = early_cause(body)
+        if cause == "engine":
+            engine_failed(state, host, reason, str(entry["id"]), now)
+        else:
+            source = body.get("source")
+            sources = sources_of(entry)
+            quarantined = [str(source)] if source in sources else sorted(sources)
+            held = state.setdefault(SOURCE_QUARANTINE_KEY, {}).setdefault(host, {})
+            for name in quarantined:
+                held[name] = {
+                    "reason": reason, "cause": "source", "at": _iso(now),
+                    "build": entry["id"], "until": now + SOURCE_QUARANTINE_SECONDS,
+                    "until_at": _iso(now + SOURCE_QUARANTINE_SECONDS),
+                }  # fmt: skip
         if (entry.get("claimed") or {}).get("host") == host:
             entry.pop("claimed", None)
             entry.pop("progress", None)
@@ -936,12 +1174,14 @@ def failed(
             {
                 "host": host,
                 "reason": reason,
+                "cause": cause,  # 0.75.0
                 "log_tail": str(body.get("log_tail") or "")[-2000:],
                 "at": _iso(now),
             },
         ][-8:]
         entry["handed_epoch"] = now
         return True
+    engine_started(state, host)  # 0.75.0: the build ran: the engine works
     entry["failed"] = {
         "host": str(body.get("host") or "?"),
         "reason": str(body.get("reason") or "the build failed")[:300],

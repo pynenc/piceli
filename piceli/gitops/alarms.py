@@ -41,7 +41,17 @@ alarms it already sent and sends what is new (:func:`observe`,
 - ``cache-over-budget`` (0.35.0): a build cache (the development runs'
   ``piceli-dev-cache``, the build Jobs' component cache) is still over its
   budget after eviction, or its disk is nearly full
-  (``controller.storage.caches``).
+  (``controller.storage.caches``);
+- ``build-host-blocked`` (0.75.0): a build host claims no image build until
+  ``piceli gitops release-host``: its container engine failed to start
+  builds :data:`~piceli.infra.remote_builds.ENGINE_BLOCK_AFTER` times in a
+  row (``controller.engine_backoff``, reason ``build-host-engine-failed``),
+  or it could not fetch a source (``controller.source_quarantine``, reason
+  ``build-host-source-failed``);
+- ``builds-fallback`` (0.75.0): ``fallback_after`` image builds in a row of
+  an environment went to the in-cluster fallback, or at least two did over
+  ``fallback_for`` (``controller.builds_fallback``, reason
+  ``build-host-fallback-only``): no build host builds for it.
 
 Each alarm is sent once: the alarms already sent are kept in the
 controller's state (they survive a restart). When the condition ends, one
@@ -81,7 +91,12 @@ EVENTS = (
     "build-host-version",
     "node-disk-pressure",
     "cache-over-budget",
+    "build-host-blocked",
+    "builds-fallback",
 )
+#: 0.75.0: the defaults of ``Alarms(fallback_after=, fallback_for=)``.
+FALLBACK_AFTER = 3
+FALLBACK_FOR = "6h"
 #: The reason code of a failed send.
 FAILED_CODE = "gitops-alarm-failed"
 #: Failed sends the status keeps.
@@ -117,12 +132,21 @@ class Alarms:
         environment variables the targets name (``url_env=``,
         ``token_env=``, ``headers_env=``): each is set from the Secret's key
         of the same name.
+    :param fallback_after: How many image builds in a row of an environment
+        may go to the in-cluster fallback before it is an alarm
+        (``builds-fallback``, 0.75.0).
+    :param fallback_for: How long (``6h``) an environment's image builds may
+        all go to the in-cluster fallback (at least two) before it is an
+        alarm (0.75.0).
     """
 
     targets: Sequence[Any] = ()
     waiting_after: str = "10m"
     secret: str | None = None
+    fallback_after: int = FALLBACK_AFTER
+    fallback_for: str = FALLBACK_FOR
     _seconds: int = field(default=0, init=False, repr=False, compare=False)
+    _fallback_seconds: int = field(default=0, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         from piceli.gitops import GitOpsError
@@ -147,6 +171,21 @@ class Alarms:
         if seconds < 60:
             raise AlarmsError("Alarms(waiting_after=) must be at least 1m")
         object.__setattr__(self, "_seconds", seconds)
+        if (
+            isinstance(self.fallback_after, bool)
+            or not isinstance(self.fallback_after, int)
+            or self.fallback_after < 1
+        ):
+            raise AlarmsError(
+                "Alarms(fallback_after=) is a number of builds, 1 or more"
+            )
+        try:
+            fallback = parse_duration(self.fallback_for)
+        except (GitOpsError, TypeError):
+            raise AlarmsError("Alarms(fallback_for=) must be like 30m or 6h") from None
+        if fallback < 60:
+            raise AlarmsError("Alarms(fallback_for=) must be at least 1m")
+        object.__setattr__(self, "_fallback_seconds", fallback)
         if self.secret is not None and not (
             isinstance(self.secret, str) and _SECRET.fullmatch(self.secret)
         ):
@@ -172,6 +211,11 @@ class Alarms:
         return self._seconds
 
     @property
+    def fallback(self) -> tuple[int, float]:
+        """``(fallback_after, fallback_for in seconds)`` (0.75.0)."""
+        return self.fallback_after, float(self._fallback_seconds)
+
+    @property
     def variables(self) -> tuple[str, ...]:
         """The environment variables the targets read (the Secret's keys)."""
         found: dict[str, None] = {}
@@ -185,6 +229,8 @@ class Alarms:
             "targets": [item.to_dict() for item in self.targets],
             "waiting_after": self.waiting_after,
             "secret": self.secret,
+            "fallback_after": self.fallback_after,
+            "fallback_for": self.fallback_for,
         }
 
     @classmethod
@@ -202,6 +248,8 @@ class Alarms:
             targets=targets,
             waiting_after=str(value.get("waiting_after") or "10m"),
             secret=value.get("secret"),
+            fallback_after=int(value.get("fallback_after") or FALLBACK_AFTER),
+            fallback_for=str(value.get("fallback_for") or FALLBACK_FOR),
         )
 
 
@@ -241,6 +289,10 @@ class Alarm:
                 if self.event == "build-host-version"
                 else "has disk space again"
                 if self.event in ("node-disk-pressure", "cache-over-budget")
+                else "released"
+                if self.event == "build-host-blocked"
+                else "builds on a host again"
+                if self.event == "builds-fallback"
                 else "no longer waiting"
             )
         return {
@@ -253,6 +305,8 @@ class Alarm:
             "build-host-version": f"piceli: build host {self.subject} version",
             "node-disk-pressure": f"piceli: node {self.subject} disk pressure",
             "cache-over-budget": f"piceli: cache {self.subject} over budget",
+            "build-host-blocked": f"piceli: build host {self.subject} blocked",
+            "builds-fallback": f"piceli: {self.subject} builds only in the cluster",
         }.get(self.event, f"piceli: {self.subject}")
 
     @property
@@ -265,6 +319,10 @@ class Alarm:
                 what = "runs the controller's Piceli version"
             if self.event in ("node-disk-pressure", "cache-over-budget"):
                 what = "has disk space again"
+            if self.event == "build-host-blocked":
+                what = "claims builds again"
+            if self.event == "builds-fallback":
+                what = "builds on a build host again"
             return f"{self.subject} {what} (was {self.reason}). Next: {self.next}"
         detail = f": {self.detail}" if self.detail else ""
         if self.event == "env-failed":
@@ -458,9 +516,16 @@ def _release_alarms(
     return []
 
 
-def observe(status: Mapping[str, Any], now: float, waiting: float) -> dict[str, Alarm]:
+def observe(
+    status: Mapping[str, Any],
+    now: float,
+    waiting: float,
+    fallback: tuple[int, float] | None = None,
+) -> dict[str, Alarm]:
     """The alarms whose condition holds in ``status`` (a GitOps status
-    document) at ``now``, by :attr:`Alarm.key`."""
+    document) at ``now``, by :attr:`Alarm.key`. ``fallback`` (0.75.0):
+    ``(builds, seconds)`` of ``builds-fallback``; ``None``: the status's
+    ``controller.alarms``, else :data:`FALLBACK_AFTER` and 6 hours."""
     found: list[Alarm] = []
     controller = _dict(status.get("controller"))
     repo = _dict(controller.get("composition_repo"))
@@ -481,7 +546,92 @@ def observe(status: Mapping[str, Any], now: float, waiting: float) -> dict[str, 
             found += _release_alarms(name, record, now, waiting)
     found += _host_version_alarms(controller)
     found += storage_alarms(_dict(controller.get("storage")))
+    found += host_block_alarms(controller)
+    found += fallback_alarms(controller, now, fallback or fallback_policy(controller))
     return {item.key: item for item in found}
+
+
+def host_block_alarms(controller: Mapping[str, Any]) -> list[Alarm]:
+    """0.75.0: a build host that claims no image build until ``piceli gitops
+    release-host``: its container engine is blocked
+    (``controller.engine_backoff``; a backoff alone is no alarm), or it
+    could not fetch a source (``controller.source_quarantine``)."""
+    found: list[Alarm] = []
+    engine = _dict(controller.get("engine_backoff"))
+    sources = _dict(controller.get("source_quarantine"))
+    for name in sorted({*engine, *sources}):
+        record = _dict(engine.get(name))
+        held = _dict(sources.get(name))
+        release = f"piceli gitops release-host {name}"
+        if record.get("state") == "blocked":
+            found.append(
+                Alarm(
+                    "build-host-blocked", str(name), "build-host-engine-failed",
+                    f"check the container engine on {name}, then {release}",
+                    fingerprint=f"engine:{record.get('since')}",
+                    since=record.get("since"),
+                    detail=f"build host {name} is blocked: its container engine "
+                    f"could not start {record.get('failures')} builds in a row "
+                    f"({record.get('reason')}); its image builds go elsewhere",
+                )
+            )  # fmt: skip
+        elif held:
+            source, item = next(iter(sorted(held.items())))
+            item = _dict(item)
+            found.append(
+                Alarm(
+                    "build-host-blocked", str(name), "build-host-source-failed",
+                    f"check that {name} can fetch {source}, then {release}",
+                    fingerprint=f"source:{','.join(sorted(held))}:{item.get('at')}",
+                    since=item.get("at"),
+                    detail=f"build host {name} could not fetch source {source} "
+                    f"({item.get('reason')}); it builds nothing that needs "
+                    + ", ".join(sorted(held))
+                    + (f" until {item.get('until')}" if item.get("until") else ""),
+                )
+            )  # fmt: skip
+    return found
+
+
+def fallback_policy(controller: Mapping[str, Any]) -> tuple[int, float]:
+    """``(builds, seconds)`` of ``builds-fallback`` from the controller's
+    status (``controller.alarms``, 0.75.0), else the defaults."""
+    declared = _dict(controller.get("alarms"))
+    after = declared.get("fallback_after")
+    seconds = declared.get("fallback_for_seconds")
+    return (
+        int(after) if isinstance(after, int) and after > 0 else FALLBACK_AFTER,
+        float(seconds) if isinstance(seconds, int | float) else 6 * 3600.0,
+    )
+
+
+def fallback_alarms(
+    controller: Mapping[str, Any], now: float, policy: tuple[int, float]
+) -> list[Alarm]:
+    """0.75.0: an environment whose image builds all went to the in-cluster
+    fallback: ``policy[0]`` in a row, or at least two over ``policy[1]``
+    seconds (``controller.builds_fallback``)."""
+    after, seconds = policy
+    found: list[Alarm] = []
+    for name, item in sorted(_dict(controller.get("builds_fallback")).items()):
+        item = _dict(item)
+        builds = int(item.get("builds") or 0)
+        began = _epoch(item.get("since"))
+        long = began is not None and builds >= 2 and now - began >= seconds
+        if builds < after and not long:
+            continue
+        found.append(
+            Alarm(
+                "builds-fallback", str(name), "build-host-fallback-only",
+                "piceli gitops hosts; piceli builder status",
+                fingerprint=str(item.get("since") or ""),
+                since=item.get("since"),
+                detail=f"the last {builds} image build(s) of {name} went to the "
+                f"in-cluster fallback since {item.get('since')}: no build host "
+                "built them",
+            )
+        )  # fmt: skip
+    return found
 
 
 def storage_alarms(storage: Mapping[str, Any]) -> list[Alarm]:
@@ -566,6 +716,7 @@ def changes(
     status: Mapping[str, Any],
     now: float,
     waiting: float,
+    fallback: tuple[int, float] | None = None,
 ) -> list[Alarm]:
     """The alarms to send now, updating ``memory`` (``{"open": {...},
     "version": ...}``, kept between polls and restarts).
@@ -576,7 +727,7 @@ def changes(
     A new controller version than the one remembered fires
     ``controller-restarted``.
     """
-    current = observe(status, now, waiting)
+    current = observe(status, now, waiting, fallback)
     opened: dict[str, Any] = _dict(memory.get("open"))
     out: list[Alarm] = []
     for key, alarm in current.items():
@@ -651,7 +802,10 @@ class AlarmSender:
         """Find and send this poll's alarms; returns them."""
         from piceli.train.notify import deliver_all
 
-        found = changes(memory, status, now, float(self.alarms.waiting_seconds))
+        found = changes(
+            memory, status, now, float(self.alarms.waiting_seconds),
+            self.alarms.fallback,
+        )  # fmt: skip
         composition = _dict(status.get("controller")).get("composition")
         failures = list(memory.get("failures") or ())
         for alarm in found:
@@ -688,6 +842,8 @@ def status_view(alarms: Alarms, memory: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "targets": [item.label() for item in alarms.targets],
         "waiting_after_seconds": alarms.waiting_seconds,
+        "fallback_after": alarms.fallback_after,  # 0.75.0
+        "fallback_for_seconds": alarms.fallback[1],
         "open": [
             {
                 "alarm": key,

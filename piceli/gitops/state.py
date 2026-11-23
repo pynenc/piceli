@@ -434,6 +434,7 @@ def build_failed_request(
     early: bool = False,
     source: str | None = None,
     stage: str | None = None,
+    cause: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """The wanted build ``build`` failed on ``host`` (its output's tail).
 
@@ -441,12 +442,15 @@ def build_failed_request(
     it cannot fetch, named by ``source``, or an engine that cannot start the
     build): the controller hands the build to another host or its fallback.
     0.41.0: ``stage``, the host's stage when it failed (``fetch``, ``build``,
-    ``push``)."""
+    ``push``). 0.75.0: ``cause`` of an early failure, ``engine`` or
+    ``source`` (a controller before 0.75.0 ignores it)."""
     extra: dict[str, Any] = {}
     if early:
         extra["early"] = True
         if source:
             extra["source"] = str(source)[:100]
+        if cause in ("engine", "source"):
+            extra["cause"] = cause
     if stage:
         extra["stage"] = str(stage)[:16]
     return request(
