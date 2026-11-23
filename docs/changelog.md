@@ -4,6 +4,10 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.76.0
+
+### Host builds send their step times (ops#97 follow-up)
+
 ## Version 0.75.0
 
 ### A container-engine failure does not block a host (ops#97)
