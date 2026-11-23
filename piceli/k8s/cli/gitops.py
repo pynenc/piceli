@@ -1693,7 +1693,8 @@ def builds(
     as_json: JsonOption = False,
 ) -> None:
     """List every build the controller knows (NixRelease publishes, image
-    builds, train handoffs): trigger, commit, host, stage, log tail, targets."""
+    builds, train handoffs): trigger, commit, host, stage, step times, log
+    tail, targets."""
     import time
 
     from piceli.infra import builds as projection
@@ -1733,9 +1734,24 @@ def builds(
                 if item.get("host_switch") == "not-switched-yet"
                 else ""
             )
+            + _commands_line(item.get("steps") or ())
         )
     if as_json:
         emit_json(document)
+
+
+def _commands_line(steps: Any) -> str:
+    """0.75.0: a build's command steps and their seconds, for ``gitops builds``."""
+    ran = [
+        step
+        for step in steps
+        if str(step.get("kind") or "").startswith(("command-", "shared-"))
+        and isinstance(step.get("seconds"), int | float)
+    ]
+    if not ran:
+        return ""
+    total = sum(float(step["seconds"]) for step in ran)
+    return f"; {len(ran)} command(s) in {total:.0f}s"
 
 
 HostArgument = Annotated[
@@ -1845,7 +1861,8 @@ def hosts(
     transport: TransportOption = "https",
     as_json: JsonOption = False,
 ) -> None:
-    """The health events and quarantine the controller recorded per build host."""
+    """The health events, quarantine, source blocks and container-engine
+    backoff the controller recorded per build host."""
     with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
         with _guard():
             document = channel.read_status() or {}
@@ -1853,6 +1870,10 @@ def hosts(
 
     controller = document.get("controller") or {}
     found = controller.get("build_health") or {}
+    # 0.75.0: sources a host could not fetch, and hosts whose container
+    # engine could not start a build (backed off or blocked).
+    sources = controller.get("source_quarantine") or {}
+    engine = controller.get("engine_backoff") or {}
     # 0.33.0: hosts that claim nothing until they run the controller's version.
     mismatched = version_mismatches(controller)
     for name, seen in mismatched.items():
@@ -1860,8 +1881,30 @@ def hosts(
             f"{name:<16} host  VERSION MISMATCH: piceli {seen}, the controller "
             f"{controller.get('version')}; it claims nothing until upgraded"
         )
-    if not found and not mismatched:
-        say("no health events recorded for any build host or builder node")
+    for name, item in sorted(engine.items()):
+        blocked = item.get("state") == "blocked"
+        say(
+            f"{name:<16} host  "
+            + (
+                "ENGINE BLOCKED"
+                if blocked
+                else f"engine backoff until {item.get('until')}"
+            )
+            + f": the container engine could not start {item.get('failures')} "
+            f"build(s) in a row since {item.get('since')} (last at {item.get('at')}: "
+            f"{item.get('reason')}); cause: container engine"
+            + (f" (piceli gitops release-host {name})" if blocked else "")
+        )
+    for name, held in sorted(sources.items()):
+        for source, item in sorted((held or {}).items()):
+            say(
+                f"{name:<16} host  SOURCE BLOCKED {source} since {item.get('at')}"
+                + (f" until {item.get('until')}" if item.get("until") else "")
+                + f": {item.get('reason')}; cause: source "
+                f"(piceli gitops release-host {name})"
+            )
+    if not found and not mismatched and not sources and not engine:
+        say("no health events or blocks recorded for any build host or builder node")
     for name, entry in sorted(found.items()):
         line = f"{name:<16} {entry.get('kind') or '?':<5} "
         if entry.get("quarantined"):
@@ -1879,6 +1922,8 @@ def hosts(
                 "hosts": found,
                 "controller_version": controller.get("version"),
                 "version_mismatch": mismatched,
+                "source_quarantine": sources,  # 0.75.0
+                "engine_backoff": engine,  # 0.75.0
             }
         )
 

@@ -651,6 +651,34 @@ and its `builder serve` skips them and says why. The quarantine lasts until
 by HOST (reason)`). A failure after the build started (a compiler error)
 still fails the step, as before.
 
+(build-host-engine-backoff)=
+**A container-engine failure backs the host off (0.75.0).** The early
+answer names its cause: `source` (a source it could not fetch) or `engine`
+(`docker run` exited 125: the engine could not start the build container,
+for example a runtime hook error). A one-off engine failure says nothing
+about any source, so:
+
+- the build is handed over as above, but **no source is quarantined**;
+- the host is **backed off**: it claims no image build for 5 minutes, then
+  10, then 20 at each next engine failure in a row (at most 1 hour);
+- after **3 engine failures in a row** it is **blocked** until `piceli
+  gitops release-host HOST`, and the `build-host-blocked` alarm fires;
+- its next build that starts (built, or failed after its first command)
+  clears the count.
+
+A source quarantine now ends after **24 hours** (`until` in
+`controller.source_quarantine`): the host then tries the source again, and
+a source still unreachable is handed over again. An older builder sends no
+cause: an early failure that names a source counts as `source`, one that
+names none as `engine`. A builder at 0.75.0 under an older controller is
+quarantined for every source, as before.
+
+`piceli gitops hosts` lists each source block and engine backoff or block
+with its reason, cause and times (`source_quarantine` and `engine_backoff`
+in `--json`; `controller.engine_backoff` in the status). Before 0.75.0 it
+showed only health events, so a host blocked for a source showed `0 recent
+health event(s)`.
+
 **No wait for hosts that cannot build (0.71.0).** The fallback no longer
 waits `host_wait` when no declared host can take the build:
 
@@ -1164,7 +1192,7 @@ prints `piceli.builds.v1`, the document the UI's Builds page shows:
   "stages": [{"stage": "approval-required", "started_at": "…", "finished_at": "…", "seconds": 40.0},
              {"stage": "queued", "…": "…"}, {"stage": "fetching-inputs", "…": "…"},
              {"stage": "building", "…": "…"}, {"stage": "uploading", "…": "…"}],
-  "log_tail": null, "requested_at": "…", "started_at": "…", "finished_at": "…",
+  "steps": [], "log_tail": null, "log_complete": false, "requested_at": "…", "started_at": "…", "finished_at": "…",
   "seconds": 312.4, "plan_digest": "sha256:…", "reason": null, "images": [],
   "digests": {}, "running_on": ["web-1"], "host_switch": "switched",
   "actions": {"approve": false, "retry": true, "cancel": false}}]}
@@ -1185,6 +1213,27 @@ yet"); it is `null` for other builds. `digests` (0.74.0) gives each image
 an environment build made: its `digest` and, for an image built for
 several platforms, the OCI index's `media_type` and `platforms` (each
 platform's manifest digest; see {ref}`pipeline-declared-platforms`).
+
+`steps` (0.75.0) lists each step of an environment image build that ran
+in the cluster (the in-cluster fallback), with its seconds, in the shape
+of a host build's receipt:
+
+```json
+"steps": [
+  {"platform": "any", "kind": "shared-1", "tool": "sh", "state": "succeeded", "exit_code": 0, "seconds": 2.5},
+  {"platform": "linux/amd64", "kind": "command-1", "tool": "cargo", "state": "succeeded", "exit_code": 0, "seconds": 301.2},
+  {"platform": "linux/amd64", "kind": "image-api", "state": "succeeded", "seconds": 4.1}
+]
+```
+
+`kind` is `command-N` (the spec's Nth command on that platform), `shared-N`
+(a shared command, run once, platform `any`), `toolchains`, `files-NAME`
+or `image-NAME` (assembling an output). Sum the `command-` and `shared-`
+seconds for the time the commands took. A failed build keeps the steps
+that ran, the failing one last, and the end of its log in `log_tail`
+(the CLI line ends with "N command(s) in Ss"). A build Job's steps need a
+0.75.0 controller and builder image; with an older builder image a passed
+build shows only its first platform's commands, a failed one none.
 
 While a build host builds, it reports its stage and the last 4000
 characters of its log (`build-progress`, at each stage and at most every
@@ -1676,6 +1725,8 @@ controller = Controller(
         ],
         secret="piceli-alarms",  # holds ALARM_WEBHOOK_URL
         waiting_after="10m",
+        fallback_after=3,  # 0.75.0: builds in a row in the cluster (builds-fallback)
+        fallback_for="6h",
     ),
 )
 ```
@@ -1699,6 +1750,8 @@ After every poll the controller sends an alarm when:
 | `build-host-version` | a build host runs another Piceli version than the controller | `install piceli VERSION on HOST ...` |
 | `node-disk-pressure` (0.35.0) | a node of the cluster reports `DiskPressure`: pods are evicted and nothing new starts there | `piceli dev cache clear; piceli gitops cache clear` |
 | `cache-over-budget` (0.35.0) | a build cache is still over its budget after eviction, or its disk is nearly full (below) | `piceli dev cache clear` or `piceli gitops cache clear` |
+| `build-host-blocked` (0.75.0) | a build host claims no image build until `release-host`: its container engine failed 3 builds in a row (`build-host-engine-failed`), or it could not fetch a source (`build-host-source-failed`); see {ref}`engine backoff <build-host-engine-backoff>` | `check ... on HOST, then piceli gitops release-host HOST` |
+| `builds-fallback` (0.75.0) | `fallback_after` (3) image builds in a row of an environment went to the in-cluster fallback, or at least two did over `fallback_for` (`6h`): no build host built them (`build-host-fallback-only`) | `piceli gitops hosts; piceli builder status` |
 
 Each message is short and names the environment or host, the reason code
 and the next command:

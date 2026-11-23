@@ -64,7 +64,10 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`blob-source-truncated`](#error-blob-source-truncated) | artifacts-registry | yes |
 | [`build-builder-mismatch`](#error-build-builder-mismatch) | host-build | no |
 | [`build-failed`](#error-build-failed) | build-spec | no |
+| [`build-host-engine-failed`](#error-build-host-engine-failed) | composition | yes |
+| [`build-host-fallback-only`](#error-build-host-fallback-only) | composition | yes |
 | [`build-host-quarantined`](#error-build-host-quarantined) | composition | yes |
+| [`build-host-source-failed`](#error-build-host-source-failed) | composition | yes |
 | [`build-platforms-invalid`](#error-build-platforms-invalid) | host-build | no |
 | [`build-timed-out`](#error-build-timed-out) | build-spec | yes |
 | [`builder-not-approved`](#error-builder-not-approved) | build-spec | no |
@@ -6279,12 +6282,36 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 ## Compositions: sources, component contracts (`piceli.toml`) and change-aware builds (`piceli.infra`, `piceli gitops enable infra.py`)
 
+(error-build-host-engine-failed)=
+### `build-host-engine-failed`
+
+**Build host's container engine could not start builds.** A build host's container engine could not start the build container (0.75.0; `docker run` exited 125, for example a runtime hook error). The host hands the build to another host or the in-cluster fallback and is backed off: 5 minutes, then twice as long at each next failure in a row. After 3 in a row it is blocked and claims no image build; its next build that starts clears the count. `piceli gitops hosts` shows the backoff or block, and `piceli gitops alarms` raises `build-host-blocked`.
+
+- **Fix:** Check the container engine on the host (`docker run --rm hello-world`, the engine's log), then `piceli gitops release-host HOST`.
+- **Retry-safe:** yes
+
+(error-build-host-fallback-only)=
+### `build-host-fallback-only`
+
+**Every image build went to the in-cluster fallback.** The last image builds of an environment all went to the in-cluster fallback (0.75.0, `Alarms(fallback_after=3, fallback_for="6h")`): no build host built them. The hosts may be offline, blocked or on another Piceli version.
+
+- **Fix:** Run `piceli gitops hosts` and `piceli builder status` to see why the hosts do not build, fix it, and the alarm resolves with the next build a host delivers.
+- **Retry-safe:** yes
+
 (error-build-host-quarantined)=
 ### `build-host-quarantined`
 
 **Builder node quarantined.** The GitOps controller builds nothing on its cluster builder node: the node is quarantined (0.22.0) after repeated machine-health signs in failed builds (an internal compiler error, a segfault, an illegal instruction, a machine check). The message names the node, the events and since when.
 
 - **Fix:** Check the node's hardware (memory test, `dmesg` for machine checks), or build on hosts (`Controller(builds=("hosts", ...))`). `piceli gitops release-host NODE` ends the quarantine; `piceli gitops suspects --host NODE` lists the images it built.
+- **Retry-safe:** yes
+
+(error-build-host-source-failed)=
+### `build-host-source-failed`
+
+**Build host could not fetch a source.** A build host could not fetch a source of a build before its first command (0.29.0): it hands the build over and claims no build that needs that source. 0.75.0: the block ends after 24 hours, when the host tries the source again; `piceli gitops hosts` shows it, and `piceli gitops alarms` raises `build-host-blocked`.
+
+- **Fix:** Check that the host reaches the source's repository (its URL, its credentials, its local mirror), then `piceli gitops release-host HOST`.
 - **Retry-safe:** yes
 
 (error-component-build-failed)=

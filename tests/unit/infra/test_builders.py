@@ -436,3 +436,85 @@ def test_earlier_failed_jobs_go_only_after_a_build_succeeds() -> None:
     probe = Probe("failed")
     probe.run_build({}, {"k": "v"})  # the single-repo controller: as before
     assert probe.calls == ["remove_kept", "run"]
+
+
+def _spec_settings() -> JobSettings:
+    return JobSettings(
+        image="registry.example/builder@sha256:" + "f" * 64,
+        namespace="piceli-system",
+        registry_url="oci://registry:5000",
+        node_registry="registry:5000",
+    )
+
+
+def _spec_receipt(**extra: Any) -> dict[str, Any]:
+    return {
+        "images": {
+            "api": {
+                "pull_ref": "registry:5000/example/api@sha256:" + "2" * 64,
+                "manifest_digest": "sha256:" + "2" * 64,
+                "key": "sha256:" + "1" * 64,
+                "timings": {"commands_seconds": 7.5},
+            }
+        },
+        **extra,
+    }
+
+
+def test_an_image_build_jobs_steps_reach_the_builder() -> None:
+    """0.75.0: each command's seconds, as a host build's receipt lists them."""
+    steps = [
+        {"platform": "any", "kind": "shared-1", "tool": "sh", "state": "succeeded",
+         "exit_code": 0, "seconds": 2.5},
+        {"platform": "linux/amd64", "kind": "command-1", "tool": "cargo",
+         "state": "succeeded", "exit_code": 0, "seconds": 5.0},
+    ]  # fmt: skip
+    builder = JobBuilder(
+        _spec_settings(), {}, _Cluster(_spec_receipt(steps=steps)), mirror_route=None
+    )
+    builder.build_spec(_spec_request(), checkout=None)  # type: ignore[arg-type]
+    assert builder.steps == {"api": steps}
+    # An older builder image prints no steps: its commands stand in.
+    older = _spec_receipt(
+        commands=[{"index": 1, "tool": "cargo", "seconds": 5.0, "state": "succeeded"}],
+        shared_commands=[
+            {"index": 1, "tool": "sh", "seconds": 2.5, "state": "succeeded"}
+        ],
+    )
+    builder = JobBuilder(_spec_settings(), {}, _Cluster(older), mirror_route=None)
+    builder.build_spec(_spec_request(), checkout=None)  # type: ignore[arg-type]
+    assert builder.steps == {
+        "api": [{key: value for key, value in step.items() if key != "exit_code"}
+                for step in steps]
+    }  # fmt: skip
+
+
+def test_a_failed_image_build_job_keeps_the_steps_that_ran() -> None:
+    ran = [
+        {"platform": "linux/amd64", "kind": "command-1", "tool": "cargo",
+         "state": "failed", "exit_code": 101, "seconds": 41.0},
+    ]  # fmt: skip
+
+    class Failed:
+        state = "failed"
+        extra: dict[str, Any] = {}
+
+        def public(self) -> dict[str, Any]:
+            return {"state": "failed", "log_tail": "error[E0308]"}
+
+    class Cluster(_Cluster):
+        def run_job(self, job: dict[str, Any]) -> Any:
+            self.jobs.append(job)
+            return Failed()
+
+    cluster = Cluster({"state": "failed", "steps": ran})
+    builder = JobBuilder(_spec_settings(), {}, cluster, mirror_route=None)
+    with pytest.raises(CompositionError) as raised:
+        builder.build_spec(_spec_request(), checkout=None)  # type: ignore[arg-type]
+    assert raised.value.steps == ran  # type: ignore[attr-defined]
+    assert builder.steps == {}
+    # A Job that printed no such line (an older builder image): no steps.
+    cluster.receipt_text = None
+    with pytest.raises(CompositionError) as raised:
+        builder.build_spec(_spec_request(), checkout=None)  # type: ignore[arg-type]
+    assert not hasattr(raised.value, "steps")

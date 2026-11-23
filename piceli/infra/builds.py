@@ -397,7 +397,8 @@ def _record(**fields: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "id": None, "kind": None, "target": None, "trigger": _trigger(None),
         "commit": None, "tag": None, "branch": None, "host": None,
-        "stage": "queued", "stages": [], "log_tail": None, "log_complete": False,
+        "stage": "queued", "stages": [], "steps": [], "log_tail": None,
+        "log_complete": False,
         "requested_at": None, "started_at": None, "finished_at": None,
         "seconds": None, "plan_digest": None, "plan": None, "reason": None,
         "images": [], "digests": {}, "running_on": [], "host_switch": None,
@@ -615,6 +616,14 @@ def _image_records(
             run = _dict(run)
             builds = _dict(run.get("builds"))
             built = [str(item) for item in run.get("built") or () if item != "mirror"]
+            # 0.75.0: a build that failed made no image, and is a record too.
+            built += sorted(
+                str(key)
+                for key, item in builds.items()
+                if key != "mirror"
+                and key not in built
+                and _dict(item).get("state") == "failed"
+            )
             if not built or not builds:
                 continue
             times = [_dict(builds.get(item)) for item in built if builds.get(item)]
@@ -648,6 +657,10 @@ def _image_records(
                     commit=commits[0] if commits else None,
                     host=", ".join(hosts) or None,
                     stage="failed" if failed else "published",
+                    steps=_run_steps(builds, built),
+                    log_tail=_text(_dict(run.get("failure")).get("log_tail"), 8000)
+                    if failed
+                    else None,
                     stages=[
                         {
                             "stage": "building",
@@ -666,6 +679,19 @@ def _image_records(
                     actions={"approve": False, "retry": True, "cancel": False},
                 )
             )
+    return found
+
+
+def _run_steps(builds: Mapping[str, Any], built: Sequence[str]) -> list[dict[str, Any]]:
+    """0.75.0: the steps of a run's builds (each command's ``seconds``), as
+    a host build's receipt lists them: ``platform``, ``kind``
+    (``command-N``, ``shared-N``, ``image-NAME``, ...), ``tool``, ``state``,
+    ``exit_code``. One build Job's steps are on its first image."""
+    found: list[dict[str, Any]] = []
+    for name in built:
+        for step in _dict(builds.get(name)).get("steps") or ():
+            if isinstance(step, Mapping):
+                found.append(dict(step))
     return found
 
 

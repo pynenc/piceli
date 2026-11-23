@@ -17,8 +17,10 @@ stderr. Importing this module is side-effect free.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -299,10 +301,12 @@ def job_run(
             )
         except BuildSpecError as error:
             _say_tail(error)
-            reject(error.code, str(error))
+            with _failed_receipt(error):
+                reject(error.code, str(error))
         except PipelineError as error:
             _say_tail(error)
-            reject(error.code, str(error), exit_code=EXIT_FAILED)
+            with _failed_receipt(error):
+                reject(error.code, str(error), exit_code=EXIT_FAILED)
         sys.stdout.write("\n" + encode_receipt(_with_fetch(receipt, budget)) + "\n")
         sys.stdout.flush()
         return
@@ -366,6 +370,25 @@ def job_run(
         reject(error.code, str(error), exit_code=EXIT_FAILED)
     sys.stdout.write("\n" + encode_receipt(_with_fetch(receipt, budget)) + "\n")
     sys.stdout.flush()
+
+
+@contextlib.contextmanager
+def _failed_receipt(error: Exception) -> Iterator[None]:
+    """0.75.0: after a failed build's rejection, its steps as the Job's last
+    line (a receipt with ``state`` ``failed``), so the controller keeps the
+    times of the steps that ran (``piceli gitops builds``)."""
+    try:
+        yield
+    finally:
+        steps = [dict(item) for item in getattr(error, "steps", None) or ()]
+        if steps:
+            import sys
+
+            from piceli.artifacts.cluster_build import encode_receipt
+
+            receipt = {"state": "failed", "steps": steps}
+            sys.stdout.write("\n" + encode_receipt(receipt) + "\n")
+            sys.stdout.flush()
 
 
 def _say_tail(error: Exception) -> None:

@@ -250,6 +250,8 @@ class LocalBuilder:
         self.work_dir = work_dir
         self.backend = backend
         self.say = say
+        #: 0.75.0: the steps of the last spec build, by its first image.
+        self.steps: dict[str, list[dict[str, Any]]] = {}
 
     @property
     def platform(self) -> str:
@@ -390,6 +392,9 @@ class LocalBuilder:
                 say=self.say,
                 index=self._index if len(platforms) > 1 else None,
             )
+        # 0.75.0: the steps, as a build Job's (JobBuilder.steps).
+        ran = receipt_steps(receipt, platforms[0] if platforms else "linux/amd64")
+        self.steps = {sorted(request.images)[0]: ran} if ran and request.images else {}
         return {
             name: BuiltImage(
                 str(entry["pull_ref"]),
@@ -1061,6 +1066,51 @@ def job_run_spec(
     return receipt
 
 
+def receipt_steps(receipt: Mapping[str, Any], platform: str) -> list[dict[str, Any]]:
+    """A spec build receipt's steps (0.75.0), as a host build's receipt lists
+    them: ``platform``, ``kind`` (``command-N``, ``shared-N``, ``image-NAME``,
+    ...), ``tool``, ``state``, ``exit_code`` and ``seconds``.
+
+    A receipt from an older builder image has no ``steps``: its
+    ``shared_commands`` and ``commands`` (``platform``'s, the first) stand
+    in."""
+    found = receipt.get("steps")
+    if isinstance(found, list):
+        return [dict(item) for item in found if isinstance(item, Mapping)]
+    steps = []
+    for key, kind, where in (
+        ("shared_commands", "shared", "any"),
+        ("commands", "command", platform),
+    ):
+        for item in receipt.get(key) or ():
+            if isinstance(item, Mapping) and isinstance(item.get("index"), int):
+                steps.append(
+                    {
+                        "platform": where,
+                        "kind": f"{kind}-{item['index']}",
+                        "tool": item.get("tool"),
+                        "state": item.get("state"),
+                        "seconds": item.get("seconds"),
+                    }
+                )
+    return steps
+
+
+def _failed_steps(text: str | None) -> list[dict[str, Any]]:
+    """The steps of a failed build Job's last line (``state`` ``failed``)."""
+    from piceli.artifacts.cluster_build import decode_receipt
+
+    if not text:
+        return []
+    try:
+        receipt = decode_receipt(text)
+    except (ValueError, OSError, EOFError):
+        return []
+    if receipt.get("state") != "failed":
+        return []
+    return receipt_steps({"steps": receipt.get("steps") or []}, "")
+
+
 def _job_times(
     began: str, seconds: float, cluster: Any, fetch: Any
 ) -> dict[str, float]:
@@ -1121,6 +1171,9 @@ class JobBuilder:
         self.attempt = 1
         #: Each image's ``timings`` from the last :meth:`build_spec` (0.17.0).
         self.timings: dict[str, dict[str, float]] = {}
+        #: 0.75.0: the steps of the last spec build Job (its receipt's
+        #: ``steps``), by its first image; the controller takes them.
+        self.steps: dict[str, list[dict[str, Any]]] = {}
         #: 0.35.0: the last build Job's cache budget check (its receipt's
         #: ``cache``, with the claim); the controller publishes it.
         self.cache_report: dict[str, Any] | None = None
@@ -1309,8 +1362,14 @@ class JobBuilder:
     ) -> dict[str, BuiltImage]:
         from piceli.artifacts.cluster_build import decode_receipt
 
+        self.steps = {}
         if outcome.state != "passed" or self.cluster.receipt_text is None:
-            raise _job_failed(outcome, "image" if kind == "spec" else "component")
+            failed = _job_failed(outcome, "image" if kind == "spec" else "component")
+            # 0.75.0: a failed build's last line lists the steps that ran.
+            ran = _failed_steps(self.cluster.receipt_text)
+            if ran:
+                failed.steps = ran  # type: ignore[attr-defined]
+            raise failed
         try:
             receipt = decode_receipt(self.cluster.receipt_text)
             self._keep_cache_report(receipt)
@@ -1348,6 +1407,10 @@ class JobBuilder:
             for name, entry in found.items()
             if isinstance(entry, Mapping) and isinstance(entry.get("timings"), Mapping)
         }
+        platforms = tuple(getattr(work, "platforms", None) or self.settings.platforms)
+        ran = receipt_steps(receipt, platforms[0] if platforms else "linux/amd64")
+        if ran and work.images:
+            self.steps = {sorted(work.images)[0]: ran}
         for name, wanted in work.images.items():
             entry = found.get(name)
             if not isinstance(entry, Mapping) or entry.get("key") != wanted["key"]:

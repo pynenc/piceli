@@ -1890,20 +1890,25 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "gitops-request-invalid in gitops status.",
         ),
         "gitops hosts": _C(
-            "Show the health events and quarantine the GitOps controller "
-            "recorded for its build hosts and builder node.",
+            "Show the health events, quarantine, source blocks and "
+            "container-engine backoff the GitOps controller recorded for its "
+            "build hosts and builder node.",
             reads=("kubeconfig or --state-dir", "the controller's status"),
             cluster="reads",
             contract="conforms",
             exit_codes=(0, 2),
-            notes="0.22.0. Read-only (controller.build_health in gitops status).",
+            notes="0.22.0. Read-only (controller.build_health in gitops status). "
+            "0.75.0: also each source block (controller.source_quarantine, with "
+            "its end) and container-engine backoff or block "
+            "(controller.engine_backoff), with reason, cause and times; --json "
+            "adds source_quarantine and engine_backoff.",
         ),
         "gitops alarms": _C(
             "Show the GitOps controller's alarms (failed or waiting "
             "environments, failed or waiting NixReleases, a composition that "
-            "does not import, a new controller version) and the alarms it "
-            "could not send; --follow raises each new one as a desktop "
-            "notification.",
+            "does not import, a new controller version, a blocked build host, "
+            "image builds only in the cluster) and the alarms it could not "
+            "send; --follow raises each new one as a desktop notification.",
             reads=("kubeconfig or --state-dir", "the controller's status"),
             cluster="reads",
             contract="conforms",
@@ -1917,7 +1922,8 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         ),
         "gitops release-host": _C(
             "Ask the GitOps controller to forget a build host's or the builder "
-            "node's health events, ending its quarantine.",
+            "node's health events, ending its quarantine (0.75.0: and its "
+            "source blocks and container-engine failures).",
             reads=("kubeconfig or --state-dir",),
             writes=("--state-dir requests (local controller)",),
             cluster="writes",
@@ -2197,7 +2203,9 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "engine that cannot start the build) answers build-failed with "
             "early: the controller hands the build to another host or the "
             "in-cluster fallback and quarantines this host for that source until "
-            "gitops release-host. --once --take-next stands by (build-standby) "
+            "gitops release-host (0.75.0: for 24 hours at most; an engine "
+            "failure, cause engine, quarantines no source but backs the host off "
+            "5 minutes, doubling, and blocks it after 3 in a row). --once --take-next stands by (build-standby) "
             "for the next build it may take, claims it before the fallback and "
             "exits (--timeout seconds, default 1800). --args-file PATH adds the "
             "arguments in PATH (one per line, # comments) at start. 0.33.0: it "

@@ -903,10 +903,22 @@ def _build_hosts(state: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     return public_hosts(state)
 
 
-def _source_quarantine(state: Mapping[str, Any]) -> dict[str, Any]:
+def _source_quarantine(state: Mapping[str, Any], now: float) -> dict[str, Any]:
     from piceli.infra.remote_builds import public_source_quarantine
 
-    return public_source_quarantine(state)
+    return public_source_quarantine(state, now)
+
+
+def _engine_backoff(state: Mapping[str, Any], now: float) -> dict[str, Any]:
+    from piceli.infra.remote_builds import public_engine
+
+    return public_engine(state, now)
+
+
+def _builds_fallback(state: Mapping[str, Any]) -> dict[str, Any]:
+    from piceli.infra.remote_builds import public_fallbacks
+
+    return public_fallbacks(state)
 
 
 def _standby(state: Mapping[str, Any], now: float) -> dict[str, Any]:
@@ -1733,6 +1745,8 @@ class CompositionController:
         )
         images = remote_builds.delivered(self.state, body, self._in_registry)
         host = str(body.get("host"))
+        # 0.75.0: its engine works; the environment's fallback run ends.
+        remote_builds.host_delivered(self.state, host, asked.get("owner"))
         receipt = body.get("receipt")
         receipt = receipt if isinstance(receipt, Mapping) else {}
         self._host_build_times(asked, receipt, host)
@@ -1927,10 +1941,23 @@ class CompositionController:
 
                     self._refuse_undeclared(body)
                     if remote_builds.failed(self.state, body, self.clock()):
+                        cause = remote_builds.early_cause(body)
                         self.log(
                             f"build host {body.get('host')}: handed build "
-                            f"{body.get('id')} over before it ran: {body.get('reason')}"
+                            f"{body.get('id')} over before it ran "
+                            f"({'container engine' if cause == 'engine' else 'source'}): "
+                            f"{body.get('reason')}"
                         )
+                        held = remote_builds.engine_hold(
+                            self.state, str(body.get("host") or "?")[:64], self.clock()
+                        )
+                        if cause == "engine" and held is not None:
+                            self.log(
+                                "build health: "
+                                + remote_builds.describe_engine(
+                                    str(body.get("host")), held
+                                )
+                            )
                     self._build_failed_health(body)
                     self._wake_waiting()
                 elif kind == "build-standby":  # 0.29.0: builder serve --take-next
@@ -3054,12 +3081,14 @@ class CompositionController:
                     self._remember(image_name, wanted["key"], built[image_name])
                     images[image_name] = built[image_name]
                 self._build_times(name, sorted(request.images))
+                self._build_steps(sorted(request.images))
         except BuildPending:
             raise  # a build host builds them: not failed (see _step)
         except Exception as error:
             for entry in components.values():
                 if entry["state"] == "building":
                     entry["state"] = "failed"
+            self._build_steps([], error)
             self._job_failure_health(error)
             raise
         (self.state.get("rebuild") or {}).pop(name, None)
@@ -3157,6 +3186,30 @@ class CompositionController:
                     pass
 
         return seen
+
+    def _build_steps(self, names: list[str], error: Any = None) -> None:
+        """0.75.0: a build's steps (each command's seconds, as a host build's
+        receipt lists them) on its first image's ``builds`` entry: the
+        builder's for ``names``, or those a failed build's ``error`` carries
+        on its first failed image. ``piceli gitops builds`` shows them."""
+        if error is not None:
+            ran = getattr(error, "steps", None)
+            names = sorted(
+                key
+                for key, item in self._builds.items()
+                if key != "mirror" and item.get("state") == "failed"
+            )[:1]
+            found = {names[0]: list(ran)} if names and ran else {}
+        else:
+            found = getattr(self.ports.builder, "steps", None)
+        if not isinstance(found, dict):
+            return
+        for name in names:
+            steps = found.pop(name, None)
+            if isinstance(steps, list) and steps and name in self._builds:
+                self._builds[name]["steps"] = [
+                    dict(item) for item in steps if isinstance(item, Mapping)
+                ]
 
     def _build_times(self, env: str, names: list[str]) -> None:
         """Each image's timings from the builder (0.17.0), in ``builds`` and the log.
@@ -4774,7 +4827,21 @@ class CompositionController:
                 ),
                 **(
                     {"source_quarantine": blocked}
-                    if (blocked := _source_quarantine(self.state))
+                    if (blocked := _source_quarantine(self.state, self.clock()))
+                    else {}
+                ),
+                # Added in 0.75.0: the hosts whose container engine could not
+                # start a build (backed off, or blocked until release-host),
+                # and the environments whose image builds went to the
+                # in-cluster fallback in a row.
+                **(
+                    {"engine_backoff": engine}
+                    if (engine := _engine_backoff(self.state, self.clock()))
+                    else {}
+                ),
+                **(
+                    {"builds_fallback": fallbacks}
+                    if (fallbacks := _builds_fallback(self.state))
                     else {}
                 ),
                 **(

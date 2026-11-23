@@ -153,7 +153,39 @@ def _builds(value: Any) -> dict[str, dict[str, Any]]:
             found[name]["shared_with"] = [
                 str(item) for item in entry.get("shared_with") or () if _text(item, 80)
             ][:20]
+        steps = _steps(entry.get("steps"))
+        if steps:  # 0.75.0: each step's seconds (a spec build's first image)
+            found[name]["steps"] = steps
     return found
+
+
+#: Steps kept per build (0.75.0).
+MAX_STEPS = 64
+
+
+def _steps(value: Any) -> list[dict[str, Any]]:
+    """A build's steps (0.75.0), bounded: ``platform``, ``kind``, ``tool``,
+    ``state``, ``exit_code`` and ``seconds``, as a host build's receipt."""
+    found = []
+    for item in value if isinstance(value, list | tuple) else ():
+        if not isinstance(item, Mapping) or not _text(item.get("kind"), 64):
+            continue
+        seconds = item.get("seconds")
+        step: dict[str, Any] = {
+            "platform": _text(item.get("platform"), 32),
+            "kind": _text(item.get("kind"), 64),
+            "state": _text(item.get("state"), 32),
+            "seconds": round(float(seconds), 3)
+            if isinstance(seconds, int | float) and not isinstance(seconds, bool)
+            else None,
+        }
+        if _text(item.get("tool"), 64):
+            step["tool"] = _text(item.get("tool"), 64)
+        code = item.get("exit_code")
+        if isinstance(code, int) and not isinstance(code, bool):
+            step["exit_code"] = code
+        found.append(step)
+    return found[:MAX_STEPS]
 
 
 _TIMINGS = (
