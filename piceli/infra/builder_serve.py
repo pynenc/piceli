@@ -352,6 +352,67 @@ def export_source(
     return {"mirror": mirror.name, "error": found}
 
 
+def checkout_problem(checkout: Path, commit: str, name: str) -> str | None:
+    """Why the build would not verify ``checkout`` as source ``name`` at
+    ``commit`` (0.79.0), the way it does inside the build: Git must name its
+    commit, and its tree must be clean. ``None`` when it would pass.
+
+    The text names the source and the failed check, redacted and bounded.
+    """
+    from piceli.artifacts.source_identity import (
+        SourceIdentityError,
+        capture_source_identity,
+    )
+    from piceli.k8s.ops.diagnosis import redact
+
+    try:
+        identity = capture_source_identity(checkout, name=name)
+    except (SourceIdentityError, OSError) as error:
+        return redact(str(error), limit=400)
+    if identity.commit != commit:
+        return f"source {name!r} is at {identity.commit[:12]}, not {commit[:12]}"
+    if identity.dirty:
+        return f"source {name!r} has {identity.changed_paths} changed path(s)"
+    return None
+
+
+def export_verified(
+    url: str,
+    commit: str,
+    into: Path,
+    mirrors: Path,
+    name: str,
+    run: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
+) -> tuple[dict[str, str] | None, str | None]:
+    """:func:`export_source`, then the build's own check of the checkout
+    (:func:`checkout_problem`) (0.79.0).
+
+    A checkout the build would refuse (``source-identity``) is a stale or
+    damaged state ``export_source`` did not see: the checkout is removed and
+    fetched again, then the mirror too. Returns the repair (``{"mirror",
+    "error"}``, the first problem found, plus ``"check": "identity"`` when
+    this check made it; ``None`` when none was needed) and
+    the problem that remains after the last attempt (``None`` when the
+    checkout passes), which the builder says in its log.
+    """
+    repaired = export_source(url, commit, into, mirrors, run)
+    problem = checkout_problem(into, commit, name)
+    if problem is None:
+        return repaired, None
+    mirror = mirrors / f"{_slug(url)}.git"
+    first = problem
+    for clear in ((into,), (into, mirror)):
+        for path in clear:
+            shutil.rmtree(path, ignore_errors=True)
+        _export(url, commit, into, mirror, run)
+        problem = checkout_problem(into, commit, name)
+        if problem is None:
+            break
+    return repaired or {"mirror": mirror.name, "error": first, "check": "identity"}, (
+        problem
+    )
+
+
 def _export(
     url: str,
     commit: str,
@@ -1276,8 +1337,8 @@ class BuilderServe:
                 self.say(f"builder: source {name} at {commit[:12]}")
                 checkout = self.root / "checkouts" / f"{name}-{_slug(url)}"
                 try:
-                    repaired = export_source(
-                        url, commit, checkout, self.root / "git", self.git
+                    repaired, problem = export_verified(
+                        url, commit, checkout, self.root / "git", name, self.git
                     )
                 except BuildFailed as error:  # 0.29.0: before the first command
                     raise BuildFailed(
@@ -1285,9 +1346,20 @@ class BuilderServe:
                     ) from None
                 if repaired is not None:
                     self.repaired[name] = repaired
+                    what = (
+                        f"source {name} did not verify on the host"
+                        if repaired.get("check") == "identity"
+                        else f"the mirror of source {name} was corrupt"
+                    )
+                    said = f"builder: {what} ({repaired['error']}); re-cloned it"
+                    tail.append(said)
+                    self.say(said)
+                if problem is not None:
+                    # 0.79.0: still refused after a fresh clone; the build
+                    # decides, and its log already says why.
                     said = (
-                        f"builder: the mirror of source {name} was corrupt "
-                        f"({repaired['error']}); re-cloned it"
+                        f"builder: source {name} does not verify on the host "
+                        f"({problem})"
                     )
                     tail.append(said)
                     self.say(said)

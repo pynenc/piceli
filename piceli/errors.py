@@ -955,7 +955,8 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "source-drift",
         "Source changed",
         "A declared source differs from its lock, or changed during the build. "
-        "Drift is currently checked over the whole repository, not only the build context.",
+        "Drift is currently checked over the whole repository, not only the build context. "
+        "A host or Job build names the source, the field, and both values after the code (0.79.0).",
         "Commit or stash the changes and record a new lock with `piceli inputs record`.",
         False,
         "build-spec",
@@ -963,8 +964,10 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "source-identity",
         "Source identity unavailable",
-        "A declared source could not be identified with git (not a work tree, git failed).",
-        "Run `piceli inputs record --spec inputs.toml` to see which source fails.",
+        "A declared source could not be identified with git (not a work tree, git failed). "
+        "A host or Job build names the source and the failed check after the code in its "
+        "log and in `piceli gitops builds` (0.79.0).",
+        "Read the reason after the code, or run `piceli inputs record --spec inputs.toml` to see which source fails.",
         False,
         "build-spec",
     ),

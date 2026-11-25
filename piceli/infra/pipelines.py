@@ -665,16 +665,12 @@ def run_spec_build(
                 build_start=build_start,
             ).to_dict()
         except BuildSpecError as error:
-            from piceli.infra.builders import build_failed
+            from piceli.infra.builders import build_failed, refusal_detail
 
             # 0.26.3: a context error names the context and its path (in the
             # Job: /work/src/<source>/...); the code alone said too little.
-            detail = (
-                f": {error}"
-                if error.code.startswith("context-")
-                or error.code == "host-build-path-not-staged"
-                else ""
-            )
+            # 0.79.0: a source refusal names the source and the failed check.
+            detail = refusal_detail(error)
             failed = build_failed(
                 f"build {request.spec}: host build failed ({error.code}){detail}",
                 error,

@@ -710,6 +710,18 @@ scratch, in the same build. It says `the mirror of source NAME was corrupt
 A second failure is handed over as above. A network or credential failure
 never removes the mirror.
 
+**A checkout the build would refuse is cloned again (0.79.0).** After each
+checkout, `builder serve` runs the check the build runs (Git names the
+commit, the tree is clean). If it fails, the host removes the checkout,
+fetches it again, then the mirror too, and says `source NAME did not verify
+on the host (REASON); re-cloned it` (the receipt records it under
+`source.repaired`, with `"check": "identity"`). If it still fails, the log
+says `source NAME does not verify on the host (REASON)` and the build
+decides. A build refused for `source-identity` or `source-drift` now ends
+its log line with the source and the failed check, for example `host build
+failed (source-identity): source 'shop' has 2 uncommitted change(s)`, in
+the build log and in `piceli gitops builds`.
+
 (build-hosts-declared)=
 **Only declared hosts build (0.29.0).** When the composition declares build
 hosts (`DevBuilds(hosts=[...])`), the controller takes claims, answers and

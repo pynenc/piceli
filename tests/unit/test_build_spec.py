@@ -816,6 +816,10 @@ def test_dirty_source_rejected_unless_allowed(
     with pytest.raises(BuildSpecError) as error:
         spec.run(grant(), tmp_path / "dist", docker=docker_tool, runner=fake)
     assert error.value.code == "source-identity"
+    assert str(error.value) == "sources not verifiable"  # fixed, path-free
+    # 0.79.0: the reason names the source and the failed check.
+    assert "source 'app'" in error.value.reason
+    assert "uncommitted" in error.value.reason
     assert not any(argv[1:3] == ["buildx", "build"] for argv in fake.calls)
 
 

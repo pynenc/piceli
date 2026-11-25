@@ -4,6 +4,27 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.79.0
+
+### A refused source says why, and the builder repairs its checkout (ops#101)
+
+- **`source-identity` and `source-drift` carry their reason.** A host build
+  refused for a source dropped the cause (`host build failed
+  (source-identity)`); the build log and `piceli gitops builds` now end the
+  line with the source and the failed check, redacted and cut at 400
+  characters: `host build failed (source-identity): git status failed in
+  /work/src/shop: ...`, or `source 'shop' has 2 uncommitted change(s)`, or
+  the drift's `shop: commit 'a' -> 'b'`. The error's message stays fixed;
+  the text is `BuildSpecError.reason`.
+- **`builder serve` checks each checkout the way the build does.** After
+  `export_source`, Git must name the commit and the tree must be clean. If
+  not, the checkout is removed and fetched again, then the mirror too (as a
+  corrupt mirror since 0.71.0). The repair is in the log and in the receipt's
+  `source.repaired` (`"check": "identity"`). If the source still fails, the
+  log says why and the build decides.
+- **Upgrade:** `builder serve` on the build hosts (the reason and the repair)
+  and the builder image (the reason inside a Job).
+
 ## Version 0.78.0
 
 ### Shared commands run alongside the platform commands (ops#99)
