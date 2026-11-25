@@ -670,6 +670,35 @@ def _resolve_ref(repo: Path, ref: str, timeout: float) -> str:
     return resolved.decode().strip()
 
 
+def _dirty_paths(
+    repo: Path, subpath: str | None, timeout: float, limit: int = 3
+) -> str:
+    """`` (M path, ?? other)``: the first changed paths of ``repo`` with their
+    Git status codes (0.80.0), for a dirty source's refusal; empty when Git
+    cannot say."""
+    try:
+        raw = _git(
+            repo,
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+            "--no-renames",
+            *(("--", f":(top,literal){subpath}") if subpath else ()),
+            timeout=timeout,
+        )
+    except SourceIdentityError:
+        return ""
+    entries = sorted(item for item in raw.split(b"\0") if item)
+    shown = [
+        f"{item[:2].decode().strip()} {item[3:].decode('utf-8', 'replace')}"
+        for item in entries[:limit]
+    ]
+    more = f", +{len(entries) - limit} more" if len(entries) > limit else ""
+    return f" ({', '.join(shown)}{more})" if shown else ""
+
+
 def _capture(
     spec: InputsSpec, source: SourceSpec, timeout: float, enforce: bool
 ) -> SourceIdentity:
@@ -689,7 +718,8 @@ def _capture(
     if identity.dirty and not source.allow_dirty:
         raise SourceIdentityError(
             f"source {source.name!r} has {identity.changed_paths} uncommitted "
-            "change(s); commit them or set allow_dirty = true",
+            f"change(s){_dirty_paths(Path(path), source.subpath, timeout)}; "
+            "commit them or set allow_dirty = true",
             code="source-dirty",
         )
     if source.ref is not None:
