@@ -373,6 +373,30 @@ def checkout_problem(checkout: Path, commit: str, name: str) -> str | None:
         return f"source {name!r} is at {identity.commit[:12]}, not {commit[:12]}"
     if identity.dirty:
         return f"source {name!r} has {identity.changed_paths} changed path(s)"
+    # 0.82.0: ``git status`` does not see a tracked file that is missing when
+    # its index entry carries a skip-worktree or assume-unchanged flag; look
+    # at the files themselves, whatever the flags say
+    try:
+        listed = subprocess.run(
+            ["git", "-C", str(checkout), "ls-files", "-s", "-z"],
+            capture_output=True,
+            check=True,
+            timeout=120,
+        ).stdout
+    except (subprocess.SubprocessError, OSError):
+        return None  # the build's own check decides
+    missing = []
+    for entry in listed.split(b"\0"):
+        info, _, raw = entry.partition(b"\t")
+        if raw and not info.startswith(b"160000"):  # a gitlink is a directory
+            path = raw.decode("utf-8", "surrogateescape")
+            if not os.path.lexists(os.path.join(checkout, path)):
+                missing.append(path)
+    if missing:
+        shown = ", ".join(missing[:3]) + (
+            f", +{len(missing) - 3} more" if len(missing) > 3 else ""
+        )
+        return f"source {name!r} lacks {len(missing)} tracked file(s) ({shown})"
     return None
 
 
@@ -1555,7 +1579,7 @@ class BuilderServe:
 
 
 #: The builder container's first step: copy every read-only checkout into
-#: ``SOURCES`` (``tar`` keeps file times; the copy is the container user's),
+#: ``SOURCES`` (``cp -a`` keeps file times; the copy is the container user's),
 #: run ``piceli``, remove the copy whatever the outcome. 0.57.0: and open
 #: ``/work/out`` to the host's user, who removes the scratch afterwards (the
 #: directories the container's user made there were left behind for good).
@@ -1567,12 +1591,32 @@ mkdir -p "$dest"
 for src in /work/src/*/; do
   name=$(basename "$src")
   mkdir "$dest/$name"
-  (cd "$src" && tar -cf - .) | (cd "$dest/$name" && tar -xf -)
+  # 0.82.0: ``cp -a`` stops the build with its reason when it cannot copy a
+  # file; the ``tar`` pipe it replaces went on (the copy then lacked the file)
+  cp -a --no-preserve=ownership "${{src}}." "$dest/$name/"
   # 0.80.0: a copy that Git calls changed is named before the build starts
   if [ -e "$dest/$name/.git" ]; then
-    left=$(GIT_OPTIONAL_LOCKS=0 git -C "$dest/$name" -c safe.directory='*' \\
-      status --porcelain=v1 --untracked-files=all 2>&1 | head -3 | tr '\\n' ';') || true
-    [ -z "$left" ] || echo "builder: after the copy, source $name is not clean: $left"
+    status=$(GIT_OPTIONAL_LOCKS=0 git -C "$dest/$name" -c safe.directory='*' \\
+      status --porcelain=v1 --untracked-files=all 2>&1 | head -3) || true
+    if [ -n "$status" ]; then
+      echo "builder: after the copy, source $name is not clean: $(echo "$status" | tr '\\n' ';')"
+      # 0.82.0: the first paths as the container sees them in the mount
+      echo "$status" | while read -r _code path; do
+        echo "builder: in the mount: $(ls -ld "${{src}}$path" 2>&1)"
+      done
+      # 0.82.0: the host checked this tree against its commit, so a copy that
+      # differs lost something on the way: restore the tracked files from the
+      # copy's own objects (exactly the commit), say so, and check again
+      GIT_OPTIONAL_LOCKS=0 git -C "$dest/$name" -c safe.directory='*' \\
+        checkout --force -- . 2>&1 | tail -2 || true
+      status=$(GIT_OPTIONAL_LOCKS=0 git -C "$dest/$name" -c safe.directory='*' \\
+        status --porcelain=v1 --untracked-files=all 2>&1 | head -3) || true
+      if [ -z "$status" ]; then
+        echo "builder: source $name restored from its objects; it is clean"
+      else
+        echo "builder: source $name is still not clean: $(echo "$status" | tr '\\n' ';')"
+      fi
+    fi
   fi
 done
 piceli "$@"

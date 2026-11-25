@@ -173,7 +173,12 @@ def test_take_next_needs_once() -> None:
     assert "add --once" in result.output
 
 
-def _run_copy(tmp_path: Path, dirty: bool) -> str:
+def _run_copy(
+    tmp_path: Path,
+    dirty: bool = False,
+    unreadable: bool = False,
+    lose: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     """The container's copy step on a local source; ``piceli`` is a stub."""
     import os
 
@@ -184,10 +189,17 @@ def _run_copy(tmp_path: Path, dirty: bool) -> str:
     git = ["git", "-C", str(source), "-c", "user.email=t@x", "-c", "user.name=t"]
     subprocess.run([*git, "init", "-q", "-b", "main"], check=True)
     (source / "a.txt").write_text("a\n")
+    (source / "run.sh").write_text("#!/bin/sh\n")
+    (source / "run.sh").chmod(0o755)
+    (source / "link").symlink_to("a.txt")
     subprocess.run([*git, "add", "-A"], check=True)
     subprocess.run([*git, "commit", "-qm", "one"], check=True)
     if dirty:
         (source / "extra.txt").write_text("not committed\n")
+    if lose:  # the source tree lacks a tracked file: the copy does too
+        (source / lose).unlink()
+    if unreadable:
+        (source / "a.txt").chmod(0)
     stub = tmp_path / "bin"
     stub.mkdir()
     (stub / "piceli").write_text("#!/bin/sh\nexit 0\n")
@@ -195,21 +207,49 @@ def _run_copy(tmp_path: Path, dirty: bool) -> str:
     script = _COPY_AND_RUN.replace(SOURCES, str(tmp_path / "dest")).replace(
         "/work/", f"{tmp_path}/work/"
     )
-    done = subprocess.run(
-        ["sh", "-c", script, "sh"],
-        capture_output=True,
-        text=True,
-        check=True,
-        env={**os.environ, "PATH": f"{stub}:{os.environ['PATH']}"},
-    )
-    return done.stdout
+    try:
+        return subprocess.run(
+            ["sh", "-c", script, "sh"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "PATH": f"{stub}:{os.environ['PATH']}"},
+        )
+    finally:
+        if (source / "a.txt").exists():
+            (source / "a.txt").chmod(0o644)  # the test directory is removed
 
 
 def test_a_clean_copy_says_nothing(tmp_path: Path) -> None:
-    assert _run_copy(tmp_path, dirty=False) == ""
+    done = _run_copy(tmp_path)
+    assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
 
 
-def test_a_copy_git_calls_changed_is_named_before_the_build(tmp_path: Path) -> None:
-    assert _run_copy(tmp_path, dirty=True) == (
-        "builder: after the copy, source shop is not clean: ?? extra.txt;\n"
+def test_a_copy_that_lost_a_tracked_file_is_restored_and_says_so(
+    tmp_path: Path,
+) -> None:
+    done = _run_copy(tmp_path, lose="a.txt")
+    assert done.returncode == 0, done.stderr
+    lines = done.stdout.splitlines()
+    assert lines[0] == "builder: after the copy, source shop is not clean:  D a.txt;"
+    assert lines[1].startswith("builder: in the mount: ")
+    assert "No such file or directory" in lines[1] and "a.txt" in lines[1]
+    assert lines[-1] == "builder: source shop restored from its objects; it is clean"
+
+
+def test_an_untracked_file_in_the_copy_is_named_not_hidden(tmp_path: Path) -> None:
+    done = _run_copy(tmp_path, dirty=True)
+    assert done.returncode == 0
+    assert "source shop is not clean: ?? extra.txt;" in done.stdout
+    assert done.stdout.splitlines()[-1] == (
+        "builder: source shop is still not clean: ?? extra.txt;"
     )
+
+
+@pytest.mark.skipif(__import__("os").geteuid() == 0, reason="root reads any file")
+def test_a_file_the_copy_cannot_read_stops_the_build_with_its_reason(
+    tmp_path: Path,
+) -> None:
+    done = _run_copy(tmp_path, unreadable=True)
+    assert done.returncode != 0
+    assert "a.txt" in done.stderr and "ermission denied" in done.stderr

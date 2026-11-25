@@ -66,11 +66,12 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.81
+## What's new in 0.82
 
-- **A missing Helm value reads as its default only where the chart owner
-  asks**: `default_on_reuse=True` on a `HelmOptional` or `HelmToggle`. Without
-  it, `helm upgrade --reuse-values` leaves a value off, as before 0.80.0.
+- **A source that lost a file is repaired**: the builder checks that every
+  tracked file exists, clones the source again if not, and restores its copy
+  inside the build container from its own objects, saying so in the log.
+  The copy uses `cp -a`, which stops the build with its reason on a failure.
 
 ## Web UI
 
