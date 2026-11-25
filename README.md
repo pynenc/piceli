@@ -66,14 +66,16 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.79
+## What's new in 0.80
 
-- **A refused source says why**: a host build refused for `source-identity`
-  or `source-drift` names the source and the failed check in its log and in
-  `piceli gitops builds`.
-- **A checkout the build would refuse is cloned again**: `builder serve`
-  runs the build's own check after each checkout, and re-clones the checkout
-  and then the mirror when it fails.
+- **`piceli bundle` names the product the operator installs**: `--input-prefix`,
+  `--tool-name` and `--annotation-domain` set the input variables, the tool
+  named in comments and the annotation keys. Defaults are unchanged.
+- **A HelmChart takes one existing Secret per app Secret**
+  (`existing_secrets`), and optional values keep their default under
+  `helm upgrade --reuse-values`.
+- **A dirty source's refusal names its paths**; the builder container names
+  a copy Git calls changed.
 
 ## Web UI
 
