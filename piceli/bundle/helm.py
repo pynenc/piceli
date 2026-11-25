@@ -151,6 +151,12 @@ class HelmToggle:
     <piceli.app.App.override>`; a list is a JSON Patch (RFC 6902: ``add``,
     ``remove``, ``replace`` and ``test``). Both renders pass the safety gate.
 
+    0.81.0: ``default_on_reuse=True`` (with ``default=True``): a value the
+    stored values lack (``helm upgrade --reuse-values`` over an older
+    release) reads as true. Without it a missing value is false: a plain
+    ``--reuse-values`` brings no new behaviour; ``--reset-then-reuse-values``
+    turns the default on.
+
     Example::
 
         HelmToggle("UDP only to the relay", patches=[(policy, [
@@ -161,6 +167,7 @@ class HelmToggle:
     description: str
     patches: Sequence[tuple[Any, Any]] | Mapping[str, Any]
     default: bool = False
+    default_on_reuse: bool = False
 
     def resolved(self) -> dict[str, Any]:
         """``"Kind/name"`` → patch (plain JSON values)."""
@@ -209,9 +216,12 @@ class HelmOptional:
     (0.31.0). The objects are part of the app, so the safety gate checks
     them; with the value false (``default``) they are not installed.
 
-    0.80.0: a value the stored values lack (``helm upgrade --reuse-values``
-    over an older release) reads as ``default``; an explicit false still
-    turns the objects off.
+    0.81.0: ``default_on_reuse=True`` (with ``default=True``): a value the
+    stored values lack (``helm upgrade --reuse-values`` over an older
+    release) reads as ``default``; an explicit false still turns the objects
+    off. Without it, a missing value is off, as before 0.80.0: a plain
+    ``--reuse-values`` brings no new object; ``--reset-then-reuse-values``
+    turns the default on.
 
     0.34.0: ``patches`` (as for :class:`HelmToggle`: pairs of an object and
     a JSON Patch or merge patch, or a mapping keyed by ``"Kind/name"``)
@@ -233,6 +243,7 @@ class HelmOptional:
     objects: Sequence[Any] = ()
     default: bool = False
     patches: Sequence[tuple[Any, Any]] | Mapping[str, Any] = ()
+    default_on_reuse: bool = False
 
     def keys(self) -> list[str]:
         """The objects as ``"Kind/name"``."""
@@ -524,14 +535,16 @@ def _value(path: str) -> str:
     return expression
 
 
-def _flag(path: str, default: bool) -> str:
-    """A boolean value for ``if``: a value the stored values lack reads as its
-    default (0.80.0). ``helm upgrade --reuse-values`` over an older release
-    leaves the key out; a default of ``true`` must stay on, an explicit
-    ``false`` must still turn it off, so the test is the key's presence.
-    A default of ``false`` needs no test: a missing value is already false."""
+def _flag(path: str, default: bool, on_reuse: bool = False) -> str:
+    """A boolean value for ``if``. With ``on_reuse`` (0.81.0) and a ``true``
+    default, a value the stored values lack reads as its default
+    (``helm upgrade --reuse-values`` over an older release leaves the key
+    out): the test is the key's presence, so an explicit ``false`` still
+    turns it off. Otherwise a missing value is false, as in 0.79.0: a plain
+    ``--reuse-values`` brings no new default (0.80.0 applied it to every
+    value; ``on_reuse`` is the owner's choice per value)."""
     ref = _value(path)
-    if not default:
+    if not (default and on_reuse):
         return ref
     return f'(or (kindIs "invalid" {ref}) {ref})'
 
@@ -1600,6 +1613,10 @@ def build_helm(
     )  # fmt: skip
     defaults = {name: toggle.default for name, toggle in toggles.items()}
     defaults.update({name: item.default for name, (_p, item, _k) in optional.items()})
+    on_reuse = {name: toggle.default_on_reuse for name, toggle in toggles.items()}
+    on_reuse.update(
+        {name: item.default_on_reuse for name, (_p, item, _k) in optional.items()}
+    )
     gated: dict[str, str] = {}
     for name, (_parts, _item, keys) in optional.items():
         for key in keys:
@@ -1652,7 +1669,7 @@ def build_helm(
             assert mine is not None
             body = templater.text(templater.manifest(mine))
             if file in gated:
-                flag = _flag(gated[file], defaults[gated[file]])
+                flag = _flag(gated[file], defaults[gated[file]], on_reuse[gated[file]])
                 body = f"{{{{- if {flag} }}}}\n{body}{{{{- end }}}}\n"
             files[f"templates/{file}"] = (header + body).encode()
             continue
@@ -1660,7 +1677,7 @@ def build_helm(
         theirs = {item.file: item for item in variants[toggle].objects}.get(file)
         on = templater.text(templater.manifest(theirs)) if theirs else ""
         off = templater.text(templater.manifest(mine)) if mine else ""
-        flag = _flag(toggle, defaults[toggle])
+        flag = _flag(toggle, defaults[toggle], on_reuse[toggle])
         if on and off:
             body = f"{{{{- if {flag} }}}}\n{on}{{{{- else }}}}\n{off}{{{{- end }}}}\n"
         elif on:

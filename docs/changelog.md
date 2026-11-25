@@ -4,6 +4,21 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.81.0
+
+### A missing value reads as its default only where the chart owner asks (ops#104)
+
+- **`default_on_reuse=True` on `HelmOptional` and `HelmToggle`.** 0.80.0 made
+  every optional value or toggle with a `true` default read as `true` when
+  `helm upgrade --reuse-values` finds the key missing from the stored values.
+  That also switched on objects a client never turned on (a cluster-wide
+  DaemonSet, for one). Now the chart owner chooses per value: with
+  `default_on_reuse=True` a missing key reads as the default (an explicit
+  `false` still turns it off); without it a missing key is off, as in 0.79.0.
+  `--reset-then-reuse-values` still turns a default on.
+- **Upgrade:** a chart that relied on 0.80.0's behaviour for a value adds
+  `default_on_reuse=True` to it; every other chart renders as in 0.79.0 again.
+
 ## Version 0.80.0
 
 ### piceli bundle names the product the operator installs (ops#102)

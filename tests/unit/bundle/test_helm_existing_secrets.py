@@ -291,8 +291,9 @@ def test_secrets_of_one_value_cannot_share_a_key() -> None:
 def test_a_true_default_reads_as_true_when_the_key_is_missing(tmp_path: Path) -> None:
     change = (
         "optional={'intake.expose': dataclasses.replace(base.optional['intake.expose'], "
-        "default=True)}, toggles={'relayOnly': dataclasses.replace("
-        "base.toggles['relayOnly'], default=True)}"
+        "default=True, default_on_reuse=True)}, toggles={'relayOnly': "
+        "dataclasses.replace(base.toggles['relayOnly'], default=True, "
+        "default_on_reuse=True)}"
     )
     module = tmp_path / "true_defaults.py"
     module.write_text(
@@ -311,6 +312,27 @@ def test_a_true_default_reads_as_true_when_the_key_is_missing(tmp_path: Path) ->
     assert f'{{{{- if (or (kindIs "invalid" {relay}) {relay}) }}}}' in text
     values = yaml.safe_load(_text(out, "values.yaml"))
     assert values["intake"]["expose"] is True and values["relayOnly"] is True
+
+
+def test_a_true_default_without_default_on_reuse_renders_as_in_0_79(
+    tmp_path: Path,
+) -> None:
+    """A plain ``--reuse-values`` brings no new default unless the owner asks."""
+    module = tmp_path / "true_plain.py"
+    module.write_text(
+        "import dataclasses\n"
+        "from tests.unit.bundle.helm_intake_app import chart as base\n"
+        "chart = dataclasses.replace(base, optional={'intake.expose': "
+        "dataclasses.replace(base.optional['intake.expose'], default=True)}, "
+        "toggles={'relayOnly': dataclasses.replace("
+        "base.toggles['relayOnly'], default=True)})\n"
+    )
+    out = tmp_path / "chart"
+    assert _run(f"{module}:chart", "--helm", "--out", str(out)).exit_code == 0
+    text = "".join(path.read_text() for path in (out / "templates").glob("*.yaml"))
+    assert "{{- if (($.Values.intake | default dict).expose) }}" in text
+    assert "{{- if $.Values.relayOnly }}" in text
+    assert '(or (kindIs "invalid"' not in text
 
 
 def test_a_false_default_renders_as_before(tmp_path: Path) -> None:
@@ -380,7 +402,8 @@ def test_helm_renders_an_old_release_with_the_default(
         "import dataclasses\n"
         "from tests.unit.bundle.helm_intake_app import chart as base\n"
         "chart = dataclasses.replace(base, optional={'intake.expose': "
-        "dataclasses.replace(base.optional['intake.expose'], default=True)})\n"
+        "dataclasses.replace(base.optional['intake.expose'], default=True, "
+        "default_on_reuse=True)})\n"
     )
     out = tmp_path / "chart"
     assert _run(f"{module}:chart", "--helm", "--out", str(out)).exit_code == 0

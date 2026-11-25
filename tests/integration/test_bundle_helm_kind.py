@@ -109,9 +109,7 @@ app.deployment(
 pipeline = Pipeline(app, Target.profile("client", namespace="agent"), secrets=secrets)
 chart = HelmChart(pipeline, existing_secrets={"tokenSecret": ["agent-token"]}@@OPTIONAL@@)
 """
-FLAGS = (
-    ', optional={"flags.enabled": HelmOptional("flags", objects=[flags], default=True)}'
-)
+FLAGS = ', optional={"flags.enabled": HelmOptional("flags", objects=[flags], default=True, default_on_reuse=True)}'
 
 pytestmark = [
     pytest.mark.integration,

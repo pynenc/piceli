@@ -213,7 +213,7 @@ What becomes a value:
 | `deleteDataOnUninstall` | StatefulSets with claims | `true`: uninstall also deletes their claims (Kubernetes 1.27 or later) |
 | `existingSecret` (0.31.0) | every Secret of the app | the name of a Secret you created holding every secret key (the README lists them); the chart then makes no Secret and generates nothing |
 | each existing-Secret value (`api.existingSecret`, 0.80.0) | `HelmChart(existing_secrets=...)` | the name of a Secret you created for the app Secrets it replaces (the README lists its keys); the chart then does not make those Secrets, and a generated value or an input only they need is skipped |
-| each optional value (`intake.expose`, 0.31.0) | `HelmChart(optional=...)` | `true` installs the named objects; a value the stored values lack reads as its default (0.80.0) |
+| each optional value (`intake.expose`, 0.31.0) | `HelmChart(optional=...)` | `true` installs the named objects; with `default_on_reuse=True` (0.81.0) a value the stored values lack reads as its default; otherwise it reads as off |
 | each object value (`intake.allowNamespaces`, 0.31.0) | `HelmChart(values=...)` | written at a JSON pointer of named objects (a list, a string, a number); where the object holds a string (a ConfigMap key, an environment variable), a number or boolean is written as one, `"true"` (0.65.0) |
 | each retired value (0.65.0) | `HelmChart(retired=...)` | accepted and ignored, so `helm upgrade --reuse-values` from an older chart works; the install notes warn when it is set |
 
@@ -274,11 +274,15 @@ when both it and a value are set, `existingSecret` wins for all. To make
 (`{"existingSecret": ["shop-db"]}`): it then is that value, and no value
 replaces every Secret. Without the declaration the chart is as before.
 
-**Optional values keep their default** (0.80.0). `helm upgrade
+**Optional values and `--reuse-values`** (0.81.0). `helm upgrade
 --reuse-values` keeps the values of the release, which lack a value a newer
-chart added. An optional value (`HelmOptional`) or toggle whose default is
-`true` now reads as `true` when the key is missing; an explicit `false`
-still turns it off. A default of `false` renders as before.
+chart added. By default a missing `HelmOptional` or `HelmToggle` value is
+off, so a plain `--reuse-values` adds nothing the client never turned on
+(`--reset-then-reuse-values` turns the defaults on). Set
+`default_on_reuse=True` on a value whose default is `true` to make a missing
+key read as `true` instead (a default-deny NetworkPolicy, say); an explicit
+`false` still turns it off. 0.80.0 did this for every value; 0.81.0 leaves
+the choice to the chart owner.
 
 Cluster-scoped objects (ClusterRoles and their bindings) belong to the
 release: their names follow the release namespace, and `helm uninstall`
