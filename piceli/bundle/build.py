@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from piceli.bundle import guides
+from piceli.bundle.naming import Naming
 from piceli.bundle.prepare import (
     PrepareError,
     SecretPlan,
@@ -29,12 +30,13 @@ from piceli.bundle.prepare import (
 )
 from piceli.bundle.safety import SafetyException, Violation, check, exceptions
 
-BUNDLE_SCHEMA = "piceli.client-bundle.v1"
 PART_OF = "app.kubernetes.io/part-of"
-BUNDLE_ANNOTATION = "piceli.io/bundle"
-#: The host of image references in the base: never resolvable (RFC 2606), so
-#: the base alone can never pull an image; the overlay names the registry.
-IMAGE_HOST = "images.piceli.invalid"
+#: The name (under the annotation domain) of the annotation that marks every
+#: object with ``<bundle>@<version>``.
+BUNDLE_ANNOTATION = "bundle"
+#: The host of image references in the base is never resolvable (RFC 2606), so
+#: the base alone can never pull an image; the overlay names the registry
+#: (``Naming.image_host``).
 REGISTRY_PLACEHOLDER = "@REGISTRY@"
 OVERLAY = "dev"
 NAME = re.compile(r"^[a-z]([-a-z0-9]{0,51}[a-z0-9])?$")
@@ -121,6 +123,7 @@ class Bundle:
     forward: Forward | None
     storage_class: str | None
     generators: Mapping[str, Any] = field(default_factory=dict, repr=False)
+    naming: Naming = field(default_factory=Naming)
 
     @property
     def workloads(self) -> list[BundleObject]:
@@ -241,8 +244,9 @@ def _objects(
 def _images(
     objects: Sequence[tuple[str, dict[str, Any]]],
     receipt_names: Sequence[str],
+    naming: Naming,
 ) -> list[ImageUse]:
-    """Rewrite build images to ``images.piceli.invalid/<name>``; list every image."""
+    """Rewrite build images to ``<naming.image_host>/<name>``; list every image."""
     from piceli.pipeline.compose import containers
 
     found: dict[str, ImageUse] = {}
@@ -262,7 +266,7 @@ def _images(
                             f"{label} uses the build image {name!r}, which the "
                             "build receipt does not hold; pass --receipt with it",
                         )
-                    container["image"] = f"{IMAGE_HOST}/{name}"
+                    container["image"] = f"{naming.image_host}/{name}"
                     found[name] = ImageUse(name, "receipt", container["image"])
                 elif not _DIGEST.search(image):
                     raise BundleError(
@@ -340,8 +344,12 @@ def build_bundle(
     environment: str | None = None,
     storage_class: str | None = None,
     forward: Forward | None = None,
+    naming: Naming | None = None,
 ) -> Bundle:
     """The bundle of a render (no image archives yet; see :func:`write_bundle`).
+
+    ``naming`` (default :class:`~piceli.bundle.naming.Naming`) chooses the
+    input variables, the tool and the annotation domain the files show.
 
     :raises BundleError: ``bundle-invalid``, ``bundle-secret-value``,
         ``bundle-secret-unsupported``, ``bundle-image-unresolved``,
@@ -356,15 +364,16 @@ def build_bundle(
         )
     if not _SEMVER.fullmatch(version or ""):
         raise BundleError("bundle-invalid", "the bundle version must be X.Y.Z[-pre]")
+    naming = naming or Naming()
     try:
         plans = secret_plans(components)
-        inputs = client_inputs(plans, generators)
+        inputs = client_inputs(plans, generators, naming)
     except PrepareError as error:
         raise BundleError(error.code, str(error)) from None
     objects = _objects(components, name)
     if not objects:
         raise BundleError("bundle-empty", "the render has no object for a bundle")
-    images = _images(objects, receipt_names)
+    images = _images(objects, receipt_names, naming)
     egress = _declared_egress(objects)
     objects.append((f"{name}-default-deny.yaml", default_deny(name)))
     manifests = [manifest for _, manifest in objects]
@@ -386,8 +395,12 @@ def build_bundle(
             manifest.get("kind") == "NetworkPolicy"
             and metadata.get("name") == f"{name}-default-deny"
         )
-        metadata.setdefault("annotations", {})[BUNDLE_ANNOTATION] = f"{name}@{version}"
-        final.append(BundleObject(file, manifest, cluster))
+        metadata.setdefault("annotations", {})[naming.key(BUNDLE_ANNOTATION)] = (
+            f"{name}@{version}"
+        )
+        # The safety gate above read the default keys; from here on the
+        # objects carry the owner's annotation domain.
+        final.append(BundleObject(file, naming.apply(manifest), cluster))
     return Bundle(
         name=name,
         version=version,
@@ -403,6 +416,7 @@ def build_bundle(
         forward=forward,
         storage_class=storage_class,
         generators=dict(generators),
+        naming=naming,
     )
 
 
@@ -553,7 +567,7 @@ def render_files(bundle: Bundle) -> dict[str, bytes]:
     )
     files.update(_overlay(bundle))
     files["prepare.sh"] = script(
-        bundle.name, bundle.secrets, bundle.generators
+        bundle.name, bundle.secrets, bundle.generators, bundle.naming
     ).encode()
     files["INSTALL.md"] = guides.install(bundle).encode()
     files["UNINSTALL.md"] = guides.uninstall(bundle).encode()
@@ -563,7 +577,7 @@ def render_files(bundle: Bundle) -> dict[str, bytes]:
 def manifest(bundle: Bundle, images: Sequence[Any] = ()) -> dict[str, Any]:
     """``bundle.json``: what the bundle holds (never a value)."""
     return {
-        "schema": BUNDLE_SCHEMA,
+        "schema": bundle.naming.schema,
         "name": bundle.name,
         "version": bundle.version,
         "environment": bundle.environment,

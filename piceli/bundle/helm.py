@@ -57,7 +57,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from piceli.app.model import HELM_RELEASE_ANNOTATION, HelmRelease
 from piceli.bundle.build import (
     BUNDLE_ANNOTATION,
     PART_OF,
@@ -65,6 +64,7 @@ from piceli.bundle.build import (
     BundleError,
     BundleObject,
 )
+from piceli.bundle.naming import Naming
 
 #: Top-level values every chart may have; a setting, input or toggle cannot
 #: take these names.
@@ -76,10 +76,14 @@ RESERVED = frozenset(
 SIZE = re.compile(r"^([0-9]+(Ki|Mi|Gi|Ti|Pi|k|M|G|T|P)?)?$")
 VALUE_NAME = re.compile(r"^[a-z][A-Za-z0-9]{0,62}$")
 SCHEMA_DRAFT = "http://json-schema.org/draft-07/schema#"
-SECRETS_TEMPLATE = "templates/piceli-secrets.yaml"
-CONFIG_DIGEST = "piceli.io/configmaps-digest"
-SECRET_DIGEST = "piceli.io/secrets-digest"
-NAMESPACE_ANNOTATION = "piceli.io/namespace"
+# The annotations the chart writes, by name under the annotation domain
+# (``Naming.key``). Moving an installed chart to another domain renames the
+# digest keys on the pod templates, so its pods roll once; nothing else on
+# the old objects changes and the old keys are not migrated.
+CONFIG_DIGEST = "configmaps-digest"
+SECRET_DIGEST = "secrets-digest"
+NAMESPACE_ANNOTATION = "namespace"
+HELM_RELEASE = "helm-release"
 _SCALAR = re.compile(r"'?__piceli_helm_(\d+)__'?")
 _KEY = re.compile(r"^(?P<indent> *)'?~~piceli_helm_(?P<site>\d+)'?: null$", re.M)
 _TOKEN = re.compile(r"\{\{|\}\}|\{(?:secret:)?([a-z][a-z0-9_.-]{0,190})\}")
@@ -504,9 +508,10 @@ def _dig(value: Any, path: Sequence[str]) -> Any:
     return value
 
 
-def _reads_release_name(pod: Mapping[str, Any]) -> bool:
+def _reads_release_name(pod: Mapping[str, Any], naming: Naming) -> bool:
     """A container of ``pod`` has an env value of ``HelmRelease.name``."""
-    path = HelmRelease.name.field_path
+    # ``HelmRelease.name`` reads the default key; the bundle renamed it.
+    path = naming.field_path(HELM_RELEASE)
     return any(
         _dig(env, ("valueFrom", "fieldRef", "fieldPath")) == path
         for group in ("initContainers", "containers")
@@ -536,6 +541,7 @@ class _Templater:
         required: set[str],
         storage_class: str | None,
         *,
+        naming: Naming | None = None,
         secret_names: frozenset[str] = frozenset(),
         values_at: Mapping[str, Sequence[tuple[list[str], str, int]]] | None = None,
         value_defaults: Mapping[str, Any] | None = None,
@@ -543,6 +549,7 @@ class _Templater:
     ) -> None:
         self.name = name
         self.namespace = namespace
+        self.naming = naming or Naming()
         self.settings = settings
         self.required = required
         self.storage_class = storage_class
@@ -593,8 +600,9 @@ class _Templater:
             "{{ $.Release.Service | toJson }}"
         )
         annotations = metadata.get("annotations") or {}
-        if annotations.get(NAMESPACE_ANNOTATION) == self.namespace:
-            annotations[NAMESPACE_ANNOTATION] = self.namespace_site()
+        namespace_key = self.naming.key(NAMESPACE_ANNOTATION)
+        if annotations.get(namespace_key) == self.namespace:
+            annotations[namespace_key] = self.namespace_site()
         if item.cluster:
             metadata["name"] = self.cluster_name(str(metadata.get("name")))
         if kind in {"ClusterRoleBinding", "RoleBinding"}:
@@ -706,7 +714,8 @@ class _Templater:
             return
         annotations = _dig(manifest, (*pod_path[:-1], "metadata", "annotations"))
         if isinstance(annotations, dict):
-            for key, helper in ((CONFIG_DIGEST, "config"), (SECRET_DIGEST, "secrets")):
+            for name, helper in ((CONFIG_DIGEST, "config"), (SECRET_DIGEST, "secrets")):
+                key = self.naming.key(name)
                 if isinstance(annotations.get(key), str):
                     digest = (
                         f'{{{{ printf "sha256:%s" (sha256sum (cat {_literal(annotations[key])} '
@@ -724,12 +733,12 @@ class _Templater:
                     annotations[key] = self.scalar(digest)
         if self.secret_names:
             self.existing_secret(pod)
-        if _reads_release_name(pod):
+        if _reads_release_name(pod, self.naming):
             # 0.46.0: HelmRelease.name reads this pod annotation.
             meta = _dig(manifest, pod_path[:-1])
             if isinstance(meta, dict):
                 notes = meta.setdefault("metadata", {}).setdefault("annotations", {})
-                notes[HELM_RELEASE_ANNOTATION] = self.scalar(
+                notes[self.naming.key(HELM_RELEASE)] = self.scalar(
                     "{{ $.Release.Name | toJson }}"
                 )
         for group in ("initContainers", "containers"):
@@ -1053,7 +1062,11 @@ def _secrets_template(
             "metadata": {
                 "name": plan.name,
                 "labels": {PART_OF: bundle.name},
-                "annotations": {BUNDLE_ANNOTATION: f"{bundle.name}@{bundle.version}"},
+                "annotations": {
+                    bundle.naming.key(BUNDLE_ANNOTATION): (
+                        f"{bundle.name}@{bundle.version}"
+                    )
+                },
             },
             "type": plan.type,
         }
@@ -1105,6 +1118,8 @@ class HelmBundle:
     optional_inputs: tuple[str, ...] = ()
     #: 0.65.0: retired value → what to use instead.
     retired: tuple[tuple[str, str], ...] = ()
+    #: 0.80.0: the names the operator sees (the tool in comments and README).
+    naming: Naming = field(default_factory=Naming)
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -1113,7 +1128,7 @@ class HelmBundle:
             "version": self.version,
             "appVersion": self.app_version,
             "type": "application",
-            "description": f"{self.name}, packaged by piceli bundle for a client's cluster",
+            "description": f"{self.name}, packaged by {self.naming.tool_name} for a client's cluster",
         }
 
     @property
@@ -1211,6 +1226,7 @@ def build_helm(
     from piceli.chart import _APP_VERSION
 
     variants = dict(variants or {})
+    naming = bundle.naming
     declared = declaration or HelmChart(bundle.name)
     app_version = bundle.version if app_version is None else app_version
     if not _APP_VERSION.fullmatch(app_version):
@@ -1306,6 +1322,7 @@ def build_helm(
     by_key = {f"{item.kind}/{item.name}": item for item in bundle.objects}
     templater = _Templater(
         bundle.name, bundle.namespace, reverse, required, bundle.storage_class,
+        naming=naming,
         secret_names=frozenset(plan.name for plan in bundle.secrets)
         if offer_existing
         else frozenset(),
@@ -1362,7 +1379,7 @@ def build_helm(
         mine = base.get(file)
         if mine is not None and mine.cluster:
             cluster_objects.append(f"{mine.kind}/{mine.name}")
-        header = f"# {file} (piceli bundle {bundle.name} {bundle.version})\n"
+        header = f"# {file} ({naming.tool_name} {bundle.name} {bundle.version})\n"
         if not owners:
             assert mine is not None
             body = templater.text(templater.manifest(mine))
@@ -1407,7 +1424,7 @@ def build_helm(
             body = (
                 f"{{{{- if not $.Values.existingSecret }}}}\n{body}\n{{{{- end }}}}\n"
             )
-        files[SECRETS_TEMPLATE] = (
+        files[naming.secrets_template] = (
             f"# The Secrets of {bundle.name}: generated once, kept across upgrades\n"
             + body
         ).encode()
@@ -1564,7 +1581,7 @@ def build_helm(
             + ", ".join(name for name, _hint in retired)
         )
     files["values.yaml"] = (
-        f"# Values of {bundle.name} {bundle.version} (written by piceli bundle --helm).\n"
+        f"# Values of {bundle.name} {bundle.version} (written by {naming.tool_with_helm}).\n"
         + "\n".join(comments)
         + "\n"
         + yaml.safe_dump(values, sort_keys=True, width=1000)
@@ -1604,6 +1621,7 @@ def build_helm(
         existing_secret_keys=tuple(sorted(secret_keys)) if offer_existing else (),
         optional_inputs=tuple(sorted(optional_inputs)),
         retired=retired,
+        naming=naming,
     )
     files["Chart.yaml"] = yaml.safe_dump(chart.metadata(), sort_keys=True).encode()
     files["templates/NOTES.txt"] = _notes(chart).encode()
@@ -1716,7 +1734,7 @@ def _readme(
     lines = [
         f"# {chart.name}",
         "",
-        "Written by `piceli bundle --helm`. Install:",
+        f"Written by `{chart.naming.tool_with_helm}`. Install:",
         "",
         "```sh",
         _install_command(chart),

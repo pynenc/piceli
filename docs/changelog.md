@@ -4,6 +4,33 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.80.0
+
+### piceli bundle names the product the operator installs (ops#102)
+
+- **`--input-prefix PREFIX`** (default `PICELI_INPUT_`) names the input
+  variables of `prepare.sh`, in its error texts and in `INSTALL.md`.
+- **`--tool-name NAME`** (default `piceli bundle`) is the tool named in the
+  generated comments: `prepare.sh`, the headers of the chart's templates,
+  `values.yaml`, `Chart.yaml` and the chart README.
+- **`--annotation-domain DOMAIN`** (default `piceli.io`) is the domain of
+  every annotation and label key the bundle writes (`DOMAIN/bundle`,
+  `/namespace`, `/helm-release`, `/configmaps-digest`, `/secrets-digest`,
+  `safety.DOMAIN/allow-<rule>`), in the objects, the pod templates, the
+  selectors that use them and the `fieldPath` that reads one. A bad name is
+  refused with `bundle-invalid`.
+- With all three set, no file or file name of a bundle or chart holds the
+  tool's name: the base's image host, the `schema` of `bundle.json` and the
+  chart's Secrets template take the first label of the domain
+  (`images.shop.invalid`, `shop.client-bundle.v1`,
+  `templates/shop-secrets.yaml`). `piceli support-bundle` reads the
+  `DOMAIN/bundle` marker under any domain.
+- **Upgrade:** the defaults are unchanged: a bundle rendered without the
+  options is byte for byte the same. Moving an installed chart to a new
+  annotation domain works with `helm upgrade` but makes its pods roll once
+  (the digest annotation keys on the pod templates change); the old keys are
+  not migrated.
+
 ## Version 0.79.0
 
 ### A refused source says why, and the builder repairs its checkout (ops#101)

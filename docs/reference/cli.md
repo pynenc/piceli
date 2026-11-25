@@ -916,6 +916,9 @@ Package the app for a cluster Piceli never accesses (kustomize, prepare.sh, imag
 | `--approve` | text |  | With --push: the digest printed without --approve; pushes it |
 | `--credentials` | path |  | With --push: private JSON file, {"username", "password"} or {"token"} |
 | `--ca-file` | path |  | With --push: CA bundle for a TLS registry |
+| `--input-prefix` | text | `PICELI_INPUT_` | Prefix of the input variables prepare.sh reads (<prefix><NAME>=path) |
+| `--tool-name` | text | `piceli bundle` | The tool named in the generated comments (written by NAME) |
+| `--annotation-domain` | text | `piceli.io` | Domain of the annotation and label keys the bundle writes (DOMAIN/bundle, DOMAIN/namespace, ...) |
 
 **Contract**
 
@@ -926,7 +929,7 @@ Package the app for a cluster Piceli never accesses (kustomize, prepare.sh, imag
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Approval applies to --helm --push only: without --approve it prints the chart's deterministic digest and exits 3; --approve DIGEST pushes path/<name>:<version> as helm push does. --helm writes a Helm 3 chart (Chart.yaml, values.yaml, values.schema.json, templates/) instead of the kustomize bundle: settings, secret inputs and toggles are values; generated Secrets are made at install and kept across upgrades with lookup. Otherwise never contacts a cluster or registry and writes no secret value. Renders like `piceli render --env`; refuses objects that break a foreign-cluster safety rule (bundle-unsafe-<rule>, with every violation) unless the App waives it per object (app.safety_exception). Writes a kustomize base and overlays/dev, prepare.sh (the generated Secrets, made in the client's cluster with kubectl and openssl), OCI image archives with SBOMs, INSTALL.md, UNINSTALL.md, bundle.json and SHA256SUMS. --out must be absent or empty; nothing is left behind on failure.
+- **Notes:** Approval applies to --helm --push only: without --approve it prints the chart's deterministic digest and exits 3; --approve DIGEST pushes path/<name>:<version> as helm push does. --helm writes a Helm 3 chart (Chart.yaml, values.yaml, values.schema.json, templates/) instead of the kustomize bundle: settings, secret inputs and toggles are values; generated Secrets are made at install and kept across upgrades with lookup. Otherwise never contacts a cluster or registry and writes no secret value. Renders like `piceli render --env`; refuses objects that break a foreign-cluster safety rule (bundle-unsafe-<rule>, with every violation) unless the App waives it per object (app.safety_exception). Writes a kustomize base and overlays/dev, prepare.sh (the generated Secrets, made in the client's cluster with kubectl and openssl), OCI image archives with SBOMs, INSTALL.md, UNINSTALL.md, bundle.json and SHA256SUMS. --out must be absent or empty; nothing is left behind on failure. --input-prefix, --tool-name and --annotation-domain choose the names the operator sees (the input variables of prepare.sh, the tool in generated comments, the domain of the annotation and label keys); the defaults give the same bundle as before.
 
 (cli-cache-prune)=
 ### `piceli cache prune`

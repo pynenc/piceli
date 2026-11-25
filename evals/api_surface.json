@@ -12660,12 +12660,14 @@
     ],
     "flags": [
      "--all-platforms",
+     "--annotation-domain",
      "--app-version",
      "--approve",
      "--ca-file",
      "--credentials",
      "--env",
      "--helm",
+     "--input-prefix",
      "--name",
      "--out",
      "--output-dir",
@@ -12673,6 +12675,7 @@
      "--push",
      "--receipt",
      "--storage-class",
+     "--tool-name",
      "--version"
     ],
     "subcommands": []
@@ -17793,6 +17796,7 @@
   "piceli.bundle.guides",
   "piceli.bundle.helm",
   "piceli.bundle.images",
+  "piceli.bundle.naming",
   "piceli.bundle.prepare",
   "piceli.bundle.rules",
   "piceli.bundle.safety",

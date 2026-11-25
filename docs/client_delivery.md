@@ -39,7 +39,7 @@ shop-bundle/
 
 - **Every object** carries `app.kubernetes.io/part-of=<name>` (and its pods
   too; selectors are never changed) and the annotation
-  `piceli.io/bundle: <name>@<version>`. `<name>` is the render's part-of
+  `piceli.io/bundle: <name>@<version>` (the domain is yours to choose, see below). `<name>` is the render's part-of
   label (the App name by default) or `--name`.
 - **No Secret is shipped.** Each Secret the app declares is bound to outputs
   of the pipeline's generators (`Secrets(Random, Template, TlsCa, …)`, see
@@ -49,7 +49,7 @@ shop-bundle/
   values, a private CA with its leaf certificates (the CA key never leaves
   the script's private temporary directory). Values from sources Piceli
   cannot generate (`Sops`, `Vault`, `AwsSecret`, an import) are read from
-  files the client names (`PICELI_INPUT_<NAME>=path`). The script is POSIX
+  files the client names (`PICELI_INPUT_<NAME>=path`, or your own prefix). The script is POSIX
   `sh`, idempotent and all-or-nothing (every Secret present: nothing to do;
   none: create all; some: refuse and name them), and never prints a value.
   An object other than a Secret that holds a secret value is refused
@@ -72,6 +72,42 @@ shop-bundle/
   namespace, egress only to the namespace and the cluster DNS. Egress the
   app declares with `app.network_policy(..., egress=...)` adds to it and is
   listed in INSTALL.md.
+
+## The names the operator sees
+
+An operator who installs the bundle reads its files, so they can carry the
+owner's names instead of the tool's. Three options of `piceli bundle` (both
+the kustomize bundle and `--helm`) choose them:
+
+| Option | Default | What it names |
+| --- | --- | --- |
+| `--input-prefix PREFIX` | `PICELI_INPUT_` | the input variables of `prepare.sh` (`<PREFIX><NAME>=path`), in its error texts and in INSTALL.md |
+| `--tool-name NAME` | `piceli bundle` | the tool in generated comments: `prepare.sh`, the file headers, `values.yaml`, `Chart.yaml`, the chart README (`--helm` adds no suffix to a custom name) |
+| `--annotation-domain DOMAIN` | `piceli.io` | the domain of every annotation and label key the bundle writes: `DOMAIN/bundle`, `DOMAIN/namespace`, `DOMAIN/helm-release`, `DOMAIN/configmaps-digest`, `DOMAIN/secrets-digest`, `safety.DOMAIN/allow-<rule>` |
+
+```sh
+piceli bundle app.py:pipeline --env client --out shop-bundle \
+  --input-prefix SHOP_INPUT_ --tool-name "shop bundle" --annotation-domain shop.example
+```
+
+- A bad name is refused with `bundle-invalid`: the prefix is capital letters,
+  digits and `_`; the tool name is plain text of 60 characters or fewer; the
+  domain is a lower-case DNS name that is not a Kubernetes one.
+- The keys are renamed in every `labels`, `annotations` and selector of the
+  objects, and the `fieldPath` that reads one, so selectors still match their
+  pods. Node labels and other keys that are not Piceli's own stay.
+- The domain also names what is not an annotation: the host of build images
+  in the base becomes `images.<first label>.invalid`, the `schema` of
+  `bundle.json` becomes `<first label>.client-bundle.v1` and the chart's
+  Secrets template `templates/<first label>-secrets.yaml` (for `shop.example`:
+  `shop`). With the defaults these are the names of every earlier bundle.
+- The defaults give files identical to the bundles of earlier versions.
+- `piceli support-bundle` reads the `DOMAIN/bundle` marker under any domain.
+- **Upgrade of an installed chart.** `helm upgrade` with a chart rendered
+  under a new domain works over an install made with the old keys. The keys
+  on the old objects change; on the pod templates the digest annotations
+  (`configmaps-digest`, `secrets-digest`) change their key, so the pods roll
+  once. The old keys are not migrated or removed by the chart.
 
 ## The safety gate
 
