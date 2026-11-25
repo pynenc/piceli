@@ -66,16 +66,14 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.78
+## What's new in 0.79
 
-- **Shared steps run alongside**: with `shared_commands_alongside = true`
-  in a host build's `[build]`, the shared commands run at the same time as
-  the first platform's commands; each image is packaged once its inputs
-  are done.
-- **One flaky request no longer fails a copy**: registry requests retry
-  transient errors with backoff, a chunked upload resumes from the
-  registry's `Range`, and a failure names its side, host, request and
-  error. `piceli promote` retries Git up to three times.
+- **A refused source says why**: a host build refused for `source-identity`
+  or `source-drift` names the source and the failed check in its log and in
+  `piceli gitops builds`.
+- **A checkout the build would refuse is cloned again**: `builder serve`
+  runs the build's own check after each checkout, and re-clones the checkout
+  and then the mirror when it fails.
 
 ## Web UI
 
