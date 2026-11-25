@@ -739,6 +739,14 @@ def refusal_detail(error: Any) -> str:
     if code.startswith("context-") or code == "host-build-path-not-staged":
         return f": {error}"
     reason = str(getattr(error, "reason", "") or "")
+    if getattr(error, "cause", "") == "source-dirty":
+        # 0.80.0: a builder or Job build records its sources itself; the
+        # file's allow_dirty does not reach it.
+        reason = reason.replace(
+            "commit them or set allow_dirty = true",
+            "builder and Job builds need a clean checkout and ignore "
+            "allow_dirty in inputs.toml",
+        )
     if reason and code in ("source-identity", "source-drift"):
         return f": {reason}"
     return ""

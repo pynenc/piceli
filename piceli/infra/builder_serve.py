@@ -1568,6 +1568,12 @@ for src in /work/src/*/; do
   name=$(basename "$src")
   mkdir "$dest/$name"
   (cd "$src" && tar -cf - .) | (cd "$dest/$name" && tar -xf -)
+  # 0.80.0: a copy that Git calls changed is named before the build starts
+  if [ -e "$dest/$name/.git" ]; then
+    left=$(GIT_OPTIONAL_LOCKS=0 git -C "$dest/$name" -c safe.directory='*' \\
+      status --porcelain=v1 --untracked-files=all 2>&1 | head -3 | tr '\\n' ';') || true
+    [ -z "$left" ] || echo "builder: after the copy, source $name is not clean: $left"
+  fi
 done
 piceli "$@"
 """

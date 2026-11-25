@@ -174,6 +174,7 @@ class BuildSpecError(ValueError):
         output_tail: str = "",
         first_error: str = "",
         reason: str = "",
+        cause: str = "",
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -182,6 +183,8 @@ class BuildSpecError(ValueError):
         #: bounded. Kept out of the message, which stays fixed; the build log
         #: and the controller's record show it.
         self.reason = reason
+        #: 0.80.0: the cause's own code (``source-dirty``, ...) when it has one.
+        self.cause = cause
         self.steps = steps
         #: The redacted, bounded end of a failed command's output (host
         #: builds); never part of the message.
@@ -202,7 +205,12 @@ def source_refusal(error: SourceIdentityError) -> BuildSpecError:
     reason = redact(str(error), limit=400)
     if isinstance(error, SourceDriftError):
         return BuildSpecError("source-drift", "a source changed", reason=reason)
-    return BuildSpecError("source-identity", "sources not verifiable", reason=reason)
+    return BuildSpecError(
+        "source-identity",
+        "sources not verifiable",
+        reason=reason,
+        cause=error.code or "",
+    )
 
 
 def _fail(message: str) -> BuildSpecError:

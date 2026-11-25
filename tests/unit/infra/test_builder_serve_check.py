@@ -171,3 +171,45 @@ def test_take_next_needs_once() -> None:
     )
     assert result.exit_code == 2
     assert "add --once" in result.output
+
+
+def _run_copy(tmp_path: Path, dirty: bool) -> str:
+    """The container's copy step on a local source; ``piceli`` is a stub."""
+    import os
+
+    from piceli.infra.builder_serve import _COPY_AND_RUN, SOURCES
+
+    source = tmp_path / "work" / "src" / "shop"
+    source.mkdir(parents=True)
+    git = ["git", "-C", str(source), "-c", "user.email=t@x", "-c", "user.name=t"]
+    subprocess.run([*git, "init", "-q", "-b", "main"], check=True)
+    (source / "a.txt").write_text("a\n")
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-qm", "one"], check=True)
+    if dirty:
+        (source / "extra.txt").write_text("not committed\n")
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "piceli").write_text("#!/bin/sh\nexit 0\n")
+    (stub / "piceli").chmod(0o755)
+    script = _COPY_AND_RUN.replace(SOURCES, str(tmp_path / "dest")).replace(
+        "/work/", f"{tmp_path}/work/"
+    )
+    done = subprocess.run(
+        ["sh", "-c", script, "sh"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env={**os.environ, "PATH": f"{stub}:{os.environ['PATH']}"},
+    )
+    return done.stdout
+
+
+def test_a_clean_copy_says_nothing(tmp_path: Path) -> None:
+    assert _run_copy(tmp_path, dirty=False) == ""
+
+
+def test_a_copy_git_calls_changed_is_named_before_the_build(tmp_path: Path) -> None:
+    assert _run_copy(tmp_path, dirty=True) == (
+        "builder: after the copy, source shop is not clean: ?? extra.txt;\n"
+    )
