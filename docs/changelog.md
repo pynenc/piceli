@@ -4,6 +4,27 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.82.0
+
+### A source missing a tracked file is cloned again; the copy is restored (ops#101)
+
+- **The host check looks at the files.** `git status` calls a checkout clean
+  when a tracked file is missing but its index entry has a skip-worktree or
+  assume-unchanged flag. After each checkout, `builder serve` now also checks
+  that every tracked file exists; if not, it clones the source again
+  (`source NAME did not verify on the host (source 'NAME' lacks 1 tracked
+  file(s) (path)); re-cloned it`).
+- **The container's copy is restored from its objects.** If Git calls the copy
+  of a source changed, the log names the paths and how each looks in the mount
+  (`builder: in the mount: ...`), the container restores the tracked files
+  from the copy's own objects (exactly the commit the host verified), and says
+  `builder: source NAME restored from its objects; it is clean`, or
+  `still not clean` with the paths. The build then records the sources as
+  before.
+- **The copy fails loudly.** The `tar` pipe is now `cp -a`: a file it cannot
+  copy stops the build with the reason, instead of leaving a copy without it.
+- **Upgrade:** `builder serve` on the build hosts and the builder image.
+
 ## Version 0.81.0
 
 ### A missing value reads as its default only where the chart owner asks (ops#104)

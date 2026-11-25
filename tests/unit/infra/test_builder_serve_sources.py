@@ -287,3 +287,16 @@ def test_checkout_problem_names_the_source_and_the_check(
     assert "not a directory" in (
         checkout_problem(tmp_path / "missing", commit, "product") or ""
     )
+
+
+def test_a_tracked_file_missing_under_a_skip_worktree_flag_is_a_problem(
+    repo: Path,
+) -> None:
+    """``git status`` calls this tree clean; the file is not there."""
+    commit = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "update-index", "--skip-worktree", "changed.rs")
+    (repo / "changed.rs").unlink()
+    assert _git(repo, "status", "--porcelain") == ""  # what hid it
+    assert checkout_problem(repo, commit, "product") == (
+        "source 'product' lacks 1 tracked file(s) (changed.rs)"
+    )
