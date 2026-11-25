@@ -166,7 +166,7 @@ jobs:
           uv run
           --with-requirements examples/comparisons/cdk8s/requirements.txt
           --with-requirements examples/comparisons/pulumi/requirements.txt
-          pytest tests/unit/comparisons tests/unit/bundle/test_helm.py -v
+          pytest tests/unit/comparisons tests/unit/bundle/test_helm.py tests/unit/bundle/test_helm_existing_secrets.py tests/unit/bundle/test_naming.py -v
 
   kind-nodes:
     # The supported Kubernetes minors (.github/kind-nodes.json, newest first,

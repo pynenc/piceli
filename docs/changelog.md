@@ -4,6 +4,63 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.80.0
+
+### piceli bundle names the product the operator installs (ops#102)
+
+- **`--input-prefix PREFIX`** (default `PICELI_INPUT_`) names the input
+  variables of `prepare.sh`, in its error texts and in `INSTALL.md`.
+- **`--tool-name NAME`** (default `piceli bundle`) is the tool named in the
+  generated comments: `prepare.sh`, the headers of the chart's templates,
+  `values.yaml`, `Chart.yaml` and the chart README.
+- **`--annotation-domain DOMAIN`** (default `piceli.io`) is the domain of
+  every annotation and label key the bundle writes (`DOMAIN/bundle`,
+  `/namespace`, `/helm-release`, `/configmaps-digest`, `/secrets-digest`,
+  `safety.DOMAIN/allow-<rule>`), in the objects, the pod templates, the
+  selectors that use them and the `fieldPath` that reads one. A bad name is
+  refused with `bundle-invalid`.
+- With all three set, no file or file name of a bundle or chart holds the
+  tool's name: the base's image host, the `schema` of `bundle.json` and the
+  chart's Secrets template take the first label of the domain
+  (`images.shop.invalid`, `shop.client-bundle.v1`,
+  `templates/shop-secrets.yaml`). `piceli support-bundle` reads the
+  `DOMAIN/bundle` marker under any domain.
+- **Upgrade:** the defaults are unchanged: a bundle rendered without the
+  options is byte for byte the same. Moving an installed chart to a new
+  annotation domain works with `helm upgrade` but makes its pods roll once
+  (the digest annotation keys on the pod templates change); the old keys are
+  not migrated.
+
+### A HelmChart takes one existing Secret per app Secret, and optional values keep their default on reuse (ops#103)
+
+- **`HelmChart(existing_secrets={"api.existingSecret": ["shop-api"]})`** maps
+  a value name to the app Secrets it replaces. Set it to the name of a Secret
+  you made: the chart does not render those Secrets, and every reference to
+  them (environment, volumes, projected sources, `envFrom`) reads the name.
+- **Only what is needed runs.** A generator whose outputs land only in
+  replaced Secrets is skipped, and an import that feeds only them is not
+  required, so an install that brings one Secret needs no `--set-file` for the
+  rest. The `secrets-digest` annotation takes the name, so a different Secret
+  rolls the pods.
+- The README, `values.yaml` and `values.schema.json` list each value with the
+  keys its Secret must hold. A bad declaration is refused when the chart is
+  built (`bundle-invalid`): an unknown Secret, a Secret in two values, a name
+  that clashes with another value, a bad name, two Secrets of one value with a
+  key in common.
+- **`existingSecret` is unchanged:** it replaces every Secret, and when it and
+  a value are set together, `existingSecret` wins for all. List
+  `existingSecret` in `existing_secrets` to make it a value of some Secrets
+  only; then nothing replaces every Secret.
+- **Optional values keep their default.** `helm upgrade --reuse-values` over a
+  release made before a value existed no longer turns it off: a
+  `HelmOptional` or `HelmToggle` whose default is `true` reads as `true` when
+  its key is missing. An explicit `false` still turns it off.
+- **Upgrade:** a chart without `existing_secrets` renders byte for byte as in
+  0.79.0, and a default of `false` renders as before. Only a chart with an
+  optional value or toggle whose default is `true` differs in its templates
+  (the `if` tests the key, then its value); nothing changes for a fresh
+  install.
+
 ## Version 0.79.0
 
 ### A refused source says why, and the builder repairs its checkout (ops#101)

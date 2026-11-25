@@ -464,7 +464,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "prepare.sh (the generated Secrets, made in the client's cluster "
             "with kubectl and openssl), OCI image archives with SBOMs, "
             "INSTALL.md, UNINSTALL.md, bundle.json and SHA256SUMS. --out must "
-            "be absent or empty; nothing is left behind on failure.",
+            "be absent or empty; nothing is left behind on failure. "
+            "--input-prefix, --tool-name and --annotation-domain choose the "
+            "names the operator sees (the input variables of prepare.sh, the "
+            "tool in generated comments, the domain of the annotation and label "
+            "keys); the defaults give the same bundle as before.",
         ),
         "support-bundle": _C(
             "Collect a read-only, redacted snapshot of a namespace (no Secrets, no env values).",

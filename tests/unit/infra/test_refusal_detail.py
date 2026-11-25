@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -53,3 +54,33 @@ def test_the_reason_is_redacted_and_bounded() -> None:
 def test_refusal_detail(code: str, reason: str, expected: str) -> None:
     error = SimpleNamespace(code=code, reason=reason)
     assert refusal_detail(error) == expected
+
+
+def test_a_dirty_source_names_its_paths_and_the_builder_policy(tmp_path: Path) -> None:
+    import subprocess
+
+    from piceli.artifacts.build_spec import BuildSpecError
+    from piceli.artifacts.source_identity import (
+        InputsSpec,
+        SourceSpec,
+        record_inputs,
+    )
+
+    repo = tmp_path / "shop"
+    repo.mkdir()
+    git = ["git", "-C", str(repo), "-c", "user.email=t@x", "-c", "user.name=t"]
+    subprocess.run([*git, "init", "-q", "-b", "main"], check=True)
+    (repo / "a.txt").write_text("a\n")
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-qm", "one"], check=True)
+    (repo / "a.txt").write_text("changed\n")
+    (repo / "new.txt").write_text("new\n")
+    with pytest.raises(SourceIdentityError) as caught:
+        record_inputs(InputsSpec((SourceSpec("shop", str(repo)),), roots={}))
+    error: BuildSpecError = source_refusal(caught.value)
+    assert error.cause == "source-dirty"
+    assert "2 uncommitted change(s) (M a.txt, ?? new.txt)" in error.reason
+    detail = refusal_detail(error)
+    assert detail.startswith(": source 'shop' has 2 uncommitted change(s) (M a.txt")
+    assert "ignore allow_dirty in inputs.toml" in detail
+    assert "set allow_dirty = true" not in detail

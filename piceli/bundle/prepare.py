@@ -13,7 +13,8 @@ client's cluster with ``openssl`` and creates the Secrets with ``kubectl``:
   self-signed certificate), with the same ``openssl`` settings as the release
   engine; the CA key never leaves the script's private directory;
 - any other source (``Sops``, ``Vault``, ``AwsSecret``, an import): a file the
-  client names with ``PICELI_INPUT_<NAME>=path`` (never read by Piceli).
+  client names with ``PICELI_INPUT_<NAME>=path`` (never read by Piceli;
+  ``--input-prefix`` chooses another prefix).
 
 The script is idempotent and all-or-nothing: when every Secret exists it does
 nothing; when none does it creates them all; when only some do it refuses and
@@ -32,6 +33,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from piceli.bundle.naming import Naming
 from piceli.k8s.release_secret_spec import (
     ImportSecretSpec,
     RandomSecretSpec,
@@ -168,20 +170,23 @@ def required_generators(
     return order
 
 
-def input_variable(name: str) -> str:
+def input_variable(name: str, naming: Naming | None = None) -> str:
     """The environment variable naming the file of a client-provided value."""
-    return "PICELI_INPUT_" + re.sub(r"[^A-Z0-9]", "_", name.upper())
+    prefix = (naming or Naming()).input_prefix
+    return prefix + re.sub(r"[^A-Z0-9]", "_", name.upper())
 
 
 def client_inputs(
-    plans: Sequence[SecretPlan], generators: Mapping[str, Any]
+    plans: Sequence[SecretPlan],
+    generators: Mapping[str, Any],
+    naming: Naming | None = None,
 ) -> list[dict[str, str]]:
     """Values the client provides as files (sources Piceli cannot generate)."""
     return [
         {
             "generator": name,
             "type": str(generators[name].type),
-            "variable": input_variable(name),
+            "variable": input_variable(name, naming),
         }
         for name in required_generators(plans, generators)
         if not _generated(generators[name])
@@ -227,7 +232,9 @@ def _config(lines: Sequence[str], path: str) -> list[str]:
     return [f"printf '%s\\n' {' '.join(quote(line) for line in lines)} > {path}"]
 
 
-def _generator_lines(name: str, spec: Any, files: _Files) -> list[str]:
+def _generator_lines(
+    name: str, spec: Any, files: _Files, naming: Naming | None = None
+) -> list[str]:
     lines = [f"# {name} ({spec.type})"]
     if isinstance(spec, RandomSecretSpec):
         lines.append(
@@ -314,7 +321,7 @@ def _generator_lines(name: str, spec: Any, files: _Files) -> list[str]:
                 f"-extfile {config} -extensions v3 -out {crt} >/dev/null 2>&1 || fail {failed}"
             )
     else:
-        variable = input_variable(name)
+        variable = input_variable(name, naming)
         lines.append(
             f'[ -n "${{{variable}:-}}" ] && [ -r "${{{variable}}}" ] || '
             f"fail {quote(f'set {variable} to a readable file holding {name}')}"
@@ -330,8 +337,10 @@ def script(
     app: str,
     plans: Sequence[SecretPlan],
     generators: Mapping[str, Any],
+    naming: Naming | None = None,
 ) -> str:
     """The text of ``prepare.sh`` for ``plans`` (see the module docstring)."""
+    naming = naming or Naming()
     files = _Files()
     order = required_generators(plans, generators)
     needs_openssl = any(
@@ -340,7 +349,7 @@ def script(
     )
     body = [
         "#!/bin/sh",
-        f"# prepare.sh: create the generated Secrets of {app} (written by piceli bundle).",
+        f"# prepare.sh: create the generated Secrets of {app} (written by {naming.tool_name}).",
         '# Usage: ./prepare.sh NAMESPACE   (KUBECTL="kubectl --context NAME" to pick a context)',
         "# Idempotent: does nothing when every Secret exists. Never prints a value.",
         "# shellcheck disable=SC2086",
@@ -390,7 +399,7 @@ def script(
         "",
     ]
     for name in order:
-        body += _generator_lines(name, generators[name], files)
+        body += _generator_lines(name, generators[name], files, naming)
     body.append("")
     for plan in plans:
         sources = " ".join(

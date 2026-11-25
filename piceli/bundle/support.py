@@ -13,7 +13,7 @@ it is sent, and the manifest records every method used):
   environment variables (never a value);
 - ``workloads.json``: Deployments, StatefulSets, DaemonSets and Jobs with
   their replica counts, conditions and the bundle they came from
-  (``piceli.io/bundle``);
+  (``<domain>/bundle``, ``piceli.io`` unless the bundle chose another domain);
 - ``health.json``: what the app declares as its health (each workload's
   readiness probe) and whether it holds (ready replicas);
 - ``events.json``: the namespace's events;
@@ -366,6 +366,25 @@ def _pod(pod: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def bundle_marker(annotations: Mapping[str, Any] | None) -> Any:
+    """The ``<name>@<version>`` a bundle wrote on an object, or ``None``.
+
+    The key is ``<domain>/bundle``: ``piceli.io/bundle`` by default, or the
+    domain the bundle's owner chose (``piceli bundle --annotation-domain``).
+    The default key wins; otherwise the first ``<domain>/bundle`` whose value
+    looks like ``name@version`` is taken, so a support bundle of a renamed
+    bundle needs no option.
+    """
+    found = annotations or {}
+    if "piceli.io/bundle" in found:
+        return found["piceli.io/bundle"]
+    for key in sorted(found):
+        value = found[key]
+        if key.endswith("/bundle") and isinstance(value, str) and "@" in value:
+            return value
+    return None
+
+
 def _workload(item: Mapping[str, Any]) -> dict[str, Any]:
     metadata = item.get("metadata") or {}
     spec = item.get("spec") or {}
@@ -374,7 +393,7 @@ def _workload(item: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "kind": item.get("kind"),
         "name": metadata.get("name"),
-        "bundle": (metadata.get("annotations") or {}).get("piceli.io/bundle"),
+        "bundle": bundle_marker(metadata.get("annotations")),
         "labels": metadata.get("labels") or {},
         "replicas": spec.get("replicas"),
         "ready": status.get("readyReplicas", status.get("numberReady")),

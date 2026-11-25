@@ -17,6 +17,14 @@ pinned public image. The test never reads the ambient kubeconfig.
 3. ``helm uninstall``: the ClusterRole, its binding and the Secret are gone;
    the StatefulSet's claim stays (deleting the namespace removes it).
 
+A second test (0.80.0) uses an app with two Secrets and an optional value:
+
+4. ``tokenSecret`` set to a Secret the test made: the chart renders the other
+   Secret and not the replaced one, and the install needs no ``--set-file``.
+5. ``helm upgrade --reuse-values`` from a release made without the optional
+   value keeps its default (the optional ConfigMap is installed); an explicit
+   ``flags.enabled=false`` removes it.
+
 Everything it created is removed afterwards (release, namespace).
 """
 
@@ -76,6 +84,34 @@ app.stateful_set(
 pipeline = Pipeline(app, Target.profile("client", namespace="agent"), secrets=secrets)
 chart = HelmChart(pipeline, required=("team",))
 """
+
+EXISTING_APP = """
+from piceli import (App, HelmChart, HelmOptional, MemoryVolume, Pipeline, PodDefaults,
+                    Random, Resources, Secrets, SecretVolume, Security, Target)
+from piceli.k8s.release_secret_spec import ImportSecretSpec
+
+RESOURCES = Resources(cpu="10m", memory="16Mi", cpu_limit="100m", memory_limit="32Mi")
+app = App("agent", pod_defaults=PodDefaults(security=Security.restricted(
+    user=10001, group=10001, fs_group=10001, read_only_root_filesystem=True)))
+secrets = Secrets(
+    api_token=ImportSecretSpec.model_validate({"type": "import", "env": "API_TOKEN"}),
+    extra_key=Random(32),
+)
+token = app.secret("agent-token", {"api-token": secrets.ref("api_token")})
+extra = app.secret("agent-extra", {"extra-key": secrets.ref("extra_key")})
+flags = app.config("agent-flags", {"mode": "on"})
+app.deployment(
+    "agent", image="@@IMAGE@@", command=["sh", "-c", "sleep 3600"], resources=RESOURCES,
+    volumes={"/run/token": SecretVolume(token, default_mode=0o440),
+             "/run/extra": SecretVolume(extra, default_mode=0o440),
+             "/tmp": MemoryVolume(size_limit="1Mi", name="tmp")},
+)
+pipeline = Pipeline(app, Target.profile("client", namespace="agent"), secrets=secrets)
+chart = HelmChart(pipeline, existing_secrets={"tokenSecret": ["agent-token"]}@@OPTIONAL@@)
+"""
+FLAGS = (
+    ', optional={"flags.enabled": HelmOptional("flags", objects=[flags], default=True)}'
+)
 
 pytestmark = [
     pytest.mark.integration,
@@ -187,3 +223,95 @@ def test_install_upgrade_and_uninstall(tmp_path: Path) -> None:
             "--wait=true",
             check=False,
         )
+
+
+def _chart(tmp_path: Path, name: str, optional: str) -> Path:
+    """The two-Secret app as a chart in ``tmp_path/name`` (no cluster needed)."""
+    source = EXISTING_APP.replace("@@IMAGE@@", BUSYBOX).replace(
+        "@@OPTIONAL@@", optional
+    )
+    directory = tmp_path / f"{name}-src"
+    directory.mkdir()
+    (directory / "app.py").write_text(source)
+    out = tmp_path / name
+    cwd = Path.cwd()
+    os.chdir(directory)
+    try:
+        result = CliRunner().invoke(
+            cli, ["bundle", "app.py:chart", "--helm", "--out", str(out)]
+        )
+    finally:
+        os.chdir(cwd)
+    assert result.exit_code == 0, result.output
+    return out
+
+
+def test_one_existing_secret_and_optional_defaults_on_reuse(tmp_path: Path) -> None:
+    older = _chart(tmp_path, "older", "")  # a release made before the optional
+    newer = _chart(tmp_path, "newer", FLAGS)
+    namespace = f"piceli-helm-{uuid.uuid4().hex[:8]}"
+    kube = ("--kubeconfig", KUBECONFIG)
+
+    def helm(*args: str, check: bool = True) -> str:
+        return _tool(
+            tmp_path, "helm", *kube, "--kube-context", CONTEXT, *args, check=check
+        )
+
+    def kubectl(*args: str, check: bool = True) -> str:
+        return _tool(
+            tmp_path, "kubectl", *kube, "--context", CONTEXT, *args, check=check
+        )
+
+    def present(kind: str, name: str) -> bool:
+        found = kubectl(
+            "-n", namespace, "get", kind, name, "--ignore-not-found", "-o", "name",
+            check=False,
+        )  # fmt: skip
+        return bool(found.strip())
+
+    try:
+        kubectl("create", "namespace", namespace)
+        kubectl(
+            "-n", namespace, "create", "secret", "generic", "client-token",
+            "--from-literal=api-token=made-by-the-client",
+        )  # fmt: skip
+        # Only tokenSecret is set: no --set-file, the client's Secret is read,
+        # the chart makes the other Secret and not the replaced one.
+        helm(
+            "install", "agent", str(older), "-n", namespace,
+            "--set", "tokenSecret=client-token", "--wait", "--timeout", "5m",
+        )  # fmt: skip
+        assert present("secret", "agent-extra")
+        assert not present("secret", "agent-token")
+        pod = json.loads(
+            kubectl("-n", namespace, "get", "deployment", "agent", "-o", "json")
+        )
+        volumes = pod["spec"]["template"]["spec"]["volumes"]
+        assert {v["secret"]["secretName"] for v in volumes if "secret" in v} == {
+            "client-token", "agent-extra",
+        }  # fmt: skip
+        extra = kubectl("-n", namespace, "get", "secret", "agent-extra", "-o", "json")
+        assert present("configmap", "agent-flags")  # a plain object of the older chart
+        # The newer chart, over the stored values of the older release.
+        helm(
+            "upgrade", "agent", str(newer), "-n", namespace, "--reuse-values",
+            "--wait", "--timeout", "5m",
+        )  # fmt: skip
+        assert present("configmap", "agent-flags"), "reuse-values dropped the default"
+        assert (
+            kubectl("-n", namespace, "get", "secret", "agent-extra", "-o", "json")
+            == extra
+        )
+        helm(
+            "upgrade", "agent", str(newer), "-n", namespace, "--reuse-values",
+            "--set", "flags.enabled=false", "--wait", "--timeout", "5m",
+        )  # fmt: skip
+        assert not present("configmap", "agent-flags"), (
+            "explicit false must turn it off"
+        )
+    finally:
+        helm("uninstall", "agent", "-n", namespace, "--ignore-not-found", check=False)
+        kubectl(
+            "delete", "namespace", namespace, "--ignore-not-found", "--wait=true",
+            check=False,
+        )  # fmt: skip

@@ -7,7 +7,11 @@ Contract:
   foreign clusters and writes the bundle into ``DIR`` (absent or empty): a
   kustomize base and ``overlays/dev``, ``prepare.sh``, the image archives of
   ``--receipt`` (``--platform``, default ``linux/amd64``; ``--all-platforms``),
-  ``INSTALL.md``, ``UNINSTALL.md``, ``bundle.json`` and ``SHA256SUMS``. It
+  ``INSTALL.md``, ``UNINSTALL.md``, ``bundle.json`` and ``SHA256SUMS``.
+  ``--input-prefix``, ``--tool-name`` and ``--annotation-domain`` choose the
+  names the operator sees (the input variables of ``prepare.sh``, the tool in
+  generated comments, the domain of the annotation and label keys); the
+  defaults are the names of every earlier bundle. It
   never contacts a cluster or registry and writes no secret value. Prints
   ``{"state": "written", …}``; a safety violation is refused with
   ``bundle-unsafe-<rule>`` and every violation in ``violations``.
@@ -24,6 +28,12 @@ from typing import Annotated, Any, NoReturn
 
 import typer
 
+from piceli.bundle.naming import (
+    DEFAULT_DOMAIN,
+    DEFAULT_INPUT_PREFIX,
+    DEFAULT_TOOL_NAME,
+    Naming,
+)
 from piceli.cli_contract import emit_json, reject, say
 from piceli.k8s.cli.cluster_access import (
     AllowExecOption,
@@ -235,6 +245,28 @@ def bundle(
         Path | None,
         typer.Option("--ca-file", help="With --push: CA bundle for a TLS registry"),
     ] = None,
+    input_prefix: Annotated[
+        str,
+        typer.Option(
+            "--input-prefix",
+            help="Prefix of the input variables prepare.sh reads (<prefix><NAME>=path)",
+        ),
+    ] = DEFAULT_INPUT_PREFIX,
+    tool_name: Annotated[
+        str,
+        typer.Option(
+            "--tool-name",
+            help="The tool named in the generated comments (written by NAME)",
+        ),
+    ] = DEFAULT_TOOL_NAME,
+    annotation_domain: Annotated[
+        str,
+        typer.Option(
+            "--annotation-domain",
+            help="Domain of the annotation and label keys the bundle writes "
+            "(DOMAIN/bundle, DOMAIN/namespace, ...)",
+        ),
+    ] = DEFAULT_DOMAIN,
 ) -> None:
     """Package the app for a cluster Piceli never accesses (kustomize, prepare.sh, images; or a Helm chart)."""
     from piceli.bundle.build import BundleError, build_bundle, part_of, write_bundle
@@ -245,6 +277,10 @@ def bundle(
         receipt_images,
     )
 
+    try:
+        naming = Naming(input_prefix, tool_name, annotation_domain)
+    except ValueError as error:
+        reject("bundle-invalid", str(error))
     if platform and all_platforms:
         reject("bundle-invalid", "pass --platform or --all-platforms, not both")
     if not helm and (push or approve or app_version or credentials or ca_file):
@@ -302,6 +338,7 @@ def bundle(
             approve=approve,
             credentials=credentials,
             ca_file=ca_file,
+            naming=naming,
         )
         return
     assert out is not None
@@ -316,6 +353,7 @@ def bundle(
             environment=env,
             storage_class=storage_class,
             forward=_forward(app, components),
+            naming=naming,
         )
         used = {item.name for item in built.images if item.source == "receipt"}
         summary = write_bundle(
@@ -364,6 +402,7 @@ def _helm(
     approve: str | None,
     credentials: Path | None,
     ca_file: Path | None,
+    naming: Naming,
 ) -> None:
     """``bundle --helm``: the chart directory, and the OCI push plan or push."""
     from piceli.bundle.build import BundleError, build_bundle
@@ -381,6 +420,7 @@ def _helm(
             generators=generators,
             environment=env,
             storage_class=storage_class,
+            naming=naming,
         )
 
     try:

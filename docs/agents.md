@@ -244,7 +244,8 @@ noted.
   for a cluster Piceli never accesses (kustomize base and overlay,
   `prepare.sh`, image archives, `INSTALL.md`, `UNINSTALL.md`,
   `SHA256SUMS`); it writes only local files, contacts no cluster or
-  registry and writes no secret value. A refusal `bundle-unsafe-<rule>`
+  registry and writes no secret value (`--input-prefix`, `--tool-name` and
+  `--annotation-domain` choose the names its files show). A refusal `bundle-unsafe-<rule>`
   lists every violation; fix the model or, with the owner, declare
   `app.safety_exception(...)`. See {doc}`client_delivery`. With `--helm`
   it writes a Helm chart instead (settings, secret inputs and toggles as

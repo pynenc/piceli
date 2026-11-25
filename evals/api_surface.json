@@ -4772,11 +4772,13 @@
    },
    "attrs": [
     "descriptions",
+    "existing_secrets",
     "optional",
     "optional_inputs",
     "patched_values",
     "required",
     "retired",
+    "secret_values",
     "setting_keys",
     "settings",
     "storage_env",
@@ -4786,6 +4788,7 @@
    ],
    "init": [
     "descriptions",
+    "existing_secrets",
     "optional",
     "optional_inputs",
     "required",
@@ -4798,6 +4801,7 @@
    ],
    "methods": {
     "patched_values": [],
+    "secret_values": [],
     "setting_keys": []
    },
    "returns": {
@@ -12660,12 +12664,14 @@
     ],
     "flags": [
      "--all-platforms",
+     "--annotation-domain",
      "--app-version",
      "--approve",
      "--ca-file",
      "--credentials",
      "--env",
      "--helm",
+     "--input-prefix",
      "--name",
      "--out",
      "--output-dir",
@@ -12673,6 +12679,7 @@
      "--push",
      "--receipt",
      "--storage-class",
+     "--tool-name",
      "--version"
     ],
     "subcommands": []
@@ -17793,6 +17800,7 @@
   "piceli.bundle.guides",
   "piceli.bundle.helm",
   "piceli.bundle.images",
+  "piceli.bundle.naming",
   "piceli.bundle.prepare",
   "piceli.bundle.rules",
   "piceli.bundle.safety",
@@ -18184,5 +18192,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.79.0"
+ "version": "0.80.0"
 }

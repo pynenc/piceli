@@ -39,7 +39,7 @@ shop-bundle/
 
 - **Every object** carries `app.kubernetes.io/part-of=<name>` (and its pods
   too; selectors are never changed) and the annotation
-  `piceli.io/bundle: <name>@<version>`. `<name>` is the render's part-of
+  `piceli.io/bundle: <name>@<version>` (the domain is yours to choose, see below). `<name>` is the render's part-of
   label (the App name by default) or `--name`.
 - **No Secret is shipped.** Each Secret the app declares is bound to outputs
   of the pipeline's generators (`Secrets(Random, Template, TlsCa, …)`, see
@@ -49,7 +49,7 @@ shop-bundle/
   values, a private CA with its leaf certificates (the CA key never leaves
   the script's private temporary directory). Values from sources Piceli
   cannot generate (`Sops`, `Vault`, `AwsSecret`, an import) are read from
-  files the client names (`PICELI_INPUT_<NAME>=path`). The script is POSIX
+  files the client names (`PICELI_INPUT_<NAME>=path`, or your own prefix). The script is POSIX
   `sh`, idempotent and all-or-nothing (every Secret present: nothing to do;
   none: create all; some: refuse and name them), and never prints a value.
   An object other than a Secret that holds a secret value is refused
@@ -72,6 +72,42 @@ shop-bundle/
   namespace, egress only to the namespace and the cluster DNS. Egress the
   app declares with `app.network_policy(..., egress=...)` adds to it and is
   listed in INSTALL.md.
+
+## The names the operator sees
+
+An operator who installs the bundle reads its files, so they can carry the
+owner's names instead of the tool's. Three options of `piceli bundle` (both
+the kustomize bundle and `--helm`) choose them:
+
+| Option | Default | What it names |
+| --- | --- | --- |
+| `--input-prefix PREFIX` | `PICELI_INPUT_` | the input variables of `prepare.sh` (`<PREFIX><NAME>=path`), in its error texts and in INSTALL.md |
+| `--tool-name NAME` | `piceli bundle` | the tool in generated comments: `prepare.sh`, the file headers, `values.yaml`, `Chart.yaml`, the chart README (`--helm` adds no suffix to a custom name) |
+| `--annotation-domain DOMAIN` | `piceli.io` | the domain of every annotation and label key the bundle writes: `DOMAIN/bundle`, `DOMAIN/namespace`, `DOMAIN/helm-release`, `DOMAIN/configmaps-digest`, `DOMAIN/secrets-digest`, `safety.DOMAIN/allow-<rule>` |
+
+```sh
+piceli bundle app.py:pipeline --env client --out shop-bundle \
+  --input-prefix SHOP_INPUT_ --tool-name "shop bundle" --annotation-domain shop.example
+```
+
+- A bad name is refused with `bundle-invalid`: the prefix is capital letters,
+  digits and `_`; the tool name is plain text of 60 characters or fewer; the
+  domain is a lower-case DNS name that is not a Kubernetes one.
+- The keys are renamed in every `labels`, `annotations` and selector of the
+  objects, and the `fieldPath` that reads one, so selectors still match their
+  pods. Node labels and other keys that are not Piceli's own stay.
+- The domain also names what is not an annotation: the host of build images
+  in the base becomes `images.<first label>.invalid`, the `schema` of
+  `bundle.json` becomes `<first label>.client-bundle.v1` and the chart's
+  Secrets template `templates/<first label>-secrets.yaml` (for `shop.example`:
+  `shop`). With the defaults these are the names of every earlier bundle.
+- The defaults give files identical to the bundles of earlier versions.
+- `piceli support-bundle` reads the `DOMAIN/bundle` marker under any domain.
+- **Upgrade of an installed chart.** `helm upgrade` with a chart rendered
+  under a new domain works over an install made with the old keys. The keys
+  on the old objects change; on the pod templates the digest annotations
+  (`configmaps-digest`, `secrets-digest`) change their key, so the pods roll
+  once. The old keys are not migrated or removed by the chart.
 
 ## The safety gate
 
@@ -176,7 +212,8 @@ What becomes a value:
 | `storage.size` (0.31.0) | every claim | empty keeps each claim's declared size; set it at install (Kubernetes does not resize a StatefulSet's claims on upgrade) |
 | `deleteDataOnUninstall` | StatefulSets with claims | `true`: uninstall also deletes their claims (Kubernetes 1.27 or later) |
 | `existingSecret` (0.31.0) | every Secret of the app | the name of a Secret you created holding every secret key (the README lists them); the chart then makes no Secret and generates nothing |
-| each optional value (`intake.expose`, 0.31.0) | `HelmChart(optional=...)` | `true` installs the named objects |
+| each existing-Secret value (`api.existingSecret`, 0.80.0) | `HelmChart(existing_secrets=...)` | the name of a Secret you created for the app Secrets it replaces (the README lists its keys); the chart then does not make those Secrets, and a generated value or an input only they need is skipped |
+| each optional value (`intake.expose`, 0.31.0) | `HelmChart(optional=...)` | `true` installs the named objects; a value the stored values lack reads as its default (0.80.0) |
 | each object value (`intake.allowNamespaces`, 0.31.0) | `HelmChart(values=...)` | written at a JSON pointer of named objects (a list, a string, a number); where the object holds a string (a ConfigMap key, an environment variable), a number or boolean is written as one, `"true"` (0.65.0) |
 | each retired value (0.65.0) | `HelmChart(retired=...)` | accepted and ignored, so `helm upgrade --reuse-values` from an older chart works; the install notes warn when it is set |
 
@@ -204,6 +241,44 @@ generated keys, for example `openssl rand -base64 32`) and sets
 client holds every value, so it can copy one (an intake token) to another
 namespace. `existingSecret` is offered when the app's Secrets have distinct
 key names; a Secret volume then mounts that one Secret.
+
+**One existing Secret per app Secret** (0.80.0). `existingSecret` replaces
+every Secret at once. To bring only some, map a value name to the app
+Secrets it replaces:
+
+```python
+chart = HelmChart(
+    pipeline,
+    existing_secrets={
+        "db.existingSecret": ["shop-db"],
+        "api.existingSecret": ["shop-api"],
+    },
+)
+```
+
+With `--set db.existingSecret=client-db`, the chart does not render
+`shop-db`, and every reference to it (an environment variable, a volume, a
+projected source, `envFrom`) reads `client-db`. A generator whose outputs
+land only in replaced Secrets does not run, and an import that feeds only
+them is not required, so an install that brings the database Secret needs
+no `--set-file` for its password. The `secrets-digest` annotation takes the
+name, so a different Secret rolls the pods. The README and `values.yaml`
+list each value with the keys its Secret must hold; the Secrets of one value
+must not share a key. Each Secret is in one value, and a value name is a
+dotted camelCase value like the optional ones. The declaration is checked
+when the chart is built (`bundle-invalid`): an unknown Secret, a Secret in
+two values, a name that clashes with another value, a bad name.
+`existingSecret` itself is still the value that replaces every Secret, and
+when both it and a value are set, `existingSecret` wins for all. To make
+`existingSecret` replace only some Secrets, list it in the mapping
+(`{"existingSecret": ["shop-db"]}`): it then is that value, and no value
+replaces every Secret. Without the declaration the chart is as before.
+
+**Optional values keep their default** (0.80.0). `helm upgrade
+--reuse-values` keeps the values of the release, which lack a value a newer
+chart added. An optional value (`HelmOptional`) or toggle whose default is
+`true` now reads as `true` when the key is missing; an explicit `false`
+still turns it off. A default of `false` renders as before.
 
 Cluster-scoped objects (ClusterRoles and their bindings) belong to the
 release: their names follow the release namespace, and `helm uninstall`
