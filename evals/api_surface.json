@@ -4772,11 +4772,13 @@
    },
    "attrs": [
     "descriptions",
+    "existing_secrets",
     "optional",
     "optional_inputs",
     "patched_values",
     "required",
     "retired",
+    "secret_values",
     "setting_keys",
     "settings",
     "storage_env",
@@ -4786,6 +4788,7 @@
    ],
    "init": [
     "descriptions",
+    "existing_secrets",
     "optional",
     "optional_inputs",
     "required",
@@ -4798,6 +4801,7 @@
    ],
    "methods": {
     "patched_values": [],
+    "secret_values": [],
     "setting_keys": []
    },
    "returns": {

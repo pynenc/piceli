@@ -37,6 +37,12 @@ kustomize base and ``prepare.sh``:
   no Secret and every workload reads its secret keys from the client's
   Secret ``NAME`` (it holds every key the README lists). Nothing is
   generated, so ``helm template`` and Argo CD render the same every time.
+- **One existing Secret per app Secret** (0.80.0).
+  ``HelmChart(existing_secrets={"api.existingSecret": ["api-tls"]})`` names
+  a value that replaces only the app Secrets it lists: they are not
+  rendered, their references read the value, and a generator or an input
+  only they need is skipped. ``existingSecret`` still replaces every Secret
+  and wins when both are set.
 - **Storage size** (0.31.0). ``storage.size`` sets the size of every claim;
   ``HelmChart(storage_env={"DISK_LIMIT": 90})`` sets an environment variable
   the workloads declare to that percentage of it, in bytes.
@@ -203,6 +209,10 @@ class HelmOptional:
     (0.31.0). The objects are part of the app, so the safety gate checks
     them; with the value false (``default``) they are not installed.
 
+    0.80.0: a value the stored values lack (``helm upgrade --reuse-values``
+    over an older release) reads as ``default``; an explicit false still
+    turns the objects off.
+
     0.34.0: ``patches`` (as for :class:`HelmToggle`: pairs of an object and
     a JSON Patch or merge patch, or a mapping keyed by ``"Kind/name"``)
     changes other objects when the value is true, so one value both adds
@@ -298,6 +308,16 @@ class HelmChart:
         an older chart had: the schema still accepts it, so ``helm upgrade
         --reuse-values`` from that chart works; the chart ignores it, and the
         install notes warn when it is set.
+    :param existing_secrets: 0.80.0: value name (``api.existingSecret``, or
+        ``existingSecret`` itself) → the app Secrets that value replaces.
+        When the client sets it to the name of a Secret they made (holding
+        the keys of the Secrets it replaces), the chart does not render those
+        Secrets, every reference to them reads the name, the generators that
+        only they need are skipped and the imports that only they need are
+        not required. A Secret is in one value. Declaring ``existingSecret``
+        here limits that value to the Secrets listed; without it,
+        ``existingSecret`` replaces every Secret and, when both are set,
+        wins.
     """
 
     target: Any
@@ -310,6 +330,28 @@ class HelmChart:
     storage_env: Mapping[str, int] = field(default_factory=dict)
     optional_inputs: Sequence[str] = ()
     retired: Mapping[str, str] = field(default_factory=dict)
+    existing_secrets: Mapping[str, Sequence[str]] = field(default_factory=dict)
+
+    def secret_values(self) -> dict[str, tuple[str, ...]]:
+        """0.80.0: value name → the app Secrets it replaces (checked for shape).
+
+        :raises ValueError: a name that is not a Secret list, or an empty one.
+        """
+        result: dict[str, tuple[str, ...]] = {}
+        for name, secrets in self.existing_secrets.items():
+            if isinstance(secrets, str) or not all(
+                isinstance(item, str) for item in secrets
+            ):
+                raise ValueError(
+                    f"existing_secrets {name!r}: a list of Secret names, "
+                    f"got {secrets!r}"
+                )
+            if not secrets:
+                raise ValueError(f"existing_secrets {name!r} names no Secret")
+            if len(set(secrets)) != len(secrets):
+                raise ValueError(f"existing_secrets {name!r} names a Secret twice")
+            result[str(name)] = tuple(secrets)
+        return result
 
     def patched_values(self) -> dict[str, HelmToggle | HelmOptional]:
         """Value name → the toggle or optional value that patches objects:
@@ -482,6 +524,18 @@ def _value(path: str) -> str:
     return expression
 
 
+def _flag(path: str, default: bool) -> str:
+    """A boolean value for ``if``: a value the stored values lack reads as its
+    default (0.80.0). ``helm upgrade --reuse-values`` over an older release
+    leaves the key out; a default of ``true`` must stay on, an explicit
+    ``false`` must still turn it off, so the test is the key's presence.
+    A default of ``false`` needs no test: a missing value is already false."""
+    ref = _value(path)
+    if not default:
+        return ref
+    return f'(or (kindIs "invalid" {ref}) {ref})'
+
+
 def _text(value: Any) -> str:
     """A scalar as Helm's ``toString`` writes it (``true``, ``30``, ``0.5``)."""
     if isinstance(value, bool):
@@ -543,6 +597,7 @@ class _Templater:
         *,
         naming: Naming | None = None,
         secret_names: frozenset[str] = frozenset(),
+        secret_values: Mapping[str, str] | None = None,
         values_at: Mapping[str, Sequence[tuple[list[str], str, int]]] | None = None,
         value_defaults: Mapping[str, Any] | None = None,
         storage_env: Mapping[str, int] | None = None,
@@ -556,6 +611,8 @@ class _Templater:
         #: 0.31.0: the app's Secrets ``existingSecret`` replaces (empty: no
         #: ``existingSecret`` value).
         self.secret_names = secret_names
+        #: 0.80.0: app Secret → the value that replaces only it (empty: none).
+        self.secret_values = dict(secret_values or {})
         #: 0.31.0: ``"Kind/name"`` → ``(pointer parts, value path, target
         #: number)``; the number counts the value's own targets (0.63.0).
         self.values_at = dict(values_at or {})
@@ -721,6 +778,17 @@ class _Templater:
                         f'{{{{ printf "sha256:%s" (sha256sum (cat {_literal(annotations[key])} '
                         f'(include "{self.name}.{helper}" $))) | toJson }}}}'
                     )
+                    if helper == "secrets" and self.secret_values:
+                        # 0.80.0: the names of the existing Secrets join the
+                        # digest, so another name rolls the pods.
+                        names = " ".join(
+                            f'({_value(path)} | default "")'
+                            for path in sorted(set(self.secret_values.values()))
+                        )
+                        digest = (
+                            f'{{{{ printf "sha256:%s" (sha256sum (cat {_literal(annotations[key])} '
+                            f'(include "{self.name}.{helper}" $) {names})) | toJson }}}}'
+                        )
                     if helper == "secrets" and self.secret_names:
                         # 0.31.0: an existing Secret: its name, never its values.
                         digest = (
@@ -731,7 +799,7 @@ class _Templater:
                             + "{{ end }}"
                         )
                     annotations[key] = self.scalar(digest)
-        if self.secret_names:
+        if self.secret_names or self.secret_values:
             self.existing_secret(pod)
         if _reads_release_name(pod, self.naming):
             # 0.46.0: HelmRelease.name reads this pod annotation.
@@ -762,14 +830,24 @@ class _Templater:
             )
 
     def _secret(self, name: Any) -> Any:
-        if not isinstance(name, str) or name not in self.secret_names:
+        if not isinstance(name, str):
             return name
-        return self.scalar(
-            f"{{{{ $.Values.existingSecret | default {_literal(name)} | toJson }}}}"
-        )
+        own = self.secret_values.get(name)
+        if name in self.secret_names:
+            # ``existingSecret`` replaces every Secret and wins over a value.
+            fallback = _literal(name)
+            if own is not None:
+                fallback = f"({_value(own)} | default {fallback})"
+            expression = f"$.Values.existingSecret | default {fallback}"
+        elif own is not None:
+            expression = f"{_value(own)} | default {_literal(name)}"
+        else:
+            return name
+        return self.scalar(f"{{{{ {expression} | toJson }}}}")
 
     def existing_secret(self, pod: dict[str, Any]) -> None:
-        """Every reference to an app Secret reads ``existingSecret`` when set."""
+        """Every reference to an app Secret reads ``existingSecret`` when set
+        (0.80.0: or the value that replaces that Secret)."""
         for group in ("initContainers", "containers"):
             for container in pod.get(group) or ():
                 if not isinstance(container, dict):
@@ -853,10 +931,15 @@ def _secret_helper(
     bundle: Bundle,
     inputs: Mapping[str, str],
     optional_inputs: frozenset[str] = frozenset(),
+    replaceable: Mapping[str, str] | None = None,
 ) -> str:
     """``<name>.secrets``: every generator output as JSON, kept across upgrades.
 
-    An input named in ``optional_inputs`` (value names) may stay empty."""
+    An input named in ``optional_inputs`` (value names) may stay empty.
+    0.80.0: ``replaceable`` (app Secret → the value that replaces it): a
+    generator whose outputs land only in Secrets whose value is set, and that
+    no running generator needs, is skipped: nothing is made and an import is
+    not required."""
     from piceli.bundle.prepare import required_generators
     from piceli.k8s.release_secret_spec import (
         ImportSecretSpec,
@@ -869,10 +952,26 @@ def _secret_helper(
 
     generators = bundle.generators
     order = required_generators(bundle.secrets, generators)
+    replaceable = replaceable or {}
     where: dict[str, tuple[int, str]] = {}
+    spots: dict[str, list[tuple[int, str]]] = {}
     for number, plan in enumerate(bundle.secrets):
         for key, output in plan.keys:
             where.setdefault(output, (number, key))
+            spots.setdefault(output, []).append((number, key))
+    for output, found in spots.items():
+        # Read an output back from a Secret that is always rendered first.
+        for number, key in found:
+            if bundle.secrets[number].name not in replaceable:
+                where[output] = (number, key)
+                break
+    flags = _live_flags(bundle, order, replaceable)
+    #: Secret number → the value that replaces it (0.80.0).
+    replaced = {
+        number: _value(replaceable[plan.name])
+        for number, plan in enumerate(bundle.secrets)
+        if plan.name in replaceable
+    }
     lines = [
         f'{{{{- define "{name}.secrets" -}}}}',
         "{{- $out := dict -}}",
@@ -890,17 +989,25 @@ def _secret_helper(
     def kept(output: str) -> list[str]:
         if output not in where:
             return []
-        number, key = where[output]
+        # Without a replaceable Secret: the first Secret that holds it (0.79).
+        found = spots[output] if replaceable else [where[output]]
         return [
             f"{{{{- if and (not $v) (hasKey $d{number} {_literal(key)}) -}}}}"
             f"{{{{- $v = get $d{number} {_literal(key)} | b64dec -}}}}{{{{- end -}}}}"
+            for number, key in found
         ]
 
+    lines += [line for _generator, line in flags.definitions]
     for generator in order:
         spec = generators[generator]
         out = _literal(generator)
+        flag = flags.names.get(generator)
+        if flag is not None:
+            lines.append(f"{{{{- if {flag} -}}}}")
         if isinstance(spec, TlsCaSpec | TlsSelfSignedSpec):
-            lines += _tls_lines(generator, spec, where, bundle.namespace)
+            lines += _tls_lines(generator, spec, where, bundle.namespace, replaced)
+            if flag is not None:
+                lines.append("{{- end -}}")
             continue
         lines.append('{{- $v = "" -}}')
         if isinstance(spec, RandomSecretSpec):
@@ -940,8 +1047,70 @@ def _secret_helper(
                     f"{{{{- if not $v -}}}}{{{{- fail {_literal(message)} -}}}}{{{{- end -}}}}"
                 )
         lines.append(f"{{{{- $_ := set $out {out} $v -}}}}")
+        if flag is not None:
+            lines.append("{{- end -}}")
     lines += ["{{- toJson $out -}}", "{{- end -}}", ""]
     return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class _LiveFlags:
+    """Generator → the Go variable that says it runs (absent: it always runs),
+    and the lines that define those variables."""
+
+    names: dict[str, str]
+    definitions: list[tuple[str, str]]
+
+
+def _live_flags(
+    bundle: Bundle, order: Sequence[str], replaceable: Mapping[str, str]
+) -> _LiveFlags:
+    """0.80.0: which generators run when some Secrets are replaced.
+
+    A generator runs when a Secret that is not replaced holds one of its
+    outputs, or when a generator that runs reads it (a template's input).
+    Only a Secret with a ``replaceable`` value can be replaced; a generator
+    needed by a Secret that has none always runs."""
+    from piceli.k8s.release_secret_spec import outputs
+
+    if not replaceable:
+        return _LiveFlags({}, [])
+    generators = bundle.generators
+    owners = {
+        output.name: name
+        for name, spec in generators.items()
+        for output in outputs(name, spec)
+    }
+    holders: dict[str, set[str]] = {}  # generator → the Secrets that hold it
+    for plan in bundle.secrets:
+        for _key, output in plan.keys:
+            holders.setdefault(owners[output], set()).add(plan.name)
+    readers: dict[str, set[str]] = {}  # generator → generators that read it
+    for name in order:
+        spec = generators[name]
+        template = getattr(spec, "template", None)
+        if isinstance(template, str):
+            for match in _TOKEN.finditer(template):
+                owner = owners.get(match.group(1) or "")
+                if owner is not None:
+                    readers.setdefault(owner, set()).add(name)
+    names: dict[str, str] = {}
+    always: set[str] = set()
+    definitions: list[tuple[str, str]] = []
+    for number, name in reversed(list(enumerate(order))):
+        if any(plan not in replaceable for plan in holders.get(name, ())) or (
+            readers.get(name, set()) & always
+        ):
+            always.add(name)
+            continue
+        terms = {
+            f"(not {_value(replaceable[plan])})" for plan in holders.get(name, ())
+        } | {names[reader] for reader in readers.get(name, ())}
+        ordered = sorted(terms)
+        expression = ordered[0] if len(ordered) == 1 else f"(or {' '.join(ordered)})"
+        names[name] = f"$run{number}"
+        definitions.append((name, f"{{{{- $run{number} := {expression} -}}}}"))
+    return _LiveFlags(names, definitions)
 
 
 def _tls_names(names: Sequence[str], namespace: str) -> str:
@@ -966,13 +1135,16 @@ def _tls_lines(
     spec: Any,
     where: Mapping[str, tuple[int, str]],
     namespace: str,
+    replaced: Mapping[int, str] | None = None,
 ) -> list[str]:
     """A private CA and its leaves (or one self-signed certificate), made at
     install with Sprig's ``genCA``/``genSignedCert`` (0.63.0).
 
     The outputs the app's Secrets hold are kept on upgrade when all of them
     are there; otherwise every output of the generator is made again (the
-    CA key is not stored, so a new leaf needs a new CA)."""
+    CA key is not stored, so a new leaf needs a new CA). 0.80.0: an output
+    held only by a Secret the client replaces cannot be read back, and nobody
+    reads it, so it does not count (``replaced``: Secret number → its value)."""
     from piceli.k8s.release_secret_spec import TlsCaSpec, outputs
 
     if spec.rsa_bits != 2048:
@@ -996,9 +1168,11 @@ def _tls_lines(
     lines = [f"{{{{- $keep_{tag} := {'true' if stored else 'false'} -}}}}"]
     for name in stored:
         number, key = where[name]
+        missing = f"not (hasKey $d{number} {_literal(key)})"
+        if replaced and number in replaced:
+            missing = f"and (not {replaced[number]}) ({missing})"
         lines.append(
-            f"{{{{- if not (hasKey $d{number} {_literal(key)}) -}}}}"
-            f"{{{{- $keep_{tag} = false -}}}}{{{{- end -}}}}"
+            f"{{{{- if {missing} -}}}}{{{{- $keep_{tag} = false -}}}}{{{{- end -}}}}"
         )
     lines.append(f"{{{{- if $keep_{tag} -}}}}")
     for name in every:
@@ -1048,12 +1222,17 @@ def _tls_lines(
 
 
 def _secrets_template(
-    name: str, bundle: Bundle, omissible: frozenset[str] = frozenset()
+    name: str,
+    bundle: Bundle,
+    omissible: frozenset[str] = frozenset(),
+    replaceable: Mapping[str, str] | None = None,
 ) -> str:
     """The Secrets; a key filled by a generator in ``omissible`` (an optional
-    input) is left out while its value is empty."""
+    input) is left out while its value is empty. 0.80.0: a Secret in
+    ``replaceable`` (name → its value) is left out when that value is set."""
     import yaml
 
+    replaceable = replaceable or {}
     documents = [f'{{{{- $values := include "{name}.secrets" $ | fromJson }}}}']
     for plan in bundle.secrets:
         header = {
@@ -1088,7 +1267,13 @@ def _secrets_template(
                     f"{line}{{{{- end }}}}\n"
                 )
             data += line
-        documents.append("---\n" + text + "data:\n" + data)
+        document = "---\n" + text + "data:\n" + data
+        if plan.name in replaceable:
+            document = (
+                f"{{{{- if not {_value(replaceable[plan.name])} }}}}\n"
+                f"{document}{{{{- end }}}}\n"
+            )
+        documents.append(document)
     return "\n".join(documents)
 
 
@@ -1114,6 +1299,10 @@ class HelmBundle:
     optional: tuple[str, ...] = ()
     values: tuple[str, ...] = ()
     existing_secret_keys: tuple[str, ...] = ()
+    #: 0.80.0: value → (the app Secrets it replaces, the keys its Secret holds).
+    existing_secret_values: tuple[
+        tuple[str, tuple[str, ...], tuple[str, ...]], ...
+    ] = ()
     #: 0.34.0: the inputs the client may leave out (value names).
     optional_inputs: tuple[str, ...] = ()
     #: 0.65.0: retired value → what to use instead.
@@ -1159,7 +1348,7 @@ class HelmBundle:
         return helm_oci(self.metadata(), self.archive(), self.archive_name)
 
     def public(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "chart": self.name,
             "version": self.version,
             "app_version": self.app_version,
@@ -1173,6 +1362,12 @@ class HelmBundle:
             "existing_secret_keys": list(self.existing_secret_keys),
             "optional_inputs": list(self.optional_inputs),
         }
+        if self.existing_secret_values:
+            result["existing_secrets"] = {
+                name: {"secrets": list(secrets), "keys": list(keys)}
+                for name, secrets, keys in self.existing_secret_values
+            }
+        return result
 
 
 def _settings(
@@ -1206,6 +1401,63 @@ def _settings(
             )
         result[name] = ref
     return result
+
+
+def _secret_value_path(name: str) -> tuple[str, ...]:
+    """The parts of an ``existing_secrets`` value name: ``existingSecret``
+    itself, or a dotted value like the other optional values."""
+    if name == "existingSecret":
+        return ("existingSecret",)
+    return _check_path(name, "existing_secrets value")
+
+
+def _existing_text(secrets: Sequence[str], keys: Sequence[str]) -> str:
+    return (
+        f"a Secret you created with the keys {', '.join(keys)}; the chart then "
+        f"does not make {', '.join(secrets)}"
+    )
+
+
+def _secret_values(
+    bundle: Bundle, declared: Mapping[str, tuple[tuple[str, ...], tuple[str, ...]]]
+) -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
+    """Check ``existing_secrets`` against the app's Secrets: Secret name → the
+    parts of its value, and value name → the keys its Secret must hold.
+
+    :raises BundleError: ``bundle-invalid`` for a Secret the app lacks, a
+        Secret in two values, or two Secrets of one value with a key in common
+        (one Secret could not hold both)."""
+    plans = {plan.name: plan for plan in bundle.secrets}
+    where: dict[str, tuple[str, ...]] = {}
+    owner: dict[str, str] = {}
+    keys: dict[str, tuple[str, ...]] = {}
+    for name, (parts, secrets) in sorted(declared.items()):
+        unknown = sorted(set(secrets) - set(plans))
+        if unknown:
+            raise BundleError(
+                "bundle-invalid",
+                f"existing_secrets {name!r} names {unknown}, which the app lacks "
+                f"(its Secrets: {sorted(plans)})",
+            )
+        held = [key for secret in secrets for key, _output in plans[secret].keys]
+        repeated = sorted({key for key in held if held.count(key) > 1})
+        if repeated:
+            raise BundleError(
+                "bundle-invalid",
+                f"existing_secrets {name!r}: the Secrets share the key(s) "
+                f"{repeated}, so one Secret could not hold them; use two values",
+            )
+        for secret in secrets:
+            if secret in owner:
+                raise BundleError(
+                    "bundle-invalid",
+                    f"Secret {secret} is in two existing_secrets values: "
+                    f"{owner[secret]!r} and {name!r}",
+                )
+            owner[secret] = name
+            where[secret] = parts
+        keys[name] = tuple(sorted(held))
+    return where, keys
 
 
 def build_helm(
@@ -1265,6 +1517,13 @@ def build_helm(
         }
     except ValueError as error:
         raise BundleError("bundle-invalid", str(error)) from None
+    try:
+        secret_values = {
+            name: (_secret_value_path(name), secrets)
+            for name, secrets in declared.secret_values().items()
+        }
+    except ValueError as error:
+        raise BundleError("bundle-invalid", str(error)) from None
     optional_inputs = frozenset(declared.optional_inputs)
     unknown_inputs = sorted(optional_inputs - set(inputs.values()))
     if unknown_inputs:
@@ -1288,7 +1547,9 @@ def build_helm(
     duplicated = sorted({name for name in names if names.count(name) > 1})
     if duplicated:
         raise BundleError("bundle-invalid", f"two values are named {duplicated}")
-    paths = [parts for parts, _i, _k in (*optional.values(), *placed_values.values())]
+    paths = [
+        parts for parts, _i, _k in (*optional.values(), *placed_values.values())
+    ] + [parts for parts, _secrets in secret_values.values()]
     for parts in paths:
         clash = [
             other for other in paths
@@ -1302,6 +1563,10 @@ def build_helm(
     # Secrets with one key name could not share it, so it is not offered.
     secret_keys = [key for plan in bundle.secrets for key, _output in plan.keys]
     offer_existing = bool(secret_keys) and len(set(secret_keys)) == len(secret_keys)
+    # 0.80.0: ``existingSecret`` declared in ``existing_secrets`` is a value
+    # of its own Secrets, not the one that replaces every Secret.
+    replace_all = offer_existing and "existingSecret" not in secret_values
+    replaceable, secret_value_keys = _secret_values(bundle, secret_values)
     unknown = sorted(set(declared.required) - set(settings) - set(toggles))
     if unknown:
         raise BundleError(
@@ -1324,14 +1589,17 @@ def build_helm(
         bundle.name, bundle.namespace, reverse, required, bundle.storage_class,
         naming=naming,
         secret_names=frozenset(plan.name for plan in bundle.secrets)
-        if offer_existing
+        if replace_all
         else frozenset(),
+        secret_values={name: ".".join(path) for name, path in replaceable.items()},
         values_at=values_at, storage_env=storage_env,
         value_defaults={
             name: _value_default(item, targets, by_key)
             for name, (_parts, item, targets) in placed_values.items()
         },
     )  # fmt: skip
+    defaults = {name: toggle.default for name, toggle in toggles.items()}
+    defaults.update({name: item.default for name, (_p, item, _k) in optional.items()})
     gated: dict[str, str] = {}
     for name, (_parts, _item, keys) in optional.items():
         for key in keys:
@@ -1384,19 +1652,21 @@ def build_helm(
             assert mine is not None
             body = templater.text(templater.manifest(mine))
             if file in gated:
-                body = f"{{{{- if {_value(gated[file])} }}}}\n{body}{{{{- end }}}}\n"
+                flag = _flag(gated[file], defaults[gated[file]])
+                body = f"{{{{- if {flag} }}}}\n{body}{{{{- end }}}}\n"
             files[f"templates/{file}"] = (header + body).encode()
             continue
         toggle = owners[0]
         theirs = {item.file: item for item in variants[toggle].objects}.get(file)
         on = templater.text(templater.manifest(theirs)) if theirs else ""
         off = templater.text(templater.manifest(mine)) if mine else ""
+        flag = _flag(toggle, defaults[toggle])
         if on and off:
-            body = f"{{{{- if {_value(toggle)} }}}}\n{on}{{{{- else }}}}\n{off}{{{{- end }}}}\n"
+            body = f"{{{{- if {flag} }}}}\n{on}{{{{- else }}}}\n{off}{{{{- end }}}}\n"
         elif on:
-            body = f"{{{{- if {_value(toggle)} }}}}\n{on}{{{{- end }}}}\n"
+            body = f"{{{{- if {flag} }}}}\n{on}{{{{- end }}}}\n"
         else:
-            body = f"{{{{- if not {_value(toggle)} }}}}\n{off}{{{{- end }}}}\n"
+            body = f"{{{{- if not {flag} }}}}\n{off}{{{{- end }}}}\n"
         files[f"templates/{file}"] = (header + body).encode()
     missing = sorted(
         name
@@ -1419,8 +1689,13 @@ def build_helm(
         omissible = frozenset(
             generator for generator, value in inputs.items() if value in optional_inputs
         )
-        body = _secrets_template(bundle.name, bundle, omissible)
-        if offer_existing:
+        body = _secrets_template(
+            bundle.name,
+            bundle,
+            omissible,
+            {name: ".".join(path) for name, path in replaceable.items()},
+        )
+        if replace_all:
             body = (
                 f"{{{{- if not $.Values.existingSecret }}}}\n{body}\n{{{{- end }}}}\n"
             )
@@ -1503,10 +1778,16 @@ def build_helm(
             node["type"] = kind
         put(parts, default, node)
         comments.append(f"# {name}: {node['description']}")
+    for name, (parts, secrets) in sorted(secret_values.items()):
+        text = descriptions.get(name) or _existing_text(
+            secrets, secret_value_keys[name]
+        )
+        put(parts, "", {"type": "string", "description": text})
+        comments.append(f"# {name}: {text}")
     for top in sorted(tree_values):
         values[top] = tree_values[top]
         schema[top] = tree_schema[top]
-    if offer_existing:
+    if replace_all:
         values["existingSecret"] = ""
         schema["existingSecret"] = {
             "type": "string",
@@ -1603,7 +1884,11 @@ def build_helm(
     files["templates/_helpers.tpl"] = _helpers(bundle.name, inputs).encode()
     if bundle.secrets:
         files["templates/_helpers.tpl"] += _secret_helper(
-            bundle.name, bundle, inputs, optional_inputs
+            bundle.name,
+            bundle,
+            inputs,
+            optional_inputs,
+            {name: ".".join(path) for name, path in replaceable.items()},
         ).encode()
     chart = HelmBundle(
         name=bundle.name,
@@ -1618,7 +1903,11 @@ def build_helm(
         claims=templater.claims,
         optional=tuple(sorted(optional)),
         values=tuple(sorted(placed_values)),
-        existing_secret_keys=tuple(sorted(secret_keys)) if offer_existing else (),
+        existing_secret_keys=tuple(sorted(secret_keys)) if replace_all else (),
+        existing_secret_values=tuple(
+            (name, secrets, secret_value_keys[name])
+            for name, (_parts, secrets) in sorted(secret_values.items())
+        ),
         optional_inputs=tuple(sorted(optional_inputs)),
         retired=retired,
         naming=naming,
@@ -1796,6 +2085,23 @@ def _readme(
             "- `existingSecret`: the name of a Secret you created in the release "
             f"namespace with the keys {keys}; the chart then makes no Secret and "
             "generates nothing"
+        )
+    for name, secrets, keys in chart.existing_secret_values:
+        names = ", ".join(f"`{secret}`" for secret in secrets)
+        held = ", ".join(f"`{key}`" for key in keys)
+        text = descriptions.get(name) or (
+            "the name of a Secret you created in the release namespace "
+            f"with the keys {held}"
+        )
+        lines.append(
+            f"- `{name}`: {text}; the chart then does not make {names}, and the "
+            "generated values and inputs only it needs are skipped (an input is "
+            "not required)"
+            + (
+                "; `existingSecret`, when also set, replaces every Secret and wins"
+                if chart.existing_secret_keys
+                else ""
+            )
         )
     lines += [
         "- `storage.size`: the size of every claim (for example `20Gi`); empty "
