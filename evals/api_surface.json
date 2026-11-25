@@ -4811,6 +4811,7 @@
   "HelmOptional": {
    "attrs": [
     "default",
+    "default_on_reuse",
     "description",
     "keys",
     "objects",
@@ -4819,6 +4820,7 @@
    ],
    "init": [
     "default",
+    "default_on_reuse",
     "description",
     "objects",
     "patches"
@@ -4839,12 +4841,14 @@
   "HelmToggle": {
    "attrs": [
     "default",
+    "default_on_reuse",
     "description",
     "patches",
     "resolved"
    ],
    "init": [
     "default",
+    "default_on_reuse",
     "description",
     "patches"
    ],
@@ -18192,5 +18196,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.80.0"
+ "version": "0.81.0"
 }

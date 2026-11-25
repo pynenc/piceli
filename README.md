@@ -66,16 +66,11 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.80
+## What's new in 0.81
 
-- **`piceli bundle` names the product the operator installs**: `--input-prefix`,
-  `--tool-name` and `--annotation-domain` set the input variables, the tool
-  named in comments and the annotation keys. Defaults are unchanged.
-- **A HelmChart takes one existing Secret per app Secret**
-  (`existing_secrets`), and optional values keep their default under
-  `helm upgrade --reuse-values`.
-- **A dirty source's refusal names its paths**; the builder container names
-  a copy Git calls changed.
+- **A missing Helm value reads as its default only where the chart owner
+  asks**: `default_on_reuse=True` on a `HelmOptional` or `HelmToggle`. Without
+  it, `helm upgrade --reuse-values` leaves a value off, as before 0.80.0.
 
 ## Web UI
 
