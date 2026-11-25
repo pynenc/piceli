@@ -12,8 +12,10 @@ import pytest
 
 from piceli.infra.builder_serve import (
     BuildFailed,
+    checkout_problem,
     corrupt_git,
     export_source,
+    export_verified,
     fetch_env,
     fetch_urls,
 )
@@ -232,3 +234,56 @@ def test_a_network_failure_keeps_the_mirror(repo: Path, tmp_path: Path) -> None:
 )
 def test_only_corruption_wipes_the_mirror(text: str, corrupt: bool) -> None:
     assert (corrupt_git(f"remote: x\n{text}\n") is not None) is corrupt
+
+
+def test_a_checkout_the_build_would_refuse_is_cloned_again(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url, mirrors = str(repo), tmp_path / "git"
+    commit = _git(repo, "rev-parse", "HEAD")
+    into = tmp_path / "checkouts" / "product"
+    assert export_verified(url, commit, into, mirrors, "product") == (None, None)
+    # A state export_source does not repair: it is only in this checkout.
+    (into / ".git" / "stale-state").write_text("x")
+    answers = iter(["source 'product' has 1 changed path(s)", None])
+    monkeypatch.setattr(
+        "piceli.infra.builder_serve.checkout_problem",
+        lambda *_: next(answers),
+    )
+    repaired, problem = export_verified(url, commit, into, mirrors, "product")
+    assert problem is None
+    assert repaired is not None and repaired["check"] == "identity"
+    assert "changed path" in repaired["error"]
+    assert not (into / ".git" / "stale-state").exists()
+    assert _git(into, "rev-parse", "HEAD") == commit
+
+
+def test_a_checkout_that_still_fails_after_both_clones_reports_the_reason(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url, mirrors = str(repo), tmp_path / "git"
+    commit = _git(repo, "rev-parse", "HEAD")
+    monkeypatch.setattr(
+        "piceli.infra.builder_serve.checkout_problem",
+        lambda *_: "git status failed in /w: fatal: unsafe",
+    )
+    repaired, problem = export_verified(
+        url, commit, tmp_path / "checkouts" / "product", mirrors, "product"
+    )
+    assert problem == "git status failed in /w: fatal: unsafe"
+    assert repaired is not None and repaired["error"] == problem
+
+
+def test_checkout_problem_names_the_source_and_the_check(
+    repo: Path, tmp_path: Path
+) -> None:
+    commit = _git(repo, "rev-parse", "HEAD")
+    assert checkout_problem(repo, commit, "product") is None
+    assert "not " + "0" * 12 in (checkout_problem(repo, "0" * 40, "product") or "")
+    (repo / "new.rs").write_text("fn new() {}\n")
+    assert checkout_problem(repo, commit, "product") == (
+        "source 'product' has 1 changed path(s)"
+    )
+    assert "not a directory" in (
+        checkout_problem(tmp_path / "missing", commit, "product") or ""
+    )

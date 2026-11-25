@@ -173,15 +173,36 @@ class BuildSpecError(ValueError):
         steps: tuple[dict[str, Any], ...] = (),
         output_tail: str = "",
         first_error: str = "",
+        reason: str = "",
     ) -> None:
         super().__init__(message)
         self.code = code
+        #: 0.79.0: why a source was refused (``source-identity``,
+        #: ``source-drift``): the source and the failed check, redacted and
+        #: bounded. Kept out of the message, which stays fixed; the build log
+        #: and the controller's record show it.
+        self.reason = reason
         self.steps = steps
         #: The redacted, bounded end of a failed command's output (host
         #: builds); never part of the message.
         self.output_tail = output_tail
         #: 0.19: its first ``error`` line and the lines after (redacted).
         self.first_error = first_error
+
+
+def source_refusal(error: SourceIdentityError) -> BuildSpecError:
+    """The refusal for a source that could not be opened (0.79.0).
+
+    ``source-drift`` when a source differs from its lock, else
+    ``source-identity``; the cause's text, redacted, travels as ``reason``
+    (it names the source and the check that failed).
+    """
+    from piceli.k8s.ops.diagnosis import redact
+
+    reason = redact(str(error), limit=400)
+    if isinstance(error, SourceDriftError):
+        return BuildSpecError("source-drift", "a source changed", reason=reason)
+    return BuildSpecError("source-identity", "sources not verifiable", reason=reason)
 
 
 def _fail(message: str) -> BuildSpecError:
@@ -1442,10 +1463,8 @@ class BuildSpec:
         try:
             if inputs is not None:
                 start = open_sources(inputs, lock)
-        except SourceDriftError:
-            raise BuildSpecError("source-drift", "a source changed") from None
-        except SourceIdentityError:
-            raise BuildSpecError("source-identity", "sources not verifiable") from None
+        except SourceIdentityError as error:  # drift is a kind of it
+            raise source_refusal(error) from None
         with _BuildLog(log, progress, raw_output) as build_log:
             build_log.line(f"### run {self.name} {started_at}")
             execution = _Execution(

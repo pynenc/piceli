@@ -280,12 +280,15 @@ def test_a_failure_after_the_first_command_still_fails_the_step(
 
 
 def test_builder_serve_marks_fetch_and_engine_failures_early(
-    world: dict[str, Any], tmp_path: Path
+    world: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from collections import deque
 
     from piceli.infra import builder_serve
     from piceli.infra.builder_serve import ENGINE_FAILED, BuildFailed
+
+    # The faked exports leave no checkout to verify (0.79.0).
+    monkeypatch.setattr(builder_serve, "checkout_problem", lambda *_a: None)
 
     world["controller"].poll_once()
     (entry,) = world["controller"].status()["controller"]["builds_wanted"]
@@ -334,6 +337,7 @@ def test_builder_serve_says_and_records_a_repaired_mirror(
     worker.container = lambda *_a: 101
     repair = {"mirror": "shop-0123456789.git", "error": "fatal: pack has bad object"}
     monkeypatch.setattr(builder_serve, "export_source", lambda *_a, **_k: repair)
+    monkeypatch.setattr(builder_serve, "checkout_problem", lambda *_a: None)
     tail: deque[str] = deque()
     with pytest.raises(BuildFailed):
         worker.build(entry, tail)

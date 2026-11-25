@@ -304,12 +304,7 @@ class LocalBuilder:
                             grant, directory, progress=self.say
                         ).to_dict()
                     except BuildSpecError as error:
-                        detail = (
-                            f": {error}"
-                            if error.code.startswith("context-")
-                            or error.code == "host-build-path-not-staged"
-                            else ""
-                        )
+                        detail = refusal_detail(error)
                         raise build_failed(
                             f"component {item.component!r}: host build failed "
                             f"({error.code}){detail}",
@@ -734,6 +729,19 @@ def _built_platforms(entry: Mapping[str, Any]) -> tuple[str, ...]:
         return tuple(sorted(str(item) for item in found))
     platform = entry.get("platform")
     return (str(platform),) if isinstance(platform, str) and platform else ()
+
+
+def refusal_detail(error: Any) -> str:
+    """What a refused host build adds to its message: a context error's text
+    (0.26.3), a source refusal's reason (0.79.0: the source and the check
+    that failed); empty for any other code, which stays fixed and path-free."""
+    code = str(getattr(error, "code", ""))
+    if code.startswith("context-") or code == "host-build-path-not-staged":
+        return f": {error}"
+    reason = str(getattr(error, "reason", "") or "")
+    if reason and code in ("source-identity", "source-drift"):
+        return f": {reason}"
+    return ""
 
 
 def build_failed(message: str, error: Any) -> CompositionError:

@@ -448,7 +448,7 @@ echoed.
 | `context-changed` | 2 | A staged file changed, vanished or changed mode between plan, staging and the end of the build. | Rebuild once the files are stable. Edits elsewhere are not drift. |
 | `dockerfile-unpinned` | 2 | A user Dockerfile references an unpinned image or a remote `ADD`. | Pin it by digest or pass it as a pinned arg. |
 | `source-drift` | 2 | The sources differ from `--lock` at the start (also: a partial lock). | Re-record the lock, or restore the sources. |
-| `source-identity` | 2 | A source is not a git root, has no commit, misses its `ref`, or is dirty without `allow_dirty`. | Fix the checkout or `inputs.toml`. |
+| `source-identity` | 2 | A source is not a git root, has no commit, misses its `ref`, or is dirty without `allow_dirty`. A host or Job build names the source and the failed check after the code (0.79.0). | Fix the checkout or `inputs.toml`. |
 | `invalid-inputs` | 2 | `--inputs`/`--lock` is malformed. | Fix the file. |
 | `docker-unavailable` | 2 | `docker` is missing or a probe failed. | Install docker/buildx; check the context. |
 | `output-invalid` | 2 | Extracted files are missing, extra, not regular or too large. | Fix `output.file` or the build. |

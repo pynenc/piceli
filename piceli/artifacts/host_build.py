@@ -96,6 +96,7 @@ from piceli.artifacts.build_spec import (
     _now,
     _rel_path,
     parse_labels,
+    source_refusal,
 )
 from piceli.artifacts.host_toolchains import RUST_ENV
 from piceli.artifacts.host_toolchains import parse as parse_toolchains
@@ -106,7 +107,6 @@ from piceli.artifacts.process import ToolPin
 from piceli.artifacts.source_identity import (
     InputsLock,
     InputsSpec,
-    SourceDriftError,
     SourceIdentityError,
     open_sources,
 )
@@ -839,10 +839,8 @@ class HostBuildSpec:
         try:
             if inputs is not None:
                 start = open_sources(inputs, lock)
-        except SourceDriftError:
-            raise BuildSpecError("source-drift", "a source changed") from None
-        except SourceIdentityError:
-            raise BuildSpecError("source-identity", "sources not verifiable") from None
+        except SourceIdentityError as error:  # drift is a kind of it
+            raise source_refusal(error) from None
         cache = (self.cache_dir or default_cache_dir()).absolute()
         with _BuildLog(log, progress, raw_output) as build_log:
             build_log.line(f"### host run {self.name} {started_at}")
