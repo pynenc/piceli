@@ -4,6 +4,21 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.85.0
+
+### A candidate named by the source you choose (ops#106)
+
+- **`Candidate(source="product")`.** A candidate is named by the commit of
+  one source the environment follows, no longer only the first one. `source`
+  names that followed source (default: the first, as before). Its commit
+  names the candidate and fills `{commit}` in copy tags, its passed commits
+  are the ones recorded, and the commit given to `gitops candidate request`
+  is that source's. `source` is written to the configuration only when set, so
+  existing hashes do not change. A source the environment does not follow is
+  refused when the composition loads (`candidate-source-unknown`, naming the
+  sources it follows).
+- **Upgrade:** `piceli gitops enable` again for the controller.
+
 ## Version 0.84.0
 
 ### Layers per platform; a candidate without copies (ops#106)

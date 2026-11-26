@@ -66,14 +66,12 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.84
+## What's new in 0.85
 
-- **Layers per platform**: history components of a multi-platform image list
-  the file-mapping layers of each platform, so a release record can read them
-  from `gitops show RUN --artifacts`.
-- **Candidates without copies**: `Candidate(copies=())` is a ready marker with
-  the run's digests, and a missing credentials Secret fails the candidate with
-  a reason instead of stopping the controller.
+- **Candidates choose their source**: `Candidate(source="product")` names a
+  release candidate by the commit of any source the environment follows, so
+  a composition that follows a workspace and a product no longer has to put
+  the product first.
 
 ## Web UI
 

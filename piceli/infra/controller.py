@@ -5272,8 +5272,8 @@ class CompositionController:
         return getattr(getattr(cluster, "controller", None), "candidate", None)
 
     def _candidate_sources(self) -> list[str]:
-        """The source keys of the candidate's environment (the first names a
-        candidate's commit)."""
+        """The source keys of the candidate's environment (``Candidate(source=)``,
+        else the first, names a candidate's commit)."""
         setting = self._candidate_setting()
         env = (
             self._composition.environment(setting.environment)
@@ -5282,6 +5282,15 @@ class CompositionController:
         )
         return [str(source.key) for source, _ in getattr(env, "sources", ())]
 
+    def _candidate_source(self) -> str | None:
+        """The key of the source whose commit names a candidate (0.85.0)."""
+        setting = self._candidate_setting()
+        sources = self._candidate_sources() if setting is not None else []
+        named = getattr(setting, "source", None)
+        if named is not None:
+            return named if named in sources else None
+        return sources[0] if sources else None
+
     def _candidate_gates(self) -> list[Any]:
         """The passed commits of the candidate's environment are recorded
         like a promotion gate's (:func:`~piceli.infra.promotion.remember`)."""
@@ -5289,15 +5298,15 @@ class CompositionController:
         from piceli.infra.promotion import Promotion
 
         setting = self._candidate_setting()
-        sources = self._candidate_sources() if setting is not None else []
-        if not sources:
+        source = self._candidate_source() if setting is not None else None
+        if source is None:  # no sources, or a source the environment lacks
             return []
         try:
             return [
                 Promotion(
-                    input=sources[0],
+                    input=source,
                     environment=setting.environment,
-                    source=sources[0],
+                    source=source,
                 )
             ]
         except CompositionError:
@@ -5363,6 +5372,7 @@ class CompositionController:
                 "this controller declares no Controller(candidate=)",
             )
         if body.get("action") == "request":
+            candidates._sources = tuple(self._candidate_sources())
             self._candidate_inputs()  # the commit may have passed this poll
         candidates.handle(body)
 

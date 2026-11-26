@@ -124,6 +124,17 @@ class Composition:
                     f"NixRelease {release.name!r}: environment {env.name!r} does "
                     f"not follow the gate's source {gate.source_key!r}"
                 )
+        controller = getattr(self.cluster, "controller", None)
+        candidate: Any = getattr(controller, "candidate", None)
+        if getattr(candidate, "source", None) is not None:  # 0.85.0
+            env = self.environment(candidate.environment)
+            followed = sorted(source.key for source, _ in getattr(env, "sources", ()))
+            if env is not None and candidate.source not in followed:
+                raise _invalid(
+                    f"Candidate(source={candidate.source!r}): environment "
+                    f"{env.name!r} does not follow it (candidate-source-unknown; "
+                    f"it follows {', '.join(followed)})"
+                )
         spaces = [item.namespace for item in named]
         if len(set(spaces)) != len(spaces):
             raise _invalid("two environments share a namespace")

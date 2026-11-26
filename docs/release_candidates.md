@@ -37,7 +37,15 @@ controller = Controller(
 ```
 
 - `environment`: the environment whose passed commits are candidates. With
-  several sources, the first source's commit names the candidate.
+  several sources, the first source's commit names the candidate, unless you
+  set `source`.
+- `source` (optional, 0.85.0): the name of the followed source whose commit
+  names the candidate, for example `source="product"` for an environment that
+  follows `{workspace: "main", product: "main"}`. That commit fills `{commit}`
+  in a copy's tag, its passed commits are the ones recorded, and the commit you
+  give to `candidate request` is that source's. Unset keeps the first source.
+  An environment that does not follow the source is refused when the
+  composition loads (`candidate-source-unknown`, naming the sources it follows).
 - `quiet` (default `30m`): how long no newer commit may have passed.
 - `keep` (default `5`): how many of the newest candidates stay. A released
   candidate always stays.
