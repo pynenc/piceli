@@ -66,17 +66,14 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.83
+## What's new in 0.84
 
-- **Release candidates**: after an environment passes a commit and stays quiet
-  for 30 minutes, the controller copies that run's images to the outside
-  registry paths you declare, by digest. `gitops status` shows each candidate
-  as ready or not ready, and why.
-- **A copy that resumes**: `piceli artifacts copy --in-cluster --set FILE
-  --ledger NAME` runs in the cluster (no port-forward), retries a dropped
-  connection and continues after a killed client.
-- **`piceli gitops show RUN --artifacts`** prints the images, platform digests
-  and layers a run produced, and history components carry the image reference.
+- **Layers per platform**: history components of a multi-platform image list
+  the file-mapping layers of each platform, so a release record can read them
+  from `gitops show RUN --artifacts`.
+- **Candidates without copies**: `Candidate(copies=())` is a ready marker with
+  the run's digests, and a missing credentials Secret fails the candidate with
+  a reason instead of stopping the controller.
 
 ## Web UI
 

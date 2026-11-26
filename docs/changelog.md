@@ -4,6 +4,28 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.84.0
+
+### Layers per platform; a candidate without copies (ops#106)
+
+- **History `layers` for multi-platform images.** The components of
+  `gitops history --json` and `gitops show RUN --artifacts` now carry the
+  file-mapping layers of every platform of a multi-platform image, each
+  entry `{"platform", "mapping", "digest"}` (at most 4 platforms and 16
+  layers each). A single-platform image keeps `{"mapping", "digest"}`. The
+  component `image` stays the index reference. Additive within
+  `piceli.gitops-history.v1`.
+- **`Candidate(copies=())` is allowed.** A candidate without copies is a
+  ready marker: after the quiet time (or `gitops candidate request`) it is
+  `ready` once the run that passed the commit is found, with `digests` taken
+  from the run's images.
+- **A missing credentials Secret no longer stops the controller.** Each
+  `CandidateCopy(credentials=)` Secret is mounted as optional; the candidate
+  fails with `candidate-credentials-missing`, naming the Secret, is retried
+  with the usual backoff (up to five tries) and starts again with
+  `gitops candidate request`.
+- **Upgrade:** `piceli gitops enable` again for the controller.
+
 ## Version 0.83.0
 
 ### Release candidates and a resumable copy to an outside registry (ops#106)

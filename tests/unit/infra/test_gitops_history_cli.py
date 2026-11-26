@@ -21,11 +21,14 @@ from piceli.k8s.cli import app
 from tests.gitops_history_fixture import (
     ASSETS,
     LAYER_BIN,
+    LAYER_BIN_ARM,
     LAYER_PAGES,
+    LAYER_PAGES_ARM,
     PRODUCT,
     PRODUCT_OLD,
     WEB,
     WEB_IMAGE,
+    multi_platform_history,
     sample_history,
 )
 
@@ -158,6 +161,71 @@ def test_artifacts_helper_shows_any_run_and_none_when_unknown(state: Path) -> No
     assert releases.artifacts(document, "nope") is None
     assert releases.artifacts({}, "x") is None
     assert releases.artifacts(document, failed["id"], env="main") is None
+
+
+def test_multi_platform_components_carry_each_platforms_layers(
+    tmp_path: Path,
+) -> None:
+    """0.84.0: the run's images are keyed ``web/linux-amd64`` and
+    ``web/linux-arm64``; the component joins them, each layer names its
+    platform, and its image stays the index."""
+    state = tmp_path / "state"
+    state.mkdir()
+    DirectoryChannel(state).publish_history(multi_platform_history(state))
+    document = DirectoryChannel(state).read_history()
+    (run,) = releases.history(document, "main")["environments"][0]["runs"]
+    (web,) = run["components"]
+    assert web["image"] == {"repository": "shop/web", "reference": WEB_IMAGE}
+    assert web["layers"] == [
+        {"platform": "linux/amd64", "mapping": "/usr/local/bin/web", "digest": LAYER_BIN},
+        {"platform": "linux/amd64", "mapping": "/srv/pages", "digest": LAYER_PAGES},
+        {
+            "platform": "linux/arm64",
+            "mapping": "/usr/local/bin/web",
+            "digest": LAYER_BIN_ARM,
+        },
+        {"platform": "linux/arm64", "mapping": "/srv/pages", "digest": LAYER_PAGES_ARM},
+    ]  # fmt: skip
+    # The run's own images keep their keys, without the layers.
+    assert {"web", "web/linux-amd64", "web/linux-arm64"} <= set(run["images"])
+    assert all("layers" not in image for image in run["images"].values())
+    code, body, text = cli("show", run["id"], "--artifacts", "--state-dir", str(state))
+    assert code == 0, text
+    (shown,) = body["components"]
+    assert shown["layers"] == web["layers"]
+    assert shown["image"]["reference"] == WEB_IMAGE
+    assert f"layer linux/arm64 /srv/pages {LAYER_PAGES_ARM}" in text
+
+
+def test_image_keys_split_into_name_and_platform() -> None:
+    from piceli.pipeline.summary import split_image_key
+
+    assert split_image_key("web") == ("web", "")
+    assert split_image_key("web/linux-amd64") == ("web", "linux/amd64")
+    assert split_image_key("web/linux-arm-v7") == ("web", "linux/arm/v7")
+    assert split_image_key("web/other") == ("web/other", "")
+    assert split_image_key("linux-arm64") == ("linux-arm64", "")
+
+
+def test_platform_layers_are_bounded() -> None:
+    from piceli.gitops import history
+
+    layer = {"mapping": "/m", "digest": "sha256:" + "a" * 64}
+    images = {
+        f"web/{slug}": {"layers": [layer] * 30}
+        for slug in (
+            "linux-amd64",
+            "linux-arm64",
+            "linux-arm-v7",
+            "linux-arm-v6",
+            "linux-386",
+        )
+    } | {"web": {"layers": [layer] * 30}, "worker/linux-amd64": {"layers": [layer]}}
+    found = history._platform_layers("web", images)
+    kept = sorted({item["platform"] for item in found if "platform" in item})
+    # Four platforms at most (sorted), 16 layers each, plus the image's own.
+    assert kept == ["linux/386", "linux/amd64", "linux/arm/v6", "linux/arm/v7"]
+    assert len(found) == history.MAX_LAYERS * (history.MAX_LAYER_PLATFORMS + 1)
 
 
 def test_layers_and_image_are_bounded() -> None:

@@ -148,7 +148,8 @@ def _say_artifacts(body: Mapping[str, Any]) -> None:
         for platform, digest in sorted((item.get("platforms") or {}).items()):
             say(f"    platform {platform} {digest}")
         for layer in item.get("layers") or ():
-            say(f"    layer {layer.get('mapping')} {layer.get('digest')}")
+            where = f"{layer['platform']} " if layer.get("platform") else ""
+            say(f"    layer {where}{layer.get('mapping')} {layer.get('digest')}")
         built = item.get("provenance") or {}
         if built.get("host"):
             say(f"    built on {built['host']}")

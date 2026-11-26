@@ -32,6 +32,10 @@ REGISTRY = "registry.example.org:5000"
 WEB_IMAGE = f"{REGISTRY}/shop/web@{WEB}"
 LAYER_BIN = "sha256:" + "5" * 64
 LAYER_PAGES = "sha256:" + "6" * 64
+LAYER_BIN_ARM = "sha256:" + "7" * 64
+LAYER_PAGES_ARM = "sha256:" + "8" * 64
+AMD64 = "sha256:" + "2" * 64
+ARM64 = "sha256:" + "3" * 64
 CHECKS = [
     {"name": "web-home", "type": "http", "passed": True, "code": None,
      "detail": "GET / returned 200", "duration": 0.084},
@@ -199,6 +203,76 @@ def _component(
 ) -> dict[str, Any]:
     found = {"source": source, "commit": commit, "digest": digest, "state": state}
     return {**found, "image": image} if image else found
+
+
+def multi_platform_history(state_dir: Path) -> dict[str, Any]:
+    """One deployed run of ``web`` built for two platforms (0.84.0).
+
+    As the real run journal records it: each platform's image under
+    ``<name>/<platform slug>`` (``web/linux-amd64``) in the build stage, the
+    image index under ``web`` in the deliver stage.
+    """
+    main_dir = state_dir / "pipelines" / "main" / "environments" / "main"
+    run_id = write_run(
+        main_dir,
+        combined_hash=combined(4),
+        release="shop-4d5e6f708192",
+        sources={"product": {"ref": "refs/heads/main", "commit": PRODUCT}},
+        built={
+            "web/linux-amd64": {
+                "image_id": AMD64,
+                "mappings": [
+                    {"mapping": "/usr/local/bin/web", "digest": LAYER_BIN},
+                    {"mapping": "/srv/pages", "digest": LAYER_PAGES},
+                ],
+            },
+            "web/linux-arm64": {
+                "image_id": ARM64,
+                "mappings": [
+                    {"mapping": "/usr/local/bin/web", "digest": LAYER_BIN_ARM},
+                    {"mapping": "/srv/pages", "digest": LAYER_PAGES_ARM},
+                ],
+            },
+        },
+        delivered={
+            "web": {
+                "action": "delivered",
+                "reference": WEB_IMAGE,
+                "config_digest": WEB,
+            }
+        },
+        at=("2026-10-02T09:21:10.500Z", "2026-10-02T09:21:58.250Z"),
+    )
+    component = {
+        **_component("product", PRODUCT, WEB, "synced", WEB_IMAGE),
+        "media_type": "application/vnd.oci.image.index.v1+json",
+        "platforms": {"linux/amd64": AMD64, "linux/arm64": ARM64},
+    }
+    event = history.event(
+        _record(
+            state="deployed",
+            action="deployed",
+            revision={"product": PRODUCT},
+            components={"web": component},
+        ),
+        started_at="2026-10-02T09:20:00Z",
+        finished_at="2026-10-02T09:22:00Z",
+        trigger="push product/main",
+        approval=None,
+        outcome=EnvOutcome(
+            state="deployed",
+            plan_hash=PLAN_HASH,
+            run_id=run_id,
+            combined_hash=combined(4),
+        ),
+        built=["web"],
+    )
+    return history.history(
+        {"main": {"namespace": "piceli-test"}},
+        {"main": [event]},
+        state_dir,
+        at="2026-10-02T09:30:00Z",
+    )
 
 
 def sample_history(state_dir: Path) -> dict[str, Any]:

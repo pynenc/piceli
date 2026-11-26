@@ -22,7 +22,7 @@ import pytest
 
 from piceli.gitops import history
 from piceli.gitops.state import sync_request
-from tests.gitops_history_fixture import sample_history
+from tests.gitops_history_fixture import multi_platform_history, sample_history
 from tests.unit.infra.test_controller import world
 from tests.unit.infra.test_controller_history import _published, journaled
 from tests.unit.test_gitops_controller import FakePorts, Repo, make
@@ -135,7 +135,12 @@ def _documents(
     return {
         "status": _union([status, _repo_status(tmp_path), *releases]),
         "history": _union(
-            [published, sample_history(tmp_path / "sample"), _lifecycle_history()]
+            [
+                published,
+                sample_history(tmp_path / "sample"),
+                multi_platform_history(tmp_path / "platforms"),
+                _lifecycle_history(),
+            ]
         ),
     }
 
@@ -204,6 +209,11 @@ def test_the_component_fields_are_built_by_the_history(tmp_path: Path) -> None:
     found = paths(sample_history(tmp_path))
     assert "envs.*.runs[].components[].image.reference" in found
     assert "envs.*.runs[].components[].layers[].mapping" in found
+    # 0.84.0: a multi-platform image's layers name their platform (additive).
+    found = paths(multi_platform_history(tmp_path / "platforms"))
+    assert "envs.*.runs[].components[].layers[].platform" in found
+    golden = json.loads(GOLDEN.read_text())
+    assert "envs.*.runs[].components[].layers[].platform" in golden["history"]
 
 
 def test_paths_name_maps_by_star() -> None:

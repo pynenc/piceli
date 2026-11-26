@@ -17,11 +17,13 @@ State of a candidate, ``state["candidates"][commit]``:
     its images are being copied (a worker thread; retried with a backoff on
     the polls after a transient failure);
 ``ready``
-    every image is copied;
+    every image is copied (a candidate with no copies is a marker: ready as
+    soon as the run is found, its ``digests`` those of the run's images);
 ``failed``
     ``reason`` says why (``candidate-no-image``, ``candidate-run-missing``,
     a permanent reason of the copy set, or the last transient one after
-    :data:`MAX_ATTEMPTS` tries);
+    :data:`MAX_ATTEMPTS` tries; ``candidate-credentials-missing`` counts as
+    transient: the Secret may appear);
 ``cancelled``
     a newer commit passed while it was building
     (``candidate-superseded``); a request resumes it from its ledger.
@@ -69,6 +71,7 @@ RUN_MISSING = "candidate-run-missing"
 COPY_ERROR = "candidate-copy-error"
 CREDENTIALS_MISSING = "candidate-credentials-missing"
 _TRANSIENT = ("unreachable", "timeout", "timed-out", "transient", "temporar")
+_RETRYABLE = (CREDENTIALS_MISSING,)
 _LABEL = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
 _TARGET = re.compile(
     r"oci://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]{1,5})?"
@@ -178,6 +181,7 @@ class Candidate:
     :param keep: How many of the newest candidates stay (released ones always
         stay).
     :param copies: The images to copy out, one per component and target.
+        Empty: the candidate is a ready marker (no copy, only the digests).
     """
 
     environment: str
@@ -297,7 +301,8 @@ class _Refused(Exception):
 
 
 def _transient(reason: str) -> bool:
-    return any(part in reason for part in _TRANSIENT)
+    """A reason worth another try: a temporary one, or a Secret still missing."""
+    return reason in _RETRYABLE or any(part in reason for part in _TRANSIENT)
 
 
 class _Job:
@@ -308,10 +313,23 @@ class _Job:
         self.done = False
         self.lock = threading.Lock()
         self.results: dict[str, tuple[bool, str | None]] = {}
+        self.details: dict[str, str] = {}
 
-    def set(self, component: str, ok: bool, reason: str | None = None) -> None:
+    def set(
+        self,
+        component: str,
+        ok: bool,
+        reason: str | None = None,
+        detail: str | None = None,
+    ) -> None:
         with self.lock:
             self.results[component] = (ok, reason)
+            if detail:
+                self.details[component] = detail
+
+    def detail(self, component: str) -> str:
+        with self.lock:
+            return self.details.get(component) or component
 
     def snapshot(self) -> dict[str, tuple[bool, str | None]]:
         with self.lock:
@@ -337,6 +355,9 @@ class Candidates:
         credentials Secret or ``None``) runs one resumable copy set and
         returns its report (``.ok``, ``.failed``); default: the copy set of
         :mod:`piceli.artifacts.copy_set` with a ledger in ``state_dir``.
+    :param credentials: ``credentials(secret)`` reads the target credentials
+        of a Secret, or raises ``candidate-credentials-missing`` (default:
+        the file the install mounts, :func:`credentials_path`).
     :param spawn: Starts a function in the background (inline in tests).
     :param registry_host: The cluster registry's service address, for a
         run's image the history gives without a host.
@@ -354,6 +375,7 @@ class Candidates:
         log: Callable[[str], None] = lambda _m: None,
         artifacts: Callable[..., Any] | None = None,
         copy: Callable[..., Any] | None = None,
+        credentials: Callable[[str], Any] | None = None,
         spawn: Callable[[Callable[[], None]], Any] = _spawn,
         registry_host: str | None = None,
         state_dir: Path | None = None,
@@ -366,6 +388,7 @@ class Candidates:
         self.log = log
         self._artifacts = artifacts
         self._copy = copy
+        self._credentials = credentials or _load_credentials
         self._spawn = spawn
         self.registry_host = registry_host
         self.state_dir = state_dir
@@ -520,6 +543,9 @@ class Candidates:
         if record.get("plan") is None:
             if not self._plan(commit, record, document):
                 return
+        if not self.candidate.copies:
+            self._ready(commit, record, now)
+            return
         job = self._jobs.get(commit)
         if job is None or (job.cancel.is_set() and job.done):
             retry = _epoch(record.get("retry_at"))
@@ -550,6 +576,18 @@ class Candidates:
             for item in found.get("components") or ()
             if isinstance(item, Mapping)
         }
+        if not self.candidate.copies:
+            # A marker: nothing to copy, the digests of the run's images.
+            record["plan"] = []
+            record["digests"] = sorted(
+                {
+                    str(item["digest"])
+                    for item in components.values()
+                    if self._source(item) is not None
+                }
+            )
+            record["copies"] = {}
+            return True
         plan: list[dict[str, str]] = []
         for copy in self.candidate.copies:
             item = components.get(copy.component)
@@ -628,13 +666,22 @@ class Candidates:
                     if job.cancel.is_set():
                         return
                     name = item["component"]
+                    secret = credentials.get(name)
                     try:
                         report = self._run_copy(
-                            item, credentials.get(name), ledger_name(commit, name)
+                            item,
+                            secret,
+                            ledger_name(commit, name),
+                            self._credentials(secret) if secret else None,
                         )
                     except Exception as error:  # a worker never dies silently
                         reason = getattr(error, "code", None) or COPY_ERROR
-                        job.set(name, False, str(reason))
+                        job.set(
+                            name,
+                            False,
+                            str(reason),
+                            str(error) if isinstance(error, _Refused) else None,
+                        )
                         return
                     if getattr(report, "ok", False):
                         job.set(name, True)
@@ -649,7 +696,11 @@ class Candidates:
         self._spawn(work)
 
     def _run_copy(
-        self, item: Mapping[str, str], secret: str | None, ledger: str
+        self,
+        item: Mapping[str, str],
+        secret: str | None,
+        ledger: str,
+        target_credentials: Any = None,
     ) -> Any:
         if self._copy is not None:
             return self._copy(item, secret, ledger)
@@ -673,7 +724,7 @@ class Candidates:
             copy=prepare_copies(
                 [found],
                 options,
-                target_credentials=_load_credentials(secret) if secret else None,
+                target_credentials=target_credentials,
             ),
             options=options,
         )
@@ -693,23 +744,27 @@ class Candidates:
         ]
         if not failures:
             if all(value == "copied" for value in record["copies"].values()):
-                record.update(state="ready", since=_iso(now), reason=None)
-                record.pop("detail", None)
-                record["retry_at"] = None
-                self.log(f"candidate {commit[:7]}: ready")
+                self._ready(commit, record, now)
             return
         name, reason = failures[0]
         attempts = int(record.get("attempts") or 0) + 1
         record["attempts"] = attempts
+        detail = job.detail(name)
         if _transient(str(reason)) and attempts < MAX_ATTEMPTS:
             wait = BACKOFF[min(attempts, len(BACKOFF)) - 1]
-            record.update(reason=reason, detail=name, retry_at=_iso(now + wait))
+            record.update(reason=reason, detail=detail, retry_at=_iso(now + wait))
             record["copies"][name] = "pending"
             self.log(
                 f"candidate {commit[:7]}: {name} {reason}, trying again in {wait}s"
             )
             return
-        self._fail(commit, record, str(reason), name)
+        self._fail(commit, record, str(reason), detail)
+
+    def _ready(self, commit: str, record: dict[str, Any], now: float) -> None:
+        record.update(state="ready", since=_iso(now), reason=None)
+        record.pop("detail", None)
+        record["retry_at"] = None
+        self.log(f"candidate {commit[:7]}: ready")
 
     def _fail(
         self, commit: str, record: dict[str, Any], reason: str, detail: str
@@ -776,6 +831,15 @@ class Candidates:
         full = self.resolve(commit, among=sorted(set(self.records) | set(every)))
         record = self.records.get(full)
         now = self.clock()
+        if (
+            record is not None
+            and record.get("state") == "building"
+            and record.get("retry_at")
+        ):
+            # Waiting for a backoff: try again at the next poll, from zero.
+            record.update(retry_at=None, attempts=0)
+            self.log(f"candidate {full[:7]}: requested, trying again now")
+            return full
         if record is not None and record.get("state") in ("building", "ready"):
             self.log(f"candidate {full[:7]}: requested, already {record['state']}")
             return full
@@ -867,7 +931,7 @@ def describe(item: Mapping[str, Any]) -> str:
         done = sum(1 for value in copies.values() if value == "copied")
         why = f"building ({done}/{len(copies)} copied)" if copies else "building"
         if item.get("reason"):  # a transient failure waiting for its next try
-            why += f", {item['reason']}"
+            why += f", {item['reason']}" + (f" ({detail})" if detail else "")
     elif why and detail:
         why = f"{why} ({detail})"
     return f"{name}: not ready: {why or state}"
@@ -876,13 +940,20 @@ def describe(item: Mapping[str, Any]) -> str:
 def _load_credentials(secret: str) -> Any:
     """The target credentials of a Secret mounted by the install.
 
-    :raises _Refused: ``candidate-credentials-missing``."""
+    :raises _Refused: ``candidate-credentials-missing`` when the file is
+        absent (the Secret does not exist yet) or not readable."""
     import json
 
     from piceli.artifacts.registry import RegistryCredentials
 
+    path = credentials_path(secret)
+    if not path.is_file():
+        raise _Refused(
+            CREDENTIALS_MISSING,
+            f"Secret {secret} has no {CREDENTIALS_KEY} (create the Secret)",
+        )
     try:
-        document = json.loads(credentials_path(secret).read_text())
+        document = json.loads(path.read_text())
         if not isinstance(document, Mapping):
             raise ValueError("not an object")
         return RegistryCredentials(
@@ -892,5 +963,5 @@ def _load_credentials(secret: str) -> Any:
         )
     except (OSError, ValueError):
         raise _Refused(
-            CREDENTIALS_MISSING, f"the credentials {secret} are not readable"
+            CREDENTIALS_MISSING, f"Secret {secret}: {CREDENTIALS_KEY} is not readable"
         ) from None

@@ -71,14 +71,20 @@ def test_the_setting_is_checked_with_the_controller() -> None:
             lambda: Controller(on="node-a", candidate={"environment": "main"}),
             r"Candidate\(\.\.\.\)",
         ),  # type: ignore[arg-type]
-        (
-            lambda: Controller(on="node-a", candidate=Candidate(environment="main")),
-            "at least one CandidateCopy",
-        ),
     ):
         with pytest.raises(ClusterError, match=words) as error:
             bad()
         assert error.value.code == "cluster-invalid"
+
+
+def test_a_candidate_without_copies_is_a_valid_ready_marker() -> None:
+    marker = Candidate(environment="main")
+    assert Controller(on="node-a", candidate=marker).candidate == marker
+    body = _cluster_dict(_cluster(candidate=marker))
+    assert body["controller"]["candidate"]["copies"] == []
+    back = _cluster_from(body)
+    assert back is not None and back.controller is not None
+    assert back.controller.candidate == marker
 
 
 def test_the_composition_carries_it_to_the_controller_process_only_when_set() -> None:
@@ -109,7 +115,12 @@ def test_the_install_mounts_each_credentials_secret_as_files_never_values() -> N
     ]
     spec = deployment["spec"]["template"]["spec"]
     (volume,) = [item for item in spec["volumes"] if "candidate" in item["name"]]
-    assert volume["secret"] == {"secretName": "shop-push", "defaultMode": 0o400}
+    # optional: a missing Secret fails the candidate, never the controller pod
+    assert volume["secret"] == {
+        "secretName": "shop-push",
+        "defaultMode": 0o400,
+        "optional": True,
+    }
     (mount,) = [
         item
         for item in spec["containers"][0]["volumeMounts"]
@@ -169,6 +180,7 @@ def _declare(world: dict[str, Any], **options: Any) -> Any:
         copied.append((item["source"], item["target"], secret))
         or SimpleNamespace(ok=True, failed=None)
     )
+    live._credentials = lambda secret: None  # the Secret's file is not mounted here
     live._spawn = lambda work: work()
     return SimpleNamespace(controller=controller, copied=copied, live=live)
 
