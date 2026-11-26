@@ -71,6 +71,8 @@ objects).
 - **Candidates copy an image the run lists by digest only**: a component with
   a digest but no image reference is copied from the cluster registry, from
   the repository the controller pushes it to.
+- **A resumed copy says what it copied**: `artifacts copy --ledger` run again
+  reports the done copy's receipt (target, tag, digest), not `result: null`.
 
 ## Web UI
 
