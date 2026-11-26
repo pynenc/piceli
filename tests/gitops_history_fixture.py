@@ -244,7 +244,15 @@ def multi_platform_history(state_dir: Path) -> dict[str, Any]:
         at=("2026-10-02T09:21:10.500Z", "2026-10-02T09:21:58.250Z"),
     )
     component = {
-        **_component("product", PRODUCT, WEB, "synced", WEB_IMAGE),
+        # 0.86.0: built at an older commit, unchanged since: current for PRODUCT.
+        **_component("product", PRODUCT_OLD, WEB, "unchanged", WEB_IMAGE),
+        "sources": {"product": PRODUCT},
+        "provenance": {
+            "builder": "host",
+            "host": "builder-1",
+            "commits": {"product": PRODUCT_OLD},
+            "finished_at": "2026-10-01T08:00:00Z",
+        },
         "media_type": "application/vnd.oci.image.index.v1+json",
         "platforms": {"linux/amd64": AMD64, "linux/arm64": ARM64},
     }

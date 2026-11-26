@@ -233,6 +233,7 @@ def artifacts(
                 "name": item.get("name"),
                 "source": item.get("source"),
                 "commit": item.get("commit"),
+                "current_for": _dict(item.get("current_for")),
                 "digest": item.get("digest"),
                 "image": item.get("image"),
                 "platforms": _dict(item.get("platforms")),

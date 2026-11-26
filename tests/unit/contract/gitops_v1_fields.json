@@ -30,6 +30,7 @@
     "envs.*.runs[].components",
     "envs.*.runs[].components[].built",
     "envs.*.runs[].components[].commit",
+    "envs.*.runs[].components[].current_for",
     "envs.*.runs[].components[].digest",
     "envs.*.runs[].components[].image",
     "envs.*.runs[].components[].image.reference",

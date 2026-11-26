@@ -94,6 +94,20 @@ def _provenance(value: Any) -> dict[str, Any] | None:
     return found
 
 
+def _current_for(item: Mapping[str, Any]) -> dict[str, str]:
+    """The source commits a component's image stands for in this run (0.86.0):
+    ``{source: commit}`` of every source the image reads, at the run's commit.
+
+    The image is the one whose inputs (its change key) match those commits, so
+    an image built at an older commit that did not change since still stands
+    for the run's. ``commit`` and ``provenance.commits`` stay where it was
+    built. Empty while the component has no image yet."""
+    if not item.get("digest"):
+        return {}
+    sources = _dict(item.get("sources"))
+    return {str(k)[:64]: str(v)[:64] for k, v in sorted(sources.items())[:20] if v}
+
+
 #: File-mapping layers kept per component (0.83.0).
 MAX_LAYERS = 16
 
@@ -304,6 +318,10 @@ def event(
         if image:
             # Added in 0.83.0: the image's repository and pinned reference.
             entries[str(name)]["image"] = image
+        current = _current_for(item)
+        if current:
+            # Added in 0.86.0: the commits this run's image stands for.
+            entries[str(name)]["current_for"] = current
         platforms = _dict(item.get("platforms"))
         if platforms:
             # Added in 0.74.0: an image built for several platforms is one

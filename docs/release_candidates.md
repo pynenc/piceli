@@ -41,11 +41,17 @@ controller = Controller(
   set `source`.
 - `source` (optional, 0.85.0): the name of the followed source whose commit
   names the candidate, for example `source="product"` for an environment that
-  follows `{workspace: "main", product: "main"}`. That commit fills `{commit}`
+  follows `{workspace: "main", product: "main"}`. It is the name the source has
+  in the environment (the key `gitops history` lists under `sources`), not the
+  name of a Python variable. That commit fills `{commit}`
   in a copy's tag, its passed commits are the ones recorded, and the commit you
   give to `candidate request` is that source's. Unset keeps the first source.
   An environment that does not follow the source is refused when the
   composition loads (`candidate-source-unknown`, naming the sources it follows).
+- A copy takes the run's image of the component, whatever commit built it: an
+  image whose inputs did not change since an older commit (`current_for` in
+  `gitops history`) is the one the candidate copies. Nothing compares the build
+  commit to the candidate's (0.86.0).
 - `quiet` (default `30m`): how long no newer commit may have passed.
 - `keep` (default `5`): how many of the newest candidates stay. A released
   candidate always stays.
