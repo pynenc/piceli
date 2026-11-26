@@ -4,6 +4,16 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.87.0
+
+### A candidate copies an image the run lists by digest only (ops#106)
+
+- **No more `candidate-no-image` for an image in the cluster registry.** A
+  run's component with a digest but no image reference is copied from
+  `registry/repository@digest`, the repository the controller pushes the
+  component to (`<registry repository>/<component>`). An image that is not
+  there fails the copy with the registry's answer, which is not retried.
+
 ## Version 0.86.0
 
 ### Which commits an unchanged image stands for (ops#107)

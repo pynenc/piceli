@@ -5352,6 +5352,8 @@ class CompositionController:
                 log=self.log,
                 registry_host=getattr(registry, "host", None),
                 state_dir=self.state_dir,
+                # 0.87.0: a run's image without a reference, by its digest.
+                repository=self._repository,
             )
             if live is not None:  # a changed declaration keeps the running copies
                 fresh._jobs = live._jobs
