@@ -532,6 +532,7 @@ def plan(
     repo: Path,
     bump: str = "patch",
     nix: str | None = None,
+    commit: str | None = None,
 ) -> dict[str, Any]:
     """The promotion plan (``state``: ``approval-required`` or ``current``).
 
@@ -539,13 +540,18 @@ def plan(
     :func:`apply` pushes instead of committing again. ``git_retries``: the
     Git commands retried after a transport error.
 
+    ``commit`` (0.83.0, ``--commit``): pin this commit, which the environment
+    passed but may not be the newest; refused unless it passed. The plan's
+    ``pinned`` names its run and its digest covers the commit.
+
     :raises PromotionError: a refusal (``promotion-not-verified`` when the
-        environment passed no commit, the working copy's refusals)."""
-    from piceli.infra.promotion import locked_rev, newest, pinned
+        environment passed no commit, or not ``commit``; the working copy's
+        refusals)."""
+    from piceli.infra.promotion import locked_rev, newest, passed, pinned
 
     if bump not in BUMPS:
         raise PromotionError("promote-invalid", "--bump is major, minor or patch")
-    best = newest(history, gate)
+    best = passed(gate, commit, history, host=host) if commit else newest(history, gate)
     if best is None:
         raise PromotionError("promotion-not-verified",
             f"environment {gate.environment} has no run with passed release "

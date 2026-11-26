@@ -119,7 +119,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def add_copy_command(sub: Any) -> None:
     """``artifacts copy`` (0.74.0): one image by digest, every platform and
-    its referrers, to another registry."""
+    its referrers, to another registry. 0.83.0: a set, a ledger that resumes,
+    whole-copy retries and ``--in-cluster``."""
     cmd = sub.add_parser(
         "copy",
         help="copy an image by digest (index, every platform, SBOM, provenance, "
@@ -128,10 +129,16 @@ def add_copy_command(sub: Any) -> None:
     cmd.add_argument(
         "--from",
         dest="source",
-        required=True,
         help="oci://host[:port]/repository@sha256:<digest>",
     )
-    cmd.add_argument("--to", required=True, help="oci://host[:port]/repository[:tag]")
+    cmd.add_argument("--to", help="oci://host[:port]/repository[:tag]")
+    cmd.add_argument(
+        "--set",
+        dest="set_file",
+        type=Path,
+        help="a JSON or TOML list of {from, to} copies, instead of --from and "
+        "--to; one plan digest approves them all",
+    )
     cmd.add_argument(
         "--no-referrers",
         action="store_true",
@@ -148,7 +155,51 @@ def add_copy_command(sub: Any) -> None:
     credentials.add_argument("--docker-config", type=Path)
     cmd.add_argument("--ca-file", type=Path)
     cmd.add_argument("--out", type=Path, help="write the copy receipt here")
-    cmd.add_argument("--timeout", type=float, default=1800)
+    cmd.add_argument(
+        "--timeout",
+        type=float,
+        default=1800,
+        help="seconds one copy may take (with --in-cluster: the Job's deadline)",
+    )
+    cmd.add_argument(
+        "--attempts",
+        type=int,
+        default=5,
+        help="tries of a whole copy that failed for a transient reason "
+        "(a dropped connection, HTTP 429/502/503/504), with a growing pause",
+    )
+    cmd.add_argument(
+        "--ledger",
+        help="a name that records each copy as done or failed; the same name "
+        "again continues at the first copy not done",
+    )
+    cmd.add_argument(
+        "--ledger-dir",
+        type=Path,
+        help="where the ledger files are (default: the user's state directory)",
+    )
+    cmd.add_argument(
+        "--in-cluster",
+        action="store_true",
+        help="run the copy as a Job in the cluster (it reaches the cluster "
+        "registry by its Service name; no port-forward); needs --kubeconfig "
+        "and --context",
+    )
+    cmd.add_argument("--namespace", default="piceli-system")
+    cmd.add_argument("--kubeconfig", type=Path)
+    cmd.add_argument("--context")
+    cmd.add_argument(
+        "--credentials-secret",
+        help="with --in-cluster: a Secret with keys source-username, "
+        "source-password, source-token and the same for target",
+    )
+    cmd.add_argument(
+        "--image", help="with --in-cluster: the Job's image (default: the controller's)"
+    )
+    job = sub.add_parser("copy-job-run", help=argparse.SUPPRESS)
+    job.add_argument("--dir", type=Path, required=True)
+    job.add_argument("--ledger", required=True)
+    job.add_argument("--attempts", type=int, default=5)
 
 
 def add_publish_command(sub: Any) -> None:
@@ -256,6 +307,8 @@ def main(arguments: list[str] | None = None) -> int:
         return run_fetch_file_command(args)
     if args.command == "copy":
         return run_copy_command(args)
+    if args.command == "copy-job-run":
+        return run_copy_job_command(args)
     if args.command == "retention":
         return run_retention_command(args)
     try:
@@ -622,25 +675,166 @@ def _registry_credentials(
     return None
 
 
-def run_copy_command(args: argparse.Namespace, **seams: Any) -> int:
-    """Plan (exit 3), or copy an approved plan (exit 0, or 1 on failure)."""
-    from piceli.artifacts.image_copy import (
-        Copier,
-        CopyError,
-        CopyGrant,
-        CopyPlan,
-        summary,
+def _state_dir() -> Path:
+    """``$XDG_STATE_HOME/piceli/copy`` (default ``~/.local/state/piceli/copy``)."""
+    import os
+
+    base = os.environ.get("XDG_STATE_HOME")
+    root = Path(base) if base else Path.home() / ".local" / "state"
+    return root / "piceli" / "copy"
+
+
+def _copy_items(args: argparse.Namespace) -> list[Any]:
+    """The copies asked for: ``--from``/``--to`` or ``--set`` (the credentials
+    flags apply to every copy that names none)."""
+    from piceli.artifacts.copy_set import CopyItem, load_set_file
+    from piceli.artifacts.image_copy import CopyError
+
+    def path(value: Path | None) -> str | None:
+        return str(value.absolute()) if value is not None else None
+
+    from_path = path(args.from_credentials or args.from_docker_config)
+    to_path = path(args.credentials or args.docker_config)
+    if args.set_file is not None:
+        if args.source or args.to:
+            raise CopyError("copy-invalid", "give --set or --from and --to, not both")
+        base = load_set_file(args.set_file.absolute())
+    else:
+        if not args.source or not args.to:
+            raise CopyError("copy-invalid", "give --from and --to, or --set")
+        base = [CopyItem(args.source, args.to)]
+    return [
+        CopyItem(
+            item.source,
+            item.target,
+            item.source_credentials or from_path,
+            item.target_credentials or to_path,
+        )
+        for item in base
+    ]
+
+
+def _copy_say_plan(plan: Any) -> None:
+    from piceli.cli_contract import say
+
+    lines = []
+    for each in plan.plans:
+        tag = f":{each.target.tag}" if each.target.tag else ""
+        where = f"{each.target.registry}/{each.target.repository}{tag}"
+        lines.append(f"copy: {each.source.digest} to {where}")
+    if len(lines) == 1:
+        say(f"{lines[0]}; approve with --approve {plan.digest}")
+        return
+    for line in lines:
+        say(line)
+    say(f"copy: {len(lines)} copies; approve with --approve {plan.digest}")
+
+
+def _cluster_copy(
+    args: argparse.Namespace, items: list[Any], options: Any, ledger: str, **seams: Any
+) -> Any:
+    """``--in-cluster``: the Job's report."""
+    from piceli.artifacts.copy_cluster import CopyCluster, copy_in_cluster, secret_data
+    from piceli.artifacts.copy_set import CopySetError, load_credentials
+    from piceli.artifacts.image_copy import CopySource
+    from piceli.cli_contract import say
+    from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
+
+    if args.kubeconfig is None or not args.context:
+        raise CopySetError(
+            "copy-invalid", "--in-cluster needs --kubeconfig and --context"
+        )
+    if options.ca_file is not None or options.source_ca_file is not None:
+        raise CopySetError("copy-invalid", "--ca-file does not apply with --in-cluster")
+    sources = {item.source_credentials for item in items}
+    targets = {item.target_credentials for item in items}
+    if len(sources) > 1 or len(targets) > 1:
+        raise CopySetError(
+            "copy-invalid", "--in-cluster uses one set of credentials per registry side"
+        )
+    local = args.credentials_secret is None
+    client = seams.pop("kube", None) or api_client_from_kubeconfig(
+        args.kubeconfig.absolute(), args.context
     )
-    from piceli.artifacts.registry import describe, docker_config_credentials
+    cluster = seams.pop("cluster", None) or CopyCluster(client, args.namespace)
+    try:
+        secret = args.credentials_secret
+        made = None
+        if local:
+            first = items[0]
+            source = load_credentials(
+                first.source_credentials,
+                CopySource.parse(first.source).repository.registry,
+            )
+            target = load_credentials(
+                first.target_credentials, _target_registry(first.target)
+            )
+            data = secret_data(source, target)
+            if data:
+                made = secret = f"piceli-copy-{ledger}-credentials"[:253]
+                cluster.apply_secret(made, data)
+        elif args.credentials or args.docker_config or args.from_credentials:
+            raise CopySetError(
+                "copy-invalid",
+                "give --credentials-secret or credentials files, not both",
+            )
+        report = copy_in_cluster(
+            items,
+            ledger=ledger,
+            namespace=args.namespace,
+            credentials_secret=secret,
+            kube=client,
+            attempts=args.attempts,
+            deadline=args.timeout,
+            image=args.image,
+            options=options,
+            cluster=cluster,
+            say=lambda line: say(line),
+        )
+        if made is not None:  # kept when the client is interrupted: a rerun needs it
+            cluster.delete_secret(made)
+        return report
+    finally:
+        cluster.close()
+
+
+def _target_registry(target: str) -> str:
+    return RegistryTarget.parse(target).registry
+
+
+def run_copy_command(args: argparse.Namespace, **seams: Any) -> int:
+    """Plan (exit 3), or copy an approved plan (exit 0, or 1 on failure).
+
+    0.83.0: ``--set`` copies several images under one approval; a failed copy
+    with a transient reason is tried again (``--attempts``); ``--ledger``
+    records each copy so a rerun continues; ``--in-cluster`` runs the copies
+    as a Job. Without those flags the output is the single copy's receipt.
+    """
+    from piceli.artifacts.copy_set import (
+        CopyOptions,
+        CopySetError,
+        CopySetPlan,
+        FileLedger,
+        MemoryLedger,
+        prepare_copies,
+        run_copy_set,
+        validate_name,
+    )
+    from piceli.artifacts.image_copy import CopyError, summary
+    from piceli.artifacts.registry import describe
     from piceli.cli_contract import EXIT_APPROVAL, emit_json, say
 
+    sleep = seams.pop("sleep", time.sleep)
     try:
-        plan = CopyPlan.parse(
-            args.source,
-            args.to,
+        items = _copy_items(args)
+        options = CopyOptions(
             referrers=not args.no_referrers,
             move_tag=args.move_tag,
+            timeout=args.timeout,
+            source_ca_file=args.from_ca_file.absolute() if args.from_ca_file else None,
+            ca_file=args.ca_file.absolute() if args.ca_file else None,
         )
+        plan = CopySetPlan.parse(items, options)
         if args.approve is None or args.approve != plan.digest:
             if args.approve is not None:
                 raise CopyError("copy-not-approved")
@@ -651,45 +845,93 @@ def run_copy_command(args: argparse.Namespace, **seams: Any) -> int:
                     "plan_hash": plan.digest,
                 }
             )
-            tag = f":{plan.target.tag}" if plan.target.tag else ""
-            say(
-                f"copy: {plan.source.digest} to {plan.target.registry}/"
-                f"{plan.target.repository}{tag}; approve with --approve {plan.digest}"
-            )
+            _copy_say_plan(plan)
             return EXIT_APPROVAL
-        source_credentials = None
-        if args.from_credentials is not None:
-            source_credentials = _input(
-                "invalid-credentials-file",
-                lambda: RegistryCredentials.load(args.from_credentials.absolute()),
-            )
-        elif args.from_docker_config is not None:
-            source_credentials = docker_config_credentials(
-                args.from_docker_config.absolute(), plan.source.repository.registry
-            )
-        copier = Copier(
-            source_credentials=source_credentials,
-            credentials=_registry_credentials(args, plan.target.registry),
-            source_ca_file=args.from_ca_file.absolute() if args.from_ca_file else None,
-            ca_file=args.ca_file.absolute() if args.ca_file else None,
-            timeout=args.timeout,
-            **seams,
+        name = args.ledger or (
+            f"set-{plan.digest.split(':')[1][:12]}" if args.in_cluster else "copy"
         )
-        result = copier.copy(plan, CopyGrant(plan.digest, time.time() + args.timeout))
+        validate_name(name)
+        if args.in_cluster:
+            report = _cluster_copy(args, items, options, name, **seams)
+        else:
+            store = (
+                FileLedger((args.ledger_dir or _state_dir()).absolute())
+                if args.ledger
+                else MemoryLedger()
+            )
+            report = run_copy_set(
+                items,
+                ledger=name,
+                store=store,
+                attempts=args.attempts,
+                sleep=sleep,
+                say=lambda line: say(line),
+                copy=prepare_copies(items, options, **seams),
+            )
+        single = args.set_file is None
+        first = report.items[0]
+        if single:
+            result: dict[str, Any] = first.receipt or {
+                "state": "copied" if first.state == "done" else "failed",
+                "reason": first.reason,
+                "result": "already-done" if first.skipped else None,
+                "digest": plan.plans[0].source.digest,
+                "ledger": name,
+                "receipt_digest": first.receipt_digest,
+            }
+            if report.retries:
+                result = {**result, "copy_retries": report.retries}
+        else:
+            result = report.to_dict()
         if args.out is not None:
             write_receipt(args.out, result)
         emit_json(result)
-        if result["state"] != "copied":
-            reason = result["reason"] if result["reason"] in ERRORS else "copy-failed"
-            where = describe(result.get("error"))
+        if not report.ok:
+            reason = report.failed or "copy-failed"
+            reason = reason if reason in ERRORS else "copy-failed"
+            where = describe((first.receipt or {}).get("error")) if single else ""
             say(f"copy: failed [{reason}]" + (f" {where}" if where else ""))
             return 1
-        say(summary(result))
+        if single and first.receipt is not None:
+            say(summary(first.receipt))
+        else:
+            say(f"copy: {sum(i.state == 'done' for i in report.items)} copied")
         return 0
-    except (CopyError, DeliveryInputError) as error:
+    except (CopyError, CopySetError, DeliveryInputError) as error:
         return rejection(error.code if error.code in ERRORS else "copy-invalid")
     except (ValueError, KeyError, TypeError, OSError):
         return rejection("copy-invalid")
+
+
+def run_copy_job_command(args: argparse.Namespace, **seams: Any) -> int:
+    """Inside the Job of ``artifacts copy --in-cluster`` (not for manual use):
+    copy the mounted set and print the ledger and the report as lines."""
+    import os
+
+    from piceli.artifacts.copy_cluster import run_job
+    from piceli.artifacts.copy_set import CopySetError
+    from piceli.artifacts.image_copy import CopyError
+    from piceli.cli_contract import say
+
+    def emit(line: str) -> None:
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+
+    try:
+        report = run_job(
+            args.dir,
+            ledger=args.ledger,
+            attempts=args.attempts,
+            environ=os.environ,
+            emit=emit,
+            say=lambda line: say(line),
+            **seams,
+        )
+    except (CopyError, CopySetError, DeliveryInputError) as error:
+        return rejection(error.code if error.code in ERRORS else "copy-invalid")
+    except (ValueError, KeyError, TypeError, OSError):
+        return rejection("copy-invalid")
+    return 0 if report.ok else 1
 
 
 def run_publish_files_command(args: argparse.Namespace, **seams: Any) -> int:

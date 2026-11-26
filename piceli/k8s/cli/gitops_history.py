@@ -3,8 +3,11 @@
 - ``piceli gitops history [ENV] [--limit N]``: each environment's deploy
   runs, newest first: outcome, trigger, commits, digests per component,
   checks, stage and cycle times, and the run's and release's time windows;
-- ``piceli gitops show RUN [--logs]``: one run (its ``id`` or ``run_id``, or
-  a unique prefix), with the log tail the controller kept on ``--logs``;
+- ``piceli gitops show RUN [--logs] [--artifacts]``: one run (its ``id`` or
+  ``run_id``, or a unique prefix), with the log tail the controller kept on
+  ``--logs``; ``--artifacts`` (0.83.0) prints what it built instead: commits,
+  and per component its digest, image reference, platform digests and the
+  layer of each file mapping (``piceli.gitops-artifacts.v1``);
 - ``piceli gitops compare ENV [A] [B]``: two runs, by default the running
   release and the one before it: source commits, components whose image
   changed, objects added, removed and changed, and both time windows.
@@ -127,6 +130,30 @@ def _say_run(run: Mapping[str, Any], *, detail: bool = False) -> None:
             )
 
 
+def _say_artifacts(body: Mapping[str, Any]) -> None:
+    say(f"{body['env']}: run {body['run']} ({body.get('state')})")
+    commits = body.get("commits") or {}
+    if commits:
+        say(
+            "  commits "
+            + ", ".join(
+                f"{name}@{_short(commit)}" for name, commit in sorted(commits.items())
+            )
+        )
+    for item in body.get("components") or ():
+        say(f"  {item.get('name')}  {item.get('digest') or '-'}")
+        say(f"    source {item.get('source') or '-'}@{_short(item.get('commit'))}")
+        image = item.get("image") or {}
+        say(f"    image {image.get('reference') or '-'}")
+        for platform, digest in sorted((item.get("platforms") or {}).items()):
+            say(f"    platform {platform} {digest}")
+        for layer in item.get("layers") or ():
+            say(f"    layer {layer.get('mapping')} {layer.get('digest')}")
+        built = item.get("provenance") or {}
+        if built.get("host"):
+            say(f"    built on {built['host']}")
+
+
 @app.command("history")
 def history(
     env: Annotated[
@@ -167,6 +194,13 @@ def show(
     with_logs: Annotated[
         bool, typer.Option("--logs", help="Also print the log tail the run kept")
     ] = False,
+    artifacts: Annotated[
+        bool,
+        typer.Option(
+            "--artifacts",
+            help="Print what the run built: commits, digests, images, layers",
+        ),
+    ] = False,
     kubeconfig: KubeconfigOption = None,
     context: ContextOption = None,
     namespace: NamespaceOption = "piceli-system",
@@ -178,6 +212,15 @@ def show(
     from piceli.gitops import releases
 
     document = _read(state_dir, kubeconfig, context, namespace, transport)
+    if artifacts:
+        with _guard():
+            releases.find(document, run, env)  # the registered error when unknown
+            found = releases.artifacts(document, run, env)
+        assert found is not None
+        _say_artifacts(found)
+        if as_json:
+            emit_json(found)
+        return
     with _guard():
         body = releases.run(document, run, env, with_logs)
     say(f"{body['env']}:")

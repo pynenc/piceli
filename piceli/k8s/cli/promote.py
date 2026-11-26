@@ -119,8 +119,10 @@ def promote_host(
     as_json: bool,
     wait: dict[str, Any] | None = None,
     machines: str | None = None,
+    commit: str | None = None,
 ) -> None:
-    """Pin the newest commit an environment verified in flake.lock, commit,
+    """Pin the newest commit an environment verified (or, 0.83.0, ``commit``,
+    one it passed that is not the newest) in flake.lock, commit,
     tag and push (plan, then --approve DIGEST). ``wait`` (0.28.0, ``--wait``):
     ``{"timeout", "interval"}``, then wait until the host runs the tag with
     its checks passed (exit 1: a failure, 2: timeout). ``machines`` (0.31.0,
@@ -145,7 +147,7 @@ def promote_host(
     try:
         found = promotion_plan.plan(
             host=host, pattern=target.pattern, gate=gate, history=history,
-            repo=repo, bump=bump,
+            repo=repo, bump=bump, commit=commit,
         )  # fmt: skip
     except PromotionError as error:
         reject(error.code, str(error), **error.detail)
@@ -153,6 +155,7 @@ def promote_host(
     command = (
         f"piceli promote {host} --from {source_env} --composition {composition} "
         f"--repo {repo}"
+        + (f" --commit {commit}" if commit else "")
         + (f" --bump {bump}" if bump != "patch" else "")
         + (f" --machines {machines}" if machines is not None else "")
         + (f" --state-dir {state_dir}" if state_dir is not None else "")

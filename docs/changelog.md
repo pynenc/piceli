@@ -4,6 +4,54 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.83.0
+
+### Release candidates and a resumable copy to an outside registry (ops#106)
+
+- **A run's artifacts.** The components of `gitops history --json` now carry
+  `image` (`repository` and a `reference` pinned by digest) and `layers`
+  (one entry per file mapping of a host build, at most 16). New
+  `piceli gitops show RUN --artifacts [--env E] [--json]` prints
+  `piceli.gitops-artifacts.v1`: the commits and, per component, the digest,
+  image reference, platform digests, layers and provenance.
+  `piceli.gitops.releases.artifacts(document, run_id, env)` returns the same
+  body. A key is left out when the run did not record it (for example
+  `layers` on an image built by Docker). The history schema stays
+  `piceli.gitops-history.v1`.
+- **A copy that survives a dropped connection.** `piceli artifacts copy`
+  gains `--attempts N` (default 5): a whole copy is tried again after
+  `registry-unreachable` or HTTP 429, 502, 503 and 504, with a pause that
+  grows to 60 s; other reasons stop at once. `--set FILE` copies a list of
+  images under one plan digest. `--ledger NAME` records each copy, and a
+  rerun continues at the first one not done.
+- **No laptop port-forward.** `--in-cluster` runs the copy as a Job next to
+  the registry, which it reaches by its Service name; credentials come from a
+  Secret (`--credentials-secret`), never from arguments. A killed client
+  leaves the Job running, and the same command attaches to it. New hidden
+  `artifacts copy-job-run` is what the Job runs; the report is
+  `piceli.copy-set.v1`.
+- **Release candidates.** `Controller(candidate=Candidate(environment=...,
+  quiet="30m", keep=5, copies=(CandidateCopy(component=..., to="oci://host/repo",
+  tag="{commit}"),)))`. After the environment passes a commit and no newer
+  one passes for the quiet time, the controller copies that run's images, by
+  digest, to the declared paths with the resumable copy set. A candidate is
+  `waiting`, `building`, `ready`, `failed` (with a reason) or `cancelled`; a
+  newer passed commit cancels one still building. `piceli gitops candidate
+  request COMMIT` starts one at once, `release COMMIT` marks it released,
+  `list [--json]` shows them, and `gitops status` (text and JSON) gains
+  `candidates`. The `keep` newest and every released one stay; their digests
+  come from `candidate list --json` for `artifacts retention --pin-file`.
+  See {doc}`release_candidates`.
+- **Promote a passed commit that is not the newest.** `piceli promote HOST
+  --from ENV --commit SHA` (7 to 40 hex characters) pins a commit ENV passed
+  even when a newer one passed since. It is refused (`promotion-not-verified`)
+  unless ENV ran it with its release checks passed; the plan's `verified_run`
+  names that run and the digest covers the commit.
+- **Not in this release:** Nix closure candidates, a macOS build host,
+  records-only paths and an upgrade environment.
+- **Upgrade:** the controller image for candidates and the in-cluster copy
+  (`piceli gitops enable` again); the client for the new flags and commands.
+
 ## Version 0.82.0
 
 ### A source missing a tracked file is cloned again; the copy is restored (ops#101)

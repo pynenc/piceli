@@ -201,7 +201,7 @@ def test_a_failure_that_stays_names_side_host_request_and_cause(
     origin = f"oci://{source.host}/{REPO}@{digest}"
     to = f"oci://{target.host}/example/api:1.0"
     common = ["copy", "--from", origin, "--to", to, "--no-referrers"]
-    common += ["--credentials", str(credentials)]
+    common += ["--credentials", str(credentials), "--attempts", "1"]
     plan = CopyPlan.parse(origin, to, referrers=False)
     args = build_parser().parse_args([*common, "--approve", plan.digest])
     code = run_copy_command(args, client_factory=_factory())

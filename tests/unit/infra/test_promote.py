@@ -48,7 +48,7 @@ def _promote(found: dict[str, Any], *extra: str) -> tuple[int, dict[str, Any], s
         *extra,
     ])  # fmt: skip
     body = json.loads(result.stdout) if result.stdout.strip() else {}
-    return result.exit_code, body, result.stderr
+    return result.exit_code, body, result.stderr + repr(result.exception)
 
 
 def _remote(found: dict[str, Any]) -> dict[str, str]:
@@ -267,6 +267,57 @@ def test_a_newer_verified_commit_still_changes_the_plan(found: dict[str, Any]) -
     )
     code, done, _ = _promote(found, "--approve", body["digest"])
     assert (code, done["reason"]) == (2, "promote-plan-changed")
+
+
+def test_commit_pins_a_passed_commit_that_is_not_the_newest(
+    found: dict[str, Any],
+) -> None:
+    """0.83.0: ``--commit`` names a commit the environment passed, by a prefix
+    or in full; the plan's ``pinned`` names its run and the digest covers it."""
+    c = found["c"]
+    before_code, before, _ = _promote(found)  # c is the newest: the plan to match
+    assert before_code == 3
+    # then a newer run of a passes: c is no longer the newest
+    support.publish_history(
+        found["state"],
+        history(
+            run(found["a"], "r4", "2026-10-23T10:00:00Z"),
+            run(found["c"], "r3", "2026-10-22T10:00:00Z"),
+            run(found["b"], "r2", "2026-10-21T10:00:00Z", passed=False),
+        ),
+    )
+    newest_code, newest, _ = _promote(found)
+    assert (newest_code, newest["state"]) == (0, "current")  # the lock pins a
+    code, body, said = _promote(found, "--commit", c[:12])
+    assert code == 3, said
+    assert body["plan"]["pinned"]["commit"] == c
+    assert body["plan"]["pinned"]["verified_run"] == "r3"
+    assert body["plan"]["change"]["to"] == c
+    assert body["digest"] == before["digest"]  # same commit: same approval
+    again_code, again, _ = _promote(found, "--commit", c)
+    assert (again_code, again["digest"]) == (3, body["digest"])
+    other_code, other, _ = _promote(found, "--commit", found["a"][:12])
+    assert other_code == 0 and other["state"] == "current"
+    done_code, done, _ = _promote(
+        found, "--commit", c[:12], "--approve", body["digest"]
+    )
+    assert done_code == 0, done
+    assert _remote(found)["refs/tags/web-v1.0.1^{}"] != c  # the lock commit, not c
+    assert locked_rev(git(found["work"], "show", "HEAD:flake.lock"), "app") == c
+
+
+def test_commit_refuses_what_the_environment_did_not_pass(
+    found: dict[str, Any],
+) -> None:
+    before = _remote(found)
+    code, body, _ = _promote(found, "--commit", found["b"][:12])  # a failed run
+    assert code == 2 and body["reason"] == "promotion-not-verified"
+    assert body["newest_passed"]["commit"] == found["c"]
+    code, body, _ = _promote(found, "--commit", "z" * 12)
+    assert code == 2 and body["reason"] == "promote-invalid"
+    code, body, _ = _promote(found, "--commit", found["c"][:4])  # too short
+    assert code == 2 and body["reason"] == "promote-invalid"
+    assert _remote(found) == before
 
 
 def test_the_digest_leaves_out_the_verifying_run() -> None:

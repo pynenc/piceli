@@ -14,7 +14,8 @@ history's own entry, unchanged, with two windows added:
   same ``piceli.release.started_at`` and ``finished_at``.
 
 Schemas (additive within v1): ``piceli.gitops-runs.v1`` (history),
-``piceli.gitops-run.v1`` (one run) and ``piceli.gitops-compare.v1``.
+``piceli.gitops-run.v1`` (one run), ``piceli.gitops-compare.v1`` and
+``piceli.gitops-artifacts.v1`` (0.83.0: what one run built).
 
 Importing this module is side-effect free.
 """
@@ -31,6 +32,7 @@ from piceli.gitops.history import _span, _when
 RUNS_SCHEMA = "piceli.gitops-runs.v1"
 RUN_SCHEMA = "piceli.gitops-run.v1"
 COMPARE_SCHEMA = "piceli.gitops-compare.v1"
+ARTIFACTS_SCHEMA = "piceli.gitops-artifacts.v1"
 #: Plan operations that add or remove an object; the others change it.
 _ADDED, _REMOVED, _UNCHANGED = {"create"}, {"delete"}, {"no-op"}
 
@@ -200,6 +202,46 @@ def run(
         body["logs"] = logs(entry)
         body["logs_note"] = LOGS_NOTE
     return body
+
+
+def artifacts(
+    document: Any, run_id: str, env: str | None = None
+) -> dict[str, Any] | None:
+    """What one run built (0.83.0, ``gitops show RUN --artifacts --json``):
+    its commits and, per component, the digest, the image (repository and
+    pinned reference), each platform's digest, each file mapping's layer and
+    where it was built. Any run is shown, with its ``state``. ``None`` when
+    the history has no such run (none yet, unknown, or a prefix matching
+    several; :func:`find` raises for those). The controller serves this
+    same body.
+    """
+    try:
+        name, entry = find(document, run_id, env)
+    except GitOpsError:
+        return None
+    return {
+        "schema": ARTIFACTS_SCHEMA,
+        "env": name,
+        "run": entry.get("id") or entry.get("run_id"),
+        "state": entry.get("state"),
+        "commits": {
+            str(source): _dict(value).get("commit")
+            for source, value in sorted(_dict(entry.get("sources")).items())
+        },
+        "components": [
+            {
+                "name": item.get("name"),
+                "source": item.get("source"),
+                "commit": item.get("commit"),
+                "digest": item.get("digest"),
+                "image": item.get("image"),
+                "platforms": _dict(item.get("platforms")),
+                "layers": list(item.get("layers") or ()),
+                "provenance": item.get("provenance"),
+            }
+            for item in (_dict(i) for i in entry.get("components") or ())
+        ],
+    }
 
 
 # ----------------------------------------------------------------- compare

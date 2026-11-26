@@ -480,6 +480,37 @@ def _render_workload(
                 {"name": volume, "secret": {"secretName": secret, "defaultMode": 0o440}}
             )
             mounts.append({"name": volume, "mountPath": path, "readOnly": True})
+    # 0.83.0 Controller(candidate=Candidate(copies=(CandidateCopy(credentials=
+    # SECRET)))): each Secret is mounted as files (the key credentials.json);
+    # the controller reads the file, never an environment variable.
+    from piceli.gitops.candidates import CREDENTIALS_DIR as CANDIDATE_CREDENTIALS_DIR
+
+    composition = getattr(config, "composition", None) or {}
+    declared = ((composition.get("cluster") or {}).get("controller") or {}).get(
+        "candidate"
+    ) or {}
+    candidate_secrets = sorted(
+        {
+            str(item["credentials"])
+            for item in declared.get("copies") or ()
+            if item.get("credentials")
+        }
+    )
+    for number, candidate_secret in enumerate(candidate_secrets):
+        name = f"candidate-credentials-{number}"
+        volumes.append(
+            {
+                "name": name,
+                "secret": {"secretName": candidate_secret, "defaultMode": 0o400},
+            }
+        )
+        mounts.append(
+            {
+                "name": name,
+                "mountPath": f"{CANDIDATE_CREDENTIALS_DIR}/{candidate_secret}",
+                "readOnly": True,
+            }
+        )
     # 0.28.0 Controller(alarms=Alarms(secret=...)): each variable a target
     # names comes from the Secret's key of that name (optional: a missing
     # key fails that send, visible in the status, never the controller).

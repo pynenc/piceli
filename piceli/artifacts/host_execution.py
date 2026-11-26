@@ -873,6 +873,8 @@ class HostExecution:
             base = bases[key]
         layers: list[tuple[Descriptor, str]] = []
         files: list[tuple[str, str, int]] = []
+        #: 0.83.0: the layer of each file mapping, by its container path.
+        mappings: list[dict[str, str]] = []
         if image.dirs:
             entries = [
                 LayerEntry(str(parent), "dir", 0o755)
@@ -894,6 +896,7 @@ class HostExecution:
             entries = collect(self._source(root, src), dest)
             written = write_layer(self.store, entries, mtime=epoch, cancel=self.cancel)
             layers.append((written.descriptor, f"copy {dest}"))
+            mappings.append({"mapping": dest, "digest": written.descriptor.digest})
             files.extend(written.files)
         built = assemble(
             self.store,
@@ -948,6 +951,9 @@ class HostExecution:
                 }
                 for item in built.layers
             ],
+            # 0.83.0: one layer per declared file mapping (the run's
+            # summary and the deploy history list them).
+            "mappings": mappings,
             "files": [
                 {"path": "/" + path, "sha256": sha, "size": size}
                 for path, sha, size in sorted(files)
