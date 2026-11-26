@@ -48,6 +48,7 @@ from piceli.artifacts.copy_set import (
     check_items,
     ledger_records,
     prepare_copies,
+    resumed_receipt,
     run_copy_set,
     validate_name,
 )
@@ -407,9 +408,15 @@ def _controller_image(kube: Any, namespace: str) -> str:
 
 
 def _from_ledger(
-    items: Sequence[CopyItem], ledger: str, document: Mapping[str, Any], reason: str
+    items: Sequence[CopyItem],
+    ledger: str,
+    document: Mapping[str, Any],
+    reason: str,
+    *,
+    resumed: bool = False,
 ) -> CopyReport:
-    """A report from the ledger alone (the Job printed no report)."""
+    """A report from the ledger alone (the Job printed no report, or, with
+    ``resumed``, every copy was done before this run)."""
     records = ledger_records(document)
     report = CopyReport(ledger)
     broke = False
@@ -425,6 +432,9 @@ def _from_ledger(
             reason=record.get("reason"),
             receipt_digest=record.get("receipt_digest"),
         )
+        if state == "done":  # 0.87.0: what the done copy copied, from the ledger
+            result.skipped = resumed
+            result.receipt = resumed_receipt(record)
         if state != "done" and not broke:
             result.state, broke = "failed", True
             result.reason = record.get("reason") or reason
@@ -530,7 +540,7 @@ def _run(
         records = ledger_records(document)
         if all((records.get(item.key) or {}).get("state") == "done" for item in sent):
             say("[copy] every copy in the ledger is done")
-            return _from_ledger(sent, ledger, document, "copy-failed")
+            return _from_ledger(sent, ledger, document, "copy-failed", resumed=True)
         image = image or cluster.controller_image()
         configmap = ConfigMapLedger.configmap(ledger)
         setting = {

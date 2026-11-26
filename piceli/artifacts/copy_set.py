@@ -581,16 +581,55 @@ def prepare_copies(
     return copy
 
 
+#: The receipt keys a ledger keeps of a done copy (0.87.0): enough to say what
+#: was copied where (no blob or referrer lists, so 500 items fit a ConfigMap).
+LEDGER_RECEIPT_KEYS = (
+    "source", "target", "digest", "media_type", "platforms", "pull_ref",
+    "previous", "result", "state", "started_at", "finished_at", "seconds",
+)  # fmt: skip
+
+
+def ledger_receipt(receipt: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """The part of a done copy's receipt its ledger record keeps (0.87.0)."""
+    if not isinstance(receipt, Mapping):
+        return None
+    kept = {key: receipt[key] for key in LEDGER_RECEIPT_KEYS if key in receipt}
+    referrers = receipt.get("referrers")
+    if isinstance(referrers, list):
+        # Each referrer's short text fields (subject, digest, result).
+        kept["referrers"] = [
+            {str(k): v for k, v in item.items() if isinstance(v, str) and len(v) <= 200}
+            for item in referrers[:16]
+            if isinstance(item, Mapping)
+        ]
+    return kept
+
+
+def resumed_receipt(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    """0.87.0: a done item's receipt from its ledger record, marked
+    ``from_ledger`` (a copy before 0.87.0 kept none: ``None``)."""
+    kept = record.get("receipt")
+    return {**kept, "from_ledger": True} if isinstance(kept, Mapping) else None
+
+
 def _record(
-    state: str, attempts: int, reason: str | None, receipt_digest: str | None
+    state: str,
+    attempts: int,
+    reason: str | None,
+    receipt_digest: str | None,
+    receipt: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    found = {
         "state": state,
         "attempts": attempts,
         "reason": reason,
         "receipt_digest": receipt_digest,
         "at": _now(),
     }
+    kept = ledger_receipt(receipt)
+    if kept is not None:
+        found["receipt"] = kept
+    return found
 
 
 def run_copy_set(
@@ -645,6 +684,8 @@ def run_copy_set(
             result.state, result.skipped = "done", True
             result.attempts = int(record.get("attempts") or 0)
             result.receipt_digest = record.get("receipt_digest")
+            # 0.87.0: a resumed copy reports what the done one copied.
+            result.receipt = resumed_receipt(record)
             continue
         if stopped:
             continue
@@ -657,7 +698,9 @@ def run_copy_set(
                 result.state, result.reason = "done", None
                 result.receipt = receipt
                 result.receipt_digest = digest(canonical(receipt))
-                records[item.key] = _record("done", total, None, result.receipt_digest)
+                records[item.key] = _record(
+                    "done", total, None, result.receipt_digest, receipt
+                )
                 persist()
                 say(f"copy {item.key}: done after {total} attempt(s)")
                 break

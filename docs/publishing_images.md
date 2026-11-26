@@ -249,7 +249,10 @@ that talks to a registry.
   failed attempt, in `--ledger-dir` (default `~/.local/state/piceli/copy`,
   private files). Running the same command again with the same name skips
   what is `done` and continues at the first copy that is not. The ledger holds
-  no credential and at most 500 copies.
+  no credential and at most 500 copies. A skipped copy reports the receipt of
+  the run that made it (0.87.0: source, target and tag, digest, platforms,
+  pull reference, result, referrers; `from_ledger: true`), so a rerun's
+  `--out` says what was copied; a copy recorded before 0.87.0 has none.
 - **In the cluster.** `--in-cluster` (with `--kubeconfig` and `--context`,
   `--namespace piceli-system`) writes the set and the ledger into ConfigMap
   `piceli-copy-<ledger>` and creates one Job (`backoffLimit: 0`, deadline

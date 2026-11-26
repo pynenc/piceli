@@ -93,8 +93,9 @@ candidate 0123abc: not ready: candidate-no-image (component web has no image ref
 | `failed` | `reason` says why; it is not tried again until you ask. |
 | `cancelled` | A newer commit passed while it was building. A request continues it from its ledger. |
 
-Reasons: `candidate-no-image` (a component of the run has no image; the detail
-names it), `candidate-no-component` (the run has no such component),
+Reasons: `candidate-no-image` (a component of the run has no image digest;
+the detail names it; since 0.87.0 a digest without an image reference is
+copied from the cluster registry, `<registry repository>/<component>@digest`), `candidate-no-component` (the run has no such component),
 `candidate-run-missing` (the history no longer has the run), `candidate-copy-error`,
 `candidate-credentials-missing`, and the reason the copy set reports.
 `candidate-superseded` is the reason of a cancelled candidate.

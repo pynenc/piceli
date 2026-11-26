@@ -377,6 +377,10 @@ class Candidates:
     :param spawn: Starts a function in the background (inline in tests).
     :param registry_host: The cluster registry's service address, for a
         run's image the history gives without a host.
+    :param repository: ``repository(component)``: the component's repository
+        in the cluster registry, the one the controller pushes it to (0.87.0).
+        A run's component with a digest but no image reference is copied from
+        ``registry_host/repository@digest``.
     :param state_dir: Where the copy set's ledgers live (``candidates/ledgers``).
     :param sources: The environment's source keys; ``Candidate(source=)``
         names the candidate's commit, else the first one (:meth:`poll` may
@@ -397,6 +401,7 @@ class Candidates:
         registry_host: str | None = None,
         state_dir: Path | None = None,
         sources: Sequence[str] = (),
+        repository: Callable[[str], str] | None = None,
     ) -> None:
         self.state = state
         self._sources = tuple(sources)
@@ -408,6 +413,7 @@ class Candidates:
         self._credentials = credentials or _load_credentials
         self._spawn = spawn
         self.registry_host = registry_host
+        self._repository = repository
         self.state_dir = state_dir
         self._jobs: dict[str, _Job] = {}
 
@@ -672,11 +678,20 @@ class Candidates:
         return releases.artifacts
 
     def _source(self, item: Mapping[str, Any]) -> str | None:
-        """``oci://host/repo@digest`` of a run's component, else ``None``."""
+        """``oci://host/repo@digest`` of a run's component, else ``None``.
+
+        0.87.0: a component the run lists with a digest but no image reference
+        is in the cluster registry under its own repository (where the
+        controller pushes it): ``registry_host/repository(name)@digest``."""
         digest = str(item.get("digest") or "")
-        image = item.get("image")
-        if not isinstance(image, Mapping) or not digest.startswith("sha256:"):
+        if not digest.startswith("sha256:"):
             return None
+        image = item.get("image")
+        if not isinstance(image, Mapping):
+            name = str(item.get("name") or "")
+            if not name or self._repository is None or not self.registry_host:
+                return None
+            return f"oci://{self.registry_host}/{self._repository(name)}@{digest}"
         reference = str(image.get("reference") or "")
         if "@" in reference:
             return "oci://" + reference.removeprefix("oci://")

@@ -66,12 +66,13 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.86
+## What's new in 0.87
 
-- **Unchanged images say which commits they stand for**: each component of a
-  run in `gitops history` has `current_for`, the run's commits its image is
-  current for, so a release can copy an image built at an older commit.
-  Provenance stays the build's.
+- **Candidates copy an image the run lists by digest only**: a component with
+  a digest but no image reference is copied from the cluster registry, from
+  the repository the controller pushes it to.
+- **A resumed copy says what it copied**: `artifacts copy --ledger` run again
+  reports the done copy's receipt (target, tag, digest), not `result: null`.
 
 ## Web UI
 

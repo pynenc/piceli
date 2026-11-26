@@ -213,6 +213,18 @@ def test_a_rerun_with_the_same_ledger_skips_what_is_done() -> None:
     assert report.ok
 
 
+def test_a_rerun_reports_what_the_done_copy_copied() -> None:
+    """0.87.0: an item the ledger names done reports its receipt (target,
+    tag, digest), not ``None``, marked ``from_ledger``."""
+    store = MemoryLedger()
+    run([item("api")], Script({}), store)
+    report, _, _ = run([item("api")], Script({}), store)
+    found = report.items[0].receipt
+    assert report.items[0].skipped and found is not None
+    assert found["target"]["tag"] == "1.0" and found["digest"] == DIGEST
+    assert found["state"] == "copied" and found["from_ledger"] is True
+
+
 def test_a_killed_run_leaves_the_ledger_and_the_rerun_continues() -> None:
     store = MemoryLedger()
     items = [item("api"), item("web"), item("db")]
@@ -712,6 +724,22 @@ def test_a_failed_job_keeps_its_ledger_and_the_rerun_continues(
     report = in_cluster(again, api, items)
     assert report.ok and fixed.calls == [item("web").target]
     assert [i.skipped for i in report.items] == [True, False]
+
+
+def test_an_in_cluster_rerun_of_a_done_ledger_reports_the_receipts(
+    tmp_path: Path, api: FakeApi
+) -> None:
+    """0.87.0: every copy done, no Job runs, and each item still says what
+    was copied (the ledger keeps a compact receipt)."""
+    items = [item("api")]
+    in_cluster(FakeCluster(tmp_path, Script({})), api, items)
+    idle = Script({})
+    report = in_cluster(FakeCluster(tmp_path, idle), api, items)
+    assert idle.calls == [] and report.ok
+    found = report.items[0]
+    assert found.skipped and found.receipt is not None
+    assert found.receipt["target"]["tag"] == "1.0"
+    assert found.receipt["digest"] == DIGEST and found.receipt["from_ledger"]
 
 
 def test_a_client_killed_after_the_job_ended_reads_its_result(

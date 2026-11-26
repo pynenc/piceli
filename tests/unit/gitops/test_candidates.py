@@ -601,6 +601,20 @@ def test_a_component_without_an_image_fails_the_candidate_naming_it() -> None:
     )
 
 
+def test_a_component_without_an_image_reference_is_copied_by_its_digest() -> None:
+    """0.87.0: a digest without a reference is copied from the cluster
+    registry, from the repository the controller pushes the component to."""
+    rig = Rig()
+    rig.candidates._repository = lambda name: f"shop/{name}"
+    rig.components = [component("web", image=False)]
+    rig.poll(passed((A, NOW - 3600, "run-1")))
+    assert rig.record(A)["state"] == "ready"
+    assert rig.copied[0][:2] == (
+        f"oci://{REGISTRY}/shop/web@{DIGEST['web']}",
+        f"oci://ghcr.io/example/shop-web:{A[:12]}",
+    )
+
+
 def test_a_run_or_component_the_history_lacks_fails_the_candidate() -> None:
     rig = Rig()
     rig.run_found = False
