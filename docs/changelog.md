@@ -14,7 +14,9 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   current for the run's commits, so a release that copies a verified run's
   images compares `current_for` to the run's `sources` (also in
   `gitops show RUN --artifacts`). `commit` and `provenance.commits` stay the
-  build's.
+  build's. A run recorded before 0.86.0 reads with `current_for` too: the
+  component's own source at the run's commit (older records do not list the
+  other sources an image reads).
 - **An image's provenance does not move without a build.** The same image
   recorded again for a newer commit keeps the provenance of its build; a
   rebuild (`piceli gitops build`, `rebuild --host`) records its own. Candidates

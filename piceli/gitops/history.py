@@ -741,15 +741,28 @@ def _from_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _components(
-    components: Mapping[str, Any], images: Mapping[str, Any]
+    components: Mapping[str, Any],
+    images: Mapping[str, Any],
+    revision: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """The entry's components. 0.83.0: each gains ``image`` (the event's, else
     the run's reference) and ``layers`` (the run's, one per file mapping),
     joined by name (a multi-platform build's ``name/<platform>`` images too, each
-    layer naming its platform); a key is left out when the run recorded none."""
+    layer naming its platform); a key is left out when the run recorded none.
+
+    0.86.0: a run recorded before 0.86.0 has no ``current_for``. Its image is
+    still the one for the run's commits (the controller looks every image up by
+    the change key of the run's revision), so it reads as
+    ``{source: the run's commit of that source}``: the component's own source
+    only, since older records do not list the other sources an image reads."""
     found = []
+    revision = _dict(revision)
     for name, value in sorted(components.items()):
         item = {"name": name, **_dict(value)}
+        source = item.get("source")
+        commit = revision.get(source) if isinstance(source, str) else None
+        if not item.get("current_for") and item.get("digest") and commit:
+            item["current_for"] = {str(source)[:64]: str(commit)[:64]}
         built = _dict(images.get(name))
         if not item.get("image"):
             image = _image_of(built.get("reference"))
@@ -832,7 +845,7 @@ def _entry(
         "combined_hash": run.get("combined_hash") or event_.get("combined_hash"),
         "approved_by": approved,
         "release": run.get("release"),
-        "components": _components(components, run_images),
+        "components": _components(components, run_images, revision),
         "built": list(event_.get("built") or []),
         "rolled": list(event_.get("rolled") or []),
         "unchanged": list(event_.get("unchanged") or []),

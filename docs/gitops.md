@@ -1998,7 +1998,8 @@ ConfigMap `piceli-gitops-history` (key `history.json`, schema
   To know whether an image fits a commit, compare `current_for` to the run's
   `sources`; never `provenance.commits`, which stays the build's and does not
   move to a newer commit without a build. Left out while the component has no
-  image;
+  image. A run recorded before 0.86.0 reads with it as well, naming only the
+  component's own source (`source`) at the run's commit;
 - `approval_wait` (`started_at`, `finished_at`, `seconds`): from the plan
   waiting for approval to the owner's approval;
 - `approved_by` (`via`, `at`); `at` is set for `policy` approvals too (when
