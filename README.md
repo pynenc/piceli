@@ -66,13 +66,11 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.87
+## What's new in 0.88
 
-- **Candidates copy an image the run lists by digest only**: a component with
-  a digest but no image reference is copied from the cluster registry, from
-  the repository the controller pushes it to.
-- **A resumed copy says what it copied**: `artifacts copy --ledger` run again
-  reports the done copy's receipt (target, tag, digest), not `result: null`.
+- **A new commit with the same images gets checks of its own**: the GitOps
+  controller runs the environment's checks against the running release, so
+  the commit passes promotion gates and can become a release candidate.
 
 ## Web UI
 

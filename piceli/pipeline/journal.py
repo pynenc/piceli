@@ -219,11 +219,14 @@ class Journal:
         return runs[-1] if runs else None
 
     def last_checks(self, release: str) -> dict[str, Any] | None:
-        """The newest checks outcome of ``release``: ``{"passed", "checks_hash"}``.
+        """The newest checks outcome of ``release``: ``{"passed", "checks_hash",
+        "revision"}``.
 
         ``None`` when no run of ``release`` ran (or verified) its checks.
         ``checks_hash`` is the digest of the check set that outcome covers
-        (``None`` for runs before 0.14.5, which did not record it).
+        (``None`` for runs before 0.14.5, which did not record it);
+        ``revision`` the source commits it stands for (``None`` before
+        0.88.0 or when the run was not told).
         """
         for run in reversed(self.runs()):
             checks = run.data["stages"].get("checks", {})
@@ -231,9 +234,17 @@ class Journal:
                 continue
             output = checks.get("output") or {}
             if checks.get("state") in {"done", "skipped"} and output.get("passed"):
-                return {"passed": True, "checks_hash": output.get("checks_hash")}
+                return {
+                    "passed": True,
+                    "checks_hash": output.get("checks_hash"),
+                    "revision": output.get("revision"),
+                }
             if checks.get("state") in {"failed", "done"}:
-                return {"passed": False, "checks_hash": output.get("checks_hash")}
+                return {
+                    "passed": False,
+                    "checks_hash": output.get("checks_hash"),
+                    "revision": output.get("revision"),
+                }
         return None
 
     def last_verified(self, release: str, checks_hash: str | None = None) -> bool:

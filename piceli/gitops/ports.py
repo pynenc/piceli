@@ -466,11 +466,19 @@ class DefaultPorts:
         digests: Mapping[str, Any] | None,
         approve: str | None,
         on_stage: Callable[[Any], None] | None = None,
+        revision: Mapping[str, str] | None = None,
     ) -> EnvOutcome:
         kwargs: dict[str, Any] = {"commit": commit, "approve": approve}
+        options: dict[str, Any] = {}
         if on_stage is not None:
             # 0.17.0: the runner's stage events (the status shows the stage).
-            kwargs["runner_options"] = {"on_event": on_stage}
+            options["on_event"] = on_stage
+        if revision:
+            # 0.88.0: the source commits; an unchanged release is checked
+            # again for commits its checks did not pass for yet.
+            options["revision"] = dict(revision)
+        if options:
+            kwargs["runner_options"] = options
         # "policy": the owner's ApprovalPolicy, or EnvConfig(auto_approve=True)
         # for a branch; also without a policy when the owner allows branches.
         envs = getattr(pipeline, "envs", None)

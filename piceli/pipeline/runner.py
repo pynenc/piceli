@@ -444,6 +444,9 @@ class PipelineRunner:
     :param refs: Sources to read from a commit instead of the working tree
         (``--ref``); run planning and execution inside :meth:`sources` so the
         temporary worktrees are removed afterwards.
+    :param revision: The source commits this run deploys (``{source:
+        commit}``, from the GitOps controller). Checks that passed on an
+        unchanged release for other commits run again (0.88.0).
     """
 
     def __init__(
@@ -455,8 +458,13 @@ class PipelineRunner:
         say: Callable[[str], None] | None = None,
         check_runner: Any = None,
         refs: Sequence[RefRequest] = (),
+        revision: Mapping[str, str] | None = None,
     ) -> None:
         self.pipeline = pipeline
+        #: The source commits this run deploys (``{}``: not told).
+        self.revision = {
+            str(key)[:64]: str(value)[:64] for key, value in (revision or {}).items()
+        }
         #: The stages of this pipeline's runs (``backup``/``prerollout`` only when declared).
         self.stages = pipeline.stages
         self.refs = tuple(refs)
@@ -2633,6 +2641,9 @@ class PipelineRunner:
         pipeline = self.pipeline
         checks, skipped = scoped_checks(pipeline)
         extra: dict[str, Any] = {"skipped": skipped} if skipped else {}
+        if self.revision:
+            # 0.88.0: the commits these checks stand for.
+            extra["revision"] = dict(self.revision)
         for item in skipped:
             self.say(f"[checks] {item['check']}: skipped (not in stack)")
         digest = checks_digest(checks)
@@ -2647,25 +2658,33 @@ class PipelineRunner:
         # The release's manifests did not change (nothing applied): its checks
         # run only when this check set was not verified against it yet (a
         # check changed, was added or removed), and a failure never rolls a
-        # release back that this run did not roll out.
+        # release back that this run did not roll out. A new revision (other
+        # source commits, 0.88.0) runs them too: each commit gets checks of
+        # its own, even when its images and manifests did not change.
         verifying = self.run.stage("apply").get("state") == "skipped"
         verification: dict[str, Any] | None = None
         if verifying:
             last = self.journal.last_checks(str(release))
-            if last is not None and last["passed"] and last["checks_hash"] == digest:
+            same = last is not None and last["passed"] and last["checks_hash"] == digest
+            covered = not self.revision or (last or {}).get("revision") == self.revision
+            if same and covered:
                 self.say(f"[checks] {release}: already verified")
                 return "skipped", {
                     "passed": True,
                     "why": "release already verified",
                     "checks_hash": digest,
+                    **({"revision": extra["revision"]} if self.revision else {}),
                 }
-            trigger = (
-                "checks-changed"
-                if last is not None
+            if same:
+                trigger = "new-revision"
+            elif (
+                last is not None
                 and last["checks_hash"] is not None
                 and last["checks_hash"] != digest
-                else "unverified"
-            )
+            ):
+                trigger = "checks-changed"
+            else:
+                trigger = "unverified"
             verification = {"trigger": trigger, "applied": False}
             self.say(
                 f"[checks] {release}: manifests unchanged; verifying the running "
