@@ -1346,6 +1346,12 @@ def status(
                 f"(run {pinned.get('verified_run')})"
             )
         say(line)
+    if body.get("candidates"):
+        # 0.83.0: the release candidates (Controller(candidate=)).
+        from piceli.gitops.candidates import describe
+
+        for item in body["candidates"]:
+            say(f"  {describe(item)}")
     if as_json:
         emit_json(body)
 
@@ -2016,6 +2022,16 @@ def promote(
     bump: Annotated[
         str, typer.Option("--bump", help="With --from: major, minor or patch")
     ] = "patch",
+    commit: Annotated[
+        str | None,
+        typer.Option(
+            "--commit",
+            help="With --from (0.83.0): pin this commit (7 to 40 hex characters) "
+            "instead of the newest; refused unless the environment passed it "
+            "with its release checks",
+            show_default=False,
+        ),
+    ] = None,
     approve: Annotated[
         str | None,
         typer.Option("--approve", help="With --from: the promotion plan's digest"),
@@ -2061,9 +2077,11 @@ def promote(
             target, from_env, composition=composition, repo=repo, bump=bump,
             approve=approve, kubeconfig=kubeconfig, context=context,
             state_dir=state_dir, namespace=namespace, as_json=as_json,
-            wait=waiting, machines=machines,
+            wait=waiting, machines=machines, commit=commit,
         )  # fmt: skip
         return
+    if commit is not None:
+        reject("promote-invalid", "--commit goes with --from")
     if wait:
         reject("promote-invalid", "--wait waits for a --from promotion")
     if machines is not None:
@@ -2822,6 +2840,7 @@ def _pause(
 
 def register(root: typer.Typer) -> None:
     """Add ``gitops`` and ``promote`` to the root application."""
+    import piceli.k8s.cli.gitops_candidate
     import piceli.k8s.cli.gitops_history
     import piceli.k8s.cli.gitops_watch  # noqa: F401 - adds `gitops alarms`
 

@@ -182,12 +182,14 @@ noted.
   alarm, report it with the node or cache it names; emptying a cache is
   in the approval table below.
 - `piceli gitops history [ENV] [--limit N] [--json]`, `piceli gitops show
-  RUN [--logs] [--json]` and `piceli gitops compare ENV [A] [B] [--json]`
+  RUN [--logs] [--artifacts] [--env E] [--json]` and `piceli gitops compare ENV [A] [B] [--json]`
   (0.38.0): the controller's deployment history, read-only, as the UI's
   Deployment history shows it. `history` lists each environment's runs,
   newest first, with `window` and `release_window` (the time a release
   changed the cluster, the same as its `piceli.release` telemetry marker);
-  `show` is one run (`--logs`: the log tail it kept); `compare` puts two
+  `show` is one run (`--logs`: the log tail it kept; `--artifacts`, 0.83.0:
+  what it built, `piceli.gitops-artifacts.v1`: per component its digest, image
+  `reference`, platform digests and the layer of each file mapping); `compare` puts two
   runs side by side (default: the running release and the one before):
   commits, images that changed, objects added, removed and changed. To
   look at telemetry before and after a release, take its `release_window`.
@@ -405,6 +407,7 @@ Exporting deploy events (`--otlp-endpoint`, or `OTEL_EXPORTER_OTLP_*` in the env
 | `piceli gitops disable` | Deletes the controller's objects (never an environment, the namespace or, without `--delete-state`, the state claim) | `--approve <plan_hash>` printed without `--approve`, after the owner agreed |
 | `piceli gitops approve` | Releases a branch deploy (or a main release) waiting for approval; the controller applies that plan on its next poll | This **is** the owner's approval: run it only with the exact hash the owner approved after seeing the plan (`piceli gitops status` shows the pending hash) |
 | `piceli promote` | Asks the controller to deploy `BRANCH@SHA` to the main environment, or `piceli promote ENV BRANCH@SHA` to a named environment that follows `Promote()` (which then waits for `gitops approve` unless it declares `auto_approve=True`); `piceli promote HOST --from ENV --approve DIGEST` (0.25.0) commits the pin of the commit ENV verified in the flake's `flake.lock`, tags and pushes (without `--approve` it only plans, exit 3) | The owner's go-ahead for that commit and environment; for `--from`, the plan digest |
+| `piceli gitops candidate request`, `piceli gitops candidate release` (0.83.0) | Asks the controller to prepare the release candidate of a commit now (it copies the images of the run that passed it to the outside registry paths the composition declares, by digest), or to mark a ready candidate released | The owner's go-ahead for that commit; nothing to approve: the controller checks that the commit passed |
 | `piceli gitops sync` | Asks the controller to deploy an environment (or every one) now at its revision; with `--component NAME` (a composition controller) also rebuilds that component | The owner's go-ahead; the deploy still needs the environment's usual approval (`auto_approve`, or `piceli gitops approve` of its plan hash) |
 | `piceli env stop`, `piceli env start` (`ENV --cluster infra.py:CLUSTER`) | Asks the composition controller to stop a named environment (workloads scaled to zero, volumes kept, not planned or deployed) or start it again (scaled back; a moved revision deploys with its usual approval) | The owner's go-ahead: stopping takes the environment's workloads down; `env start` of an environment declared `stopped=True` is refused (`gitops-env-stop-declared`) |
 | `piceli dev run` (0.18.0) | Creates one Job in `piceli-dev` that runs your build or test command on the builder node in the shared development cache (isolated: non-root, no token, no Secret, no cluster network); it is removed afterwards | Approved **once**: the owner's approval of `Cluster(dev=DevBuilds(...))` in `piceli cluster init` covers every run inside that declaration. After that, run it as often as you need, with the commits and commands of your task; never change the declaration or the profiles yourself. A failing command is `dev-command-failed` (exit 1): read `log_tail`, fix, run again. `dev-run-unschedulable` (0.35.0, after `--unschedulable-seconds`, default 60): the builder cannot take the pod; report the reason, or run `piceli dev cache clear` when it names disk pressure; see {doc}`dev_builds` |

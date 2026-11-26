@@ -30,6 +30,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli artifacts build-spec preview`](#cli-artifacts-build-spec-preview) | Preview a containerized build and its plan hash. | none | no |
 | [`piceli artifacts build-spec run`](#cli-artifacts-build-spec-run) | Run an approved containerized build and write a receipt. | none | yes |
 | [`piceli artifacts copy`](#cli-artifacts-copy) | Copy an image by digest (index, every platform, SBOM, provenance, signatures) to another registry. | none | yes |
+| [`piceli artifacts copy-job-run`](#cli-artifacts-copy-job-run) | What the in-cluster copy Job runs: copy the mounted set, record each result. | none | no |
 | [`piceli artifacts deliver`](#cli-artifacts-deliver) | Deliver a digest-approved image to a registry or node. | reads | yes |
 | [`piceli artifacts execute-command`](#cli-artifacts-execute-command) | Run a pinned external build command under an approved plan. | none | yes |
 | [`piceli artifacts fetch-file`](#cli-artifacts-fetch-file) | Download one published file (a blob) by its digest and check it. | none | no |
@@ -84,6 +85,9 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli gitops builds`](#cli-gitops-builds) | List every build the controller knows (NixRelease publishes, image builds, train handoffs): trigger, commit, host, stage, step times, log tail, targets. | reads | no |
 | [`piceli gitops cache clear`](#cli-gitops-cache-clear) | Ask the controller to empty its build cache (a corrupted cargo cache). | writes | no |
 | [`piceli gitops cancel`](#cli-gitops-cancel) | Cancel NAME's queued or running build: unclaimed it is dropped, claimed the build host stops at its next stage. | writes | no |
+| [`piceli gitops candidate list`](#cli-gitops-candidate-list) | Each candidate the controller holds, newest first, and its state. | reads | no |
+| [`piceli gitops candidate release`](#cli-gitops-candidate-release) | Mark the ready candidate of COMMIT released: it stays, with its digests. | writes | no |
+| [`piceli gitops candidate request`](#cli-gitops-candidate-request) | Prepare the candidate of COMMIT now: no quiet time to wait for. | writes | no |
 | [`piceli gitops compare`](#cli-gitops-compare) | Two runs side by side: commits, changed images, objects, time windows. | reads | no |
 | [`piceli gitops disable`](#cli-gitops-disable) | Remove the controller (plan first; --approve HASH removes). Never an environment. | writes | yes |
 | [`piceli gitops enable`](#cli-gitops-enable) | Install the GitOps controller (plan first; --approve HASH installs). | writes | yes |
@@ -362,8 +366,9 @@ Copy an image by digest (index, every platform, SBOM, provenance, signatures) to
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--from` | text | required | oci://host[:port]/repository@sha256:<digest> |
-| `--to` | text | required | oci://host[:port]/repository[:tag] |
+| `--from` | text |  | oci://host[:port]/repository@sha256:<digest> |
+| `--to` | text |  | oci://host[:port]/repository[:tag] |
+| `--set` | path |  | a JSON or TOML list of {from, to} copies, instead of --from and --to; one plan digest approves them all |
 | `--no-referrers` | boolean | `False` | copy only the image, not its SBOM, provenance and signatures |
 | `--move-tag` | boolean | `False` |  |
 | `--approve` | text |  | the plan digest printed without --approve |
@@ -374,7 +379,16 @@ Copy an image by digest (index, every platform, SBOM, provenance, signatures) to
 | `--docker-config` | path |  |  |
 | `--ca-file` | path |  |  |
 | `--out` | path |  | write the copy receipt here |
-| `--timeout` | float | `1800` |  |
+| `--timeout` | float | `1800` | seconds one copy may take (with --in-cluster: the Job's deadline) |
+| `--attempts` | integer | `5` | tries of a whole copy that failed for a transient reason (a dropped connection, HTTP 429/502/503/504), with a growing pause |
+| `--ledger` | text |  | a name that records each copy as done or failed; the same name again continues at the first copy not done |
+| `--ledger-dir` | path |  | where the ledger files are (default: the user's state directory) |
+| `--in-cluster` | boolean | `False` | run the copy as a Job in the cluster (it reaches the cluster registry by its Service name; no port-forward); needs --kubeconfig and --context |
+| `--namespace` | text | `piceli-system` |  |
+| `--kubeconfig` | path |  |  |
+| `--context` | text |  |  |
+| `--credentials-secret` | text |  | with --in-cluster: a Secret with keys source-username, source-password, source-token and the same for target |
+| `--image` | text |  | with --in-cluster: the Job's image (default: the controller's) |
 
 Mutually exclusive: `from_credentials` / `from_docker_config`; `credentials` / `docker_config`.
 
@@ -387,7 +401,29 @@ Mutually exclusive: `from_credentials` / `from_docker_config`; `credentials` / `
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** 0.74.0. Without --approve it prints the plan and its digest (exit 3) and contacts nothing. Every digest is preserved: the index, each platform manifest and each referrer (the referrers API, else the sha256-<digest> fallback tag). The tag moves last; one that names another digest is refused unless --move-tag. Never prints a credential.
+- **Notes:** 0.74.0. Without --approve it prints the plan and its digest (exit 3) and contacts nothing. Every digest is preserved: the index, each platform manifest and each referrer (the referrers API, else the sha256-<digest> fallback tag). The tag moves last; one that names another digest is refused unless --move-tag. Never prints a credential. 0.83.0: --attempts retries a whole copy on transient reasons; --set FILE copies a list under one plan digest; --ledger NAME resumes at the first copy not done; --in-cluster runs the copy as a Job next to the registry.
+
+(cli-artifacts-copy-job-run)=
+### `piceli artifacts copy-job-run`
+
+What the in-cluster copy Job runs: copy the mounted set, record each result.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--dir` | path | required |  |
+| `--ledger` | text | required |  |
+| `--attempts` | integer | `5` |  |
+
+**Contract**
+
+- **Reads:** the mounted set (ConfigMap), registry credentials (environment)
+- **Writes:** the target OCI registry
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.83.0. Prints PICELI-COPY-LEDGER and PICELI-COPY-RESULT lines (gzip and base64) that the client reads from the pod log.
 
 (cli-artifacts-deliver)=
 ### `piceli artifacts deliver`
@@ -1919,6 +1955,83 @@ Cancel NAME's queued or running build: unclaimed it is dropped, claimed the buil
 - **Output contract:** conforms
 - **Notes:** 0.26.0. Unclaimed, the build is dropped; claimed, the build host stops at its next stage and its answer is refused. A cancelled image build fails its step until piceli gitops sync; a cancelled publish waits for a newer tag, a sync or a build. Nothing running: gitops-build-not-running in gitops status.
 
+(cli-gitops-candidate-list)=
+### `piceli gitops candidate list`
+
+Each candidate the controller holds, newest first, and its state.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir, the controller's status
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.83.0. Read-only. --json prints piceli.gitops-candidates.v1 (candidates: commit, state, since, reason, detail, copies, released, run, passed_at, digests). The digests feed piceli artifacts retention --pin-file.
+
+(cli-gitops-candidate-release)=
+### `piceli gitops candidate release`
+
+Mark the ready candidate of COMMIT released: it stays, with its digests.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `COMMIT` | text | required |  |
+| `--env` | text |  | The candidate's environment (the controller has one) |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir
+- **Writes:** --state-dir requests (local controller)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.83.0. Writes a request to the ConfigMap piceli-gitops-requests; a candidate that is not ready is refused (gitops-request-invalid).
+
+(cli-gitops-candidate-request)=
+### `piceli gitops candidate request`
+
+Prepare the candidate of COMMIT now: no quiet time to wait for.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `COMMIT` | text | required |  |
+| `--env` | text |  | The candidate's environment (the controller has one) |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir
+- **Writes:** --state-dir requests (local controller)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.83.0. Writes a request to the ConfigMap piceli-gitops-requests; a candidate that is building or ready is left as it is, a failed or cancelled one starts again from its copy ledger. A commit that passed no run, or a controller without Controller(candidate=), drops it (gitops-request-invalid). The state shows in gitops status and gitops candidate list.
+
 (cli-gitops-compare)=
 ### `piceli gitops compare`
 
@@ -2169,6 +2282,7 @@ One deploy run: outcome, commits, digests, checks, stages, failure.
 | `RUN` | text | required |  |
 | `--env` | text |  | Look in this environment only |
 | `--logs` | boolean | `False` | Also print the log tail the run kept |
+| `--artifacts` | boolean | `False` | Print what the run built: commits, digests, images, layers |
 | `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
 | `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
 | `--namespace` | text | `piceli-system` | The controller's namespace |
@@ -3285,6 +3399,7 @@ Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV; w
 | `--machines` | text |  | With --from --wait (0.31.0): MODULE or MODULE:ATTR of the Infrastructure of the host's server (its applied address and pinned host keys); default: the one the composition imports |
 | `--repo` | path | `.` | With --from: the flake's working copy |
 | `--bump` | text | `patch` | With --from: major, minor or patch |
+| `--commit` | text |  | With --from (0.83.0): pin this commit (7 to 40 hex characters) instead of the newest; refused unless the environment passed it with its release checks |
 | `--approve` | text |  | With --from: the promotion plan's digest |
 | `--wait` | boolean | `False` | With --from --approve: wait until the host runs the new tag with its checks passed (exit 0), or report the first failure (exit 1) or the timeout (exit 2) |
 | `--timeout` | text | `15m` | With --wait: give up after (15m, 1h) |
@@ -3300,7 +3415,7 @@ Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV; w
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Writes a request; the controller accepts only a commit it saw on that branch (gitops-promote-unknown otherwise), a named environment only when it follows Promote() (gitops-promote-not-allowed), and the environment then waits for gitops approve of its plan hash. 0.25.0, promote HOST --from ENV: without --approve it prints the plan (pinned, the lock change old rev -> new rev, the commit message, the tag, the remote and branch) with its digest and exits 3. A lock that already pins the commit exits 0 with state current: with a tag of the pattern at HEAD there is nothing to do; without one the plan only tags HEAD and --approve tags and pushes the tag. --approve recomputes the plan (promote-plan-changed when it differs), commits flake.lock alone, tags and pushes with git push --atomic (promote-push-failed exits 1; the commit and tag stay local). 0.74.0: the digest covers what the promotion changes, not the run that verified the commit (a re-verification keeps the approval); after a failed push the same --approve command pushes the local commit and tag (resume, resumed); a fetch, push, ls-remote or clone that fails in transport is retried up to twice with a growing pause (git_retries). Refuses a dirty working copy (promote-dirty), one behind, ahead of or diverged from its upstream (promote-not-in-sync), an environment without a passed run (promotion-not-verified) and an unreadable history (promotion-history-unreachable). 0.28.0, --from --wait: after the push (or when the tag is current), waits until the host runs the tag with its checks passed (exit 0), reports the first failure (a failed publish of the tag in the controller's status, or the host's failed or rolled-back attempt over SSH; exit 1) or the timeout (gitops-wait-timeout, exit 2); progress lines on stderr, the result under wait in the JSON.
+- **Notes:** Writes a request; the controller accepts only a commit it saw on that branch (gitops-promote-unknown otherwise), a named environment only when it follows Promote() (gitops-promote-not-allowed), and the environment then waits for gitops approve of its plan hash. 0.25.0, promote HOST --from ENV: without --approve it prints the plan (pinned, the lock change old rev -> new rev, the commit message, the tag, the remote and branch) with its digest and exits 3. A lock that already pins the commit exits 0 with state current: with a tag of the pattern at HEAD there is nothing to do; without one the plan only tags HEAD and --approve tags and pushes the tag. --approve recomputes the plan (promote-plan-changed when it differs), commits flake.lock alone, tags and pushes with git push --atomic (promote-push-failed exits 1; the commit and tag stay local). 0.83.0: --commit SHA (7 to 40 hex characters) pins a commit ENV passed that is not the newest: refused (promotion-not-verified) unless it passed with its release checks; the plan's pinned names its run and the digest covers the commit. 0.74.0: the digest covers what the promotion changes, not the run that verified the commit (a re-verification keeps the approval); after a failed push the same --approve command pushes the local commit and tag (resume, resumed); a fetch, push, ls-remote or clone that fails in transport is retried up to twice with a growing pause (git_retries). Refuses a dirty working copy (promote-dirty), one behind, ahead of or diverged from its upstream (promote-not-in-sync), an environment without a passed run (promotion-not-verified) and an unreadable history (promotion-history-unreachable). 0.28.0, --from --wait: after the push (or when the tag is current), waits until the host runs the tag with its checks passed (exit 0), reports the first failure (a failed publish of the tag in the controller's status, or the host's failed or rolled-back attempt over SSH; exit 1) or the timeout (gitops-wait-timeout, exit 2); progress lines on stderr, the result under wait in the JSON.
 
 (cli-publish)=
 ### `piceli publish`

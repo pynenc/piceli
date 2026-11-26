@@ -80,6 +80,14 @@ def _images(run: Run, state_dir: Path) -> dict[str, Any]:
             entry["reference"] = planned[name]
         if type(made.get("size_bytes")) is int:
             entry["size_bytes"] = made["size_bytes"]
+        # 0.83.0: the layer of each file mapping a host build made.
+        layers = [
+            {"mapping": str(item["mapping"])[:200], "digest": str(item["digest"])[:80]}
+            for item in made.get("mappings") or ()
+            if isinstance(item, Mapping) and item.get("mapping") and item.get("digest")
+        ][:16]
+        if layers:
+            entry["layers"] = layers
         if delivery.get("action"):
             entry["delivery"] = {"action": delivery["action"]}
             receipt = (

@@ -66,12 +66,17 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.82
+## What's new in 0.83
 
-- **A source that lost a file is repaired**: the builder checks that every
-  tracked file exists, clones the source again if not, and restores its copy
-  inside the build container from its own objects, saying so in the log.
-  The copy uses `cp -a`, which stops the build with its reason on a failure.
+- **Release candidates**: after an environment passes a commit and stays quiet
+  for 30 minutes, the controller copies that run's images to the outside
+  registry paths you declare, by digest. `gitops status` shows each candidate
+  as ready or not ready, and why.
+- **A copy that resumes**: `piceli artifacts copy --in-cluster --set FILE
+  --ledger NAME` runs in the cluster (no port-forward), retries a dropped
+  connection and continues after a killed client.
+- **`piceli gitops show RUN --artifacts`** prints the images, platform digests
+  and layers a run produced, and history components carry the image reference.
 
 ## Web UI
 

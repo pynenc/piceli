@@ -20,9 +20,12 @@ from piceli.gitops.state import DirectoryChannel
 from piceli.k8s.cli import app
 from tests.gitops_history_fixture import (
     ASSETS,
+    LAYER_BIN,
+    LAYER_PAGES,
     PRODUCT,
     PRODUCT_OLD,
     WEB,
+    WEB_IMAGE,
     sample_history,
 )
 
@@ -84,6 +87,93 @@ def test_show_prints_one_run_and_its_log_tail(state: Path) -> None:
     assert "npm ERR!" in text
     code, plain, _ = cli("show", run_id, "--state-dir", str(state))
     assert code == 0 and "logs" not in plain
+
+
+def _deployed(state: Path) -> dict[str, Any]:
+    document = DirectoryChannel(state).read_history()
+    runs = releases.history(document, "main")["environments"][0]["runs"]
+    return next(run for run in runs if run["trigger"] == "push product/main")
+
+
+def test_history_components_carry_their_image_and_layers(state: Path) -> None:
+    code, body, text = cli("history", "main", "--state-dir", str(state))
+    assert code == 0, text
+    run = _deployed(state)
+    web, worker = (
+        next(c for c in run["components"] if c["name"] == name)
+        for name in ("web", "worker")
+    )
+    assert web["image"] == {"repository": "shop/web", "reference": WEB_IMAGE}
+    assert web["layers"] == [
+        {"mapping": "/usr/local/bin/web", "digest": LAYER_BIN},
+        {"mapping": "/srv/pages", "digest": LAYER_PAGES},
+    ]
+    # Never invented: a component the run recorded no image for has none.
+    assert "image" not in worker and "layers" not in worker
+    # The run's own ``images`` keeps its shape (the layers are the component's).
+    assert "layers" not in run["images"]["web"]
+    assert run["images"]["web"]["reference"] == WEB_IMAGE
+
+
+def test_show_artifacts_prints_what_the_run_built(state: Path) -> None:
+    run_id = _deployed(state)["id"]
+    code, body, text = cli("show", run_id, "--artifacts", "--state-dir", str(state))
+    assert code == 0, text
+    assert body["schema"] == "piceli.gitops-artifacts.v1"
+    assert set(body) == {"schema", "env", "run", "state", "commits", "components"}
+    assert body["env"] == "main" and body["run"] == run_id
+    assert body["state"] == "deployed"
+    assert body["commits"] == {"assets": ASSETS, "product": PRODUCT}
+    web = next(c for c in body["components"] if c["name"] == "web")
+    assert set(web) == {
+        "name", "source", "commit", "digest", "image", "platforms", "layers",
+        "provenance",
+    }  # fmt: skip
+    assert web["source"] == "product" and web["commit"] == PRODUCT
+    assert web["digest"] == WEB and web["image"]["reference"] == WEB_IMAGE
+    assert [layer["mapping"] for layer in web["layers"]] == [
+        "/usr/local/bin/web",
+        "/srv/pages",
+    ]
+    media = next(c for c in body["components"] if c["name"] == "media")
+    assert media["image"] is None and media["layers"] == []
+    assert WEB_IMAGE in text and LAYER_BIN in text and "/srv/pages" in text
+    code, other, _ = cli(
+        "show", run_id, "--artifacts", "--env", "main", "--state-dir", str(state)
+    )
+    assert code == 0 and other == body
+    code, error, _ = cli("show", "nope", "--artifacts", "--state-dir", str(state))
+    assert code == 2 and error["reason"] == "gitops-run-unknown"
+
+
+def test_artifacts_helper_shows_any_run_and_none_when_unknown(state: Path) -> None:
+    document = DirectoryChannel(state).read_history()
+    failed = releases.history(document, "wp-login")["environments"][0]["runs"][0]
+    body = releases.artifacts(document, failed["id"])
+    assert body is not None and body["state"] == "failed"
+    assert body["env"] == "wp-login"
+    (web,) = body["components"]
+    assert web["digest"] is None and web["image"] is None
+    assert web["platforms"] == {} and web["layers"] == []
+    assert releases.artifacts(document, "nope") is None
+    assert releases.artifacts({}, "x") is None
+    assert releases.artifacts(document, failed["id"], env="main") is None
+
+
+def test_layers_and_image_are_bounded() -> None:
+    from piceli.gitops import history
+
+    assert history._image_of("registry.example.org/a/b:1.0@sha256:" + "a" * 64) == {
+        "repository": "a/b",
+        "reference": "registry.example.org/a/b:1.0@sha256:" + "a" * 64,
+    }
+    assert history._image_of("registry.example.org/a/b:1.0") is None
+    assert history._image_of(None) is None
+    many = [{"mapping": f"/m/{n}" + "x" * 500, "digest": "sha256:" + "a" * 64}
+            for n in range(40)]  # fmt: skip
+    kept = history._layers([*many, {"mapping": "", "digest": "sha256:x"}])
+    assert len(kept) == history.MAX_LAYERS
+    assert all(len(item["mapping"]) <= 200 for item in kept)
 
 
 def test_compare_defaults_to_the_running_release_and_the_one_before(

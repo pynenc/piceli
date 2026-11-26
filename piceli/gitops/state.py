@@ -71,6 +71,8 @@ REQUEST_KINDS = (
     # 0.33.0: a build host says its Piceli version (it differs from the
     # controller's, or from the one the controller last saw)
     "build-host-version",
+    # 0.83.0: piceli gitops candidate request|release COMMIT
+    "candidate",
 )  # fmt: skip
 #: Env states a status may carry.
 ENV_STATES = (
@@ -632,6 +634,39 @@ def host_release_request(host: str) -> tuple[str, dict[str, Any]]:
 
     at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     return request("host-release", host=_host_name(host), at=at)
+
+
+def candidate_request(
+    action: str, commit: str, env: str | None = None
+) -> tuple[str, dict[str, Any]]:
+    """Start the release candidate of ``commit`` at once (``request``), or
+    mark it released (``release``): ``piceli gitops candidate`` (0.83.0).
+
+    :raises GitOpsError: ``gitops-request-invalid``."""
+    import re
+    from datetime import UTC, datetime
+
+    if action not in {"request", "release"}:
+        raise GitOpsError("gitops-request-invalid", "unknown candidate action")
+    text = str(commit or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{7,40}", text):
+        raise GitOpsError(
+            "gitops-request-invalid", "a commit is 7 to 40 hexadecimal characters"
+        )
+    if env is not None and not re.fullmatch(
+        r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?", env
+    ):
+        raise GitOpsError(
+            "gitops-request-invalid", "the environment name is not a DNS label"
+        )
+    at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return request(
+        "candidate",
+        action=action,
+        commit=text,
+        **({"env": env} if env else {}),
+        at=at,
+    )
 
 
 def stop_request(

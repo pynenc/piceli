@@ -914,7 +914,24 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(exit 3) and contacts nothing. Every digest is preserved: the index, "
             "each platform manifest and each referrer (the referrers API, else the "
             "sha256-<digest> fallback tag). The tag moves last; one that names "
-            "another digest is refused unless --move-tag. Never prints a credential.",
+            "another digest is refused unless --move-tag. Never prints a credential. "
+            "0.83.0: --attempts retries a whole copy on transient reasons; --set FILE "
+            "copies a list under one plan digest; --ledger NAME resumes at the first "
+            "copy not done; --in-cluster runs the copy as a Job next to the registry.",
+        ),
+        "artifacts copy-job-run": _C(
+            "What the in-cluster copy Job runs: copy the mounted set, record each result.",
+            reads=(
+                "the mounted set (ConfigMap)",
+                "registry credentials (environment)",
+            ),
+            writes=("the target OCI registry",),
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.83.0. Prints PICELI-COPY-LEDGER and PICELI-COPY-RESULT lines "
+            "(gzip and base64) that the client reads from the pod log.",
         ),
         "artifacts publish-files": _C(
             "Publish local files as one OCI artifact (each file one layer, by its sha256).",
@@ -1738,6 +1755,50 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(at, crates, state) in gitops status. The next build is cold for "
             "what was cleared. A controller without --builder-image drops it "
             "(gitops-request-invalid).",
+        ),
+        "gitops candidate request": _C(
+            "Ask the GitOps controller to prepare the release candidate of a "
+            "commit now: it copies the images of the run that passed it to the "
+            "outside registry paths the composition declares, by digest, with "
+            "no quiet time to wait for.",
+            reads=("kubeconfig or --state-dir",),
+            writes=("--state-dir requests (local controller)",),
+            cluster="writes",
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.83.0. Writes a request to the ConfigMap "
+            "piceli-gitops-requests; a candidate that is building or ready is "
+            "left as it is, a failed or cancelled one starts again from its "
+            "copy ledger. A commit that passed no run, or a controller "
+            "without Controller(candidate=), drops it (gitops-request-invalid). "
+            "The state shows in gitops status and gitops candidate list.",
+        ),
+        "gitops candidate release": _C(
+            "Ask the GitOps controller to mark a ready release candidate "
+            "released, so it stays and its digests stay out of the registry "
+            "cleanup, whatever the number of candidates kept.",
+            reads=("kubeconfig or --state-dir",),
+            writes=("--state-dir requests (local controller)",),
+            cluster="writes",
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.83.0. Writes a request to the ConfigMap "
+            "piceli-gitops-requests; a candidate that is not ready is refused "
+            "(gitops-request-invalid).",
+        ),
+        "gitops candidate list": _C(
+            "List the release candidates the GitOps controller holds, newest "
+            "first: candidate COMMIT: ready, or not ready with its reason.",
+            reads=("kubeconfig or --state-dir", "the controller's status"),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.83.0. Read-only. --json prints piceli.gitops-candidates.v1 "
+            "(candidates: commit, state, since, reason, detail, copies, "
+            "released, run, passed_at, digests). The digests feed piceli "
+            "artifacts retention --pin-file.",
         ),
         "gitops sync": _C(
             "Ask the GitOps controller to deploy an environment (or every one) "
@@ -3017,7 +3078,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "tags and pushes the tag. --approve recomputes the plan "
             "(promote-plan-changed when it differs), commits flake.lock alone, "
             "tags and pushes with git push --atomic (promote-push-failed exits "
-            "1; the commit and tag stay local). 0.74.0: the digest covers what "
+            "1; the commit and tag stay local). 0.83.0: --commit SHA (7 to 40 "
+            "hex characters) pins a commit ENV passed that is not the newest: "
+            "refused (promotion-not-verified) unless it passed with its release "
+            "checks; the plan's pinned names its run and the digest covers the "
+            "commit. 0.74.0: the digest covers what "
             "the promotion changes, not the run that verified the commit (a "
             "re-verification keeps the approval); after a failed push the same "
             "--approve command pushes the local commit and tag (resume, "

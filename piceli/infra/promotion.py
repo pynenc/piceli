@@ -360,6 +360,42 @@ def verify(
     )
 
 
+def passed(
+    gate: Promotion,
+    commit: str,
+    history: Any,
+    *,
+    host: str | None = None,
+    record: Any = None,
+) -> dict[str, Any]:
+    """The newest qualifying run (as :func:`newest`) of a commit the
+    environment passed, not only of the newest commit (0.83.0,
+    ``piceli promote --commit``). ``commit`` is a full commit or a
+    prefix of at least 7 characters that names one passed commit.
+
+    :raises PromotionError: ``promotion-not-verified`` when the environment
+        did not pass it (the newest passed is the hint), or when a prefix names
+        several; ``promotion-history-unreachable`` as :func:`verify`."""
+    wanted = commit.strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{7,40}", wanted):
+        raise PromotionError(
+            "promote-invalid", "--commit is a commit hash (7 to 40 hex characters)"
+        )
+    runs, _ = _runs(history, gate, record)
+    found = [run for run in runs if run["commit"].startswith(wanted)]
+    if len({run["commit"] for run in found}) > 1:
+        raise PromotionError(
+            "promotion-not-verified",
+            f"{wanted} names several commits environment {gate.environment} "
+            "passed; give more characters",
+            {"input": gate.input, "commit": wanted, "environment": gate.environment},
+        )
+    if found:
+        return found[0]  # the newest qualifying run of that commit
+    verify(gate, wanted, history, host=host, record=record)  # raises
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 def check_pinned(value: Any) -> dict[str, Any] | None:
     """A plan's ``pinned`` as a build host receives it (``None``: ungated).
 

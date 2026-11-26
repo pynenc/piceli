@@ -1622,6 +1622,14 @@ source of the environment moved) keeps your approval valid. The run that
 `--approve` finds is named in the commit message, the tag and the
 result's `verified_run`. A newer verified commit still changes the plan.
 
+**A commit that is not the newest (0.83.0).** `--commit SHA` (7 to 40
+characters) pins a commit the environment passed even when it has passed a
+newer one since, for example a release the owner chose earlier. It is refused
+(`promotion-not-verified`, naming the newest passed commit) unless the
+environment ran that commit with its release checks passed. The plan's
+`pinned.verified_run` names that run, the digest covers the commit, and a lock
+that already pins it gives `current` as before.
+
 A push that failed is resumed by the same `--approve` command (0.74.0):
 it finds the local commit and tag, checks that the commit is exactly the
 planned `flake.lock` change, and pushes them (`resume` in the plan,
@@ -1972,6 +1980,13 @@ ConfigMap `piceli-gitops-history` (key `history.json`, schema
 - `builds.<image>`: `started_at`, `finished_at` and `state` (`done`,
   `failed`, `cached`) of each image the controller built or mirrored
   (images built by one build Job share its times) and of the run's builds;
+- `components[].image` and `components[].layers` (0.83.0): what the run
+  built. `image` is `{"repository", "reference"}`: the path in the registry
+  and the pull reference pinned by digest (`host/repository@sha256:...`).
+  `layers` is `[{"mapping", "digest"}]`: the layer of each file mapping of a
+  host build (the container path and its layer digest), at most 16 per
+  component. A key is left out when the run recorded nothing (an image
+  built by a Docker engine has no `layers`); nothing is invented;
 - `approval_wait` (`started_at`, `finished_at`, `seconds`): from the plan
   waiting for approval to the owner's approval;
 - `approved_by` (`via`, `at`); `at` is set for `policy` approvals too (when
@@ -2002,7 +2017,25 @@ main: 2 run(s)
     checks 6/6 passed
   ...
 $ piceli gitops show 20261030T1000 --logs --kubeconfig kc --context prod
+$ piceli gitops show 20261030T1000 --artifacts --kubeconfig kc --context prod
 $ piceli gitops compare main --kubeconfig kc --context prod
+```
+
+`show RUN --artifacts` (0.83.0) prints what a run built, to check or to hand
+to another tool (for example, to publish the same image elsewhere). Any run
+is shown, with its `state`:
+
+```console
+$ piceli gitops show 20261030T1000 --artifacts --state-dir state
+main: run 20261030T100000Z-1a2b (deployed)
+  commits shop@3f2a91c07d4e
+  web  sha256:9b1e0c2d3f...
+    source shop@3f2a91c07d4e
+    image registry.example.org:5000/shop/web@sha256:9b1e0c2d3f...
+    platform linux/amd64 sha256:5d6e...
+    layer /usr/local/bin/web sha256:5555...
+    layer /srv/pages sha256:6666...
+    built on builder-1
 ```
 
 A build that failed on a build host shows the host's stage and the failing
@@ -2026,6 +2059,7 @@ main:
 | --- | --- | --- |
 | `gitops history [ENV] [--limit N]` | `piceli.gitops-runs.v1` | `history_schema`, `generated_at`, `truncated`, `environments` (`name`, `runs`) |
 | `gitops show RUN [--env ENV] [--logs]` | `piceli.gitops-run.v1` | `env`, `run`; with `--logs` also `logs` (`source`, `attempt`, `at`, `reason`, `stage`, `host`, `text`) and `logs_note` |
+| `gitops show RUN --artifacts [--env ENV]` (0.83.0) | `piceli.gitops-artifacts.v1` | `env`, `run`, `state`, `commits` (`{source: commit}`), `components` (`name`, `source`, `commit`, `digest`, `image` (`repository`, `reference`) or `null`, `platforms` (`{platform: manifest digest}`), `layers` (`mapping`, `digest`), `provenance` or `null`) |
 | `gitops compare ENV [A] [B]` | `piceli.gitops-compare.v1` | `env`, `before`, `after`, `sources`, `components`, `images_changed`, `resources` (`added`, `removed`, `changed`, `partial`), `fields` |
 
 - A run is the history's own entry (`piceli.gitops-history.v1`, above) with
@@ -2106,7 +2140,8 @@ controller's release of the same commit when the report has it.
 
 `piceli.gitops-status.v1` and `piceli.gitops-history.v1` (and, from
 0.38.0, `piceli.gitops-runs.v1`, `piceli.gitops-run.v1` and
-`piceli.gitops-compare.v1`) change only
+`piceli.gitops-compare.v1`, and from 0.83.0 `piceli.gitops-artifacts.v1`)
+change only
 **additively** within v1: a release adds fields, and never removes, renames
 or changes the type or meaning of one. A tool that reads them keeps working
 across Piceli releases as long as it ignores fields it does not know. A test

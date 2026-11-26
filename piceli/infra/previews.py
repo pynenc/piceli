@@ -49,6 +49,8 @@ WAKE_KINDS = frozenset(
         # 0.29.0: a build host claiming or standing by is answered at once.
         "build-claim",
         "build-standby",
+        # 0.83.0: piceli gitops candidate request|release.
+        "candidate",
     }
 )
 

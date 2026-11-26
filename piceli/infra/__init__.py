@@ -41,6 +41,8 @@ __all__ = [
     "Branch",
     "Bucket",
     "BuildHost",
+    "Candidate",
+    "CandidateCopy",
     "Cluster",
     "Component",
     "CompositionError",
@@ -230,6 +232,13 @@ class Controller:
     component, its reference names the component's repository in this
     registry pinned by digest, and the digest is in the registry (checked
     when offered and again when used). Off by default.
+
+    ``candidate=Candidate(environment="staging", copies=(CandidateCopy(...),))``
+    (0.83.0) makes the controller prepare a release candidate of the newest
+    commit that environment passed, once no newer one passed for a quiet
+    time: it copies the run's images, by digest, to the outside registry
+    paths declared (:class:`~piceli.gitops.candidates.Candidate`;
+    ``docs/release_candidates.md``).
     """
 
     on: str
@@ -245,6 +254,7 @@ class Controller:
     quarantine_window: str = "24h"
     prebuilt: bool = False
     alarms: Alarms | None = None
+    candidate: Candidate | None = None
 
     def __post_init__(self) -> None:
         from piceli.infra.cluster import check_controller
@@ -449,6 +459,8 @@ from piceli.infra.machines import (  # noqa: E402
 # loads no Kubernetes client.
 _LAZY = {
     "Alarms": "piceli.gitops.alarms",
+    "Candidate": "piceli.gitops.candidates",
+    "CandidateCopy": "piceli.gitops.candidates",
     "Notify": "piceli.train.notify",
     "register_cluster": "piceli.infra.multicluster",
     "NixRelease": "piceli.infra.nix_releases",
@@ -458,6 +470,7 @@ __getattr__, __dir__ = lazy_exports(__name__, _LAZY, globals())
 
 if TYPE_CHECKING:
     from piceli.gitops.alarms import Alarms
+    from piceli.gitops.candidates import Candidate, CandidateCopy
     from piceli.infra.multicluster import register_cluster
     from piceli.infra.nix_releases import NixRelease
     from piceli.infra.promotion import Promotion

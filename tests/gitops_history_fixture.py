@@ -28,6 +28,10 @@ WEB_OLD = "sha256:" + "1" * 64
 WORKER = "sha256:" + "b" * 64
 MEDIA = "sha256:" + "c" * 64
 PLAN_HASH = "sha256:" + "d" * 64
+REGISTRY = "registry.example.org:5000"
+WEB_IMAGE = f"{REGISTRY}/shop/web@{WEB}"
+LAYER_BIN = "sha256:" + "5" * 64
+LAYER_PAGES = "sha256:" + "6" * 64
 CHECKS = [
     {"name": "web-home", "type": "http", "passed": True, "code": None,
      "detail": "GET / returned 200", "duration": 0.084},
@@ -53,10 +57,13 @@ def write_run(
     policy: bool = False,
     at: tuple[str, str] | None = None,
     kept_orphaned: Sequence[Mapping[str, Any]] = (),
+    built: Mapping[str, Mapping[str, Any]] | None = None,
+    delivered: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> str:
     """A finished run journal under ``state_dir/runs``; its run id.
 
-    ``at``: its ``(created_at, updated_at)`` instead of now.
+    ``at``: its ``(created_at, updated_at)`` instead of now. ``built`` and
+    ``delivered``: the images the build and deliver stages output (by name).
     """
     journal = Journal(state_dir)
     run = journal.create(
@@ -88,8 +95,18 @@ def write_run(
         run.data["stages"][name]["state"] = "running"
         run.data["stages"][name]["started_at"] = run.data["created_at"]
     run.set_stage("inputs", state="done", seconds=0.4)
-    run.set_stage("build", state="skipped", seconds=0.0)
-    run.set_stage("deliver", state="skipped", seconds=0.0)
+    run.set_stage(
+        "build",
+        state="skipped",
+        seconds=0.0,
+        **({"output": {"web": {"images": dict(built)}}} if built else {}),
+    )
+    run.set_stage(
+        "deliver",
+        state="skipped",
+        seconds=0.0,
+        **({"output": {"images": dict(delivered)}} if delivered else {}),
+    )
     counts = {"no-op": 7}
     for item in changes:
         counts[item["operation"]] = counts.get(item["operation"], 0) + 1
@@ -177,8 +194,11 @@ def _record(
     }
 
 
-def _component(source: str, commit: str, digest: str, state: str) -> dict[str, Any]:
-    return {"source": source, "commit": commit, "digest": digest, "state": state}
+def _component(
+    source: str, commit: str, digest: str, state: str, image: str | None = None
+) -> dict[str, Any]:
+    found = {"source": source, "commit": commit, "digest": digest, "state": state}
+    return {**found, "image": image} if image else found
 
 
 def sample_history(state_dir: Path) -> dict[str, Any]:
@@ -212,6 +232,24 @@ def sample_history(state_dir: Path) -> dict[str, Any]:
         },
         changes=[{"operation": "update", "kind": "Deployment", "name": "web"}],
         at=("2026-10-01T09:21:10.500Z", "2026-10-01T09:21:58.250Z"),
+        # 0.83.0: the host build's layer of each file mapping, and the pull
+        # reference the deliver stage recorded.
+        built={
+            "web": {
+                "image_id": "sha256:" + "9" * 64,
+                "mappings": [
+                    {"mapping": "/usr/local/bin/web", "digest": LAYER_BIN},
+                    {"mapping": "/srv/pages", "digest": LAYER_PAGES},
+                ],
+            }
+        },
+        delivered={
+            "web": {
+                "action": "delivered",
+                "reference": WEB_IMAGE,
+                "config_digest": "sha256:" + "9" * 64,
+            }
+        },
     )
     third = write_run(
         main_dir,
@@ -232,7 +270,7 @@ def sample_history(state_dir: Path) -> dict[str, Any]:
         action="deployed",
         revision=revision,
         components={
-            "web": _component("product", PRODUCT, WEB, "synced"),
+            "web": _component("product", PRODUCT, WEB, "synced", WEB_IMAGE),
             "worker": _component("product", PRODUCT, WORKER, "unchanged"),
             "media": _component("assets", ASSETS, MEDIA, "unchanged"),
         },

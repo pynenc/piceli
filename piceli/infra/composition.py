@@ -611,7 +611,9 @@ def _cluster_dict(cluster: Cluster, *, remote: bool = False) -> dict[str, Any]:
     }
     controller = cluster.controller
     if controller is not None and (
-        tuple(controller.builds) != ("cluster",) or controller.prebuilt
+        tuple(controller.builds) != ("cluster",)
+        or controller.prebuilt
+        or controller.candidate is not None
     ):
         # 0.21.0, only when declared (other configs and hashes unchanged).
         body["controller"] = {
@@ -621,6 +623,8 @@ def _cluster_dict(cluster: Cluster, *, remote: bool = False) -> dict[str, Any]:
         }
         if controller.prebuilt:  # 0.26.0, only when on
             body["controller"]["prebuilt"] = True
+        if controller.candidate is not None:  # 0.83.0, only when declared
+            body["controller"]["candidate"] = controller.candidate.to_dict()
         if controller.delivery == "nodes":
             # 0.22.0: the nodes build hosts import into, with their
             # architecture; the targets without their SSH user.
@@ -661,6 +665,7 @@ def _cluster_from(value: Any) -> Cluster | None:
 
     controller = None
     if isinstance(value.get("controller"), dict):
+        from piceli.gitops.candidates import Candidate
         from piceli.infra import Controller
 
         found_controller = value["controller"]
@@ -670,6 +675,11 @@ def _cluster_from(value: Any) -> Cluster | None:
             host_wait=str(found_controller.get("host_wait") or "30m"),
             delivery=found_controller.get("delivery") or "registry",
             prebuilt=bool(found_controller.get("prebuilt", False)),
+            candidate=(
+                Candidate.from_dict(found_controller["candidate"])
+                if found_controller.get("candidate")
+                else None
+            ),
         )
     nodes = tuple(
         Node(item["name"], arch=item["arch"], target=item.get("target"))

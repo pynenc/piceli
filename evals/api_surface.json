@@ -1498,6 +1498,62 @@
     "mount": "CacheMount"
    }
   },
+  "Candidate": {
+   "attrs": [
+    "copies",
+    "environment",
+    "from_dict",
+    "keep",
+    "quiet",
+    "quiet_seconds",
+    "secrets",
+    "to_dict"
+   ],
+   "init": [
+    "copies",
+    "environment",
+    "keep",
+    "quiet"
+   ],
+   "methods": {
+    "from_dict": [
+     "value"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "from_dict": "Candidate"
+   }
+  },
+  "CandidateCopy": {
+   "attrs": [
+    "component",
+    "credentials",
+    "from_dict",
+    "tag",
+    "target",
+    "to",
+    "to_dict"
+   ],
+   "init": [
+    "component",
+    "credentials",
+    "tag",
+    "to"
+   ],
+   "methods": {
+    "from_dict": [
+     "value"
+    ],
+    "target": [
+     "commit"
+    ],
+    "to_dict": []
+   },
+   "returns": {
+    "from_dict": "CandidateCopy"
+   }
+  },
   "CargoCheck": {
    "attr_types": {
     "select": "Impact"
@@ -2537,11 +2593,13 @@
   "Controller": {
    "attr_types": {
     "alarms": "Alarms",
+    "candidate": "Candidate",
     "telemetry": "Otlp"
    },
    "attrs": [
     "alarms",
     "builds",
+    "candidate",
     "delete_volumes",
     "delivery",
     "host_wait",
@@ -2557,6 +2615,7 @@
    "init": [
     "alarms",
     "builds",
+    "candidate",
     "delete_volumes",
     "delivery",
     "host_wait",
@@ -12281,6 +12340,7 @@
      "build",
      "build-spec",
      "copy",
+     "copy-job-run",
      "deliver",
      "execute-command",
      "fetch-file",
@@ -12346,18 +12406,37 @@
     "arguments": [],
     "flags": [
      "--approve",
+     "--attempts",
      "--ca-file",
+     "--context",
      "--credentials",
+     "--credentials-secret",
      "--docker-config",
      "--from",
      "--from-ca-file",
      "--from-credentials",
      "--from-docker-config",
+     "--image",
+     "--in-cluster",
+     "--kubeconfig",
+     "--ledger",
+     "--ledger-dir",
      "--move-tag",
+     "--namespace",
      "--no-referrers",
      "--out",
+     "--set",
      "--timeout",
      "--to"
+    ],
+    "subcommands": []
+   },
+   "artifacts copy-job-run": {
+    "arguments": [],
+    "flags": [
+     "--attempts",
+     "--dir",
+     "--ledger"
     ],
     "subcommands": []
    },
@@ -13239,6 +13318,7 @@
      "builds",
      "cache",
      "cancel",
+     "candidate",
      "compare",
      "disable",
      "enable",
@@ -13344,6 +13424,55 @@
     "flags": [
      "--by",
      "--context",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops candidate": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "list",
+     "release",
+     "request"
+    ]
+   },
+   "gitops candidate list": {
+    "arguments": [],
+    "flags": [
+     "--context",
+     "--json",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops candidate release": {
+    "arguments": [
+     "commit"
+    ],
+    "flags": [
+     "--context",
+     "--env",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops candidate request": {
+    "arguments": [
+     "commit"
+    ],
+    "flags": [
+     "--context",
+     "--env",
      "--kubeconfig",
      "--namespace",
      "--state-dir",
@@ -13496,6 +13625,7 @@
      "run"
     ],
     "flags": [
+     "--artifacts",
      "--context",
      "--env",
      "--json",
@@ -14131,6 +14261,7 @@
     "flags": [
      "--approve",
      "--bump",
+     "--commit",
      "--composition",
      "--context",
      "--from",
@@ -16861,6 +16992,12 @@
    "BuildHost": {
     "class": "BuildHost"
    },
+   "Candidate": {
+    "class": "Candidate"
+   },
+   "CandidateCopy": {
+    "class": "CandidateCopy"
+   },
    "Cluster": {
     "class": "Cluster"
    },
@@ -17768,6 +17905,8 @@
   "piceli.artifacts.cli",
   "piceli.artifacts.cluster_build",
   "piceli.artifacts.cluster_registry",
+  "piceli.artifacts.copy_cluster",
+  "piceli.artifacts.copy_set",
   "piceli.artifacts.delivery",
   "piceli.artifacts.delivery_inputs",
   "piceli.artifacts.file_signing",
@@ -17855,6 +17994,7 @@
   "piceli.gitops",
   "piceli.gitops.alarms",
   "piceli.gitops.canary",
+  "piceli.gitops.candidates",
   "piceli.gitops.config",
   "piceli.gitops.controller",
   "piceli.gitops.heartbeat",
@@ -17949,6 +18089,7 @@
   "piceli.k8s.cli.env_push",
   "piceli.k8s.cli.env_stop",
   "piceli.k8s.cli.gitops",
+  "piceli.k8s.cli.gitops_candidate",
   "piceli.k8s.cli.gitops_history",
   "piceli.k8s.cli.gitops_watch",
   "piceli.k8s.cli.heavy",
@@ -18196,5 +18337,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.82.0"
+ "version": "0.83.0"
 }

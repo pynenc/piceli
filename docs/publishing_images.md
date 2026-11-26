@@ -153,17 +153,33 @@ the image but not the referrers.
 # build.platforms records an OCI index; see compositions).
 piceli gitops status --json | jq -r '.envs.main.components.api.digest'
 
-# Reach the in-cluster registry (plain HTTP is allowed on loopback).
-kubectl -n piceli-system port-forward svc/piceli-registry 5000:5000 &
-
 # Without --approve it prints the plan and its digest (exit 3).
-piceli artifacts copy \
+piceli artifacts copy --in-cluster --kubeconfig ~/.kube/config --context k-lab \
     --from oci://127.0.0.1:5000/shop/api@sha256:<index digest> \
     --to oci://ghcr.io/example/api:1.4.0 --docker-config ~/.docker/config.json
-piceli artifacts copy \
+piceli artifacts copy --in-cluster --kubeconfig ~/.kube/config --context k-lab \
     --from oci://127.0.0.1:5000/shop/api@sha256:<index digest> \
     --to oci://ghcr.io/example/api:1.4.0 --docker-config ~/.docker/config.json \
     --approve sha256:<plan digest> --out dist/copy.json
+```
+
+`--in-cluster` (0.83.0) runs the copy as a Job next to the registry, so no
+`kubectl port-forward` can drop in the middle of a release. See
+{ref}`artifacts-copy-cluster` below. `--from oci://127.0.0.1:5000/...` is
+renamed to the registry's Service (`piceli-registry.piceli-system.svc:5000`)
+inside the Job.
+
+**Fallback: a port-forward.** Without `--in-cluster` the copy runs on your
+machine and needs a route to the registry. Reach it with a forward (plain
+HTTP is allowed on loopback) and drop `--in-cluster`, `--kubeconfig` and
+`--context`. A dropped forward is retried as a whole copy (`--attempts`,
+below), but you must restart the forward yourself:
+
+```sh
+kubectl -n piceli-system port-forward svc/piceli-registry 5000:5000 &
+piceli artifacts copy --from oci://127.0.0.1:5000/shop/api@sha256:<index digest> \
+    --to oci://ghcr.io/example/api:1.4.0 --docker-config ~/.docker/config.json \
+    --approve sha256:<plan digest>
 ```
 
 1. **Plan** (no network): the source repository and digest, the target
@@ -212,6 +228,52 @@ copy: failed [registry-unreachable] target ghcr.io PATCH blob sha256:9072a3f9…
 a credential, a token or a query string. The same retries cover
 `artifacts publish`, `artifacts deliver`, mirrors and every other command
 that talks to a registry.
+
+(artifacts-copy-cluster)=
+### Several images, retries, a ledger and a Job (0.83.0)
+
+- **A set.** `--set FILE` replaces `--from` and `--to` with a list of copies,
+  in JSON (`[{"from": "...", "to": "..."}]`) or TOML (`[[copy]]` tables with
+  `from` and `to`). One plan digest covers the whole set, so one `--approve`
+  approves exactly these copies. A set of one has the digest of that copy.
+- **Whole-copy retries.** `--attempts N` (default 5) tries a copy again as a
+  whole when it failed for a transient reason (`registry-unreachable`, or HTTP
+  429, 502, 503, 504), after about 2, 4, 8, 16 seconds (at most 60; half fixed,
+  half random). It adds to the per-request retries above: one dropped
+  connection that outlasts those no longer fails a release. The registry
+  already holds what was copied, so a retry sends only what is missing. Any
+  other reason (`copy-tag-exists`, `registry-unauthorized`, ...) stops at
+  once and names itself.
+- **A ledger.** `--ledger NAME` records each copy as `done` or `failed`
+  (attempts, reason, the receipt's digest, time) after every copy and every
+  failed attempt, in `--ledger-dir` (default `~/.local/state/piceli/copy`,
+  private files). Running the same command again with the same name skips
+  what is `done` and continues at the first copy that is not. The ledger holds
+  no credential and at most 500 copies.
+- **In the cluster.** `--in-cluster` (with `--kubeconfig` and `--context`,
+  `--namespace piceli-system`) writes the set and the ledger into ConfigMap
+  `piceli-copy-<ledger>` and creates one Job (`backoffLimit: 0`, deadline
+  `--timeout`) from the controller's image (`--image` to choose another) that
+  runs `piceli artifacts copy-job-run`. The Job reaches the cluster registry by
+  its Service name, runs the same retries and ledger, and prints its ledger
+  and report as log lines that your command reads, saves and prints. Without
+  `--ledger` the ledger is named after the plan digest. Registry credentials
+  never go into the Job's arguments or the plan: `--credentials` or
+  `--docker-config` files are put into a Secret that the Job reads into
+  environment variables and that is removed afterwards, or name your own with
+  `--credentials-secret NAME` (keys `source-username`, `source-password`,
+  `source-token`, and the same for `target`, each optional).
+- **A killed client.** The Job keeps running. Run the same command again with
+  the same ledger: it finds the Job (its name is a hash of the ledger and the
+  set), waits for it and prints its result; a Job that already ended is read
+  the same way, and a failed one is replaced and continues at the first copy
+  not done. A failed Job is kept until then, so its log stays.
+
+The output of a single `--from`/`--to` copy is still its receipt. With
+`--set` it is a `piceli.copy-set.v1` report: `ledger`, `ok`, `failed` (the
+first failed reason), `items` (each with `state` `done`, `failed` or
+`pending`, `attempts`, `reason`, `receipt_digest`, `skipped` and, when it ran,
+its `receipt`) and `retries`.
 
 ## Registries and credentials
 

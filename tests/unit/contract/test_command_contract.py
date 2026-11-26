@@ -307,6 +307,13 @@ CASES: dict[str, tuple[Argv, str]] = {
         ),
         "copy-invalid",
     ),
+    "artifacts copy-job-run": (
+        lambda p: (
+            ["artifacts", "copy-job-run", "--dir", str(p / "absent")]
+            + ["--ledger", "set"]
+        ),
+        "copy-invalid",
+    ),
     "artifacts publish-files": (
         lambda p: (
             ["artifacts", "publish-files", str(p / "absent.tar.gz")]
@@ -745,6 +752,18 @@ CASES: dict[str, tuple[Argv, str]] = {
     "gitops compare": (
         lambda p: ["gitops", "compare", "main", "--state-dir", str(p)],
         "gitops-history-unavailable",
+    ),
+    "gitops candidate request": (
+        lambda p: ["gitops", "candidate", "request", "nope", "--state-dir", str(p)],
+        "gitops-request-invalid",
+    ),
+    "gitops candidate release": (
+        lambda p: ["gitops", "candidate", "release", "nope", "--state-dir", str(p)],
+        "gitops-request-invalid",
+    ),
+    "gitops candidate list": (
+        lambda p: ["gitops", "candidate", "list"],
+        "gitops-target-required",
     ),
     "gitops hosts": (lambda p: ["gitops", "hosts"], "gitops-target-required"),
     "gitops alarms": (lambda p: ["gitops", "alarms"], "gitops-target-required"),

@@ -1023,6 +1023,7 @@ class CompositionController:
         self._poll_started = 0.0
         self._history_digest: str | None = None
         self._runs: Any = None
+        self._candidates_live: Any = None  # 0.83.0: piceli.gitops.candidates
         self._step_runs: Any = None  # the current step's run (its own cache)
         #: Each other cluster's contact this poll; whether it answered last time.
         self._polled: dict[str, dict[str, Any]] = {}
@@ -2004,6 +2005,8 @@ class CompositionController:
                     remote_builds.progress(self.state, body, self.clock())
                 elif kind == "preview":  # 0.28.0: piceli env up|down BRANCH
                     self._preview(key, body)
+                elif kind == "candidate":  # 0.83.0: piceli gitops candidate
+                    self._candidate_request(body)
                 else:
                     raise GitOpsError("gitops-request-invalid", "unknown request kind")
                 self._host_seen(str(kind), body, ok=True)
@@ -4177,6 +4180,7 @@ class CompositionController:
         )
         if stopped:
             self.log(f"build Jobs no longer wanted: {', '.join(sorted(stopped))}")
+        self._candidate_poll()
         self._alarms()
         return self._publish()
 
@@ -4941,6 +4945,9 @@ class CompositionController:
             # Added in 0.25.0, only when declared: each NixRelease's latest
             # tag, publish state, timings and manifest digest.
             **({"nix_releases": releases} if (releases := self.nix.status()) else {}),
+            # Added in 0.83.0, once a commit passed: each release candidate
+            # (``commit``, ``state``, ``since``, ``reason``, ``copies``).
+            **({"candidates": found} if (found := self._candidate_status()) else {}),
             "rejected_requests": list(self.state.get("rejected") or []),
             # Added in 0.15, only with several clusters: each cluster's reach
             # and the placements removed from them.
@@ -4951,6 +4958,11 @@ class CompositionController:
                 else {}
             ),
         }
+
+    def _candidate_status(self) -> list[dict[str, Any]]:
+        from piceli.gitops.candidates import status_view
+
+        return status_view(self.state)
 
     #: Record keys of a cluster's record that only the controller uses.
     _INTERNAL = (
@@ -5249,8 +5261,110 @@ class CompositionController:
         record: dict[str, Any] = self.state.setdefault("passed_commits", {})
         releases = self._composition.nix_releases if self._composition else ()
         gates = [item.gate for item in releases if item.gate is not None]
+        gates += self._candidate_gates()
         promotion.remember(record, document, gates)
         return record
+
+    # ------------------------------------------------------------ candidates
+    def _candidate_setting(self) -> Any:
+        """``Controller(candidate=)`` of the composition now loaded (0.83.0)."""
+        cluster = getattr(self._composition, "cluster", None)
+        return getattr(getattr(cluster, "controller", None), "candidate", None)
+
+    def _candidate_sources(self) -> list[str]:
+        """The source keys of the candidate's environment (the first names a
+        candidate's commit)."""
+        setting = self._candidate_setting()
+        env = (
+            self._composition.environment(setting.environment)
+            if setting and self._composition
+            else None
+        )
+        return [str(source.key) for source, _ in getattr(env, "sources", ())]
+
+    def _candidate_gates(self) -> list[Any]:
+        """The passed commits of the candidate's environment are recorded
+        like a promotion gate's (:func:`~piceli.infra.promotion.remember`)."""
+        from piceli.infra import CompositionError
+        from piceli.infra.promotion import Promotion
+
+        setting = self._candidate_setting()
+        sources = self._candidate_sources() if setting is not None else []
+        if not sources:
+            return []
+        try:
+            return [
+                Promotion(
+                    input=sources[0],
+                    environment=setting.environment,
+                    source=sources[0],
+                )
+            ]
+        except CompositionError:
+            return []
+
+    def _candidates(self) -> Any:
+        """The candidates state machine of the declaration now loaded, or
+        ``None`` without one (:mod:`piceli.gitops.candidates`)."""
+        from piceli.gitops.candidates import Candidates
+
+        setting = self._candidate_setting()
+        if setting is None:
+            self._candidates_live = None
+            return None
+        live = self._candidates_live
+        if live is None or live.candidate != setting:
+            registry = getattr(self.config, "registry", None)
+            fresh = Candidates(
+                self.state,
+                setting,
+                clock=self.clock,
+                log=self.log,
+                registry_host=getattr(registry, "host", None),
+                state_dir=self.state_dir,
+            )
+            if live is not None:  # a changed declaration keeps the running copies
+                fresh._jobs = live._jobs
+            self._candidates_live = live = fresh
+        return live
+
+    def _candidate_inputs(self) -> tuple[Any, dict[str, Any]]:
+        """The history document (``None`` when unreadable) and the record of
+        passed commits updated from it."""
+        from piceli.gitops import history
+
+        try:
+            if self._runs is None:
+                self._runs = history.RunReader()
+            document: Any = self._history_document()
+        except (GitOpsError, OSError, ValueError):
+            document = None
+        return document, self._passed_commits(document)
+
+    def _candidate_poll(self) -> None:
+        """Prepare the release candidates (0.83.0): the newest passed commit
+        of ``Controller(candidate=)``'s environment, once it stood quiet; never
+        fails a poll."""
+        candidates = self._candidates()
+        if candidates is None:
+            return
+        try:
+            document, passed = self._candidate_inputs()
+            candidates.poll(passed, document, sources=self._candidate_sources())
+        except Exception as error:  # never fail a poll on it
+            self.log(f"candidates not evaluated ({type(error).__name__})")
+
+    def _candidate_request(self, body: Mapping[str, Any]) -> None:
+        """``piceli gitops candidate request|release COMMIT``."""
+        candidates = self._candidates()
+        if candidates is None:
+            raise GitOpsError(
+                "gitops-request-invalid",
+                "this controller declares no Controller(candidate=)",
+            )
+        if body.get("action") == "request":
+            self._candidate_inputs()  # the commit may have passed this poll
+        candidates.handle(body)
 
     def _history_document(self) -> dict[str, Any]:
         """``piceli.gitops-history.v1``: an environment on several clusters

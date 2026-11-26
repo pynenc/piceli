@@ -139,7 +139,9 @@ platforms = ["linux/amd64", "linux/arm64"]
 - Every platform's manifest stays in the registry under the index, so
   retention keeps it with the index. A release copies that digest to
   another registry with `piceli artifacts copy` ({ref}`artifacts-copy`):
-  build once, promote by digest.
+  build once, promote by digest. `--in-cluster` runs that copy as a Job next to
+  the registry, so a dropped port-forward cannot fail the release, and
+  `--ledger` lets a rerun continue where it stopped.
 - A spec without `platforms` keeps the 0.68.0 rule above. That is the way
   to build only what the pods run: leave `platforms` out.
 - A platform the nodes need that the spec does not declare fails the

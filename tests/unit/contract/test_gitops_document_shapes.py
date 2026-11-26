@@ -186,6 +186,26 @@ def test_the_0160_fields_are_part_of_the_promise() -> None:
         assert path in golden["history"], path
 
 
+def test_the_0830_component_fields_are_part_of_the_promise() -> None:
+    """0.83.0: a history component's ``image`` and ``layers`` (additive)."""
+    golden = json.loads(GOLDEN.read_text())
+    for path in (
+        "envs.*.runs[].components[].image",
+        "envs.*.runs[].components[].image.repository",
+        "envs.*.runs[].components[].image.reference",
+        "envs.*.runs[].components[].layers",
+        "envs.*.runs[].components[].layers[].mapping",
+        "envs.*.runs[].components[].layers[].digest",
+    ):
+        assert path in golden["history"], path
+
+
+def test_the_component_fields_are_built_by_the_history(tmp_path: Path) -> None:
+    found = paths(sample_history(tmp_path))
+    assert "envs.*.runs[].components[].image.reference" in found
+    assert "envs.*.runs[].components[].layers[].mapping" in found
+
+
 def test_paths_name_maps_by_star() -> None:
     assert paths({"envs": {"main": {"state": "x"}}, "a": [{"b": 1}]}) == {
         "envs",

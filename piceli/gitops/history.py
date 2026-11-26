@@ -94,6 +94,35 @@ def _provenance(value: Any) -> dict[str, Any] | None:
     return found
 
 
+#: File-mapping layers kept per component (0.83.0).
+MAX_LAYERS = 16
+
+
+def _image_of(value: Any) -> dict[str, str] | None:
+    """A component's image (0.83.0): ``{"repository", "reference"}`` from a
+    pull reference pinned by digest (``host/repository@sha256:...``); none
+    when it is not one (never invented)."""
+    reference = _text(value, 300)
+    if not reference or "@sha256:" not in reference:
+        return None
+    where = reference.rsplit("@", 1)[0]
+    path = where.partition("/")[2] or where
+    head, _, last = path.rpartition("/")
+    repository = f"{head}/{last.split(':')[0]}" if head else last.split(":")[0]
+    return {"repository": repository[:200], "reference": reference}
+
+
+def _layers(value: Any) -> list[dict[str, str]]:
+    """The layer of each file mapping (0.83.0): bounded, text clipped."""
+    found = []
+    for item in value if isinstance(value, list) else ():
+        item = _dict(item)
+        mapping, digest = _text(item.get("mapping"), 200), _text(item.get("digest"), 80)
+        if mapping and digest:
+            found.append({"mapping": mapping, "digest": digest})
+    return found[:MAX_LAYERS]
+
+
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
@@ -237,6 +266,10 @@ def event(
             "state": _text(item.get("state"), 32),
             "built": name in built_set,
         }
+        image = _image_of(item.get("image"))
+        if image:
+            # Added in 0.83.0: the image's repository and pinned reference.
+            entries[str(name)]["image"] = image
         platforms = _dict(item.get("platforms"))
         if platforms:
             # Added in 0.74.0: an image built for several platforms is one
@@ -582,7 +615,7 @@ def _from_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
             str(name): {
                 key: value
                 for key, value in _dict(item).items()
-                if key in {"reference", "config_digest", "size_bytes"}
+                if key in {"reference", "config_digest", "size_bytes", "layers"}
             }
             for name, item in _dict(summary.get("images")).items()
         },
@@ -655,12 +688,34 @@ def _from_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
 # ------------------------------------------------------------------ joined
 
 
+def _components(
+    components: Mapping[str, Any], images: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """The entry's components. 0.83.0: each gains ``image`` (the event's, else
+    the run's reference) and ``layers`` (the run's, one per file mapping),
+    joined by name; a key is left out when the run recorded none."""
+    found = []
+    for name, value in sorted(components.items()):
+        item = {"name": name, **_dict(value)}
+        built = _dict(images.get(name))
+        if not item.get("image"):
+            image = _image_of(built.get("reference"))
+            if image:
+                item["image"] = image
+        layers = _layers(built.get("layers"))
+        if layers and not item.get("layers"):
+            item["layers"] = layers
+        found.append(item)
+    return found
+
+
 def _entry(
     env: str, event_: Mapping[str, Any] | None, run: Mapping[str, Any] | None
 ) -> dict[str, Any]:
     event_ = _dict(event_)
     run = _dict(run)
     components = _dict(event_.get("components"))
+    run_images = _dict(run.get("images"))
     sources: dict[str, Any] = {}
     revision = _dict(event_.get("revision"))
     refs = _dict(event_.get("refs"))
@@ -724,15 +779,16 @@ def _entry(
         "combined_hash": run.get("combined_hash") or event_.get("combined_hash"),
         "approved_by": approved,
         "release": run.get("release"),
-        "components": [
-            {"name": name, **_dict(value)} for name, value in sorted(components.items())
-        ],
+        "components": _components(components, run_images),
         "built": list(event_.get("built") or []),
         "rolled": list(event_.get("rolled") or []),
         "unchanged": list(event_.get("unchanged") or []),
         "deleted": list(run.get("deleted") or []),
         "kept_orphaned": list(run.get("kept_orphaned") or []),
-        "images": _dict(run.get("images")),
+        "images": {
+            name: {k: v for k, v in _dict(item).items() if k != "layers"}
+            for name, item in run_images.items()
+        },
         "plan": run.get("plan"),
         "checks": checks,
         "verification": verification or None,
