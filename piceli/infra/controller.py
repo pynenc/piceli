@@ -2776,9 +2776,30 @@ class CompositionController:
         )
 
     def _remember(self, component: str, digest: str, image: BuiltImage) -> None:
+        self._keep_provenance(component, digest, image)
         write_json(self._cache_path(component, digest), image.to_dict())
         self._built.append(component)  # built (or mirrored) in this step
         self.telemetry.built(component, image.manifest_digest)
+
+    def _keep_provenance(self, component: str, digest: str, image: BuiltImage) -> None:
+        """0.86.0: an image already recorded under this change key keeps the
+        provenance of its build. The same image delivered or looked up again
+        for a newer commit (its inputs did not change) is not a build, so its
+        record does not move to that commit; the run's history says which
+        commits it is current for (``current_for``). A deliberate rebuild
+        (``piceli gitops build``) records the new build as before."""
+        rebuilt = any(
+            component in names for names in (self.state.get("rebuild") or {}).values()
+        )
+        old = read_json(self._cache_path(component, digest))
+        before = old.get("provenance") if isinstance(old, Mapping) else None
+        if (
+            not rebuilt
+            and isinstance(before, Mapping)
+            and before.get("host")
+            and old.get("manifest_digest") == image.manifest_digest
+        ):
+            image.extra["provenance"] = dict(before)
 
     def _contracts(
         self, instance: _Instance, revision: Mapping[str, str]

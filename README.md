@@ -66,12 +66,12 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.85
+## What's new in 0.86
 
-- **Candidates choose their source**: `Candidate(source="product")` names a
-  release candidate by the commit of any source the environment follows, so
-  a composition that follows a workspace and a product no longer has to put
-  the product first.
+- **Unchanged images say which commits they stand for**: each component of a
+  run in `gitops history` has `current_for`, the run's commits its image is
+  current for, so a release can copy an image built at an older commit.
+  Provenance stays the build's.
 
 ## Web UI
 

@@ -94,6 +94,20 @@ def _provenance(value: Any) -> dict[str, Any] | None:
     return found
 
 
+def _current_for(item: Mapping[str, Any]) -> dict[str, str]:
+    """The source commits a component's image stands for in this run (0.86.0):
+    ``{source: commit}`` of every source the image reads, at the run's commit.
+
+    The image is the one whose inputs (its change key) match those commits, so
+    an image built at an older commit that did not change since still stands
+    for the run's. ``commit`` and ``provenance.commits`` stay where it was
+    built. Empty while the component has no image yet."""
+    if not item.get("digest"):
+        return {}
+    sources = _dict(item.get("sources"))
+    return {str(k)[:64]: str(v)[:64] for k, v in sorted(sources.items())[:20] if v}
+
+
 #: File-mapping layers kept per component (0.83.0).
 MAX_LAYERS = 16
 
@@ -304,6 +318,10 @@ def event(
         if image:
             # Added in 0.83.0: the image's repository and pinned reference.
             entries[str(name)]["image"] = image
+        current = _current_for(item)
+        if current:
+            # Added in 0.86.0: the commits this run's image stands for.
+            entries[str(name)]["current_for"] = current
         platforms = _dict(item.get("platforms"))
         if platforms:
             # Added in 0.74.0: an image built for several platforms is one
@@ -723,15 +741,28 @@ def _from_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _components(
-    components: Mapping[str, Any], images: Mapping[str, Any]
+    components: Mapping[str, Any],
+    images: Mapping[str, Any],
+    revision: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """The entry's components. 0.83.0: each gains ``image`` (the event's, else
     the run's reference) and ``layers`` (the run's, one per file mapping),
     joined by name (a multi-platform build's ``name/<platform>`` images too, each
-    layer naming its platform); a key is left out when the run recorded none."""
+    layer naming its platform); a key is left out when the run recorded none.
+
+    0.86.0: a run recorded before 0.86.0 has no ``current_for``. Its image is
+    still the one for the run's commits (the controller looks every image up by
+    the change key of the run's revision), so it reads as
+    ``{source: the run's commit of that source}``: the component's own source
+    only, since older records do not list the other sources an image reads."""
     found = []
+    revision = _dict(revision)
     for name, value in sorted(components.items()):
         item = {"name": name, **_dict(value)}
+        source = item.get("source")
+        commit = revision.get(source) if isinstance(source, str) else None
+        if not item.get("current_for") and item.get("digest") and commit:
+            item["current_for"] = {str(source)[:64]: str(commit)[:64]}
         built = _dict(images.get(name))
         if not item.get("image"):
             image = _image_of(built.get("reference"))
@@ -814,7 +845,7 @@ def _entry(
         "combined_hash": run.get("combined_hash") or event_.get("combined_hash"),
         "approved_by": approved,
         "release": run.get("release"),
-        "components": _components(components, run_images),
+        "components": _components(components, run_images, revision),
         "built": list(event_.get("built") or []),
         "rolled": list(event_.get("rolled") or []),
         "unchanged": list(event_.get("unchanged") or []),

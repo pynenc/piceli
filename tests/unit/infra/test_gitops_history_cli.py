@@ -129,7 +129,7 @@ def test_show_artifacts_prints_what_the_run_built(state: Path) -> None:
     assert body["commits"] == {"assets": ASSETS, "product": PRODUCT}
     web = next(c for c in body["components"] if c["name"] == "web")
     assert set(web) == {
-        "name", "source", "commit", "digest", "image", "platforms", "layers",
+        "name", "source", "commit", "current_for", "digest", "image", "platforms", "layers",
         "provenance",
     }  # fmt: skip
     assert web["source"] == "product" and web["commit"] == PRODUCT
@@ -195,6 +195,12 @@ def test_multi_platform_components_carry_each_platforms_layers(
     assert shown["layers"] == web["layers"]
     assert shown["image"]["reference"] == WEB_IMAGE
     assert f"layer linux/arm64 /srv/pages {LAYER_PAGES_ARM}" in text
+    # 0.86.0: built at an older commit, current for the run's.
+    assert web["commit"] == PRODUCT_OLD
+    assert web["provenance"]["commits"] == {"product": PRODUCT_OLD}
+    assert web["current_for"] == {"product": PRODUCT}
+    assert run["sources"]["product"]["commit"] == PRODUCT
+    assert shown["current_for"] == {"product": PRODUCT}
 
 
 def test_image_keys_split_into_name_and_platform() -> None:

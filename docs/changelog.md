@@ -4,6 +4,26 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.86.0
+
+### Which commits an unchanged image stands for (ops#107)
+
+- **`components[].current_for` in the run history.** `{source: commit}`: the
+  run's commits this component's image stands for. An image whose inputs did
+  not change keeps the build of an older commit; `current_for` says it is
+  current for the run's commits, so a release that copies a verified run's
+  images compares `current_for` to the run's `sources` (also in
+  `gitops show RUN --artifacts`). `commit` and `provenance.commits` stay the
+  build's. A run recorded before 0.86.0 reads with `current_for` too: the
+  component's own source at the run's commit (older records do not list the
+  other sources an image reads).
+- **An image's provenance does not move without a build.** The same image
+  recorded again for a newer commit keeps the provenance of its build; a
+  rebuild (`piceli gitops build`, `rebuild --host`) records its own. Candidates
+  copy the run's image whatever commit built it (a test covers it).
+- **Docs:** `Candidate(source=)` takes the source's name in the environment,
+  not a Python variable name.
+
 ## Version 0.85.0
 
 ### A candidate named by the source you choose (ops#106)

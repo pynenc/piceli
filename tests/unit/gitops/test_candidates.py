@@ -271,6 +271,25 @@ def test_a_passed_commit_waits_for_the_quiet_time_then_copies_and_is_ready() -> 
     ]
 
 
+def test_an_image_built_at_an_older_commit_is_copied_for_the_candidate() -> None:
+    """0.86.0: the run's image stands for the commit when its inputs did not
+    change (``current_for``): the candidate copies it, whatever commit built it."""
+    rig = Rig()
+    rig.components = [
+        {
+            **component("web"),
+            "commit": "f" * 40,
+            "current_for": {"app": A},
+            "provenance": {"host": "builder-1", "commits": {"app": "f" * 40}},
+        }
+    ]
+    rig.poll(passed((A, NOW, "run-1")))
+    rig.now += 1800
+    rig.poll(passed((A, NOW, "run-1")))
+    assert rig.record(A)["state"] == "ready"
+    assert rig.record(A)["copies"] == {"web": "copied"}
+
+
 def _two_sources() -> dict[str, Any]:
     """Two sources of ``staging`` passed different commits: ``workspace`` the
     first (sorted order, as the environment lists them), ``product`` the other."""
