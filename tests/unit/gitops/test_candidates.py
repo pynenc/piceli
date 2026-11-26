@@ -83,7 +83,10 @@ class Rig:
         quiet: str = "30m",
         inline: bool = True,
         credentials: Callable[[str], Any] | None = None,
+        source: str | None = None,
+        sources: tuple[str, ...] = ("app",),
     ) -> None:
+        self.sources = list(sources)
         self.now = NOW
         self.logs: list[str] = []
         self.copied: list[tuple[str, str, str | None, str]] = []
@@ -97,6 +100,7 @@ class Rig:
             environment="staging",
             quiet=quiet,
             keep=keep,
+            source=source,
             copies=copies
             if copies is not None
             else (
@@ -135,7 +139,7 @@ class Rig:
         return SimpleNamespace(ok=False, failed=found)
 
     def poll(self, record: dict[str, Any]) -> None:
-        self.candidates.poll(record, {"schema": "history"}, sources=["app"])
+        self.candidates.poll(record, {"schema": "history"}, sources=self.sources)
 
     def record(self, commit: str) -> dict[str, Any]:
         return self.state[STATE_KEY][commit]
@@ -265,6 +269,74 @@ def test_a_passed_commit_waits_for_the_quiet_time_then_copies_and_is_ready() -> 
     assert [describe(item) for item in status_view(rig.state)] == [
         f"candidate {'a' * 7}: ready"
     ]
+
+
+def _two_sources() -> dict[str, Any]:
+    """Two sources of ``staging`` passed different commits: ``workspace`` the
+    first (sorted order, as the environment lists them), ``product`` the other."""
+    both = passed((A, NOW, "run-1"))
+    both["staging"]["product"] = passed((B, NOW, "run-1"))["staging"]["app"]
+    both["staging"]["workspace"] = both["staging"].pop("app")
+    return both
+
+
+def test_the_source_names_the_commit_of_the_candidate() -> None:
+    record = _two_sources()
+    sources = ("workspace", "product")
+    first = Rig(sources=sources)  # unset: the first source, as before
+    first.poll(record)
+    assert list(first.state[STATE_KEY]) == [A]
+    named = Rig(sources=sources, source="product")
+    named.poll(record)
+    assert list(named.state[STATE_KEY]) == [B]
+    named.now += 1800
+    named.poll(record)
+    (_, target, _, ledger) = named.copied[0]
+    assert target == "oci://ghcr.io/example/shop-web:" + "b" * 12  # {commit}
+    assert ledger.startswith("candidate-" + "b" * 12)
+    assert named.record(B)["state"] == "ready"
+
+
+def test_a_request_takes_the_commit_of_the_named_source_only() -> None:
+    record = _two_sources()
+    sources = ("workspace", "product")
+    rig = Rig(sources=sources, source="product")
+    rig.poll(record)
+    rig.state["passed_commits"] = record
+    with pytest.raises(GitOpsError, match="did not pass"):
+        rig.candidates.request(A[:8])  # the first source's commit
+    assert rig.candidates.request(B[:8]) == B
+    assert rig.record(B)["state"] == "building"
+    default = Rig(sources=sources)
+    default.state["passed_commits"] = record
+    assert default.candidates.request(A[:8]) == A  # unset: any source finds it
+
+
+def test_a_source_the_environment_does_not_follow_is_refused() -> None:
+    record = _two_sources()
+    rig = Rig(sources=("workspace", "product"), source="catalog")
+    rig.poll(record)
+    assert STATE_KEY not in rig.state or not rig.state[STATE_KEY]
+    assert "candidate-source-unknown" in rig.state["candidate_source_error"]
+    assert "workspace, product" in rig.state["candidate_source_error"]
+    assert any("candidate-source-unknown" in line for line in rig.logs)
+    rig.state["passed_commits"] = record
+    with pytest.raises(GitOpsError, match="candidate-source-unknown") as error:
+        rig.candidates.request(B[:8])
+    assert error.value.code == "gitops-request-invalid"
+
+
+def test_the_source_is_declared_checked_and_round_trips() -> None:
+    setting = Candidate(environment="staging", source="product")
+    assert Candidate.from_dict(json.loads(json.dumps(setting.to_dict()))) == setting
+    assert setting.to_dict()["source"] == "product"
+    plain = Candidate(environment="staging")
+    assert "source" not in plain.to_dict()  # the same configuration hash as before
+    assert Candidate.from_dict(plain.to_dict()).source is None
+    for bad in ("Product!", "", 3):
+        with pytest.raises(ClusterError, match="source") as error:
+            Candidate(environment="staging", source=bad)  # type: ignore[arg-type]
+        assert error.value.code == "cluster-invalid"
 
 
 def test_the_quiet_time_counts_from_when_the_commit_passed() -> None:

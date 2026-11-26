@@ -52,6 +52,8 @@ from typing import Any
 STATE_KEY = "candidates"
 #: State key of the newest passed commit the candidates last saw.
 NEWEST_KEY = "candidate_newest"
+#: State key of the last ``candidate-source-unknown`` message (logged once).
+SOURCE_ERROR_KEY = "candidate_source_error"
 #: Where an install mounts the Secrets named by ``CandidateCopy(credentials=)``.
 CREDENTIALS_DIR = "/etc/piceli/candidate-credentials"
 #: The key of such a Secret: ``{"username": ..., "password": ...}`` or ``{"token": ...}``.
@@ -68,6 +70,7 @@ SUPERSEDED = "candidate-superseded"
 NO_IMAGE = "candidate-no-image"
 NO_COMPONENT = "candidate-no-component"
 RUN_MISSING = "candidate-run-missing"
+SOURCE_UNKNOWN = "candidate-source-unknown"
 COPY_ERROR = "candidate-copy-error"
 CREDENTIALS_MISSING = "candidate-credentials-missing"
 _TRANSIENT = ("unreachable", "timeout", "timed-out", "transient", "temporar")
@@ -175,19 +178,24 @@ class Candidate:
     """A release candidate of an environment (0.83.0).
 
     :param environment: The environment whose passed commits are candidates.
-        An environment with several sources uses its first source's commit.
+        An environment with several sources uses one source's commit (see
+        ``source``).
     :param quiet: How long no newer commit may have passed before the
         candidate is prepared (``30m``, ``1h``).
     :param keep: How many of the newest candidates stay (released ones always
         stay).
     :param copies: The images to copy out, one per component and target.
         Empty: the candidate is a ready marker (no copy, only the digests).
+    :param source: The name of the environment's followed source whose commit
+        names the candidate (0.85.0), as ``piceli gitops status`` lists the
+        sources. ``None``: the first source the environment follows.
     """
 
     environment: str
     quiet: str = "30m"
     keep: int = 5
     copies: tuple[CandidateCopy, ...] = ()
+    source: str | None = None
 
     def __post_init__(self) -> None:
         from piceli.gitops import GitOpsError
@@ -217,6 +225,10 @@ class Candidate:
         if not all(isinstance(item, CandidateCopy) for item in copies):
             raise _invalid("Candidate(copies=) is a list of CandidateCopy")
         object.__setattr__(self, "copies", copies)
+        if self.source is not None and (
+            not isinstance(self.source, str) or not _LABEL.fullmatch(self.source)
+        ):
+            raise _invalid("Candidate(source=) is a followed source's name")
         for what, values in (
             ("component", [item.component for item in copies]),
             ("target", [item.to for item in copies]),
@@ -243,6 +255,9 @@ class Candidate:
             "quiet": self.quiet,
             "keep": self.keep,
             "copies": [item.to_dict() for item in self.copies],
+            # 0.85.0: written only when set, so a declaration without it
+            # keeps its configuration hash.
+            **({"source": self.source} if self.source is not None else {}),
         }
 
     @classmethod
@@ -256,6 +271,7 @@ class Candidate:
             copies=tuple(
                 CandidateCopy.from_dict(item) for item in value.get("copies") or ()
             ),
+            source=value.get("source") or None,
         )
 
 
@@ -362,8 +378,9 @@ class Candidates:
     :param registry_host: The cluster registry's service address, for a
         run's image the history gives without a host.
     :param state_dir: Where the copy set's ledgers live (``candidates/ledgers``).
-    :param sources: The environment's source keys; the first names the
-        candidate's commit (:meth:`poll` may set them again).
+    :param sources: The environment's source keys; ``Candidate(source=)``
+        names the candidate's commit, else the first one (:meth:`poll` may
+        set them again).
     """
 
     def __init__(
@@ -432,15 +449,33 @@ class Candidates:
         self, passed: Mapping[str, Any] | None, *, every: bool = False
     ) -> dict[str, dict[str, Any]]:
         """``{commit: entry}`` of the passed commits of the environment's
-        first source (``every``: of all its sources, to find a commit)."""
+        candidate source (``Candidate(source=)``, else its first source;
+        ``every``: of all its sources, to find a commit, unless one is named)."""
         record = (passed or {}).get(self.candidate.environment) or {}
-        sources = sorted(record) if every else (self._sources or sorted(record))[:1]
+        if self.candidate.source is not None:
+            sources = [] if self.unknown_source() else [self.candidate.source]
+        elif every:
+            sources = sorted(record)
+        else:
+            sources = (self._sources or sorted(record))[:1]
         found: dict[str, dict[str, Any]] = {}
         for source in sources:
             for commit, entry in (record.get(source) or {}).items():
                 if isinstance(entry, Mapping):
                     found[str(commit)] = dict(entry)
         return found
+
+    def unknown_source(self) -> str | None:
+        """Why ``Candidate(source=)`` names no followed source (``None``: it
+        does, or the sources are not known yet). The composition refuses it
+        at load; this guards a controller whose sources changed."""
+        named = self.candidate.source
+        if named is None or not self._sources or named in self._sources:
+            return None
+        return (
+            f"{SOURCE_UNKNOWN}: {self.candidate.environment} does not follow "
+            f"{named!r} (it follows {', '.join(self._sources)})"
+        )
 
     @staticmethod
     def _newest(commits: Mapping[str, Mapping[str, Any]]) -> str | None:
@@ -464,10 +499,16 @@ class Candidates:
         :param passed: The record of passed commits
             (``{env: {source: {commit: {last_run, last_at, ...}}}}``).
         :param document: The history document (the digests of a run).
-        :param sources: The environment's source keys, the first one names
-            the candidate's commit."""
+        :param sources: The environment's source keys; ``Candidate(source=)``
+            (else the first one) names the candidate's commit."""
         self._sources = tuple(sources)
         now = self.clock()
+        if (why := self.unknown_source()) is not None:
+            if self.state.get(SOURCE_ERROR_KEY) != why:
+                self.state[SOURCE_ERROR_KEY] = why
+                self.log(f"candidates: {why}")
+            return
+        self.state.pop(SOURCE_ERROR_KEY, None)
         commits = self._passed(passed)
         newest = self._newest(commits)
         records = self.records
@@ -826,7 +867,12 @@ class Candidates:
         """Start the candidate of ``commit`` at once (no quiet time); a
         building or ready one is left as it is. Returns the full commit.
 
-        :raises GitOpsError: ``gitops-request-invalid`` (unknown commit)."""
+        :raises GitOpsError: ``gitops-request-invalid`` (unknown commit, or
+            ``candidate-source-unknown``)."""
+        from piceli.gitops import GitOpsError
+
+        if (why := self.unknown_source()) is not None:
+            raise GitOpsError("gitops-request-invalid", why)
         every = self._passed(self.state.get("passed_commits"), every=True)
         full = self.resolve(commit, among=sorted(set(self.records) | set(every)))
         record = self.records.get(full)

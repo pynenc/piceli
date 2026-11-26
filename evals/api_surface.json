@@ -1507,13 +1507,15 @@
     "quiet",
     "quiet_seconds",
     "secrets",
+    "source",
     "to_dict"
    ],
    "init": [
     "copies",
     "environment",
     "keep",
-    "quiet"
+    "quiet",
+    "source"
    ],
    "methods": {
     "from_dict": [
@@ -18337,5 +18339,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.84.0"
+ "version": "0.85.0"
 }

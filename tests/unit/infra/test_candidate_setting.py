@@ -4,6 +4,7 @@ controller process, and the controller's poll, requests and status."""
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -97,6 +98,46 @@ def test_the_composition_carries_it_to_the_controller_process_only_when_set() ->
     assert back.controller.candidate == _candidate(quiet="10m", keep=3)
 
 
+def test_the_source_round_trips_through_the_composition_only_when_set() -> None:
+    body = _cluster_dict(_cluster(candidate=_candidate()))
+    assert "source" not in body["controller"]["candidate"]
+    body = _cluster_dict(_cluster(candidate=_candidate(source="catalog")))
+    assert body["controller"]["candidate"]["source"] == "catalog"
+    back = _cluster_from(json.loads(json.dumps(body)))
+    assert back is not None and back.controller is not None
+    assert back.controller.candidate == _candidate(source="catalog")
+
+
+def test_the_composition_refuses_a_source_its_environment_does_not_follow(
+    tmp_path: Path,
+) -> None:
+    """The example composition with ``Controller(candidate=Candidate(source=))``
+    declared in its text: a followed source loads, another is refused."""
+    text = (EXAMPLE / "infra.py").read_text()
+    assert "controller=Controller(on=REGISTRY_NODE)," in text
+
+    def declared(source: str) -> Any:
+        folder = tmp_path / source
+        shutil.copytree(EXAMPLE, folder, ignore=shutil.ignore_patterns("__pycache__"))
+        (folder / "infra.py").write_text(
+            text.replace(
+                "controller=Controller(on=REGISTRY_NODE),",
+                "controller=Controller(on=REGISTRY_NODE, candidate=Candidate("
+                f'environment="main", source="{source}", '
+                'copies=(CandidateCopy("web", "oci://ghcr.io/example/shop-web"),))),',
+            ).replace(
+                "from piceli.infra import Cluster,",
+                "from piceli.infra import Candidate, CandidateCopy, Cluster,",
+            )
+        )
+        return load_composition(folder / "infra.py")
+
+    assert declared("catalog").cluster is not None  # followed by main
+    with pytest.raises(Exception, match="candidate-source-unknown") as error:
+        declared("billing")
+    assert "shop, catalog" in str(error.value) or "catalog, shop" in str(error.value)
+
+
 def test_the_install_mounts_each_credentials_secret_as_files_never_values() -> None:
     composition = load_composition(EXAMPLE / "infra.py")
     document = composition.to_dict()
@@ -147,7 +188,7 @@ def _declare(world: dict[str, Any], **options: Any) -> Any:
     controller.poll_once()  # the first deploy
     setting = _candidate(**options)
     controller._candidate_setting = lambda: setting  # no Cluster in this world
-    source = controller._candidate_sources()[0]
+    source = options.get("source") or controller._candidate_sources()[0]
     controller.state["passed_commits"] = {
         "main": {
             source: {
@@ -206,6 +247,38 @@ def test_the_poll_prepares_the_candidate_after_the_quiet_time_and_publishes_it(
     # The same commit again: nothing is copied twice.
     rig.controller.poll_once()
     assert len(rig.copied) == 1
+
+
+def test_the_named_source_names_the_candidate_and_its_passed_commits(
+    world: dict[str, Any],
+) -> None:
+    rig = _declare(world, source="catalog")
+    assert rig.controller._candidate_source() == "catalog"
+    (gate,) = rig.controller._candidate_gates()
+    assert gate.source_key == "catalog"
+    (found,) = rig.controller.poll_once()["candidates"]
+    assert (found["commit"], found["state"]) == (COMMIT, "ready")
+    assert list(rig.controller.state["passed_commits"]["main"]) == ["catalog"]
+
+
+def test_a_candidate_without_a_source_uses_the_first_followed_source(
+    world: dict[str, Any],
+) -> None:
+    rig = _declare(world)
+    first = rig.controller._candidate_sources()[0]
+    assert rig.controller._candidate_source() == first
+    (gate,) = rig.controller._candidate_gates()
+    assert gate.source_key == first
+
+
+def test_a_source_the_environment_lacks_names_no_candidate(
+    world: dict[str, Any],
+) -> None:
+    rig = _declare(world, source="billing")
+    assert rig.controller._candidate_gates() == []
+    status = rig.controller.poll_once()
+    assert "candidates" not in status
+    assert "candidate-source-unknown" in rig.controller.state["candidate_source_error"]
 
 
 def test_a_quiet_time_not_over_shows_the_candidate_waiting(
