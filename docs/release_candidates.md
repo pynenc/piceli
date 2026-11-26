@@ -45,11 +45,17 @@ controller = Controller(
   image of the passed run is copied; `to` is `oci://host/repository` (no tag, no
   digest); `tag` is optional and may hold `{commit}` (the first 12 characters of
   the commit). Without a tag the image is copied by digest only. A component
-  and a target appear once.
+  and a target appear once. `copies` may be empty: the candidate is then a
+  ready marker. It copies nothing and becomes `ready` after the quiet time (or a
+  `request`) once the run that passed the commit is found; `digests` lists the
+  image digests of that run (a component without an image is not listed).
 - `credentials` of a copy names a Secret in the controller's namespace with the
   key `credentials.json`: `{"username": "...", "password": "..."}` or
   `{"token": "..."}`. The controller mounts it as a file, never as a variable.
-  Without it, the copy is anonymous.
+  Without it, the copy is anonymous. The Secret may be missing when the
+  controller starts: the mount is optional, so a missing Secret fails the
+  candidate with `candidate-credentials-missing` (the detail names the Secret),
+  never the controller.
 
 The copies are done by the resumable copy set (`piceli.artifacts.copy_set`):
 every image is copied by digest, a ledger remembers what is done, and a retry
@@ -68,7 +74,7 @@ candidate 0123abc: not ready: candidate-no-image (component web has no image ref
 | State | Meaning |
 | --- | --- |
 | `waiting` | The commit passed; the quiet time is not over. |
-| `building` | The images are being copied. A temporary failure (a registry that does not answer) is tried again, 60 seconds later, then 5, 15 and 30 minutes, up to five tries. |
+| `building` | The images are being copied. A temporary failure (a registry that does not answer) is tried again, 60 seconds later, then 5, 15 and 30 minutes, up to five tries. A missing credentials Secret is tried again the same way (it may be created later; a mounted Secret appears without a restart), and a `request` tries at once. |
 | `ready` | Every image is copied. |
 | `failed` | `reason` says why; it is not tried again until you ask. |
 | `cancelled` | A newer commit passed while it was building. A request continues it from its ledger. |

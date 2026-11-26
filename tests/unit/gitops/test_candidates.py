@@ -82,6 +82,7 @@ class Rig:
         keep: int = 5,
         quiet: str = "30m",
         inline: bool = True,
+        credentials: Callable[[str], Any] | None = None,
     ) -> None:
         self.now = NOW
         self.logs: list[str] = []
@@ -97,7 +98,8 @@ class Rig:
             quiet=quiet,
             keep=keep,
             copies=copies
-            or (
+            if copies is not None
+            else (
                 CandidateCopy(
                     "web",
                     "oci://ghcr.io/example/shop-web",
@@ -113,6 +115,7 @@ class Rig:
             log=self.logs.append,
             artifacts=self._artifacts,
             copy=self._copy,
+            credentials=credentials or (lambda _secret: None),
             spawn=(lambda work: work()) if inline else self.waiting.append,
             registry_host=REGISTRY,
         )
@@ -173,7 +176,7 @@ def test_a_declaration_round_trips_and_names_its_targets() -> None:
         (lambda: Candidate(environment="staging", quiet="soon"), "quiet"),
         (lambda: Candidate(environment="staging", keep=0), "keep"),
         (lambda: Candidate(environment="staging", keep=True), "keep"),  # type: ignore[arg-type]
-        (lambda: Candidate(environment="staging", copies=["web"]), "CandidateCopy"),  # type: ignore[list-item]
+        (lambda: Candidate(environment="staging", copies=["web"]), "CandidateCopy"),  # type: ignore[arg-type]
         (lambda: CandidateCopy("Web_1", "oci://ghcr.io/example/web"), "component"),
         (lambda: CandidateCopy("web", "ghcr.io/example/web"), "oci://"),
         (lambda: CandidateCopy("web", "oci://ghcr.io/example/web:1"), "no tag"),
@@ -207,6 +210,32 @@ def test_two_copies_may_not_share_a_component_or_a_target() -> None:
 
 
 # ------------------------------------------------------------- the quiet timer
+
+
+def test_a_candidate_without_copies_is_ready_with_the_digests_of_the_run() -> None:
+    rig = Rig(copies=())
+    rig.components = [component("web"), component("worker", image=False)]
+    record = passed((A, NOW, "run-1"))
+    rig.poll(record)
+    assert rig.record(A)["state"] == "waiting"
+    rig.now += 1800
+    rig.poll(record)
+    found = rig.record(A)
+    assert found["state"] == "ready"
+    assert found["reason"] is None
+    assert found["digests"] == [DIGEST["web"]]  # no image, not listed, no failure
+    assert found["copies"] == {}
+    assert rig.copied == []
+    assert protected_digests(rig.state) == {DIGEST["web"]}
+    rig.poll(record)
+    assert rig.record(A)["state"] == "ready"
+
+
+def test_a_candidate_without_copies_fails_only_when_the_run_is_gone() -> None:
+    rig = Rig(copies=())
+    rig.run_found = False
+    rig.poll(passed((A, NOW - 3600, "run-1")))
+    assert rig.record(A)["reason"] == "candidate-run-missing"
 
 
 def test_a_passed_commit_waits_for_the_quiet_time_then_copies_and_is_ready() -> None:
@@ -555,10 +584,11 @@ def test_a_transient_failure_that_clears_makes_the_candidate_ready() -> None:
 def test_a_copy_that_raises_fails_the_candidate_with_its_reason() -> None:
     rig = Rig()
     error = RuntimeError("no credentials")
-    error.code = "candidate-credentials-missing"  # type: ignore[attr-defined]
+    error.code = "candidate-no-such-thing"  # type: ignore[attr-defined]
     rig.outcome["web"] = error
     rig.poll(passed((A, NOW - 3600, "run-1")))
-    assert rig.record(A)["reason"] == "candidate-credentials-missing"
+    assert rig.record(A)["state"] == "failed"
+    assert rig.record(A)["reason"] == "candidate-no-such-thing"
     other = Rig()
     other.outcome["web"] = ValueError("boom")
     other.poll(passed((A, NOW - 3600, "run-1")))
@@ -611,3 +641,65 @@ def test_a_state_without_candidates_has_nothing_to_show() -> None:
     assert status_view({}) == []
     assert protected_digests({}) == frozenset()
     assert protected_digests({STATE_KEY: {A: "junk"}}) == frozenset()
+
+
+def test_a_missing_credentials_secret_fails_the_candidate_then_it_recovers(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.gitops import candidates
+
+    monkeypatch.setattr(candidates, "CREDENTIALS_DIR", str(tmp_path))
+    rig = Rig(credentials=candidates._load_credentials)
+    record = passed((A, NOW - 3600, "run-1"))
+    rig.poll(record)
+    found = rig.record(A)
+    assert found["state"] == "building"  # retryable, never permanent
+    assert found["reason"] == "candidate-credentials-missing"
+    assert "shop-push" in found["detail"]
+    assert found["retry_at"] == _iso(NOW + BACKOFF[0])
+    assert rig.copied == []
+    line = describe(status_view(rig.state)[0])
+    assert "candidate-credentials-missing (Secret shop-push" in line
+    # the Secret appears in the pod: the backoff retry copies
+    secret = tmp_path / "shop-push"
+    secret.mkdir()
+    (secret / "credentials.json").write_text('{"token": "t"}')
+    rig.now += BACKOFF[0]
+    rig.poll(record)
+    found = rig.record(A)
+    assert found["state"] == "ready"
+    assert found["reason"] is None and "detail" not in found
+    assert len(rig.copied) == 1
+
+
+def test_a_missing_secret_is_bounded_and_a_request_tries_again(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.gitops import candidates
+
+    monkeypatch.setattr(candidates, "CREDENTIALS_DIR", str(tmp_path))
+    rig = Rig(credentials=candidates._load_credentials)
+    record = passed((A, NOW - 3600, "run-1"))
+    rig.poll(record)
+    for _ in range(MAX_ATTEMPTS):
+        rig.now += 100_000
+        rig.poll(record)
+    found = rig.record(A)
+    assert found["state"] == "failed"
+    assert found["reason"] == "candidate-credentials-missing"
+    secret = tmp_path / "shop-push"
+    secret.mkdir()
+    (secret / "credentials.json").write_text('{"token": "t"}')
+    rig.now += 100_000
+    rig.poll(record)
+    assert rig.record(A)["state"] == "failed"  # not on its own
+    rig.candidates.request(A[:9])
+    rig.poll(record)
+    assert rig.record(A)["state"] == "ready"
+    # a request also cuts a backoff short
+    (secret / "credentials.json").unlink()
+    other = Rig(credentials=candidates._load_credentials)
+    other.poll(record)
+    assert other.record(A)["retry_at"] is not None
+    other.candidates.request(A[:9])
+    assert other.record(A)["retry_at"] is None

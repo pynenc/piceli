@@ -133,10 +133,6 @@ def check_controller(controller: Controller) -> None:
 
         if not isinstance(controller.candidate, Candidate):
             raise _invalid("Controller(candidate=) must be Candidate(...)")
-        if not controller.candidate.copies:
-            raise _invalid(
-                "Controller(candidate=) needs at least one CandidateCopy in copies="
-            )
     builds = tuple(controller.builds) if not isinstance(controller.builds, str) else ()
     if (
         not builds

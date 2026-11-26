@@ -482,7 +482,9 @@ def _render_workload(
             mounts.append({"name": volume, "mountPath": path, "readOnly": True})
     # 0.83.0 Controller(candidate=Candidate(copies=(CandidateCopy(credentials=
     # SECRET)))): each Secret is mounted as files (the key credentials.json);
-    # the controller reads the file, never an environment variable.
+    # the controller reads the file, never an environment variable. The mount
+    # is optional: a missing Secret fails that candidate (reason
+    # candidate-credentials-missing), never the controller pod.
     from piceli.gitops.candidates import CREDENTIALS_DIR as CANDIDATE_CREDENTIALS_DIR
 
     composition = getattr(config, "composition", None) or {}
@@ -501,7 +503,11 @@ def _render_workload(
         volumes.append(
             {
                 "name": name,
-                "secret": {"secretName": candidate_secret, "defaultMode": 0o400},
+                "secret": {
+                    "secretName": candidate_secret,
+                    "defaultMode": 0o400,
+                    "optional": True,
+                },
             }
         )
         mounts.append(

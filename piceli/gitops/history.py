@@ -112,15 +112,49 @@ def _image_of(value: Any) -> dict[str, str] | None:
     return {"repository": repository[:200], "reference": reference}
 
 
-def _layers(value: Any) -> list[dict[str, str]]:
-    """The layer of each file mapping (0.83.0): bounded, text clipped."""
+#: Platforms whose layers one component keeps (0.84.0).
+MAX_LAYER_PLATFORMS = 4
+
+
+def _layers(value: Any, platform: str = "") -> list[dict[str, str]]:
+    """The layer of each file mapping (0.83.0): bounded, text clipped.
+
+    0.84.0: each also names its ``platform`` (``platform`` here, else the
+    item's own) when there is one; a single-platform image has none.
+    """
     found = []
     for item in value if isinstance(value, list) else ():
         item = _dict(item)
         mapping, digest = _text(item.get("mapping"), 200), _text(item.get("digest"), 80)
+        where = platform or _text(item.get("platform"), 32)
         if mapping and digest:
-            found.append({"mapping": mapping, "digest": digest})
+            found.append(
+                {
+                    **({"platform": where} if where else {}),
+                    "mapping": mapping,
+                    "digest": digest,
+                }
+            )
     return found[:MAX_LAYERS]
+
+
+def _platform_layers(name: str, images: Mapping[str, Any]) -> list[dict[str, str]]:
+    """The layers of component ``name`` (0.84.0): its own image's, and each
+    platform image's (``name/linux-amd64``, ...) of a multi-platform build;
+    at most :data:`MAX_LAYER_PLATFORMS` platforms, :data:`MAX_LAYERS` each."""
+    from piceli.pipeline.summary import split_image_key
+
+    by_platform: dict[str, list[dict[str, str]]] = {
+        "": _layers(_dict(images.get(name)).get("layers"))
+    }
+    for key, value in sorted(images.items()):
+        image, platform = split_image_key(str(key))
+        if platform and image == name:
+            by_platform[platform] = _layers(_dict(value).get("layers"), platform)
+    found: list[dict[str, str]] = list(by_platform.pop(""))
+    for platform in sorted(by_platform)[:MAX_LAYER_PLATFORMS]:
+        found.extend(by_platform[platform])
+    return found
 
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -693,7 +727,8 @@ def _components(
 ) -> list[dict[str, Any]]:
     """The entry's components. 0.83.0: each gains ``image`` (the event's, else
     the run's reference) and ``layers`` (the run's, one per file mapping),
-    joined by name; a key is left out when the run recorded none."""
+    joined by name (a multi-platform build's ``name/<platform>`` images too, each
+    layer naming its platform); a key is left out when the run recorded none."""
     found = []
     for name, value in sorted(components.items()):
         item = {"name": name, **_dict(value)}
@@ -702,7 +737,7 @@ def _components(
             image = _image_of(built.get("reference"))
             if image:
                 item["image"] = image
-        layers = _layers(built.get("layers"))
+        layers = _platform_layers(str(name), images)
         if layers and not item.get("layers"):
             item["layers"] = layers
         found.append(item)

@@ -56,6 +56,28 @@ def _read(path: Any) -> dict[str, Any]:
     return _dict(value)
 
 
+#: File-mapping layers kept per image (one platform's image, 0.83.0).
+MAX_LAYERS = 16
+
+
+def split_image_key(key: str) -> tuple[str, str]:
+    """``(name, platform)`` of a run's image key (0.84.0).
+
+    A multi-platform build keys each platform's image ``<name>/<slug>``
+    (``shop/linux-amd64``, see :mod:`piceli.artifacts.multi_platform`): the
+    name and the platform (``linux/amd64``). Any other key is a name with no
+    platform (an empty string).
+    """
+    from piceli.artifacts.build_spec import PLATFORMS, platform_slug
+
+    name, _, slug = key.rpartition("/")
+    if name:
+        for platform in PLATFORMS:
+            if platform_slug(platform) == slug:
+                return name, platform
+    return key, ""
+
+
 def _images(run: Run, state_dir: Path) -> dict[str, Any]:
     from piceli.pipeline.operate import delivery_path
 
@@ -80,12 +102,18 @@ def _images(run: Run, state_dir: Path) -> dict[str, Any]:
             entry["reference"] = planned[name]
         if type(made.get("size_bytes")) is int:
             entry["size_bytes"] = made["size_bytes"]
-        # 0.83.0: the layer of each file mapping a host build made.
+        # 0.83.0: the layer of each file mapping a host build made; 0.84.0:
+        # with the platform of a multi-platform build's image.
+        platform = split_image_key(name)[1]
         layers = [
-            {"mapping": str(item["mapping"])[:200], "digest": str(item["digest"])[:80]}
+            {
+                **({"platform": platform} if platform else {}),
+                "mapping": str(item["mapping"])[:200],
+                "digest": str(item["digest"])[:80],
+            }
             for item in made.get("mappings") or ()
             if isinstance(item, Mapping) and item.get("mapping") and item.get("digest")
-        ][:16]
+        ][:MAX_LAYERS]
         if layers:
             entry["layers"] = layers
         if delivery.get("action"):

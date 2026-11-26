@@ -37,6 +37,7 @@
     "envs.*.runs[].components[].layers",
     "envs.*.runs[].components[].layers[].digest",
     "envs.*.runs[].components[].layers[].mapping",
+    "envs.*.runs[].components[].layers[].platform",
     "envs.*.runs[].components[].name",
     "envs.*.runs[].components[].source",
     "envs.*.runs[].components[].state",

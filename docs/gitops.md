@@ -1986,7 +1986,11 @@ ConfigMap `piceli-gitops-history` (key `history.json`, schema
   `layers` is `[{"mapping", "digest"}]`: the layer of each file mapping of a
   host build (the container path and its layer digest), at most 16 per
   component. A key is left out when the run recorded nothing (an image
-  built by a Docker engine has no `layers`); nothing is invented;
+  built by a Docker engine has no `layers`); nothing is invented. 0.84.0:
+  an image built for several platforms keeps the layers of each platform,
+  `[{"platform": "linux/arm64", "mapping", "digest"}]` (at most 4
+  platforms, 16 layers each; `image` stays the index reference). `platform`
+  is present only for those images;
 - `approval_wait` (`started_at`, `finished_at`, `seconds`): from the plan
   waiting for approval to the owner's approval;
 - `approved_by` (`via`, `at`); `at` is set for `policy` approvals too (when
@@ -2059,7 +2063,7 @@ main:
 | --- | --- | --- |
 | `gitops history [ENV] [--limit N]` | `piceli.gitops-runs.v1` | `history_schema`, `generated_at`, `truncated`, `environments` (`name`, `runs`) |
 | `gitops show RUN [--env ENV] [--logs]` | `piceli.gitops-run.v1` | `env`, `run`; with `--logs` also `logs` (`source`, `attempt`, `at`, `reason`, `stage`, `host`, `text`) and `logs_note` |
-| `gitops show RUN --artifacts [--env ENV]` (0.83.0) | `piceli.gitops-artifacts.v1` | `env`, `run`, `state`, `commits` (`{source: commit}`), `components` (`name`, `source`, `commit`, `digest`, `image` (`repository`, `reference`) or `null`, `platforms` (`{platform: manifest digest}`), `layers` (`mapping`, `digest`), `provenance` or `null`) |
+| `gitops show RUN --artifacts [--env ENV]` (0.83.0) | `piceli.gitops-artifacts.v1` | `env`, `run`, `state`, `commits` (`{source: commit}`), `components` (`name`, `source`, `commit`, `digest`, `image` (`repository`, `reference`) or `null`, `platforms` (`{platform: manifest digest}`), `layers` (`mapping`, `digest`, and `platform` for a multi-platform image), `provenance` or `null`) |
 | `gitops compare ENV [A] [B]` | `piceli.gitops-compare.v1` | `env`, `before`, `after`, `sources`, `components`, `images_changed`, `resources` (`added`, `removed`, `changed`, `partial`), `fields` |
 
 - A run is the history's own entry (`piceli.gitops-history.v1`, above) with
