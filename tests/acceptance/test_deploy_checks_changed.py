@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from tests.acceptance.test_deploy_pipeline import FakeBackend, deploy, image
 
 
@@ -134,4 +136,54 @@ def test_a_failing_changed_check_never_rolls_back_an_unchanged_release(shop) -> 
     assert events[-1]["stages"]["checks"] == "done"
     assert events[-1]["verification"]["trigger"] == "unverified"
     assert events[-1]["verification"]["passed"] is True
+    assert image(api) == good and releases(tmp_path) == count
+
+
+def test_new_commits_with_the_same_release_run_the_checks_again(
+    shop, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0.88.0: a commit whose images and manifests did not change gets checks
+    of its own; the same commits again stay verified."""
+    from piceli.pipeline import runner as runner_module
+
+    api, tmp_path = shop
+    set_checks(tmp_path, 1)
+    code, events, result = deploy(tmp_path, "--auto-approve", "--json")
+    assert code == 0, result.stdout + result.stderr
+    good, count = image(api), releases(tmp_path)
+    assert len(FakeBackend.contexts) == 1
+
+    revision = {"app": "a" * 40}
+    original = runner_module.PipelineRunner.__init__
+
+    def told(self: Any, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("revision", dict(revision))
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(runner_module.PipelineRunner, "__init__", told)
+
+    # Checks recorded without commits (before 0.88.0): checked once more.
+    code, events, result = deploy(tmp_path, "--auto-approve", "--json")
+    assert code == 0, result.stdout + result.stderr
+    assert events[-1]["stages"]["apply"] == "skipped"
+    assert events[-1]["stages"]["checks"] == "done"
+    assert events[-1]["verification"]["trigger"] == "new-revision"
+    assert len(FakeBackend.contexts) == 2
+    output = last_run(tmp_path)["stages"]["checks"]["output"]
+    assert output["revision"] == revision and output["results"]
+
+    # The same commits: verified already.
+    code, events, _ = deploy(tmp_path, "--auto-approve", "--json")
+    assert code == 0 and events[-1]["stages"]["checks"] == "skipped"
+    assert len(FakeBackend.contexts) == 2
+
+    # A new commit, nothing else changed: its own checks, nothing applied.
+    revision["app"] = "b" * 40
+    code, events, result = deploy(tmp_path, "--auto-approve", "--json")
+    assert code == 0, result.stdout + result.stderr
+    assert events[-1]["stages"]["apply"] == "skipped"
+    assert events[-1]["verification"]["trigger"] == "new-revision"
+    assert events[-1]["verification"]["passed"] is True
+    assert len(FakeBackend.contexts) == 3
+    assert "verifying the running release (new-revision)" in result.stderr
     assert image(api) == good and releases(tmp_path) == count

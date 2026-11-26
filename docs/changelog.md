@@ -4,6 +4,22 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.88.0
+
+### A new commit with the same images gets checks of its own (ops#108)
+
+- **An unchanged release is checked again for new commits.** When the GitOps
+  controller deploys source commits whose images and manifests did not change,
+  nothing is applied, but the environment's checks now run against the running
+  release (`verification.trigger: new-revision`). Before, the run skipped its
+  checks ("release already verified"), so the commit never counted as passed:
+  a promotion gate refused it and `gitops candidate request` did not find it.
+  Now its run carries passed checks like any other.
+- The checks output records the commits it covers (`revision`). The same
+  commits again stay verified; a release whose last checks were recorded
+  before 0.88.0 is checked once more on its next run.
+- The deploy log line says why: `verified ... (new commits, same images)`.
+
 ## Version 0.87.0
 
 ### A candidate copies an image the run lists by digest only (ops#106)

@@ -1907,8 +1907,10 @@ last verification (`null` after a deploy that applied):
 
 `state` is `verified` or `failed` (`failed` lists the failing checks);
 `trigger` is `checks-changed` (the check set changed since its last
-verification) or `unverified` (the release's last verification failed, or
-predates 0.14.5); `rolled` is always empty. A failed step adds `failure`:
+verification), `new-revision` (0.88.0: a new commit with the same images and
+manifests; its run gets checks of its own, so it counts as passed for
+promotion gates and release candidates) or `unverified` (the release's last
+verification failed, or predates 0.14.5); `rolled` is always empty. A failed step adds `failure`:
 `log_tail` (the scrubbed end of a failed build Job's log, at most 4000
 characters) and `kept_job` (that Job, kept with its pod log until the next
 build of the same branch), or `denied` (the `verb`, `resource`, `namespace`

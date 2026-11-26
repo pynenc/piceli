@@ -82,7 +82,7 @@
           "description": "Added in 0.14.5. The checks ran against a release whose manifests did not change (a changed check set): nothing was applied and a failure never rolls back.",
           "required": ["trigger", "applied", "checks_hash", "passed"],
           "properties": {
-            "trigger": {"enum": ["checks-changed", "unverified"]},
+            "trigger": {"enum": ["checks-changed", "new-revision", "unverified"]},
             "applied": {"const": false},
             "checks_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
             "passed": {"type": "boolean"}

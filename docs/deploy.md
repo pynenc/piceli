@@ -550,8 +550,12 @@ release; the rollback is journaled in the run and the result's state is
 When a check changes, is added or is removed but the release does not (the
 apply is skipped), the checks run against the running release: a
 **verification**. The result carries `verification` (`trigger`:
-`checks-changed`, or `unverified` when this release's last checks failed;
-`applied: false`, `checks_hash`, `passed`). A failing verification ends the
+`checks-changed`, `new-revision`, or `unverified` when this release's last
+checks failed; `applied: false`, `checks_hash`, `passed`). `new-revision`
+(0.88.0): the GitOps controller deploys other source commits whose images and
+manifests did not change. Each commit gets checks of its own, so it can pass
+a promotion gate or become a release candidate; the checks output records
+the commits as `revision`. The same commits again are verified already. A failing verification ends the
 run `failed` (`pipeline-checks-failed`) and **never rolls back**, whatever
 `rollback_on_failed_checks` says: this run rolled nothing out, so the
 running release stays. A `python` check is identified by its declaration

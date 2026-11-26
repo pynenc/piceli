@@ -52,6 +52,7 @@ class FakePorts:
     def __init__(self, approve: bool = True) -> None:
         self.builder = FakeBuilder()
         self.deployed: list[tuple[str, dict[str, str]]] = []
+        self.revisions: list[dict[str, str]] = []
         self.removed: list[str] = []
         self.approve = approve
 
@@ -71,6 +72,7 @@ class FakePorts:
         if kwargs["approve"] is None:
             return {"state": "approval-required", "plan_hash": "sha256:" + "d" * 64}
         self.deployed.append((name, pipeline["images"]))
+        self.revisions.append(dict(kwargs.get("revision") or {}))
         return {"state": "ready", "namespace": f"ns-{name}"}
 
     def env_down(self, pipeline: Any, name: str) -> None:
@@ -623,3 +625,14 @@ def test_a_reverted_change_does_not_ask_again_for_the_running_plan(
     calls.clear()
     env = redeploy(plan_a)  # approved once, but C is the running release
     assert env["state"] == "approval-required" and calls == [None]
+
+
+def test_a_deploy_tells_the_pipeline_the_commits_it_deploys(
+    world: dict[str, Any],
+) -> None:
+    """0.88.0: the run's source commits reach the pipeline, whose checks of an
+    unchanged release run again for commits they did not pass for yet."""
+    controller, ports = world["controller"], world["ports"]
+    status = controller.poll_once()
+    assert ports.revisions[-1] == status["envs"]["main"]["revision"]
+    assert set(ports.revisions[-1]) == {"shop", "catalog"}

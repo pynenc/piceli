@@ -8067,6 +8067,7 @@
     "on_event",
     "pipeline",
     "refs",
+    "revision",
     "say"
    ],
    "methods": {
@@ -18339,5 +18340,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.87.0"
+ "version": "0.88.0"
 }

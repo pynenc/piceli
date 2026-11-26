@@ -209,6 +209,13 @@ MAX_FAILED_ATTEMPTS = 3
 #: Characters of a failed attempt's log tail kept.
 ATTEMPT_TAIL_CHARS = 8000  # 2000 before 0.17.0: about 80 lines
 #: Workload kinds whose change in a plan rolls their pods.
+#: Why an unchanged release was checked again, in the deploy log line.
+_VERIFIED_WHY = {
+    "checks-changed": "checks changed",
+    "new-revision": "new commits, same images",
+    "unverified": "not verified yet",
+}
+
 _ROLLING_KINDS = frozenset(
     {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "ReplicaSet"}
 )
@@ -455,6 +462,7 @@ class CompositionPorts(Protocol):
         receipt: Mapping[str, Any] | None,
         digests: Mapping[str, Any] | None,
         approve: str | None,
+        revision: Mapping[str, str] | None = None,
     ) -> Any: ...
 
     def env_down(self, pipeline: Any, name: str) -> None: ...
@@ -2962,6 +2970,7 @@ class CompositionController:
                     pipeline,
                     instance.deploys_as,
                     commit=str(record.get("commit") or ""),
+                    revision=dict(record.get("revision") or {}),
                     receipt=None,
                     digests=None,
                     approve=approve,
@@ -3162,6 +3171,7 @@ class CompositionController:
                     target,
                     instance.deploys_as,
                     commit=str(record.get("commit") or ""),
+                    revision=dict(record.get("revision") or {}),
                     receipt=None,
                     digests=refs,
                     approve=approve,
@@ -3446,9 +3456,14 @@ class CompositionController:
             # restarted controller's log alone shows what was deployed).
             commits = _commits(record.get("revision"))
             verb = "verified" if action == "verified" else "deployed"
+            trigger = (outcome.verification or {}).get("trigger")
             self.log(
                 f"{record['branch']}: {verb}{f' {commits}' if commits else ''}"
-                + (" (checks changed)" if action == "verified" else "")
+                + (
+                    f" ({_VERIFIED_WHY.get(str(trigger), 'checks changed')})"
+                    if action == "verified"
+                    else ""
+                )
                 + f"; rolled {', '.join(changed) or 'nothing'}"
             )
             line = pruned_line(record["branch"], pruned)
