@@ -154,10 +154,10 @@ the image but not the referrers.
 piceli gitops status --json | jq -r '.envs.main.components.api.digest'
 
 # Without --approve it prints the plan and its digest (exit 3).
-piceli artifacts copy --in-cluster --kubeconfig ~/.kube/config --context k-lab \
+piceli artifacts copy --in-cluster --kubeconfig ~/.kube/config --context my-cluster \
     --from oci://127.0.0.1:5000/shop/api@sha256:<index digest> \
     --to oci://ghcr.io/example/api:1.4.0 --docker-config ~/.docker/config.json
-piceli artifacts copy --in-cluster --kubeconfig ~/.kube/config --context k-lab \
+piceli artifacts copy --in-cluster --kubeconfig ~/.kube/config --context my-cluster \
     --from oci://127.0.0.1:5000/shop/api@sha256:<index digest> \
     --to oci://ghcr.io/example/api:1.4.0 --docker-config ~/.docker/config.json \
     --approve sha256:<plan digest> --out dist/copy.json
