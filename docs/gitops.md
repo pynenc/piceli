@@ -181,7 +181,11 @@ nothing:
 - resolves the revision each environment would deploy;
 - loads each build spec and resolves each component, without building
   (an image the live controller already built for the same sources is
-  reused; any other counts as a build);
+  reused; any other counts as a build). A derived image (0.89.0) is
+  appended dry the same way: the live controller's image for the same key,
+  or one counted under `derives` (`appends N derived images` in the line
+  below). Before 0.93.0 the canary refused every composition with derived
+  images (`component-build-unsupported`);
 - plans each environment (a dry run: what would change), so refusals such
   as `retained-content-differs` or `versioned-secret-generated` show up.
 

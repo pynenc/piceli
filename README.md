@@ -66,11 +66,10 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.92
+## What's new in 0.93
 
-- **`piceli cluster init` replaces a development cache claim its storage
-  class cannot grow**, as part of the approved plan, and applies the rest of
-  the plan when one object is refused, naming the API's reason.
+- **`gitops enable --canary` checks compositions with derived images**: it
+  appends them dry, instead of refusing the upgrade.
 
 ## Web UI
 

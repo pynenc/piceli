@@ -4,6 +4,20 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.93.0
+
+### The canary checks compositions with derived images (ops#114)
+
+- `gitops enable --canary` refused every composition with derived images
+  (0.89.0): its dry builder could build, mirror and copy, but not append, so
+  the resolve stage failed with `component-build-unsupported` ("this
+  controller's builder cannot append derived images"), although the live
+  controller deploys the same composition.
+- The canary now appends them dry, as it builds: the live controller's
+  image for the same key is reused, any other gets a placeholder and is
+  listed in the environment's `derives`. Its line says
+  `appends N derived images`.
+
 ## Version 0.92.0
 
 ### Cluster init replaces a development cache that cannot grow (ops#113)
