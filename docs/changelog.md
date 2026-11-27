@@ -4,6 +4,22 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.95.0
+
+### Chart values that need other values (ops#116)
+
+- `HelmOptional(when=[...])` renders a value's objects, and applies its
+  patches, only when every listed value is true too: one
+  `{{- if and (A) (B) }}`, each value read as before (`default_on_reuse`
+  included). It names toggles or optional values, and gates whole objects.
+- `HelmChart(requires={"collector.enabled": ["intake.expose"]})` fails the
+  install with `collector.enabled=true needs intake.expose=true` when the
+  first is true and the second is not.
+- `values.yaml`, `values.schema.json` and the chart's README note each
+  dependency. Unknown names, a value naming itself, a cycle and defaults
+  that would fail the default install are refused with `bundle-invalid`.
+- Charts that use neither render byte for byte as in 0.94.0.
+
 ## Version 0.94.0
 
 ### An OpenTelemetry Collector image built with OCB (ops#115)

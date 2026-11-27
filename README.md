@@ -66,14 +66,11 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.94
+## What's new in 0.95
 
-- **An OpenTelemetry Collector image built with OCB**: only the components
-  you list, with licence notices and its Go modules in the SBOM.
-- **Every built, mirrored and copied image is scanned** for known
-  vulnerabilities; a fixable critical one stops the run.
-- **A storage probe before a chart's install** names why a storage class
-  cannot attach and which classes to try.
+- **Chart values that need other values**: an optional object can render
+  only when several values are true, and a value can refuse to install
+  without the one it needs, with a message naming both.
 
 ## Web UI
 
