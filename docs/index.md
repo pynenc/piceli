@@ -259,6 +259,7 @@ source_identity
 containerized_builds
 host_builds
 publishing_images
+image_scanning
 release_candidates
 release_files
 node_delivery

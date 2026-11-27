@@ -4832,6 +4832,7 @@
   "HelmChart": {
    "attr_types": {
     "optional": "HelmOptional",
+    "storage_probe": "StorageProbe",
     "toggles": "HelmToggle",
     "values": "HelmValue"
    },
@@ -4847,6 +4848,7 @@
     "setting_keys",
     "settings",
     "storage_env",
+    "storage_probe",
     "target",
     "toggles",
     "values"
@@ -4860,6 +4862,7 @@
     "retired",
     "settings",
     "storage_env",
+    "storage_probe",
     "target",
     "toggles",
     "values"
@@ -11348,6 +11351,25 @@
     "publish": "PublishStep"
    }
   },
+  "StorageProbe": {
+   "attrs": [
+    "checked",
+    "image",
+    "size",
+    "timeout_seconds"
+   ],
+   "init": [
+    "image",
+    "size",
+    "timeout_seconds"
+   ],
+   "methods": {
+    "checked": []
+   },
+   "returns": {
+    "checked": "StorageProbe"
+   }
+  },
   "StreamedOciRegistryClient": {
    "attrs": [
     "authenticate",
@@ -12437,7 +12459,9 @@
      "--move-tag",
      "--namespace",
      "--no-referrers",
+     "--no-scan",
      "--out",
+     "--scan-policy",
      "--set",
      "--timeout",
      "--to"
@@ -15344,6 +15368,8 @@
    "codegen-cluster-read-failed",
    "codegen-flags-conflict",
    "codegen-output-refused",
+   "collector-licence-missing",
+   "collector-notices-failed",
    "command-cancelled",
    "command-failed",
    "command-output-limit",
@@ -15600,6 +15626,9 @@
    "image-invalid",
    "image-mismatch",
    "image-not-immutable",
+   "image-scan-failed",
+   "image-scanner-checksum",
+   "image-vulnerable",
    "immutable-field-changed",
    "import-cancelled",
    "import-discovery-failed",
@@ -15887,6 +15916,7 @@
    "runner-disk-low",
    "runner-memory-low",
    "runner-tool-missing",
+   "scan-policy-invalid",
    "scope-mismatch",
    "secret-adoption-incomplete",
    "secret-adoption-invalid",
@@ -16306,6 +16336,9 @@
      "value"
     ],
     "returns": "StaticSecretSpec"
+   },
+   "StorageProbe": {
+    "class": "StorageProbe"
    },
    "TYPE_CHECKING": {},
    "Tag": {
@@ -17932,6 +17965,7 @@
   "piceli.artifacts.file_signing",
   "piceli.artifacts.gc",
   "piceli.artifacts.host_build",
+  "piceli.artifacts.host_collector",
   "piceli.artifacts.host_execution",
   "piceli.artifacts.host_toolchains",
   "piceli.artifacts.image_copy",
@@ -17954,6 +17988,7 @@
   "piceli.artifacts.retention",
   "piceli.artifacts.retention_cli",
   "piceli.artifacts.runnable",
+  "piceli.artifacts.scan",
   "piceli.artifacts.signing",
   "piceli.artifacts.source_identity",
   "piceli.artifacts.staged_paths",
@@ -17965,6 +18000,7 @@
   "piceli.bundle.images",
   "piceli.bundle.naming",
   "piceli.bundle.prepare",
+  "piceli.bundle.probe",
   "piceli.bundle.rules",
   "piceli.bundle.safety",
   "piceli.bundle.support",
@@ -18357,5 +18393,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.93.0"
+ "version": "0.94.0"
 }

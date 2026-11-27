@@ -225,7 +225,7 @@ with `--delete-untagged` (every image here is untagged).
 | --- | --- |
 | `piceli deploy` on a laptop | A supervised, loopback-only `kubectl port-forward` to `service/piceli-registry`, for the length of the push (as for `NodeLoopbackRegistry`). Only missing blobs are sent; the receipt records the stable pull reference. |
 | A cluster build (`piceli build job`, the GitOps controller) | The Job pushes to `piceli-registry.piceli-system.svc:5000` by cluster DNS. |
-| Mirrors (`mirror=[…]`) | Copied by digest like a laptop push. |
+| Mirrors (`mirror=[…]`) | Copied by digest like a laptop push, then scanned for known vulnerabilities before they are used (0.94.0, {doc}`image_scanning`). |
 | Anything else | `piceli registry forward` keeps a port-forward open and prints its `push_url` (`oci://127.0.0.1:PORT/<repository>`); push with `piceli artifacts deliver … --to <push_url>/IMAGE --node-registry piceli-registry.piceli-system.svc:5000`. Or expose `node_port=` for builders outside the cluster that are configured for a plain-HTTP registry. |
 
 `piceli deploy --plan` shows the registry in the deliver stage (`registry

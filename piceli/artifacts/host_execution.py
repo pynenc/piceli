@@ -377,6 +377,8 @@ class HostExecution:
         self.run_shared = run_shared
         #: 0.22: what provisioning did per pinned tool (the receipt's ``toolchains``).
         self.toolchains: dict[str, dict[str, Any]] = {}
+        #: 0.94.0: per collector image, its Go release and linked modules.
+        self.collectors: dict[str, dict[str, Any]] = {}
         #: 0.78.0: the whole build's start (``time.time()``), for ``start_seconds``.
         self.build_start = time.time() if build_start is None else build_start
         #: 0.78.0: overlapped shared commands: set to stop the other side.
@@ -446,6 +448,7 @@ class HostExecution:
                 self._shared_commands(cwd, shared)
                 for index, command in enumerate(self.plan.commands, start=1):
                     self._command(index, command, cwd, environment)
+                self._collectors(environment)
                 files, details, images = self._outputs(output_dir, None)
         except LayerError as error:
             raise BuildSpecError(
@@ -482,6 +485,12 @@ class HostExecution:
             start = self._offset()
             began = time.monotonic()
             images[image.name] = self._image(image, images_dir, bases)
+            if image.collector is not None:  # 0.94.0
+                from piceli.artifacts.host_collector import summary
+
+                images[image.name]["collector"] = summary(
+                    image.collector, self.collectors.get(image.name) or {}
+                )
             # 0.17.0: each image's assembly time (base pull, layers, archive).
             self.steps.append(
                 {
@@ -524,6 +533,7 @@ class HostExecution:
         try:
             for index, command in enumerate(self.plan.commands, start=1):
                 self._command(index, command, cwd, environment)
+            self._collectors(environment)
             result = self._outputs(output_dir, side)
             side.wait(len(self.plan.shared_commands))
         except BaseException as error:
@@ -691,6 +701,15 @@ class HostExecution:
             }
         )
 
+    def _collectors(self, environment: Mapping[str, str]) -> None:
+        """0.94.0: build each collector image's binary and notices
+        (:mod:`piceli.artifacts.host_collector`), after the commands."""
+        from piceli.artifacts.host_collector import build
+
+        for image in self.plan.images:
+            if image.collector is not None:
+                self.collectors[image.name] = build(self, image, environment)
+
     def _command(
         self,
         index: int,
@@ -699,7 +718,13 @@ class HostExecution:
         env: Mapping[str, str],
         repaired: bool = False,
         shared: bool = False,
+        program: Path | None = None,
+        kind: str | None = None,
+        title: str | None = None,
     ) -> None:
+        """Run one step. ``program``, ``kind`` and ``title`` (0.94.0): a
+        program Piceli installed (not a declared tool), its step kind and
+        its log label."""
         if self.cancel is not None and self.cancel.is_set():
             raise BuildSpecError(
                 "cancelled", "build cancelled", steps=tuple(self.steps)
@@ -708,9 +733,12 @@ class HostExecution:
             raise BuildSpecError("grant-expired", "build grant expired")
         if self.overlap and self.stop.is_set():
             raise _Stopped()
-        path, pin = self.plan.tools[command[0]]
+        path = self.plan.tools[command[0]][0] if program is None else program
         self._verify_tools()
-        if shared:
+        if kind is not None:
+            step = {"platform": self.plan.platform, "kind": kind, "tool": command[0]}
+            label = title or kind
+        elif shared:
             # 0.23: once for every platform of the build.
             step = {"platform": "any", "kind": f"shared-{index}", "tool": command[0]}
             total = len(self.plan.shared_commands)
@@ -792,7 +820,17 @@ class HostExecution:
                     f"{', '.join(crates)} ({removed} entries); running once more"
                 )
                 self.steps[-1]["repaired"] = {"kind": damage, "crates": crates}
-                self._command(index, command, cwd, env, repaired=True, shared=shared)
+                self._command(
+                    index,
+                    command,
+                    cwd,
+                    env,
+                    repaired=True,
+                    shared=shared,
+                    program=program,
+                    kind=kind,
+                    title=title,
+                )
                 return
             code = "build-timed-out" if state == "timed-out" else "build-failed"
             secrets = [value for key, value in env.items() if _SECRET_NAME.search(key)]

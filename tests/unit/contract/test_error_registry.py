@@ -19,6 +19,7 @@ FIRST_ARGUMENT = {
     "SigningError",
     "DeliveryInputError",
     "BuildSpecError",
+    "ScanError",
     "BuildContextError",
     "ExecAuthError",
     "ProviderError",

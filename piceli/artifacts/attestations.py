@@ -6,7 +6,9 @@ For every image a host build writes, next to its OCI archive:
   (by manifest digest), its base image (by digest), every file the build put
   in the image (path and sha256) and every package pinned by a ``Cargo.lock``
   among the staged context files (name, version, registry checksum, package
-  URL). The lockfiles pin a superset of what one binary links. The document
+  URL). The lockfiles pin a superset of what one binary links. A collector
+  image (0.94.0) also lists every Go module linked into its binary
+  (``pkg:golang`` URL) and the Go standard library. The document
   depends only on the build's inputs and outputs: the same build gives the
   same bytes.
 * ``<name>.provenance.json``: an in-toto Statement v1 with a SLSA provenance
@@ -26,6 +28,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 from piceli.artifacts.plan import canonical, digest
 
@@ -77,14 +80,79 @@ def cargo_packages(plan: HostBuildPlan) -> list[dict[str, str]]:
     return [found[key] for key in sorted(found)]
 
 
+def _purl_part(value: str) -> str:
+    """A purl path or version: unreserved characters and ``/`` kept, the rest
+    percent-encoded (``+incompatible`` becomes ``%2Bincompatible``)."""
+    return quote(value, safe="/-._~")
+
+
+def go_packages(built: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """0.94.0: the SPDX packages of a collector binary's Go modules.
+
+    ``built`` is what :func:`piceli.artifacts.host_collector.build` returned
+    (``{"go": "go1.X.Y", "modules": [{"path", "version", "sum"?}]}``). Each
+    module gets the purl ``pkg:golang/<path>@<version>``; its ``go.sum`` hash
+    (``h1:``, a hash of the module's file tree, not of one file, so not an
+    SPDX checksum) is the package comment. The Go standard library is the
+    package ``stdlib`` (``pkg:golang/stdlib@<version>``), as scanners expect.
+    """
+    if not built:
+        return []
+    found: list[dict[str, Any]] = []
+    go = str(built.get("go") or "")
+    if go.startswith("go"):
+        found.append(
+            {
+                "SPDXID": _spdx_id("GoModule", f"stdlib-{go}"),
+                "name": "stdlib",
+                "versionInfo": go,
+                "downloadLocation": "NOASSERTION",
+                "filesAnalyzed": False,
+                "externalRefs": [
+                    {
+                        "referenceCategory": "PACKAGE-MANAGER",
+                        "referenceType": "purl",
+                        "referenceLocator": f"pkg:golang/stdlib@{_purl_part(go[2:])}",
+                    }
+                ],
+            }
+        )
+    for module in built.get("modules") or ():
+        path, version = str(module["path"]), str(module["version"])
+        package: dict[str, Any] = {
+            "SPDXID": _spdx_id("GoModule", f"{path}-{version}"),
+            "name": path,
+            "versionInfo": version,
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": False,
+            "externalRefs": [
+                {
+                    "referenceCategory": "PACKAGE-MANAGER",
+                    "referenceType": "purl",
+                    "referenceLocator": (
+                        f"pkg:golang/{_purl_part(path)}@{_purl_part(version)}"
+                    ),
+                }
+            ],
+        }
+        if module.get("sum"):
+            package["comment"] = f"go.sum {module['sum']}"
+        found.append(package)
+    return found
+
+
 def sbom(
     name: str,
     repository: str,
     image: Mapping[str, Any],
     crates: Sequence[Mapping[str, str]],
     epoch: int,
+    go_modules: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
-    """The SPDX 2.3 document of one image (see the module docstring)."""
+    """The SPDX 2.3 document of one image (see the module docstring).
+
+    ``go_modules`` (0.94.0, :func:`go_packages`): the SPDX packages of the
+    Go modules linked into a collector image's binary."""
     manifest = str(image["digest"])
     root = _spdx_id("Image", name)
     packages: list[dict[str, Any]] = [
@@ -180,6 +248,15 @@ def sbom(
                 "relatedSpdxElement": crate_id,
             }
         )
+    for module in go_modules:  # 0.94.0
+        packages.append(dict(module))
+        relationships.append(
+            {
+                "spdxElementId": root,
+                "relationshipType": "CONTAINS",
+                "relatedSpdxElement": str(module["SPDXID"]),
+            }
+        )
     unique: dict[str, dict[str, Any]] = {item["SPDXID"]: item for item in packages}
     return {
         "spdxVersion": SPDX_VERSION,
@@ -268,6 +345,17 @@ def provenance(
                     ),
                     "source_date_epoch": spec.source_date_epoch,
                     **({"toolchains": pins} if pins else {}),
+                    # 0.94.0: the collector an image holds, only when it has one.
+                    **(
+                        {
+                            "collector": {
+                                key: image["collector"][key]
+                                for key in ("version", "components", "manifest_sha256")
+                            }
+                        }
+                        if isinstance(image.get("collector"), Mapping)
+                        else {}
+                    ),
                 },
                 "internalParameters": {
                     "node_facts": plan.facts.to_dict(),

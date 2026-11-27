@@ -26,6 +26,11 @@ same bytes, it builds nothing. Every digest is kept:
 
 ``skopeo copy --all --preserve-digests`` copies 2 but not 3.
 
+**Scan (0.94.0).** Before 2, the source digest is scanned for known
+vulnerabilities, every platform (:mod:`piceli.artifacts.scan`); a fixable
+critical one fails the copy (``image-vulnerable``) before anything is sent.
+``CopyPlan.scan`` (``--scan-policy FILE``, ``--no-scan``) is part of the plan.
+
 The receipt (``piceli.copy-receipt.v1``) gives the digest, its media type,
 each platform's manifest, the blobs uploaded and skipped and each referrer.
 Credentials are never printed. Importing this module runs nothing.
@@ -68,6 +73,7 @@ from piceli.artifacts.registry import (
     RegistryTarget,
     StreamedOciRegistryClient,
 )
+from piceli.artifacts.scan import ScanError, ScanPolicy, scan_registry
 
 COPY_PLAN_REVISION = "piceli.copy-plan.v1"
 COPY_RECEIPT_REVISION = "piceli.copy-receipt.v1"
@@ -147,10 +153,19 @@ class CopyPlan:
     target: RegistryTarget
     referrers: bool = True
     move_tag: bool = False
+    #: 0.94.0: the source is scanned before the copy
+    #: (:class:`~piceli.artifacts.scan.ScanPolicy`; ``None``: the default).
+    scan: ScanPolicy | None = None
 
     @classmethod
     def parse(
-        cls, source: str, to: str, *, referrers: bool = True, move_tag: bool = False
+        cls,
+        source: str,
+        to: str,
+        *,
+        referrers: bool = True,
+        move_tag: bool = False,
+        scan: ScanPolicy | None = None,
     ) -> CopyPlan:
         """The plan for ``--from`` and ``--to``. No network.
 
@@ -171,7 +186,7 @@ class CopyPlan:
             and target.tag is None
         ):
             raise CopyError("copy-invalid", "--to is the --from repository")
-        return cls(found, target, referrers, move_tag)
+        return cls(found, target, referrers, move_tag, scan)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -184,6 +199,12 @@ class CopyPlan:
             "tag": self.target.tag,
             "referrers": self.referrers,
             "move_tag": self.move_tag,
+            # 0.94.0: only when not the default, so other digests are unchanged.
+            **(
+                {"scan": self.scan.to_dict()}
+                if self.scan is not None and not self.scan.default
+                else {}
+            ),
         }
 
     @property
@@ -207,6 +228,8 @@ class Copier:
     ca_file: Path | None = field(default=None, repr=False)
     client_factory: ClientFactory = field(default=StreamedOciRegistryClient, repr=False)
     timeout: float = 1800.0
+    #: 0.94.0: a :class:`~piceli.artifacts.scan.Scanner` (test seam).
+    scanner: Any = field(default=None, repr=False)
     _retries: list[dict[str, object]] = field(
         default_factory=list, init=False, repr=False
     )
@@ -260,6 +283,10 @@ class Copier:
             self._copy(plan, receipt, time.time() + self.timeout, cancel)
         except CopyError as error:
             receipt.update(state="failed", reason=error.code)
+        except ScanError as error:  # 0.94.0: nothing was copied
+            receipt.update(state="failed", reason=error.code, message=str(error))
+            if error.details:
+                receipt["vulnerabilities"] = error.details
         except MirrorError as error:
             receipt.update(state="failed", reason=error.code)
         except RegistryError as error:
@@ -318,6 +345,15 @@ class Copier:
             if not plan.move_tag:
                 raise CopyError("copy-tag-exists", "the tag names another image")
             receipt["previous"] = previous
+        # 0.94.0: the source digest is scanned before anything is copied.
+        receipt["scan"] = scan_registry(
+            plan.scan,
+            source,
+            source_repo.repository,
+            wanted,
+            image=f"{source_repo.registry}/{source_repo.repository}",
+            scanner=self.scanner,
+        )
         # 2. The image, every platform (the mirror's copy, platform None).
         mirrored = mirror_image(
             MirrorSource(source_repo.registry, source_repo.repository, wanted),
@@ -329,6 +365,7 @@ class Copier:
             node_registry=target.registry,
             max_seconds=max(1.0, deadline - time.time()),
             cancel=cancel,
+            scan_policy="caller",  # scanned above
         )
         if mirrored.get("state") != "succeeded":
             receipt["error"] = mirrored.get("error")

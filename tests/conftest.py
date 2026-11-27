@@ -88,6 +88,30 @@ def _no_leftover_temporary_files(
         shutil.rmtree(root, ignore_errors=True)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _fake_image_scanner(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """0.94.0: builds, mirrors and copies scan each image with Grype. The
+    suite never downloads it or its database: a stand-in that reports no
+    finding is the default (``tests/fake_scanner.py``), and mirrors and
+    copies keep their scan cache in the session's temporary space."""
+    from tests.fake_scanner import write_scanner
+
+    names = ("PICELI_SCANNER", "PICELI_SCAN_CACHE", "PICELI_SCAN_POLICY")
+    saved = {name: os.environ.get(name) for name in names}
+    root = tmp_path_factory.mktemp("scanner")
+    os.environ["PICELI_SCANNER"] = str(write_scanner(root / "bin"))
+    os.environ["PICELI_SCAN_CACHE"] = str(root / "cache")
+    os.environ.pop("PICELI_SCAN_POLICY", None)
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
 @pytest.fixture(autouse=True)
 def _no_leftover_temporary_files_per_test(
     _no_leftover_temporary_files: Path,

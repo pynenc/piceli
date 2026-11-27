@@ -55,6 +55,7 @@ from piceli.artifacts.registry import (
     RegistryError,
     docker_config_credentials,
 )
+from piceli.artifacts.scan import ScanPolicy
 
 LEDGER_REVISION = "piceli.copy-ledger.v1"
 REPORT_REVISION = "piceli.copy-set.v1"
@@ -171,6 +172,8 @@ class CopyOptions:
     timeout: float = 1800.0
     source_ca_file: Path | None = None
     ca_file: Path | None = None
+    #: 0.94.0: the scan of each source (``None``: the default policy).
+    scan: ScanPolicy | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """The part a cluster Job needs (CA files are local paths: not sent)."""
@@ -178,6 +181,7 @@ class CopyOptions:
             "referrers": self.referrers,
             "move_tag": self.move_tag,
             "timeout": self.timeout,
+            **({"scan": self.scan.to_dict()} if self.scan is not None else {}),
         }
 
     @classmethod
@@ -187,6 +191,7 @@ class CopyOptions:
                 referrers=bool(value.get("referrers", True)),
                 move_tag=bool(value.get("move_tag", False)),
                 timeout=float(value.get("timeout", 1800.0)),
+                scan=ScanPolicy.from_table(value["scan"]) if "scan" in value else None,
             )
         except (TypeError, ValueError, AttributeError):
             raise CopySetError("copy-invalid", "invalid copy options") from None
@@ -283,6 +288,7 @@ class CopySetPlan:
                 item.target,
                 referrers=options.referrers,
                 move_tag=options.move_tag,
+                scan=options.scan,
             )
             for item in check_items(items)
         )
@@ -559,6 +565,7 @@ def prepare_copies(
             item.target,
             referrers=options.referrers,
             move_tag=options.move_tag,
+            scan=options.scan,
         )
         copier = Copier(
             source_credentials=source_credentials

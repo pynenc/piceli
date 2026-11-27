@@ -196,6 +196,9 @@ piceli artifacts copy --from oci://127.0.0.1:5000/shop/api@sha256:<index digest>
    there and each referrer is listed (`copy-verification-failed`
    otherwise).
 
+Before step 2 the source digest is scanned for known vulnerabilities
+(0.94.0; `--scan-policy FILE`, `--no-scan`): see {doc}`image_scanning`.
+
 `--to` without a tag copies by digest only. The source is read anonymously
 unless `--from-credentials` or `--from-docker-config`; the target uses
 `--credentials` or `--docker-config` (below); `--from-ca-file` and

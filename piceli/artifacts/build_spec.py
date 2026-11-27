@@ -2197,6 +2197,10 @@ FAILED_CODES = frozenset(
         "smoke-failed",
         "smoke-timed-out",
         "smoke-output-mismatch",
+        # 0.94.0: piceli.artifacts.scan
+        "image-vulnerable",
+        "image-scan-failed",
+        "image-scanner-checksum",
     }
 )
 
@@ -2289,6 +2293,9 @@ def run_build_spec_command(
         body: dict[str, Any] = {}
         if error.steps:
             body["steps"] = list(error.steps)
+        details = getattr(error, "details", None)  # 0.94.0: image-vulnerable
+        if details:
+            body["details"] = details
         return _result_error(error.code, failed=failed, **body)
     except SourceIdentityError:
         return _result_error("invalid-inputs")

@@ -1,0 +1,37 @@
+# An OpenTelemetry Collector with only the components listed below, built on
+# the host with OCB (OpenTelemetry Collector Builder) and the pinned Go: no
+# container VM, no command to write. Piceli installs Go 1.26.11 into the build
+# cache (checked against go.dev), builds the binary for the node's platform,
+# and writes /THIRD-PARTY-NOTICES from the linked Go modules.
+#
+#   Build.spec("host-build.toml", builder="host")    # in a Pipeline
+#   piceli artifacts build-spec run --spec host-build.toml
+#
+# Needs public HTTPS the first time (go.dev and the Go module proxy).
+revision = "piceli.host-build.v1"
+name = "otel-collector"
+
+[build]
+platforms = ["linux/amd64", "linux/arm64"]
+toolchains = { go = "1.26.11" }
+timeout_seconds = 1800
+
+[context.conf]
+path = "."
+include = ["config.yaml"]
+
+[[output.image]]
+name = "collector"
+repository = "shop/collector"
+base = "scratch"
+user = "10001:10001"
+files = { "conf/config.yaml" = "/etc/otelcol/config.yaml" }
+cmd = ["--config", "/etc/otelcol/config.yaml"]
+labels = { "org.opencontainers.image.source" = "https://example.org/shop" }
+
+[output.image.collector]
+version = "0.166.0"
+receivers = ["otlp", "statsd"]
+processors = ["memory_limiter", "resource"]
+extensions = ["health_check"]
+exporters = ["otlp_http", "debug"]

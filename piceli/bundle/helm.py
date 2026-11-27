@@ -46,6 +46,10 @@ kustomize base and ``prepare.sh``:
 - **Storage size** (0.31.0). ``storage.size`` sets the size of every claim;
   ``HelmChart(storage_env={"DISK_LIMIT": 90})`` sets an environment variable
   the workloads declare to that percentage of it, in bytes.
+- **Storage probe** (0.94.0). ``HelmChart(storage_probe=StorageProbe(...))``
+  adds ``pre-install`` hooks that check the claims' storage class attaches
+  on the cluster's nodes and fail the install with one line saying why not
+  (:mod:`piceli.bundle.probe`); ``storageProbe.enabled=false`` skips it.
 
 Cluster-scoped objects (ClusterRoles and their bindings) are part of the
 release, so ``helm uninstall`` removes them. The chart is deterministic: the
@@ -71,6 +75,7 @@ from piceli.bundle.build import (
     BundleObject,
 )
 from piceli.bundle.naming import Naming
+from piceli.bundle.probe import StorageProbe
 
 #: Top-level values every chart may have; a setting, input or toggle cannot
 #: take these names.
@@ -329,6 +334,11 @@ class HelmChart:
         here limits that value to the Secrets listed; without it,
         ``existingSecret`` replaces every Secret and, when both are set,
         wins.
+    :param storage_probe: 0.94.0: a :class:`~piceli.bundle.probe.StorageProbe`:
+        Helm ``pre-install`` hooks check that the chart's storage class
+        attaches on the cluster's nodes before the app installs (values
+        ``storageProbe.enabled`` and ``storageProbe.timeoutSeconds``). Only
+        for an app with at least one claim.
     """
 
     target: Any
@@ -342,6 +352,7 @@ class HelmChart:
     optional_inputs: Sequence[str] = ()
     retired: Mapping[str, str] = field(default_factory=dict)
     existing_secrets: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    storage_probe: StorageProbe | None = None
 
     def secret_values(self) -> dict[str, tuple[str, ...]]:
         """0.80.0: value name → the app Secrets it replaces (checked for shape).
@@ -828,10 +839,7 @@ class _Templater:
                     self.disk_env(container)
                 image = container.get("image") if isinstance(container, dict) else None
                 if isinstance(image, str):
-                    container["image"] = self.scalar(
-                        f'{{{{ include "{self.name}.image" (list {_literal(image)} '
-                        f"{_literal(_image_path(image))} {_value('image.registry')}) | toJson }}}}"
-                    )
+                    container["image"] = self.scalar(self.image(image))
         if "imagePullSecrets" not in pod:
             self.optional(
                 pod,
@@ -841,6 +849,13 @@ class _Templater:
                 '{{ $names = append $names (dict "name" .) }}{{ end }}'
                 "{{ toJson $names }}",
             )
+
+    def image(self, image: str) -> str:
+        """``image`` with ``image.registry`` in place of its registry, as JSON."""
+        return (
+            f'{{{{ include "{self.name}.image" (list {_literal(image)} '
+            f"{_literal(_image_path(image))} {_value('image.registry')}) | toJson }}}}"
+        )
 
     def _secret(self, name: Any) -> Any:
         if not isinstance(name, str):
@@ -1322,6 +1337,8 @@ class HelmBundle:
     retired: tuple[tuple[str, str], ...] = ()
     #: 0.80.0: the names the operator sees (the tool in comments and README).
     naming: Naming = field(default_factory=Naming)
+    #: 0.94.0: the storage probe the chart runs before install, if any.
+    storage_probe: StorageProbe | None = None
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -1375,6 +1392,11 @@ class HelmBundle:
             "existing_secret_keys": list(self.existing_secret_keys),
             "optional_inputs": list(self.optional_inputs),
         }
+        if self.storage_probe is not None:
+            result["storage_probe"] = {
+                "timeout_seconds": self.storage_probe.timeout_seconds,
+                "size": self.storage_probe.size,
+            }
         if self.existing_secret_values:
             result["existing_secrets"] = {
                 name: {"secrets": list(secrets), "keys": list(keys)}
@@ -1572,6 +1594,7 @@ def build_helm(
             raise BundleError(
                 "bundle-invalid", f"the value {'.'.join(parts)} is named twice"
             )
+    probe = _storage_probe(bundle, declared.storage_probe, names, paths)
     # 0.31.0: an existing Secret holds every key of the app's Secrets; two
     # Secrets with one key name could not share it, so it is not offered.
     secret_keys = [key for plan in bundle.secrets for key, _output in plan.keys]
@@ -1719,6 +1742,11 @@ def build_helm(
         files[naming.secrets_template] = (
             f"# The Secrets of {bundle.name}: generated once, kept across upgrades\n"
             + body
+        ).encode()
+
+    if probe is not None:
+        files[f"templates/{naming.product}-storage-probe.yaml"] = _probe_template(
+            bundle, probe, templater
         ).encode()
 
     descriptions = dict(declared.descriptions)
@@ -1871,6 +1899,38 @@ def build_helm(
             "# deleteDataOnUninstall: helm uninstall also deletes the data claims "
             "(default: they stay)"
         )
+    if probe is not None:
+        values["storageProbe"] = {
+            "enabled": True,
+            "timeoutSeconds": probe.timeout_seconds,
+        }
+        schema["storageProbe"] = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Before install, check that storageClass "
+                    f"attaches on the cluster's nodes (a {probe.size} claim, "
+                    "deleted after)",
+                },
+                "timeoutSeconds": {
+                    "type": "integer",
+                    "minimum": 10,
+                    "maximum": 3600,
+                    "description": "How long the probe waits for its pod; keep "
+                    "it under helm's --timeout",
+                },
+            },
+        }
+        comments.append(
+            "# storageProbe.enabled: before install, check that storageClass "
+            f"attaches on these nodes (a {probe.size} claim, deleted after)"
+        )
+        comments.append(
+            "# storageProbe.timeoutSeconds: how long the probe waits (under "
+            "helm's --timeout)"
+        )
     schema["global"] = {"type": "object"}
     retired = _retire(schema, declared.retired)
     if retired:
@@ -1899,6 +1959,13 @@ def build_helm(
         + "\n"
     ).encode()
     files["templates/_helpers.tpl"] = _helpers(bundle.name, inputs).encode()
+    if probe is not None:
+        # 0.94.0: the name of the probe's claim, pod and namespaced objects.
+        files["templates/_helpers.tpl"] += (
+            f'{{{{- define "{bundle.name}.storageProbe" -}}}}\n'
+            '{{- printf "%s-storage-probe" .Release.Name | trunc 63 | trimSuffix "-" -}}\n'
+            "{{- end -}}\n"
+        ).encode()
     if bundle.secrets:
         files["templates/_helpers.tpl"] += _secret_helper(
             bundle.name,
@@ -1928,6 +1995,7 @@ def build_helm(
         optional_inputs=tuple(sorted(optional_inputs)),
         retired=retired,
         naming=naming,
+        storage_probe=probe,
     )
     files["Chart.yaml"] = yaml.safe_dump(chart.metadata(), sort_keys=True).encode()
     files["templates/NOTES.txt"] = _notes(chart).encode()
@@ -1935,6 +2003,91 @@ def build_helm(
         chart, descriptions, toggles, declared.optional, declared.values
     ).encode()
     return chart
+
+
+def _storage_probe(
+    bundle: Bundle,
+    declared: Any,
+    names: Sequence[str],
+    paths: Sequence[tuple[str, ...]],
+) -> StorageProbe | None:
+    """0.94.0: the declared probe, checked: a pinned image, a claim to
+    probe, no value of its name, and every object past the safety gate."""
+    from piceli.bundle.probe import first_claim, gate
+
+    if declared is None:
+        return None
+    if not isinstance(declared, StorageProbe):
+        raise BundleError("bundle-invalid", "storage_probe must be a StorageProbe")
+    probe = declared.checked()
+    manifests = [item.manifest for item in bundle.objects]
+    if first_claim(manifests) is None:
+        raise BundleError(
+            "bundle-invalid",
+            "storage_probe needs a claim to probe: the app declares no "
+            "PersistentVolumeClaim or claim template; remove storage_probe",
+        )
+    if "storageProbe" in names or any(parts[0] == "storageProbe" for parts in paths):
+        raise BundleError("bundle-invalid", "the value storageProbe is named twice")
+    gate(
+        bundle.name,
+        bundle.namespace,
+        {bundle.naming.key(BUNDLE_ANNOTATION): f"{bundle.name}@{bundle.version}"},
+        probe,
+        manifests,
+    )
+    return probe
+
+
+def _probe_template(bundle: Bundle, probe: StorageProbe, templater: _Templater) -> str:
+    """0.94.0: the probe's hook objects, rendered when ``storageProbe.enabled``."""
+    from piceli.bundle.probe import Names, first_claim, hook_objects
+
+    manifests = [item.manifest for item in bundle.objects]
+    claim = first_claim(manifests) or {}
+    fallback = claim.get("storageClassName") or bundle.storage_class
+    storage_class = "$.Values.storageClass | default " + _literal(fallback or "")
+    timeout = (
+        f"({_value('storageProbe.timeoutSeconds')} | default "
+        f"{int(probe.timeout_seconds)} | int)"
+    )
+    name = f'{{{{ include "{bundle.name}.storageProbe" $ | toJson }}}}'
+    names = Names(
+        name=templater.scalar(name),
+        cluster=templater.scalar(
+            '{{ printf "%s:%s:storage-probe" $.Release.Namespace $.Release.Name | toJson }}'
+        ),
+        namespace=bundle.namespace,
+        image=templater.scalar(templater.image(probe.image)),
+        timeout=templater.scalar(f"{{{{ {timeout} | toString | toJson }}}}"),
+        deadline=templater.scalar(f"{{{{ add {timeout} 60 }}}}"),
+        storage_class=templater.scalar(
+            f"{{{{ {storage_class} | toString | toJson }}}}"
+        ),
+        pull_secrets=templater.scalar(
+            "{{ $probePull := list }}"
+            f"{{{{ range ({_value('image.pullSecrets')} | default list) }}}}"
+            '{{ $probePull = append $probePull (dict "name" .) }}{{ end }}'
+            "{{ $probePull | toJson | toJson }}"
+        ),
+    )
+    annotation = {
+        bundle.naming.key(BUNDLE_ANNOTATION): f"{bundle.name}@{bundle.version}"
+    }
+    documents = [
+        "---\n"
+        + templater.text(
+            templater.manifest(BundleObject("storage-probe.yaml", manifest))
+        )
+        for manifest in hook_objects(bundle.name, annotation, probe, manifests, names)
+    ]
+    header = (
+        f"# The storage probe of {bundle.name}: before install, a claim in "
+        "storageClass must attach on these nodes "
+        f"({bundle.naming.tool_name} {bundle.name} {bundle.version})\n"
+    )
+    flag = _flag("storageProbe.enabled", True, True)
+    return header + f"{{{{- if {flag} }}}}\n" + "".join(documents) + "{{- end }}\n"
 
 
 def _helpers(name: str, inputs: Mapping[str, str]) -> str:
@@ -2132,11 +2285,33 @@ def _readme(
         lines.append(
             "- `deleteDataOnUninstall`: uninstall also deletes the data claims"
         )
+    probe = chart.storage_probe
+    if probe is not None:
+        lines += [
+            "- `storageProbe.enabled` (true or false, default true): before "
+            f"install, a {probe.size} claim in `storageClass` and a pod mounting "
+            "it check that the class attaches on these nodes; both are deleted "
+            "after",
+            "- `storageProbe.timeoutSeconds` (default "
+            f"{probe.timeout_seconds}): how long the probe waits for its pod; "
+            "keep it under `helm install --timeout` (5 minutes by default)",
+        ]
     lines += [
         "",
         "Generated secrets are made once at install and kept across `helm upgrade` "
         "(read back with `lookup`); they are never printed.",
     ]
+    if probe is not None:
+        lines += [
+            "",
+            "Storage probe: when the class cannot attach, the install fails "
+            'with one line such as `storage class "standard" cannot attach on '
+            "these nodes (FailedAttachVolume: ...): set storageClass to one of: "
+            "...`. Helm 4 prints it; Argo CD shows it as the hook's termination "
+            "message; with Helm 3 read it with `kubectl -n NAMESPACE logs "
+            "job/RELEASE-storage-probe`. Argo CD runs the probe before every "
+            "sync; set `storageProbe.enabled=false` to skip it.",
+        ]
     if chart.existing_secret_keys:
         lines += [
             "",

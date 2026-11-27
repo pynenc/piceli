@@ -444,6 +444,61 @@ env = {"APP_RELEASE": HelmRelease.name, "APP_NAMESPACE": HelmRelease.namespace}
 the chart sets to `{{ .Release.Name }}`; in a kustomize bundle or a
 `piceli deploy` the annotation is absent and the variable is empty.
 
+### Storage probe before install (0.94.0)
+
+A claim in a storage class the cluster's nodes cannot attach (a disk type
+the machine type does not support, a class bound to another zone, a full
+quota) leaves the app Pending with no message. Helm's `lookup` sees nothing
+under `helm template` and Argo CD, so the chart checks it in the cluster,
+before it installs anything else:
+
+```python
+from piceli import HelmChart, StorageProbe
+
+chart = HelmChart(
+    pipeline,
+    storage_probe=StorageProbe(image=WEB_IMAGE, timeout_seconds=180, size="1Gi"),
+)
+```
+
+- **What runs.** Helm `pre-install` hooks (not `pre-upgrade`: on an upgrade
+  the claims already exist): a ServiceAccount, a Role (create, get and delete
+  claims and pods in the release namespace, list events), a ClusterRole that
+  only reads storage classes, their bindings, a NetworkPolicy that lets the
+  probe reach the API server, and a Job. The Job runs `sh` and `curl` from
+  `image` (pinned by digest, like every chart image; usually the app's own),
+  as `app.cluster_identity` does. It creates a claim `<release>-storage-probe`
+  of `size` in `storageClass` (the default class when empty) and a pod that
+  mounts it, on the nodes where the app's claim workload runs (its node
+  selector, tolerations and node affinity). Once the pod runs, it deletes
+  both and prints how long it took. Every object passes the
+  [safety gate](#the-safety-gate).
+- **The message.** When the pod does not run within
+  `storageProbe.timeoutSeconds`, the Job reads the newest warning event of
+  the claim and the pod and fails the install with one line:
+
+  ```text
+  storage class "standard" cannot attach on these nodes (FailedAttachVolume: ...): set storageClass to one of: standard-rwo, premium-rwo
+  ```
+
+  For the default class it says `the default storage class "standard"`.
+  With no other class it says to ask the cluster's administrator for one.
+  A claim the cluster refuses (a full quota) fails at once with the API
+  server's message.
+- **Where you read it.** Helm 4 prints the Job's log when the hook fails
+  (`helm.sh/hook-output-log-policy: hook-failed`). Argo CD shows the
+  container's termination message (`FallbackToLogsOnError`). With Helm 3:
+  `kubectl -n NAMESPACE logs job/RELEASE-storage-probe`. A failed probe's
+  objects stay until the next install replaces them.
+- **Turn it off** with `--set storageProbe.enabled=false`. Keep
+  `storageProbe.timeoutSeconds` under `helm install --timeout` (5 minutes by
+  default). Argo CD maps `pre-install` to a PreSync hook, so it runs the
+  probe before every sync; turn it off there once the first sync worked.
+- **Cost.** One 1 GiB disk (`size`) for under a minute, deleted after. With a
+  class whose reclaim policy is `Retain`, its volume stays; delete it by hand.
+- **Only for an app with a claim** (otherwise `bundle-invalid`), and only in
+  the Helm chart: the kustomize bundle has no hook to run it before the app.
+
 Publish the chart to an OCI registry as `helm push` does, with an approval
 of its digest like every Piceli publish:
 
