@@ -452,6 +452,10 @@ class DevBuilds:
         toolchains, cargo's home, Git mirrors) is over it, or while the
         cache's disk has less than 15% free (a ``local-path`` claim is not
         limited to its size).
+    :param cache_free_share: 0.90.0: the cache may also grow by at most this
+        share of its disk's free space, measured when a run starts (default
+        0.5; 0 turns it off). The run's budget is the smaller of the two, and
+        its log says which one applies.
     :param timeout: A command's deadline.
     :param network: ``"fetch"``: runs may reach public addresses on ports
         80 and 443 (crates, toolchains) and DNS, never cluster or private
@@ -470,6 +474,7 @@ class DevBuilds:
     run_storage: str = "20Gi"
     cache_size: str = "200Gi"
     cache_budget: float = 0.8
+    cache_free_share: float = 0.5
     timeout: str = "1h"
     network: Literal["fetch", "none"] = "fetch"
     hosts: Sequence[BuildHost] = ()
@@ -523,6 +528,12 @@ class DevBuilds:
             or not 0.1 <= self.cache_budget <= 0.95
         ):
             raise _invalid("cache_budget is a share of cache_size from 0.1 to 0.95")
+        if (
+            isinstance(self.cache_free_share, bool)
+            or not isinstance(self.cache_free_share, int | float)
+            or not (self.cache_free_share == 0 or 0.1 <= self.cache_free_share <= 1)
+        ):
+            raise _invalid("cache_free_share is 0 (off) or a share from 0.1 to 1")
         parse_seconds(self.timeout)
         if self.network not in ("fetch", "none"):
             raise _invalid('network is "fetch" or "none"')
@@ -574,6 +585,12 @@ class DevBuilds:
             "run_storage": self.run_storage,
             "cache_size": self.cache_size,
             "cache_budget": self.cache_budget,
+            # 0.90.0: only when not the default, so descriptions stay the same.
+            **(
+                {"cache_free_share": self.cache_free_share}
+                if self.cache_free_share != 0.5
+                else {}
+            ),
             "timeout": self.timeout,
             "network": self.network,
         }
@@ -609,9 +626,27 @@ class DevBuilds:
             run_storage=str(value.get("run_storage", "20Gi")),
             cache_size=str(value.get("cache_size", "200Gi")),
             cache_budget=float(value.get("cache_budget", 0.8)),
+            cache_free_share=float(value.get("cache_free_share", 0.5)),
             timeout=str(value.get("timeout", "1h")),
             network=value.get("network", "fetch"),
         )
+
+
+def config_drift(installed: DevBuilds, declared: DevBuilds) -> list[str]:
+    """0.90.0: the fields where the installed ``piceli-dev-config`` differs
+    from the declaration, as ``name: installed -> declared`` (a list or table
+    as ``name changed``); empty when they match."""
+    have, want = installed.describe(), declared.describe()
+    found = []
+    for name in sorted(set(have) | set(want)):
+        old, new = have.get(name), want.get(name)
+        if old == new:
+            continue
+        if isinstance(old, list | dict) or isinstance(new, list | dict):
+            found.append(f"{name} changed")
+        else:
+            found.append(f"{name}: {old} -> {new}")
+    return found
 
 
 def cpu_of(value: str) -> float:

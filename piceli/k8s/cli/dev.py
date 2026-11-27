@@ -396,6 +396,18 @@ def run(
                             f"development builds are not installed on "
                             f"{declared.name}: run piceli cluster init",
                         )
+                    if dev is not None:
+                        from piceli.dev.model import config_drift
+
+                        drift = config_drift(installed, dev)
+                        if drift:
+                            # 0.90.0: the runs use the installed config.
+                            say(
+                                "piceli: the installed development config "
+                                "differs from the declared one ("
+                                + "; ".join(drift)
+                                + "); piceli cluster init applies it"
+                            )
                     result = run_on(
                         port, installed, request, say=say,
                         log=None if quiet else say, host=chosen,

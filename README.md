@@ -66,13 +66,13 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.89
+## What's new in 0.90
 
-- **Derived images**: `from = "<image>"` in `host-build.toml` appends a few
-  files (a release number, say) to an image already built, in the registry,
-  with no build.
-- **An idle build host stays live**: it renews a lease, so the in-cluster
-  fallback waits for it; a host that comes takes over a running fallback.
+- **The development cache's budget follows its disk**: a run's budget is at
+  most the cache plus half its disk's free space (`cache_free_share`), and
+  its log says which limit applies.
+- **`piceli dev run` warns when the installed config differs from the
+  declared one**, naming the fields.
 
 ## Web UI
 

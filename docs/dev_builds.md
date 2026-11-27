@@ -67,12 +67,19 @@ applies it with `--approve <plan_hash>`:
 The owner's approval of that plan is the approval of every run inside it:
 runs need no hash of their own.
 
+Runs use the installed config, not the declaration. 0.90.0: when the two
+differ, `piceli dev run` prints one line naming the fields, for example
+`piceli: the installed development config differs from the declared one
+(cache_size: 80Gi -> 110Gi); piceli cluster init applies it`.
+
 `DevBuilds` settings: `node` (a declared node), `image` (pinned by digest),
 `profiles` (the first is the default), `slots` (`"auto"` or a number),
 `run_cpu` (request; no CPU limit, so an idle builder lends its cores),
 `run_memory` (request and limit), `run_storage` (the run's scratch),
 `cache_size`, `cache_budget` (0.35.0: the share of `cache_size` the cache
-may hold, default `0.8`; see "The shared cache"), `timeout` (a command's
+may hold, default `0.8`; see "The shared cache"), `cache_free_share`
+(0.90.0: the cache may also grow by at most this share of its disk's free
+space, default `0.5`, `0` turns it off), `timeout` (a command's
 deadline, default `1h`), `network` (`"fetch"` or `"none"`).
 
 `DevProfile` settings: `name`, `image` (default the `DevBuilds` image),
@@ -432,6 +439,13 @@ declared size is **never enforced**, and a full cache is a node under
    has less than 15% free. A lineage in use is counted, never evicted. A
    lineage whose run was killed before it released it, or that never
    recorded its size, is measured again first.
+
+   0.90.0: the budget of the run is the smaller of that and what the cache
+   holds plus `cache_free_share` (default `0.5`) of its disk's free space
+   now, so a bigger `cache_size` is safe on a disk shared with other data.
+   The run's log says which applies, for example `[piceli-dev] cache budget:
+   36.0 GiB (the cache plus 50% of its disk's 52.0 GiB free, under the
+   configured 88.0 GiB)`.
 2. **During a run** (0.38.1). The run's lineage has a **cap**: the budget
    less what the rest of the cache held when the run took it. Every 15
    seconds the wrapper reads the cache's disk (cheap); only when the disk

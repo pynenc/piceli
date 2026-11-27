@@ -54,7 +54,7 @@ import sys
 import tarfile
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -909,15 +909,25 @@ def shrink(
     other: int,
     max_bytes: int,
     min_free_ratio: float,
+    free_share: float = 0.0,
 ) -> dict[str, Any]:
     """Evict ``units`` (``(last_used, bytes, name, remove)``), least recently
     used first, while the cache is over ``max_bytes`` or its filesystem has
     less than ``min_free_ratio`` free; the budget report.
 
+    0.90.0: with ``free_share``, the budget is also at most what the cache
+    holds plus that share of its filesystem's free space now (the report's
+    ``max_bytes``; ``cap_bytes`` is the configured one, ``limited_by`` says
+    which applies: ``cap`` or ``disk``).
+
     ``held`` is what busy units hold (counted, never evicted) and ``other``
     what is not evictable. ``remove()`` returns whether the unit went.
     """
     used = held + other + sum(size for _at, size, _name, _remove in units)
+    cap_bytes = max_bytes
+    if free_share > 0:
+        free_now, _total = filesystem(cache)
+        max_bytes = min(max_bytes, used + int(free_now * free_share))
     evicted: list[str] = []
     freed = 0
 
@@ -942,6 +952,9 @@ def shrink(
         "schema": BUDGET_SCHEMA,
         "used_bytes": used,
         "max_bytes": max_bytes,
+        "cap_bytes": cap_bytes,
+        "limited_by": "disk" if max_bytes < cap_bytes else "cap",
+        "free_share": free_share,
         "other_bytes": other,
         "held_bytes": held,
         "evicted": evicted,
@@ -955,6 +968,22 @@ def shrink(
     if why:
         report["evicted_for"] = why
     return report
+
+
+def budget_line(report: Mapping[str, Any]) -> str:
+    """0.90.0: the run's cache budget and why, as its log prints it."""
+    gib = 2**30
+    limit = int(report.get("max_bytes") or 0) / gib
+    cap = int(report.get("cap_bytes") or 0) / gib
+    free = int(report.get("fs_free_bytes") or 0) / gib
+    share = float(report.get("free_share") or 0)
+    why = (
+        f"the cache plus {share:.0%} of its disk's {free:.1f} GiB free, under "
+        f"the configured {cap:.1f} GiB"
+        if report.get("limited_by") == "disk"
+        else f"the configured budget; its disk has {free:.1f} GiB free"
+    )
+    return f"[piceli-dev] cache budget: {limit:.1f} GiB ({why})"
 
 
 def _listed(path: Path, meta: dict[str, Any], *, busy: bool) -> dict[str, Any]:
@@ -976,6 +1005,7 @@ def evict(
     limit: int,
     *,
     min_free_ratio: float = 0.0,
+    free_share: float = 0.0,
     now: float | None = None,
 ) -> dict[str, Any]:
     """Keep the development cache within its budget (0.35.0: everything in
@@ -983,7 +1013,8 @@ def evict(
 
     Removes least recently used free lineages while the cache holds more
     than ``limit`` bytes, or its filesystem has less than ``min_free_ratio``
-    free. A lineage a run holds is counted, never removed. A free lineage
+    free (0.90.0: and with ``free_share``, see :func:`shrink`). A lineage a
+    run holds is counted, never removed. A free lineage
     without a size, or one a run took and never released (a killed pod), is
     measured first. Writes the report to :data:`BUDGET_FILE` and returns it.
 
@@ -1053,7 +1084,7 @@ def evict(
         # 0.71.0: a quarantined lineage is never read, so never measured.
         other, other_at = other_bytes(cache, ("lineages", QUARANTINE), now)
         listed.extend(quarantined(cache))
-        report = shrink(cache, units, held, other, limit, min_free_ratio)
+        report = shrink(cache, units, held, other, limit, min_free_ratio, free_share)
     finally:
         for descriptor in locks:
             os.close(descriptor)
@@ -2438,6 +2469,7 @@ def clear_main(
             cache,
             int(spec.get("cache_max_bytes") or 1 << 62),
             min_free_ratio=float(spec.get("cache_min_free_ratio") or 0),
+            free_share=float(spec.get("cache_free_share") or 0),
         )
         result = {"schema": CLEAR_SCHEMA, "cleared": [], "busy": [], "budget": budget}
         emit(RESULT_MARKER + json.dumps(result, sort_keys=True))
@@ -2848,7 +2880,13 @@ def main(
         toolchain = _toolchain(spec, {**os.environ, **selected} if selected else None)
         timeline.phase("lineage")
         limit = int(spec.get("cache_max_bytes") or 1 << 62)
-        budget = evict(cache, limit, min_free_ratio=min_free)
+        share = float(spec.get("cache_free_share") or 0)
+        budget = evict(cache, limit, min_free_ratio=min_free, free_share=share)
+        if share > 0:
+            # 0.90.0: the run's budget, fixed for the run: the smaller of the
+            # configured one and the cache plus a share of its disk's free space.
+            limit = int(budget["max_bytes"])
+            emit(budget_line(budget))
         if budget["evicted"]:
             emit(
                 f"[piceli-dev] cache budget: evicted {len(budget['evicted'])} "

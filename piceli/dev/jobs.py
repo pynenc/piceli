@@ -233,6 +233,7 @@ def run_job(
         "max_lineages": max_lineages(dev),
         "cache_max_bytes": _cache_budget(dev),
         "cache_min_free_ratio": MIN_FREE_RATIO,
+        "cache_free_share": dev.cache_free_share,
         "log_tail_lines": 80,
         "prefetch": profile.prefetch,
         "toolchain_probe": None
@@ -394,6 +395,7 @@ def cache_clear_job(
             evict=True,
             cache_max_bytes=_cache_budget(dev),
             cache_min_free_ratio=MIN_FREE_RATIO,
+            cache_free_share=dev.cache_free_share,
         )
     return {
         "apiVersion": "batch/v1",
