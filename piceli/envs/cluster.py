@@ -365,6 +365,17 @@ class EnvCluster:
             )
         return tuple(sorted(found))
 
+    def node_addresses(self) -> tuple[str, ...]:
+        """The addresses a node's own traffic comes from (0.91.0; see
+        :func:`piceli.envs.access.node_peers`)."""
+        from piceli.envs.access import node_peers
+
+        body = self._call(self._core().list_node)
+        items = [
+            item for item in (body or {}).get("items") or () if isinstance(item, dict)
+        ]
+        return node_peers(items)
+
     def cluster_objects(self, namespace: str) -> list[tuple[str, str]]:
         """``(kind, name)`` of the ClusterRoles/Bindings Piceli made for ``namespace``.
 

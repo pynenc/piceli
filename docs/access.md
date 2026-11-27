@@ -319,6 +319,21 @@ not what you want.
   select the pods through labels the Service does not use; it is still
   found. Piceli adds no new policy (a new one would cut the pods off from
   every other source) and widens none beyond those ports.
+- **The cluster's nodes are admitted too** (0.91.0). The operator marks a
+  plain companion's tailnet IP `ipMode: VIP`, so kube-proxy on each node
+  sends that IP straight to the pod. A tailnet device that is also a node
+  then reaches the pod from the node, not through the proxy, and a policy
+  that admits only the operator's namespace refused it. `env up` (and the
+  GitOps controller) reads the nodes and adds a second rule, on the same
+  ports of the plain companions only (a Tailscale `Ingress` is not
+  short-circuited): each node's `InternalIP` and the first two addresses of
+  its pod range (`spec.podCIDRs`), where node traffic leaves from on
+  flannel, k3s' default. Pods never get those two addresses. On another
+  network plugin, node traffic may come from an address not in this list;
+  reach the service from a device that is not a node. The node list is read
+  at each deploy: a node added later is admitted by the next one. When the
+  nodes cannot be listed (no `list nodes` right), `env up` says so and only
+  the operator is admitted, as before.
 - `piceli access ENV --cluster infra.py:CLUSTER` prints the tailnet URL of
   each such forward instead of forwarding it, and keeps forwarding the
   rest (and the UI with `--ui`). The name is read from the companion's
@@ -367,7 +382,8 @@ Nothing is skipped silently (0.19.1). The plan of an environment with
 `Access(tailnet=True)` has `access` in its `plan` stage (shown, not part of
 the plan hash): `tailnet` (each companion: `kind`, `name`, `service`,
 `host`, `ports`, `scheme`), `policies` (the ingress policies admitting the
-operator's namespace) and `notes`:
+operator's namespace), `nodes` (the node addresses admitted beside it,
+0.91.0) and `notes`:
 
 | Code | `why` | Meaning |
 | --- | --- | --- |

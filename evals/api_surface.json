@@ -974,6 +974,7 @@
     "main_namespace",
     "mirrors",
     "namespace",
+    "node_addresses",
     "on_nodes",
     "pin_node",
     "prebuilt",
@@ -994,6 +995,7 @@
     "main_namespace",
     "mirrors",
     "namespace",
+    "node_addresses",
     "on_nodes",
     "pin_node",
     "prebuilt",
@@ -16924,6 +16926,7 @@
      "branch",
      "build_receipt",
      "digests",
+     "node_addresses",
      "pipeline"
     ],
     "returns": "Pipeline"
@@ -18353,5 +18356,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.90.0"
+ "version": "0.91.0"
 }

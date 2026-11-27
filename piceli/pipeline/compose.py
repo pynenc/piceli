@@ -156,6 +156,7 @@ def tailnet_report(pipeline: Pipeline) -> dict[str, Any] | None:
         env.environment or env.branch,
         env.namespace,
         env.exposed_http,
+        tuple(getattr(env, "node_addresses", ()) or ()),
     )
 
 
