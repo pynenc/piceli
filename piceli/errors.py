@@ -5108,6 +5108,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "cluster",
     ),
     _E(
+        "cluster-init-partial",
+        "Cluster init applied only part of its plan",
+        "`piceli cluster init --approve` (0.92.0) applied every object it could; the API refused the ones listed in `failed` (each with the API's own reason). Before 0.92.0 the first refusal stopped the rest of the plan.",
+        "Read each reason: an RBAC refusal needs the account's rights, an object in use is applied once it is free. Then run `piceli cluster init` again: it plans only what is left.",
+        True,
+        "cluster",
+    ),
+    _E(
         "cluster-api-mismatch",
         "Profile points at another cluster",
         "The credential profile (`Cluster(credentials=)` or `--profile`) names a kubeconfig context whose API server is not `Cluster(api=)` (scheme, host and port compared). Nothing was read from or written to the cluster.",

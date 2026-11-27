@@ -4,6 +4,25 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.92.0
+
+### Cluster init replaces a development cache that cannot grow (ops#113)
+
+- A refused object no longer stops `piceli cluster init --approve`: every
+  other object is applied, then init fails with `cluster-init-partial`,
+  listing each refused object with the API's own reason. Before, a cache
+  claim that could not grow kept the development config from being applied.
+- The plan says `replace` for the claim `piceli-dev-cache` when `cache_size`
+  asks for a size it cannot reach in place: smaller, or larger on a storage
+  class that cannot resize it (`allowVolumeExpansion` not `true`, or a
+  volume the class did not provision), or another storage class. Applying it
+  sets a `Retain` volume to `Delete`, deletes the claim, and creates it
+  again at the new size; the cache rebuilds. A claim in use by a running
+  pod is left as it is and reported.
+- Every API refusal names the API's reason (the `Status` message) after the
+  HTTP status. A 403 that is not RBAC (an admission refusal) is reported as
+  `refused`, not `denied`.
+
 ## Version 0.91.0
 
 ### A tailnet device that is a node reaches the LoadBalancer companions (ops#112)

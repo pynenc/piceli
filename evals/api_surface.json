@@ -15325,6 +15325,7 @@
    "cluster-credentials-unsupported",
    "cluster-identity-changed",
    "cluster-identity-unreadable",
+   "cluster-init-partial",
    "cluster-invalid",
    "cluster-load-failed",
    "cluster-node-arch-mismatch",
@@ -18356,5 +18357,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.91.0"
+ "version": "0.92.0"
 }

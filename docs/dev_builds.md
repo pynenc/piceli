@@ -56,7 +56,8 @@ applies it with `--approve <plan_hash>`:
 
 - the namespace `piceli-dev` (Pod Security `restricted`);
 - the cache claim `piceli-dev-cache` (`cache_size`, the cluster's storage
-  class);
+  class; 0.92.0: a size its class cannot resize replaces the claim, see
+  {doc}`cluster_init`);
 - the NetworkPolicy `piceli-dev-runs`: no ingress; egress to DNS and, with
   `network="fetch"` (default), to public addresses on ports 80 and 443
   (crates, toolchains), never to private, link-local or cluster addresses,

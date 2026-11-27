@@ -318,13 +318,101 @@ def plan_init(api: Api, cluster: Cluster, ui: UiRenderer | None) -> InitPlan:
         config=described,
         schema=PLAN_SCHEMA,
     )
+    objects = replace_dev_cache(api, objects)
     return InitPlan(described, tuple(nodes), objects, ui_state(cluster, ui))
 
 
+def _size(claim: Mapping[str, Any] | None) -> int | None:
+    from piceli.artifacts.cluster_registry import quantity_bytes
+
+    spec = (claim or {}).get("spec") or {}
+    return quantity_bytes(
+        ((spec.get("resources") or {}).get("requests") or {}).get("storage")
+    )
+
+
+def _cannot_resize(api: Api, live: Mapping[str, Any]) -> str | None:
+    """Why the API will refuse to grow ``live`` (``None``: it can grow).
+
+    Kubernetes grows a claim only when a storage class with
+    ``allowVolumeExpansion: true`` dynamically provisioned its volume.
+    """
+    spec = live.get("spec") or {}
+    name = spec.get("storageClassName")
+    if not name:
+        return "it has no storage class"
+    found = api.call(f"/apis/storage.k8s.io/v1/storageclasses/{name}", "GET")
+    if not isinstance(found, dict):
+        return f"its storage class {name} is gone"
+    if found.get("allowVolumeExpansion") is not True:
+        return f"its storage class {name} cannot resize volumes"
+    volume = spec.get("volumeName")
+    pv = api.call(f"/api/v1/persistentvolumes/{volume}", "GET") if volume else None
+    annotations = ((pv or {}).get("metadata") or {}).get("annotations") or {}
+    if isinstance(pv, dict) and "pv.kubernetes.io/provisioned-by" not in annotations:
+        return f"its volume {volume} was not provisioned by {name}"
+    return None
+
+
+def replace_dev_cache(api: Api, objects: InstallPlan) -> InstallPlan:
+    """Plan the development cache claim as ``replace`` when the API cannot
+    change it in place (0.92.0).
+
+    The claim holds only the cache, which runs rebuild, so a size the claim
+    cannot reach (a smaller one, or a larger one its storage class cannot
+    grow) or another storage class replaces it: deleted, its volume with it
+    (a ``Retain`` volume is set to ``Delete`` first), and created again. The
+    plan says so, and its hash approves it like any other change.
+    """
+    import dataclasses
+
+    from piceli.dev.model import CACHE_CLAIM
+    from piceli.dev.model import NAMESPACE as DEV_NAMESPACE
+
+    changed = []
+    for item in objects.objects:
+        meta = item.manifest["metadata"]
+        if (
+            item.operation != "apply"
+            or item.manifest["kind"] != "PersistentVolumeClaim"
+            or meta["name"] != CACHE_CLAIM
+            or meta.get("namespace") != DEV_NAMESPACE
+        ):
+            changed.append(item)
+            continue
+        live = api.get(item.manifest) or {}
+        wanted, held = _size(item.manifest), _size(live)
+        want_class = (item.manifest.get("spec") or {}).get("storageClassName")
+        live_class = (live.get("spec") or {}).get("storageClassName")
+        size = (
+            (item.manifest["spec"].get("resources") or {}).get("requests") or {}
+        ).get("storage")
+        why = None
+        if want_class and live_class and want_class != live_class:
+            why = f"a claim cannot change its storage class ({live_class} -> {want_class})"
+        elif wanted is not None and held is not None and wanted < held:
+            why = "a claim cannot shrink"
+        elif wanted is not None and held is not None and wanted > held:
+            why = _cannot_resize(api, live)
+        if why is None:
+            changed.append(item)
+            continue
+        note = f"the cache; {why}: deleted with its volume and made again at {size}"
+        changed.append(dataclasses.replace(item, operation="replace", note=note))
+    return dataclasses.replace(objects, objects=tuple(changed))
+
+
 def execute_init(
-    api: Api, plan: InitPlan, log: Callable[[str], None] = lambda _: None
+    api: Api,
+    plan: InitPlan,
+    log: Callable[[str], None] = lambda _: None,
+    failures: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Label the nodes, then apply the objects (the caller checked the hash)."""
+    """Label the nodes, then apply the objects (the caller checked the hash).
+
+    With ``failures`` (0.92.0), an object the API refuses is recorded there
+    and the others are still applied.
+    """
     from piceli.gitops import GitOpsError
     from piceli.gitops.install import execute
 
@@ -357,7 +445,7 @@ def execute_init(
         done.append(change.describe())
         log(f"  label Node/{change.node}")
     try:
-        done += execute(api, plan.objects, log)
+        done += execute(api, plan.objects, log, failures=failures)
     except GitOpsError as error:
         if error.code == "gitops-plan-changed":
             raise ClusterError("cluster-plan-changed", str(error)) from None
