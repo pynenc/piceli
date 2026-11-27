@@ -75,6 +75,7 @@ class OciRegistry:
         self.index_platforms: set[tuple[str, str]] | None = None
         self.tamper: set[str] = set()  # manifest digests served with wrong bytes
         self.faults: list[Fault] = []
+        self.mounts = True  # cross-repository blob mounts (``?mount=&from=``)
         self.lock = threading.Lock()
         registry = self
 
@@ -289,6 +290,11 @@ class OciRegistry:
 
     def _upload(self, handler, method, repo, session, query, body):  # type: ignore[no-untyped-def]
         if method == "POST":
+            mount, origin = query.get("mount", [""])[0], query.get("from", [""])[0]
+            if mount and self.mounts and (origin, mount) in self.blobs:
+                # A cross-repository mount: the blob is linked, not sent.
+                self.blobs[(repo, mount)] = self.blobs[(origin, mount)]
+                return self._reply(handler, 201, b"", {"Docker-Content-Digest": mount})
             new = uuid.uuid4().hex
             self.uploads[new] = bytearray()
             return self._reply(

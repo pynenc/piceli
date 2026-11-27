@@ -16,7 +16,9 @@ of a running build keeps it, and its images serve the new revision. A
 build with other inputs for the same environment stops the older Job
 (superseded). ``piceli gitops cancel`` deletes it. A restarted controller
 finds the record and looks at the same Job; with no record, starting it
-again adopts a running Job of the same name.
+again adopts a running Job of the same name. 0.89.0: a build host that
+claims the build while its Job runs takes it over: the Job is stopped
+(:meth:`ClusterBuilds.stop_build`, see :mod:`piceli.infra.remote_builds`).
 
 A builder that cannot start a Job without waiting (``gitops run --once``,
 ``--local-build``, the test fakes) still builds while the step waits.
@@ -134,6 +136,15 @@ class ClusterBuilds:
             stop(self.inner, record)
             stopped.append(str(record.get("job")))
         return stopped
+
+    def stop_build(self, kind: str, work: Any) -> str | None:
+        """0.89.0: stop this build's own Job (a build host took the build
+        over); its Job name, or ``None`` when none runs."""
+        record = self._jobs().pop(self.key(kind, work), None)
+        if record is None:
+            return None
+        stop(self.inner, record)
+        return str(record.get("job"))
 
     def build_spec(self, request: Any, checkout: Any) -> Any:
         if not request.images or not self.asynchronous:

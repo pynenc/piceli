@@ -76,6 +76,15 @@ It builds in the controller's builder image (``controller.builder_image``,
 the image of its own build Job), pulled again when it changes, unless
 ``--image`` pins another (said once).
 
+0.89.0: an idle host renews a lease while it polls (:meth:`BuilderServe.renew_lease`,
+``build-host-lease``, at most every
+:data:`~piceli.infra.remote_builds.LEASE_SECONDS`), so the controller counts
+it live and its in-cluster fallback waits ``host_wait`` for it. On a version
+mismatch the host tells the controller until it records the host upgrading,
+so the controller waits for it to restart. A build whose in-cluster fallback
+Job runs is still offered (``fallback`` on the wanted build): this host
+claims it, takes it over, and the controller stops the Job.
+
 Nothing here holds a Tailscale, registry or cluster credential of its own:
 the profile reaches the API, the API reaches the registry; the nodes are
 reached with this host's own SSH access (its keys, its agent).
@@ -695,6 +704,14 @@ class BuilderServe:
     version: str = field(default_factory=_piceli_version)
     controller_version: str | None = None
     seen_version: str | None = None
+    #: 0.89.0: the version the controller records this host upgrading from
+    #: (``controller.build_hosts[host].upgrading``): told, not said again.
+    seen_upgrading: str | None = None
+    #: 0.89.0: when this host last renewed its lease (``build-host-lease``),
+    #: and whether its last :meth:`pick` passed every check (it may claim).
+    _leased: float | None = None
+    _serving: bool = False
+    _lease_said: bool = False
     #: 0.33.0: where to write the controller's version on a mismatch (the
     #: file its service installs Piceli from); ``None``: written nowhere.
     version_file: Path | None = None
@@ -736,6 +753,12 @@ class BuilderServe:
             if isinstance(seen, Mapping)
             else None
         )
+        upgrading = seen.get("upgrading") if isinstance(seen, Mapping) else None
+        self.seen_upgrading = (
+            str(upgrading.get("version") or "") or None
+            if isinstance(upgrading, Mapping)
+            else None
+        )
         return list(controller.get("builds_wanted") or ())
 
     def check_version(self) -> None:
@@ -743,19 +766,24 @@ class BuilderServe:
         another Piceli version (after the last :meth:`wanted`); first tell
         the controller this host's version when it last saw another one,
         and write the controller's into :attr:`version_file`. A controller
-        that publishes no version (before 0.16) is not checked."""
+        that publishes no version (before 0.16) is not checked.
+
+        0.89.0: on a mismatch it is said until the controller records this
+        host upgrading from its version (``upgrading``), also when the
+        controller last saw this version: the controller then waits for it
+        (it restarts on the controller's version) instead of taking it for
+        gone."""
         from piceli.gitops.state import build_host_version_request
 
         wanted = self.controller_version
         mismatch = bool(wanted) and wanted not in ("unknown", self.version)
         # Said when the controller last saw another version from this host,
-        # or never saw it and it claims nothing (a mismatch); a host on the
-        # same version shows it with its first claim.
+        # or (a mismatch) has not recorded it upgrading from this one; a host
+        # on the same version shows it with its first claim.
         unseen = self.seen_version != self.version
-        if (
-            unseen
-            and (mismatch or self.seen_version is not None)
-            and self._version_sent != self.version
+        told = self.seen_upgrading == self.version
+        if self._version_sent != self.version and (
+            (unseen and self.seen_version is not None) or (mismatch and not told)
         ):
             try:
                 self.channel.add_request(
@@ -820,6 +848,7 @@ class BuilderServe:
         return True
 
     def pick(self) -> dict[str, Any] | None:
+        self._serving = False
         entries = self.wanted()
         self.check_version()  # 0.33.0: never claim on another version
         if not self.follow_image():
@@ -837,6 +866,7 @@ class BuilderServe:
         self._said = None
         if self.undeclared():
             return None
+        self._serving = True  # 0.89.0: it may claim: an idle one renews its lease
         # 0.22.0: what this host answered stays until the controller drops
         # it (its next poll); never build it again meanwhile.
         self.answered &= {str(entry.get("id")) for entry in entries}
@@ -1053,13 +1083,49 @@ class BuilderServe:
             self.quarantined()
 
     def once(self) -> str | None:
-        """Build one wanted build, if any; its id."""
+        """Build one wanted build, if any; its id. 0.89.0: with nothing to
+        claim, a host that may claim renews its lease (:meth:`renew_lease`)."""
         if self.quarantined() is not None:
             return None
         entry = self.pick()
-        if entry is None or not self.claim(entry):
+        if entry is None:
+            if self._serving:
+                self.renew_lease()
             return None
+        fallback = entry.get("fallback")
+        if not self.claim(entry):
+            return None
+        if isinstance(fallback, Mapping):  # 0.89.0
+            self.say(
+                f"builder: {entry.get('id')} builds in the cluster since "
+                f"{fallback.get('at')}; {self.host} takes it over (the controller "
+                "stops its Job)"
+            )
         return self.run(entry)
+
+    def renew_lease(self) -> bool:
+        """0.89.0: tell the controller this idle host is live
+        (``build-host-lease``), at most once every
+        :data:`~piceli.infra.remote_builds.LEASE_SECONDS`; only to a
+        controller on this host's version (one that knows the request).
+        Whether it was sent; a failure is said once and never stops the loop."""
+        from piceli.gitops.state import build_host_lease_request
+        from piceli.infra.remote_builds import LEASE_SECONDS
+
+        if self.controller_version != self.version:
+            return False
+        now = self.clock()
+        if self._leased is not None and now - self._leased < LEASE_SECONDS:
+            return False
+        try:
+            self.channel.add_request(*build_host_lease_request(self.host, self.version))
+        except Exception as error:
+            if not self._lease_said:
+                self._lease_said = True
+                self.say(f"builder: could not renew the lease of {self.host} ({error})")
+            return False
+        self._leased, self._lease_said = now, False
+        return True
 
     def take_next(self, timeout: float = 1800.0, poll: float = 2.0) -> str | None:
         """0.29.0 (``--once --take-next``): stand by for the next build this

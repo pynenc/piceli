@@ -180,7 +180,9 @@ def test_a_running_build_job_never_blocks_the_loop(
     assert main["waiting_for"].startswith(f"building web in the cluster: Job {name}")
     assert main["waiting_for"].endswith("(running)")
     assert main["attempts"] == 0
-    assert status["controller"]["builds_wanted"] == []
+    # 0.89.0: still offered while its Job runs, so a host may take it over.
+    (offered,) = status["controller"]["builds_wanted"]
+    assert offered["fallback"]["at"] and offered["claimed"] is None
     (shown,) = status["controller"]["cluster_builds"]
     assert shown["job"] == name and shown["owner"] == "main"
 
@@ -340,3 +342,82 @@ def test_a_replacement_falls_back_when_no_host_is_alive(
     status = _next_try(world)
     assert ports.builder.built == [["api", "catalog", "web"]]
     assert status["envs"]["main"]["state"] == "deployed"
+
+
+# ------------------------------- a host takes over a running fallback (0.89.0)
+
+
+def _fallback_running(world: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """main's new build runs as an in-cluster Job; its Job and wanted build."""
+    jobs = world["ports"].builder
+    world["controller"].poll_once()
+    _poll(world, 21)
+    jobs.asynchronous = True
+    world["shop"].commit({"web/index.html": "<h1>v2</h1>\n"})
+    _poll(world)
+    status = _poll(world, 21)
+    ((name, _images_built),) = jobs.started
+    (entry,) = status["controller"]["builds_wanted"]
+    assert entry["fallback"] and entry["claimed"] is None
+    # One record in gitops builds: the Job's, not also the offer's.
+    (row,) = [r for r in _image_builds(world) if r["id"] == f"images:{entry['id']}"]
+    assert row["host"] == "cluster"
+    return name, entry
+
+
+def test_a_host_that_claims_a_running_fallback_takes_it_over(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = _jobs_world(tmp_path, monkeypatch)
+    channel, jobs = world["channel"], world["ports"].builder
+    name, entry = _fallback_running(world)
+
+    # The Job runs and nobody claims: nothing is stopped.
+    _poll(world)
+    assert jobs.stopped == []
+
+    channel.add_request(*build_claim_request(entry["id"], "builder-1"))
+    status = _poll(world)
+    assert jobs.stopped == [name]  # the host builds it; the Job is stopped
+    assert status["controller"]["cluster_builds"] == []
+    (held,) = status["controller"]["builds_wanted"]
+    assert held["claimed"]["host"] == "builder-1" and "fallback" not in held
+    assert held["taken_over"]["host"] == "builder-1"
+    assert held["taken_over"]["job"] == name
+    main = status["envs"]["main"]
+    assert main["reason"] == "build-waiting"
+    assert "took the build over from the in-cluster fallback" in main["waiting_for"]
+    (row,) = [r for r in _image_builds(world) if r["id"] == f"images:{entry['id']}"]
+    assert row["host"] == "builder-1"  # one record, the host's
+
+    channel.add_request(
+        *built_request(entry["id"], "builder-1", _images(entry), {"host": "builder-1"})
+    )
+    status = _poll(world)
+    assert status["envs"]["main"]["state"] == "deployed", status["envs"]["main"]
+    assert len(jobs.started) == 1  # no second Job
+    assert status["controller"]["builds_wanted"] == []
+
+
+def test_a_fallback_that_finished_first_keeps_its_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = _jobs_world(tmp_path, monkeypatch)
+    channel, jobs = world["channel"], world["ports"].builder
+    name, entry = _fallback_running(world)
+
+    # The Job ends as the host claims: the cluster's images are the result.
+    jobs.done.add(name)
+    channel.add_request(*build_claim_request(entry["id"], "builder-1"))
+    status = _poll(world)
+    assert status["envs"]["main"]["state"] == "deployed", status["envs"]["main"]
+    assert jobs.stopped == []
+    assert status["controller"]["builds_wanted"] == []
+
+    # The host's later answer is refused: one result per build.
+    channel.add_request(
+        *built_request(entry["id"], "builder-1", _images(entry), {"host": "builder-1"})
+    )
+    status = _poll(world)
+    (refused,) = [r for r in status["rejected_requests"] if r["kind"] == "built"]
+    assert "no such wanted build" in refused["message"]

@@ -31,7 +31,9 @@ SLSA_PROVENANCE = "https://slsa.dev/provenance/v1"
 BUILD_TYPE = "https://piceli.dev/gitops-build/v1"
 #: How a record names the kind of builder (0.26.0: ``train``, a merge
 #: train's images step).
-BUILDERS = ("host", "cluster-job", "train")
+BUILDERS = ("host", "cluster-job", "train", "derive")
+#: 0.89.0: the build type of a derived image (a built image plus one layer).
+DERIVED_BUILD_TYPE = "https://piceli.dev/derived-image/v1"
 _KEYS = (
     "builder",
     "host",
@@ -43,6 +45,9 @@ _KEYS = (
     "platforms",
     "started_at",
     "finished_at",
+    "derived_from",
+    "files",
+    "layer",
 )
 
 
@@ -58,11 +63,16 @@ def record(
     toolchains: Mapping[str, Any] | None = None,
     platforms: Iterable[str] = (),
     train: Mapping[str, Any] | None = None,
+    derived_from: Mapping[str, str] | None = None,
+    files: Mapping[str, str] | None = None,
+    layer: str | None = None,
 ) -> dict[str, Any]:
     """A provenance record (see the module doc); absent values are left out.
 
     ``train`` (0.26.0): the merge train run that built it (``name``,
-    ``run``, ``tag``)."""
+    ``run``, ``tag``). 0.89.0, a derived image: ``derived_from``
+    (``{"image", "digest"}`` of its base), the added ``files`` (image path
+    to sha256) and the ``layer`` digest."""
     found: dict[str, Any] = {
         "builder": builder,
         "host": str(host)[:64],
@@ -82,6 +92,16 @@ def record(
         "platforms": sorted(str(item) for item in platforms) or None,
         "started_at": started_at,
         "finished_at": finished_at,
+        "derived_from": {
+            "image": str(derived_from.get("image") or "")[:64],
+            "digest": str(derived_from.get("digest") or "")[:80],
+        }
+        if derived_from
+        else None,
+        "files": {str(k)[:300]: str(v)[:80] for k, v in sorted(dict(files).items())}
+        if files
+        else None,
+        "layer": None if layer is None else str(layer)[:80],
     }
     return {key: value for key, value in found.items() if value is not None}
 
@@ -127,17 +147,36 @@ def statement(repository: str, digest: str, provenance: Mapping[str, Any]) -> by
         f"https://piceli.dev/builder/{provenance.get('builder', 'host')}/"
         f"{provenance.get('host', 'unknown')}"
     )
+    external: dict[str, Any] = {
+        "commits": commits,
+        "platforms": list(provenance.get("platforms") or ()),
+    }
+    build_type = BUILD_TYPE
+    base = provenance.get("derived_from")
+    if isinstance(base, Mapping) and base.get("digest"):
+        # 0.89.0: a derived image names its base and the files it adds.
+        build_type = DERIVED_BUILD_TYPE
+        files = dict(provenance.get("files") or {})
+        external["derived_from"] = dict(base)
+        external["files"] = files
+        dependencies.append(
+            {
+                "name": f"image:{base.get('image')}",
+                "digest": {"sha256": str(base["digest"]).split(":")[-1]},
+            }
+        )
+        dependencies += [
+            {"name": f"file:{path}", "digest": {"sha256": str(value).split(":")[-1]}}
+            for path, value in sorted(files.items())
+        ]
     body = {
         "_type": STATEMENT,
         "subject": [{"name": repository, "digest": {"sha256": digest.split(":")[-1]}}],
         "predicateType": SLSA_PROVENANCE,
         "predicate": {
             "buildDefinition": {
-                "buildType": BUILD_TYPE,
-                "externalParameters": {
-                    "commits": commits,
-                    "platforms": list(provenance.get("platforms") or ()),
-                },
+                "buildType": build_type,
+                "externalParameters": external,
                 "internalParameters": {
                     key: provenance[key]
                     for key in ("node", "toolchains", "train")

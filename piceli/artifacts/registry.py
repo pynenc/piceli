@@ -1200,6 +1200,29 @@ class StreamedOciRegistryClient:
         except RegistryError:
             pass
 
+    def mount_blob(self, repository: str, digest: str, source: str) -> bool:
+        """0.89.0: link blob ``digest`` of ``source`` into ``repository`` on
+        the same registry, without sending it (the OCI Distribution
+        cross-repository mount). ``False`` when the registry did not mount
+        it (the caller then copies the bytes)."""
+        validate_digest(digest)
+        query = urllib.parse.urlencode({"mount": digest, "from": source}, safe=":/")
+        try:
+            response = self._call(
+                "POST", f"/v2/{repository}/blobs/uploads/?{query}", repository
+            )
+        except RegistryError:
+            return False
+        if response.status == 201:
+            return True
+        location = response.headers.get("location")
+        if response.status == 202 and location:
+            try:
+                self._cancel_upload(self._target(location))
+            except RegistryError:
+                pass
+        return False
+
     def push_blob(
         self,
         repository: str,

@@ -514,3 +514,153 @@ def test_take_next_gives_up_after_its_timeout(
     worker.sleep = sleep
     assert worker.take_next(timeout=10, poll=2) is None
     assert any("no build to take in 10s" in line for line in worker.said)
+
+
+# ------------------------------- 5. idle hosts and upgrades stay live (0.89.0)
+
+
+def _leases(world: dict[str, Any]) -> int:
+    return sum(
+        1
+        for body in world["channel"].requests().values()
+        if body["kind"] == "build-host-lease"
+    )
+
+
+def test_an_idle_host_renews_its_lease_and_holds_the_fallback_for_host_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.infra.remote_builds import (
+        CLAIM_STALE_SECONDS,
+        HANDOVER_SECONDS,
+        LEASE_SECONDS,
+    )
+
+    world = _world(tmp_path, monkeypatch, hosts=("builder-1",), host_wait="30m")
+    controller, channel = world["controller"], world["channel"]
+    ports, clock = world["ports"], world["clock"]
+    (wanted,) = controller.poll_once()["controller"]["builds_wanted"]
+    channel.add_request(*built_request(wanted["id"], "builder-1", _images(wanted), {}))
+    assert controller.poll_once()["envs"]["main"]["state"] == "deployed"
+
+    # builder-1 serves for 20 minutes with nothing to claim: it renews its
+    # lease every LEASE_SECONDS, one request each time.
+    worker = _serve(world, tmp_path, "builder-1")
+    leases = 0
+    for _ in range(20):
+        clock["now"] += 60
+        assert worker.once() is None
+        leases += _leases(world)
+        controller.poll_once()
+    assert leases == int(20 * 60 // LEASE_SECONDS)
+    assert CLAIM_STALE_SECONDS < 20 * 60  # idle for longer than the stale window
+    seen = controller.status()["controller"]["build_hosts"]["builder-1"]
+    assert seen["seen"] == "build-host-lease"
+
+    # A new build: the idle host is live, so the fallback waits host_wait.
+    world["shop"].commit({"web/index.html": "<h1>v2</h1>\n"})
+    status = controller.poll_once()
+    assert "no live host" not in status["envs"]["main"]["waiting_for"]
+    clock["now"] += HANDOVER_SECONDS + 1
+    controller.poll_once()
+    assert ports.builder.built == []
+    (current,) = controller.status()["controller"]["builds_wanted"]
+    assert worker.claim(current) is True  # its next poll takes it
+
+
+def test_a_host_restarting_on_the_controllers_version_holds_the_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli import __version__
+    from piceli.infra.builder_serve import VersionMismatch
+    from piceli.infra.remote_builds import CLAIM_STALE_SECONDS
+
+    world = _world(tmp_path, monkeypatch, hosts=("builder-1",), host_wait="30m")
+    controller, channel = world["controller"], world["channel"]
+    ports, clock = world["ports"], world["clock"]
+    status = controller.poll_once()
+    assert "no live host may take it" in status["envs"]["main"]["waiting_for"]
+
+    # builder-1 runs an older Piceli: it says so (also though the controller
+    # never saw another version from it) and exits to restart on the new one.
+    old = _serve(world, tmp_path, "builder-1", version="0.0.1")
+    with pytest.raises(VersionMismatch):
+        old.once()
+    kinds = [body["kind"] for body in channel.requests().values()]
+    assert kinds == ["build-host-version"]
+    status = controller.poll_once()
+    upgrading = status["controller"]["build_hosts"]["builder-1"]["upgrading"]
+    assert (upgrading["version"], upgrading["to"]) == ("0.0.1", __version__)
+    assert "since_epoch" not in upgrading
+
+    # Past the stale window, silent while it upgrades: still coming.
+    clock["now"] += CLAIM_STALE_SECONDS + 1
+    status = controller.poll_once()
+    waiting = status["envs"]["main"]["waiting_for"]
+    assert "no live host" not in waiting
+    assert f"build host builder-1 runs piceli 0.0.1 and restarts on {__version__}" in (
+        waiting
+    )
+    assert ports.builder.built == []
+
+    # Restarted on the old version again: told already, nothing is sent.
+    again = _serve(world, tmp_path, "builder-1", version="0.0.1")
+    with pytest.raises(VersionMismatch):
+        again.once()
+    assert channel.requests() == {}
+
+    # On the controller's version: it claims, the grace ends.
+    upgraded = _serve(world, tmp_path, "builder-1")
+    assert upgraded.pick() is not None
+    status = controller.poll_once()
+    assert "upgrading" not in status["controller"]["build_hosts"]["builder-1"]
+    assert status["controller"]["build_hosts"]["builder-1"]["version"] == __version__
+
+
+def test_a_host_that_never_comes_back_from_an_upgrade_is_not_waited_for(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.infra.builder_serve import VersionMismatch
+    from piceli.infra.remote_builds import UPGRADE_GRACE_SECONDS
+
+    world = _world(tmp_path, monkeypatch, hosts=("builder-1",), host_wait="2h")
+    controller, ports, clock = world["controller"], world["ports"], world["clock"]
+    controller.poll_once()
+    with pytest.raises(VersionMismatch):
+        _serve(world, tmp_path, "builder-1", version="0.0.1").once()
+    controller.poll_once()
+    clock["now"] += UPGRADE_GRACE_SECONDS - 60
+    controller.poll_once()
+    assert ports.builder.built == []
+    clock["now"] += 120  # the grace is over: no live host, the cluster builds
+    controller.poll_once()
+    assert ports.builder.built == [["api", "catalog", "web"]]
+
+
+def test_gitops_hosts_says_why_the_fallback_does_not_wait_for_a_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    from typer.testing import CliRunner
+
+    from piceli.infra.remote_builds import CLAIM_STALE_SECONDS
+    from piceli.k8s.cli import app as cli
+
+    world = _world(tmp_path, monkeypatch, hosts=("builder-1", "builder-2"))
+    controller, clock = world["controller"], world["clock"]
+    controller.poll_once()
+    _seen(world, "builder-1")
+    controller.poll_once()
+    clock["now"] += CLAIM_STALE_SECONDS + 1
+    controller.poll_once()
+    result = CliRunner().invoke(
+        cli, ["gitops", "hosts", "--state-dir", str(tmp_path / "state"), "--json"]
+    )
+    assert result.exit_code == 0, result.output
+    shown = json.loads(result.stdout)["liveness"]
+    assert shown["builder-1"]["state"] == "stale"
+    assert shown["builder-1"]["waits"] is False
+    assert shown["builder-2"]["state"] == "never-seen"
+    (line,) = [item for item in result.stderr.splitlines() if "STALE" in item]
+    assert line.startswith("builder-1 ") and "taken for gone" in line

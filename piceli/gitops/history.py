@@ -91,6 +91,20 @@ def _provenance(value: Any) -> dict[str, Any] | None:
         found["toolchains"] = {
             str(k)[:64]: str(v)[:200] for k, v in sorted(toolchains.items())[:20]
         }
+    # 0.89.0: a derived image's base, the files it added and its layer.
+    base = _dict(item.get("derived_from"))
+    if base.get("digest"):
+        found["derived_from"] = {
+            "image": str(base.get("image") or "")[:64],
+            "digest": str(base["digest"])[:80],
+        }
+    files = _dict(item.get("files"))
+    if files:
+        found["files"] = {
+            str(k)[:300]: str(v)[:80] for k, v in sorted(files.items())[:50]
+        }
+    if _text(item.get("layer"), 80):
+        found["layer"] = _text(item.get("layer"), 80)
     return found
 
 
@@ -334,6 +348,13 @@ def event(
         if built_on:
             # Added in 0.22.0: where the image was built.
             entries[str(name)]["provenance"] = built_on
+        base = _dict(item.get("derived_from"))
+        if base.get("digest"):
+            # Added in 0.89.0: a derived image's base, pinned by digest.
+            entries[str(name)]["derived_from"] = {
+                "image": _text(base.get("image"), 64),
+                "digest": _text(base.get("digest"), 80),
+            }
     state = str(record.get("state") or "unknown")
     if state == "deployed" and record.get("health") == "degraded":
         state = "degraded"

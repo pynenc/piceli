@@ -344,7 +344,8 @@ def build_table(spec: Any) -> dict[str, Any]:
     return {
         key: value
         for key, value in spec.to_dict().items()
-        if key not in ("contexts", "images", "inputs")
+        # 0.89.0: a derived image changes its own key only.
+        if key not in ("contexts", "images", "inputs", "derived")
     }
 
 
@@ -404,7 +405,106 @@ def image_keys(
                 for name in reads
             },
         )
+    for derived in getattr(spec, "derived", ()):
+        # 0.89.0: the base image's key plus the files of its own contexts.
+        # The base's other contexts do not feed it; a change there changes
+        # the base key, and so this one.
+        base = keys[derived.base]
+        reads = derived.reads(names)
+        keys[derived.name] = ImageKey(
+            build.name,
+            derived.name,
+            _digest(
+                {
+                    "revision": IMAGE_KEY_REVISION,
+                    "derived": derived.to_dict(),
+                    "base": base.key,
+                    "contexts": {name: files[name] for name in reads},
+                }
+            ),
+            {
+                **dict(base.sources),
+                **{
+                    build.contexts[name][0]: revision[build.contexts[name][0]]
+                    for name in reads
+                },
+            },
+        )
     return keys
+
+
+@dataclass(frozen=True)
+class DeriveItem:
+    """0.89.0: one derived image to append in the registry, no build.
+
+    :param component: The derived image's name.
+    :param repository: Where it is pushed.
+    :param key: Its change key.
+    :param base: The base image's name; ``base_repository`` and
+        ``base_digest`` pin the image already recorded for its key.
+    :param files: The files it adds
+        (:class:`~piceli.artifacts.derived_image.DerivedFile`).
+    :param epoch: The spec's ``source_date_epoch`` (the layer's times).
+    :param labels: Config labels it sets.
+    :param commits: The sources it reads, at their commits (provenance).
+    """
+
+    component: str
+    repository: str
+    key: str
+    base: str
+    base_repository: str
+    base_digest: str
+    files: tuple[Any, ...]
+    epoch: int = 0
+    labels: tuple[tuple[str, str], ...] = ()
+    commits: Mapping[str, str] = field(default_factory=dict)
+
+
+def derived_files(
+    build: SpecBuild, image: Any, revision: Mapping[str, str], sources: Any
+) -> tuple[Any, ...]:
+    """0.89.0: the files of a derived image, read from Git at ``revision``.
+
+    Each ``files`` key is a stage path (``<context dir>/<path>``): a file, or
+    a directory whose staged files are all added. The context's include and
+    exclude globs apply, as for a staged build.
+
+    :raises CompositionError: ``composition-invalid`` when a path stages no
+        file or is a symbolic link.
+    """
+    from piceli.artifacts.derived_image import DerivedFile
+
+    staged = {item.target or item.name: item for item in build.spec.contexts}
+    found: list[DerivedFile] = []
+    for src, dest in image.files:
+        head, _, rest = src.partition("/")
+        context = staged[head]
+        source, prefix = build.contexts[context.name]
+        commit = revision[source]
+        listed = context_files(sources, source, commit, prefix, context.selection)
+        matched = [
+            item
+            for item in listed
+            if not rest or item[0] == rest or item[0].startswith(rest + "/")
+        ]
+        if not matched:
+            raise _invalid(
+                f"derived image {image.name!r}: {src!r} stages no file at "
+                f"{source}@{commit[:12]}"
+            )
+        for path, mode, _oid in matched:
+            if mode == "120000":
+                raise _invalid(
+                    f"derived image {image.name!r}: {path!r} is a symbolic link"
+                )
+            data = sources.read(source, commit, posixpath.join(prefix, path))
+            if data is None:
+                raise _invalid(f"derived image {image.name!r}: {path!r} is gone")
+            inner = path[len(rest) :].lstrip("/") if rest else path
+            target = posixpath.join(dest, inner) if inner else dest
+            found.append(DerivedFile(target, data, mode == "100755"))
+    return tuple(found)
 
 
 @dataclass(frozen=True)

@@ -2221,7 +2221,8 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             ),
             writes=(
                 "the controller's requests (build-claim, built, build-failed, "
-                "nix-published, build-host-version)",
+                "nix-published, build-host-version; 0.89.0: build-host-lease, "
+                "an idle host's lease)",
                 "--version-file PATH: the controller's Piceli version (0.33.0)",
                 "the binary cache: closure, signed manifest, tag pointer (--publish)",
                 "images in the cluster's registry (through a port-forward)",

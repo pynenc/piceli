@@ -615,6 +615,17 @@ controller looks at the same Job again (it is named after the build's
 inputs). `piceli gitops cancel ENV` deletes the Job, and a commit with other
 inputs replaces it. `piceli gitops run --once` still waits for its build.
 
+(build-host-takeover)=
+**A build host takes over a running fallback (0.89.0).** While the
+in-cluster Job runs, the build stays offered to the hosts (`fallback` on
+its entry in `builds_wanted`). A host that claims it takes it over: at the
+next look the controller stops the Job and waits for the host's images
+(the environment says `it took the build over from the in-cluster
+fallback`). Only a claim the controller accepted stops the Job. If the Job
+finished first, its images are used and the host's answer is refused (the
+build is no longer wanted), so a build never has two results. A warm host
+often builds in minutes what a cold cluster builds in half an hour.
+
 On a build host, with the cluster's credential profile:
 
 ```sh
@@ -697,6 +708,27 @@ waits `host_wait` when no declared host can take the build:
   the controller in the last 10 minutes and none stands by. A running
   `builder serve` claims within its poll; an offline laptop is not waited
   for. With `builds=("hosts",)` the build keeps waiting for it.
+
+(build-hosts-idle)=
+**An idle host is live, not gone (0.89.0).** Before 0.89.0 an idle host sent
+nothing, so after 10 idle minutes it counted as gone and a build went to
+the cold in-cluster fallback after 60 seconds instead of waiting
+`host_wait`. Now an idle `builder serve` renews a lease (request
+`build-host-lease`) every 2 minutes while it polls, like a Kubernetes node
+lease: one small request, only while it may claim (declared, not
+quarantined, on the controller's version). "Not heard from for 10 minutes"
+now means the host stopped. A host that reported another Piceli version
+than the controller's (it claims nothing until it restarts on that
+version, see [the same version](#builder-version)) counts as coming for 30
+minutes after its report, so the fallback waits `host_wait` for it then.
+The waiting environment says `build host HOST runs piceli OLD and restarts
+on NEW`. A host on a version before 0.89.0 sends no lease.
+
+`piceli gitops hosts` says, per host, whether the fallback waits for it and
+why not: `busy` (it holds a claim), `live` (heard from in the last 10
+minutes: a lease, a claim, a report), `UPGRADING` (restarts on the
+controller's version), `STALE` (taken for gone) or `never seen`
+(`liveness` in `--json`).
 
 The waiting environment says why, for example `in-cluster fallback at
 2026-01-01T10:01:00Z (no live host may take it ...)`.
@@ -980,8 +1012,10 @@ knows, so a build host claims only while it runs the controller's version
 (`controller.version` in the status). On a mismatch `builder serve`:
 
 1. claims nothing; the controller builds in the cluster after `host_wait`,
-   with its own image;
-2. tells the controller its version (request `build-host-version`), so
+   with its own image (0.89.0: it waits `host_wait` for the host for 30
+   minutes after the host's report, see [idle hosts](#build-hosts-idle));
+2. tells the controller its version (request `build-host-version`; 0.89.0:
+   also when the controller last saw that version, once per upgrade), so
    `piceli builder status` shows the host `version-mismatch`, `piceli
    gitops hosts` prints `VERSION MISMATCH` and the `build-host-version`
    alarm fires (resolved once the host runs the same version);

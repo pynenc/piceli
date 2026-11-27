@@ -318,6 +318,55 @@ class Backend:
         url = route.url(repository, free_port())
         return self._delivery(route).has_manifest(RegistryTarget.parse(url), digest)
 
+    def derive_deliver(self, route: RegistryRoute, item: Any) -> dict[str, Any]:
+        """0.89.0: push a derived image (:class:`piceli.infra.pipelines.DeriveItem`):
+        its base, pinned by digest, plus one layer of its files; no build.
+
+        Returns ``{"pull_ref", "digest", "media_type", "platforms", "layer",
+        "blobs"}``.
+        """
+        import tempfile
+
+        from piceli.artifacts.derived_image import append, write_layer_of
+        from piceli.artifacts.oci_layers import BlobStore
+        from piceli.artifacts.registry import (
+            RegistryTarget,
+            StreamedOciRegistryClient,
+        )
+
+        port = free_port()
+        with (
+            tempfile.TemporaryDirectory(prefix="piceli-derive-") as directory,
+            self._forward(route, port),
+        ):
+            store = BlobStore(Path(directory))
+            layer = write_layer_of(store, item.files, epoch=item.epoch)
+            target = RegistryTarget.parse(route.url(item.repository, port))
+            client = StreamedOciRegistryClient(
+                target.endpoint(
+                    credentials=self._credentials(route),
+                    ca_file=route.ca_file.absolute() if route.ca_file else None,
+                    timeout=120,
+                )
+            )
+            derived = append(
+                client,
+                source_repository=item.base_repository,
+                base_digest=item.base_digest,
+                repository=item.repository,
+                store=store,
+                layer=layer.descriptor,
+                epoch=item.epoch,
+                created_by="piceli derive: "
+                + ", ".join(sorted(file.path for file in item.files))[:500],
+                labels=dict(item.labels),
+            )
+        node = route.node_registry or target.registry
+        return {
+            **derived.to_dict(),
+            "pull_ref": f"{node}/{item.repository}@{derived.digest}",
+        }
+
     def mirror_deliver(
         self,
         route: RegistryRoute,

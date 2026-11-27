@@ -200,6 +200,10 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`deploy-ref-source-unknown`](#error-deploy-ref-source-unknown) | pipeline | no |
 | [`deploy-ref-unknown`](#error-deploy-ref-unknown) | pipeline | yes |
 | [`deploy-stage-unknown`](#error-deploy-stage-unknown) | cli | no |
+| [`derived-base-invalid`](#error-derived-base-invalid) | host-build | no |
+| [`derived-base-unavailable`](#error-derived-base-unavailable) | host-build | yes |
+| [`derived-base-unrecorded`](#error-derived-base-unrecorded) | host-build | no |
+| [`derived-image-local-unsupported`](#error-derived-image-local-unsupported) | host-build | no |
 | [`dev-cache-clear-failed`](#error-dev-cache-clear-failed) | dev | yes |
 | [`dev-cache-over-cap`](#error-dev-cache-over-cap) | dev | yes |
 | [`dev-command-failed`](#error-dev-command-failed) | dev | yes |
@@ -4870,6 +4874,38 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Cluster build input invalid.** A cluster build (`piceli build job`, `run_build_job`) was given an input it refuses: a commit that is not a full Git commit id, an unsupported platform, a builder image that is not pinned by digest, a repository URL with credentials in it, a missing Git Secret (keys `username` and `password`), a pipeline without a host build, or an approved hash that no longer matches the plan.
 
 - **Fix:** Fix the input named in the message. The Git credentials belong in a Secret, never in the URL; plan again (`piceli build job ... --plan`) when the hash changed.
+- **Retry-safe:** no
+
+(error-derived-base-invalid)=
+### `derived-base-invalid`
+
+**Base of a derived image is invalid.** The base manifest, index or config of a derived image does not match its digest, or its layers differ from its config.
+
+- **Fix:** Rebuild the base image with `piceli gitops sync ENV --component BASE`.
+- **Retry-safe:** no
+
+(error-derived-base-unavailable)=
+### `derived-base-unavailable`
+
+**Base of a derived image cannot be read.** The registry did not serve the base image of a derived image by its recorded digest (it is gone, or the registry cannot be reached).
+
+- **Fix:** Check the registry, then sync again; if the base was removed, rebuild it with `piceli gitops sync ENV --component BASE`.
+- **Retry-safe:** yes
+
+(error-derived-base-unrecorded)=
+### `derived-base-unrecorded`
+
+**Base image record of a derived image is missing.** A derived image changed, and its base's change key is the one the environment last recorded, but the controller no longer has the base's image record. A derived image is only made from the base the environment already runs, so the controller does not build the base again on its own.
+
+- **Fix:** Rebuild the base on purpose with `piceli gitops sync ENV --component BASE`; the derived image is then made from the new base.
+- **Retry-safe:** no
+
+(error-derived-image-local-unsupported)=
+### `derived-image-local-unsupported`
+
+**Derived images are made by the composition controller.** `piceli artifacts build-spec run` was given a `host-build.toml` with a derived image (`from = ...`). A local build does not append derived images.
+
+- **Fix:** Remove the derived images for the local build, or let a composition controller make them.
 - **Retry-safe:** no
 
 (error-env-push-invalid)=

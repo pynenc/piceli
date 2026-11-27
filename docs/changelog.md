@@ -4,6 +4,54 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.89.0
+
+### A derived image appends files to a built image, without a build (ops#110)
+
+- An `[[output.image]]` with `from = "<image>"` in `host-build.toml` is a
+  derived image: that built image of the same spec plus one layer of
+  `files`. It takes only `name`, `repository`, `from`, `files`, `contexts`
+  and `labels`; anything else is refused when the spec is loaded.
+- Its change key is the base image's key plus the files of its own contexts.
+  A file read only by derived images (a release number, for example) changes
+  only their keys, so changing it runs no build: no build host, no build Job.
+- The composition controller appends the files in the cluster registry to
+  the base image it recorded, pinned by digest, as `crane append` does. The
+  base layers and config are kept (base layers are mounted, not
+  downloaded); a base index gets one derived manifest per platform and a new
+  index. The same files give the same layer, so every image derived for one
+  release shares that layer.
+- A derived image is never made from a rebuilt base: when the base's key did
+  not change but its record is lost, the step fails with
+  `derived-base-unrecorded` instead of building the base.
+- The record and provenance carry `derived_from: {image, digest}`, the added
+  files' sha256 and the layer; the status and `gitops history` show
+  `derived_from`. The SLSA (Supply-chain Levels for Software Artifacts)
+  statement uses build type `https://piceli.dev/derived-image/v1`.
+- `piceli artifacts build-spec run` refuses derived images
+  (`derived-image-local-unsupported`). A builder or build host older than
+  0.89.0 refuses a spec with `from`: upgrade them with the controller.
+
+### An idle build host stays live (ops#109)
+
+- An idle `piceli builder serve` renews a lease (`build-host-lease`) every 2
+  minutes. "Not heard from for 10 minutes" now means the host stopped, so the
+  in-cluster fallback waits `host_wait` for an idle host instead of building
+  cold after 60 seconds.
+- A host on another Piceli version than the controller's reports it once per
+  upgrade. For 30 minutes after that it counts as coming (`upgrading`), and
+  the fallback waits for it to restart.
+- A host that claims a build while its in-cluster fallback Job runs takes it
+  over: the controller stops the Job and uses the host's images. If the Job
+  finished first, its images stand and the host's answer is refused, so a
+  build never has two results.
+- `piceli gitops hosts` says per host whether the fallback waits for it:
+  `busy`, `live`, `UPGRADING`, `STALE` or `never seen` (`liveness` in
+  `--json`). `piceli gitops builds` shows one record for a build whose
+  fallback Job runs.
+- Hosts on 0.88.0 or older send no lease: upgrade the build hosts before, or
+  with, the controller.
+
 ## Version 0.88.0
 
 ### A new commit with the same images gets checks of its own (ops#108)

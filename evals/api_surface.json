@@ -11355,6 +11355,7 @@
     "list_repositories",
     "list_tags",
     "manifest_digest",
+    "mount_blob",
     "open_blob",
     "push_blob",
     "push_blob_stream",
@@ -11401,6 +11402,11 @@
     "manifest_digest": [
      "reference",
      "repository"
+    ],
+    "mount_blob": [
+     "digest",
+     "repository",
+     "source"
     ],
     "open_blob": [
      "digest",
@@ -15379,6 +15385,10 @@
    "deploy-ref-source-unknown",
    "deploy-ref-unknown",
    "deploy-stage-unknown",
+   "derived-base-invalid",
+   "derived-base-unavailable",
+   "derived-base-unrecorded",
+   "derived-image-local-unsupported",
    "dev-cache-clear-failed",
    "dev-cache-over-cap",
    "dev-command-failed",
@@ -17912,6 +17922,7 @@
   "piceli.artifacts.copy_set",
   "piceli.artifacts.delivery",
   "piceli.artifacts.delivery_inputs",
+  "piceli.artifacts.derived_image",
   "piceli.artifacts.file_signing",
   "piceli.artifacts.gc",
   "piceli.artifacts.host_build",
@@ -18340,5 +18351,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.88.0"
+ "version": "0.89.0"
 }

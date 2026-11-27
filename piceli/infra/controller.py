@@ -1989,14 +1989,23 @@ class CompositionController:
                     self._refuse_undeclared(body)
                     remote_builds.standby(self.state, body, self.clock())
                 elif kind == "build-host-version":  # 0.33.0: builder serve
-                    # Recorded as a sighting (controller.build_hosts) below.
+                    from piceli.infra import remote_builds
+
+                    # Recorded as a sighting (controller.build_hosts) below;
+                    # 0.89.0: another version starts its `upgrading` grace.
                     self._refuse_undeclared(body)
+                    remote_builds.host_version(
+                        self.state, body, _version(), self.clock()
+                    )
                     if str(body.get("version") or "") != _version():
                         self.log(
                             f"build host {body.get('host')} runs piceli "
                             f"{body.get('version')}, this controller {_version()}: "
                             "it claims nothing until it runs the same version"
                         )
+                elif kind == "build-host-lease":  # 0.89.0: an idle builder serve
+                    # Only a sighting (controller.build_hosts, below).
+                    self._refuse_undeclared(body)
                 elif kind == "rebuild":
                     self._rebuild(body)
                 elif kind == "host-release":
@@ -3022,6 +3031,7 @@ class CompositionController:
         components: dict[str, dict[str, Any]] = {}
         images: dict[str, BuiltImage] = {}
         requests: list[SpecBuildRequest] = []
+        derive: list[tuple[Any, Any, Any]] = []
         for path, build in spec_paths(pipeline, self.repo.checkout):
             self.sources.fetch(repo)
             text = self.sources.read(repo, revision[repo], path)
@@ -3080,6 +3090,11 @@ class CompositionController:
                     self._unused_offer(
                         components[image.name], image.name, key.key, key.sources
                     )
+            for derived in spec.spec.derived:  # 0.89.0: appended, not built
+                self._derived_entry(
+                    spec, derived, keys, components, previous, images, record, rebuild
+                )
+                derive.append((spec, derived, keys[derived.name]))
             if changed:
                 commits = {
                     source: revision[source] for source, _ in spec.contexts.values()
@@ -3130,6 +3145,8 @@ class CompositionController:
                     images[image_name] = built[image_name]
                 self._build_times(name, sorted(request.images))
                 self._build_steps(sorted(request.images))
+            if derive:
+                self._derive(derive, images, components, rebuild, revision)
         except BuildPending:
             raise  # a build host builds them: not failed (see _step)
         except Exception as error:
@@ -3146,6 +3163,10 @@ class CompositionController:
             entry["image"] = image.pull_ref
             _provenance_of(entry, image)
             _index_of(entry, image)
+            if image.extra.get("derived_from"):  # 0.89.0: the base it pins
+                entry["derived_from"] = dict(image.extra["derived_from"])
+            else:
+                entry.pop("derived_from", None)
             deployed = (previous.get(key) or {}).get("deployed_image")
             entry["deployed_image"] = deployed
             entry["state"] = "unchanged" if deployed == image.pull_ref else "rolling"
@@ -3182,6 +3203,119 @@ class CompositionController:
             )
         )
         self._outcome(record, outcome)
+
+    def _derived_entry(
+        self,
+        spec: Any,
+        derived: Any,
+        keys: Mapping[str, Any],
+        components: dict[str, dict[str, Any]],
+        previous: Mapping[str, Any],
+        images: Mapping[str, BuiltImage],
+        record: Mapping[str, Any],
+        rebuild: set[str],
+    ) -> None:
+        """0.89.0: the status entry of a derived image, before its append.
+
+        A derived image is made from the base image the environment already
+        runs: when the base's key is the one it last recorded but its image
+        record is gone, the base would be built again; that is refused
+        (``derived-base-unrecorded``), never done silently.
+        """
+        if derived.name in components:
+            raise CompositionError(
+                "composition-invalid", f"two builds make image {derived.name!r}"
+            )
+        base, key = keys[derived.base], keys[derived.name]
+        before = previous.get(derived.base) or {}
+        if (
+            derived.base not in images
+            and derived.base not in rebuild
+            and before.get("source_digest") == base.key
+            and before.get("digest")
+        ):
+            raise CompositionError(
+                "derived-base-unrecorded",
+                f"image {derived.name!r} is derived from {derived.base!r}, whose "
+                f"key is unchanged but whose recorded image is gone; rebuild it "
+                f"on purpose (piceli gitops sync ENV --component {derived.base})",
+            )
+        cached = self._cached(derived.name, key.key)
+        primary, built_at = self._built_from(
+            previous.get(derived.name),
+            key,
+            record.get("trigger"),
+            self.repo.settings.name if self.repo is not None else "",
+            record["revision"],
+        )
+        components[derived.name] = {
+            "source": primary,
+            "commit": built_at,
+            "sources": dict(sorted(key.sources.items())),
+            "source_digest": key.key,
+            "digest": None if cached is None else cached.manifest_digest,
+            "image": None if cached is None else cached.pull_ref,
+            "state": "building" if cached is None else "pending",
+            "health": (previous.get(derived.name) or {}).get("health", "unknown"),
+            "updated_at": _iso(self.clock()),
+        }
+
+    def _derive(
+        self,
+        wanted: list[tuple[Any, Any, Any]],
+        images: dict[str, BuiltImage],
+        components: dict[str, dict[str, Any]],
+        rebuild: set[str],
+        revision: Mapping[str, str],
+    ) -> None:
+        """0.89.0: append the derived images whose key (or base) changed to
+        the base image recorded for the base's key, pinned by its digest, in
+        the registry; no build. Others keep their recorded image."""
+        from piceli.infra.pipelines import DeriveItem, derived_files
+
+        items = []
+        for spec, derived, key in wanted:
+            base = images[derived.base]
+            cached = (
+                None if derived.name in rebuild else self._cached(derived.name, key.key)
+            )
+            pinned = (cached.extra.get("derived_from") or {}) if cached else {}
+            if cached is not None and pinned.get("digest") == base.manifest_digest:
+                images[derived.name] = cached
+                continue
+            name = base.pull_ref.partition("@")[0]
+            items.append(
+                DeriveItem(
+                    derived.name,
+                    self._repository(derived.name),
+                    key.key,
+                    derived.base,
+                    name.split("/", 1)[1] if "/" in name else name,
+                    base.manifest_digest,
+                    derived_files(spec, derived, revision, self.sources),
+                    spec.spec.source_date_epoch,
+                    derived.labels,
+                    dict(key.sources),
+                )
+            )
+            components[derived.name]["state"] = "building"
+        if not items:
+            return
+        append = getattr(self.ports.builder, "derive", None)
+        if append is None:
+            raise CompositionError(
+                "component-build-unsupported",
+                "this controller's builder cannot append derived images",
+            )
+        done = self._timed([item.component for item in items], lambda: append(items))
+        for item in items:
+            if item.component not in done:
+                raise CompositionError(
+                    "component-build-failed",
+                    f"the append returned no image {item.component!r}",
+                )
+            self._remember(item.component, item.key, done[item.component])
+            images[item.component] = done[item.component]
 
     def _timed(self, names: list[str], call: Callable[[], Any]) -> Any:
         """``call()`` (a build or mirror of ``names``), its times in the step's

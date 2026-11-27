@@ -247,6 +247,45 @@ class HostImage:
 
 
 @dataclass(frozen=True)
+class DerivedImage:
+    """0.89.0: an image made from another image of the spec plus one layer.
+
+    ``from`` names a built ``[[output.image]]`` of the same spec; ``files``
+    maps stage paths (``<context>/<path>``) to image paths. No command runs
+    for it and nothing is compiled: the files are appended to the base image
+    as one layer (:mod:`piceli.artifacts.derived_image`). Its change key is
+    the base image's key plus the files of its own ``contexts``.
+    """
+
+    name: str
+    repository: str
+    base: str
+    files: tuple[tuple[str, str], ...]
+    contexts: tuple[str, ...] | None = None
+    labels: tuple[tuple[str, str], ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "repository": self.repository,
+            "from": self.base,
+            "files": [list(item) for item in self.files],
+            **({"contexts": list(self.contexts)} if self.contexts is not None else {}),
+            **({"labels": dict(self.labels)} if self.labels else {}),
+        }
+
+    def reads(self, contexts: tuple[str, ...]) -> tuple[str, ...]:
+        """The context names this image reads, of ``contexts`` (all by default)."""
+        if self.contexts is None:
+            return contexts
+        return tuple(name for name in contexts if name in self.contexts)
+
+
+#: The keys a derived ``[[output.image]]`` takes (0.89.0).
+DERIVED_KEYS = frozenset({"name", "repository", "from", "files", "contexts", "labels"})
+
+
+@dataclass(frozen=True)
 class HostFileOutput:
     """0.39: plain files of the build, written to ``files/<name>/<file name>``.
 
@@ -322,6 +361,8 @@ class HostBuildSpec:
     shared_commands_alongside: bool = False
     """``build.shared_commands_alongside`` (0.78.0): run the shared commands at
     the same time as the platform's commands, not before them."""
+    derived: tuple[DerivedImage, ...] = ()
+    """0.89.0: images appended from another image of the spec, no build."""
 
     builder_kind: ClassVar[str] = "host"
     network: ClassVar[str] = "host"
@@ -343,14 +384,16 @@ class HostBuildSpec:
                 )
         if not self.images and not self.files:
             raise _fail("declare at least one [[output.image]] or [[output.files]]")
-        if len({item.name for item in self.images}) != len(self.images):
+        outputs: tuple[HostImage | DerivedImage, ...] = (*self.images, *self.derived)
+        every = [item.name for item in outputs]
+        if len(set(every)) != len(every):
             raise _fail("output image names must be unique")
         if len({item.name for item in self.files}) != len(self.files):
             raise _fail("output files names must be unique")
         names = [item.name for item in self.contexts]
         if not names or len(set(names)) != len(names):
             raise _fail("declare uniquely named contexts")
-        for image in self.images:
+        for image in outputs:
             unknown = sorted(set(image.contexts or ()) - set(names))
             if unknown:
                 raise _fail(
@@ -359,6 +402,7 @@ class HostBuildSpec:
         into = [item.target or item.name for item in self.contexts]
         if len(set(into)) != len(into):
             raise _fail("contexts must be staged into different directories")
+        self._check_derived()
         if not self.commands:
             raise _fail("declare build.commands")
         if not self.tools or len(set(self.tools)) != len(self.tools):
@@ -437,6 +481,41 @@ class HostBuildSpec:
             0 < self.timeout_seconds <= 3600
         ):
             raise _fail("timeout_seconds must be in (0, 3600]")
+
+    def _check_derived(self) -> None:
+        """0.89.0: a derived image names a built image of this spec, and its
+        files come from the contexts it reads (only those feed its key)."""
+        built = {item.name for item in self.images}
+        derived = {item.name for item in self.derived}
+        for tags in (self.command_images, self.shared_command_images):
+            for names in tags:
+                named = sorted(set(names) & derived)
+                if named:
+                    raise _fail(
+                        f"a command names derived image {named[0]!r}; no command "
+                        "runs for a derived image (it appends files to its base)"
+                    )
+        staged = {item.name: item.target or item.name for item in self.contexts}
+        for image in self.derived:
+            if image.base == image.name:
+                raise _fail(f"derived image {image.name!r} names itself in from")
+            if image.base in derived:
+                raise _fail(
+                    f"derived image {image.name!r}: from = {image.base!r} is a "
+                    "derived image; derive from a built [[output.image]]"
+                )
+            if image.base not in built:
+                raise _fail(
+                    f"derived image {image.name!r}: from = {image.base!r} is not "
+                    "an [[output.image]] of this spec"
+                )
+            dirs = {staged[name] for name in image.reads(tuple(staged))}
+            for src, _ in image.files:
+                if PurePosixPath(src).parts[0] not in dirs:
+                    raise _fail(
+                        f"derived image {image.name!r}: file {src!r} is not in a "
+                        "context it reads; add that context to its contexts"
+                    )
 
     # --- parsing ---------------------------------------------------------
 
@@ -533,10 +612,20 @@ class HostBuildSpec:
         inputs = document.get("inputs")
         if inputs is not None and (not isinstance(inputs, str) or "\x00" in inputs):
             raise _fail("inputs must be a path to an inputs.toml")
+        tables = output.get("image", [])
         spec = cls(
             name=document["name"] if isinstance(document["name"], str) else "",
             contexts=tuple(context_specs),
-            images=tuple(_image(item) for item in output.get("image", [])),
+            images=tuple(
+                _image(item)
+                for item in tables
+                if not (isinstance(item, dict) and "from" in item)
+            ),
+            derived=tuple(
+                _derived(item)
+                for item in tables
+                if isinstance(item, dict) and "from" in item
+            ),
             files=tuple(_file_output(item) for item in output.get("files", [])),
             commands=commands,
             shared_commands=shared_commands,
@@ -600,6 +689,12 @@ class HostBuildSpec:
             ),
             **(
                 {"files": [item.to_dict() for item in self.files]} if self.files else {}
+            ),
+            # 0.89.0: only when declared, so every other digest is unchanged.
+            **(
+                {"derived": [item.to_dict() for item in self.derived]}
+                if self.derived
+                else {}
             ),
         }
 
@@ -1161,6 +1256,57 @@ def _image(item: Any) -> HostImage:
             )
         ),
         labels,
+    )
+
+
+def _derived(item: dict[str, Any]) -> DerivedImage:
+    """0.89.0: an ``[[output.image]]`` with ``from``: a derived image."""
+    extra = sorted(set(item) - DERIVED_KEYS)
+    if extra:
+        raise _fail(
+            f"derived image {item.get('name')!r} cannot set {extra[0]!r}: a "
+            "derived image takes only name, repository, from, files, contexts "
+            "and labels (it is its base plus one layer of files)"
+        )
+    _keys(
+        item,
+        {"name", "repository", "from", "files"},
+        {"contexts", "labels"},
+        "output.image",
+    )
+    files = item["files"]
+    if not isinstance(files, dict) or not 0 < len(files) <= 256:
+        raise _fail(
+            f"derived image {item['name']!r}: files must map 1-256 stage paths "
+            "to image paths"
+        )
+    destinations = [
+        _abs_path(dest, "output.image file destination") for dest in files.values()
+    ]
+    if len(set(destinations)) != len(destinations):
+        raise _fail(f"image {item['name']!r}: two files at one destination")
+    contexts = item.get("contexts")
+    if contexts is not None:
+        if (
+            not isinstance(contexts, list)
+            or not 0 < len(contexts) <= 32
+            or len(set(contexts)) != len(contexts)
+        ):
+            raise _fail("output.image.contexts must list context names, each once")
+        for name in contexts:
+            _match(_NAME, name, "output.image.contexts entry")
+    return DerivedImage(
+        _match(_NAME, item["name"], "output.image.name"),
+        _match(_REPOSITORY, item["repository"], "output.image.repository"),
+        _match(_NAME, item["from"], "output.image.from"),
+        tuple(
+            sorted(
+                (_rel_path(key, "output.image.files key"), value)
+                for key, value in files.items()
+            )
+        ),
+        tuple(contexts) if contexts is not None else None,
+        parse_labels(item.get("labels", {}), "output.image.labels"),
     )
 
 
