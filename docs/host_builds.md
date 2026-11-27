@@ -212,7 +212,9 @@ labels = { "org.opencontainers.image.licenses" = "MIT", "org.opencontainers.imag
 - `contexts = ["api", "config"]` (optional, default every context) names
   the contexts an image reads. A composition controller rebuilds an image
   only when the files of those contexts (or its tables) changed (see
-  {doc}`compositions`); a local build still builds every image.
+  {doc}`compositions`); a local build still builds every image. An empty
+  list (0.95.0) reads none: the image changes only with its tables, as an
+  OpenTelemetry Collector built from its `collector` table does.
 - There is no smoke check: nothing can run a `linux/arm64` binary on the
   build machine without a VM. Use {doc}`checks` after the rollout.
 - **A command that names a file its context does not stage is refused when

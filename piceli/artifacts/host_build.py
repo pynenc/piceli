@@ -1268,9 +1268,11 @@ def _image(item: Any) -> HostImage:
         host_collector.check_image(item, collector)
     contexts = item.get("contexts")
     if contexts is not None:
+        # 0.95.0: an empty list is an image whose key is its own tables only
+        # (an OpenTelemetry Collector built from its table).
         if (
             not isinstance(contexts, list)
-            or not 0 < len(contexts) <= 32
+            or not 0 <= len(contexts) <= 32
             or len(set(contexts)) != len(contexts)
         ):
             raise _fail("output.image.contexts must list context names, each once")

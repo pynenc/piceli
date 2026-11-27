@@ -20,6 +20,12 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   that would fail the default install are refused with `bundle-invalid`.
 - Charts that use neither render byte for byte as in 0.94.0.
 
+### An image may read no context
+
+- `contexts = []` on an `[[output.image]]` is accepted: the image's key is
+  its own tables only, so an OpenTelemetry Collector image built from its
+  `collector` table (0.94.0) is not rebuilt for every source change.
+
 ## Version 0.94.0
 
 ### An OpenTelemetry Collector image built with OCB (ops#115)

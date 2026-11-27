@@ -608,3 +608,10 @@ def test_the_example_collector_spec_parses() -> None:
     assert collector is not None and collector.version == "0.166.0"
     assert spec.declared_platforms == ("linux/amd64", "linux/arm64")
     assert spec.commands == ()
+
+
+def test_an_image_may_read_no_context(tmp_path: Path) -> None:
+    """0.95.0: ``contexts = []`` keys a collector image on its tables only."""
+    image = load(tmp_path, image="contexts = []").images[0]
+    assert image.contexts == ()
+    assert image.to_dict()["contexts"] == []
