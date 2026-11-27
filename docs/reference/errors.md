@@ -136,6 +136,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`cluster-credentials-unsupported`](#error-cluster-credentials-unsupported) | cluster | no |
 | [`cluster-identity-changed`](#error-cluster-identity-changed) | release | no |
 | [`cluster-identity-unreadable`](#error-cluster-identity-unreadable) | kubernetes | yes |
+| [`cluster-init-partial`](#error-cluster-init-partial) | cluster | yes |
 | [`cluster-invalid`](#error-cluster-invalid) | cluster | no |
 | [`cluster-load-failed`](#error-cluster-load-failed) | cluster | no |
 | [`cluster-node-arch-mismatch`](#error-cluster-node-arch-mismatch) | cluster | no |
@@ -6219,6 +6220,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Give a kubeconfig context with a client certificate or a token (for example a service account token with `--prompt`).
 - **Retry-safe:** no
+
+(error-cluster-init-partial)=
+### `cluster-init-partial`
+
+**Cluster init applied only part of its plan.** `piceli cluster init --approve` (0.92.0) applied every object it could; the API refused the ones listed in `failed` (each with the API's own reason). Before 0.92.0 the first refusal stopped the rest of the plan.
+
+- **Fix:** Read each reason: an RBAC refusal needs the account's rights, an object in use is applied once it is free. Then run `piceli cluster init` again: it plans only what is left.
+- **Retry-safe:** yes
 
 (error-cluster-invalid)=
 ### `cluster-invalid`

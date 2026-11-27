@@ -66,11 +66,11 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.91
+## What's new in 0.92
 
-- **A tailnet device that is also a cluster node reaches the services
-  `Access(tailnet=True)` exposes**: the ingress policies now admit the nodes
-  on the exposed LoadBalancer ports, beside the Tailscale operator.
+- **`piceli cluster init` replaces a development cache claim its storage
+  class cannot grow**, as part of the approved plan, and applies the rest of
+  the plan when one object is refused, naming the API's reason.
 
 ## Web UI
 

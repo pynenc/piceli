@@ -682,6 +682,31 @@ def asked_for(path: str, method: str) -> dict[str, Any]:
     }
 
 
+def api_reason(error: Any) -> str | None:
+    """The API server's own reason for refusing a request (its ``Status``
+    ``message``), at most 300 characters; ``None`` when it gave none."""
+    body = getattr(error, "body", None)
+    if isinstance(body, bytes):
+        body = body.decode("utf-8", "replace")
+    try:
+        status = json.loads(body) if isinstance(body, str) and body else None
+    except ValueError:
+        return None
+    message = status.get("message") if isinstance(status, dict) else None
+    if not isinstance(message, str) or not message.strip():
+        return None
+    message = " ".join(message.split())
+    return message if len(message) <= 300 else message[:297] + "..."
+
+
+def _rbac_denied(status: int, reason: str | None) -> bool:
+    """A 401, or a 403 that RBAC gave (``User "x" cannot patch ...``); an
+    admission refusal is a 403 too, with another reason (0.92.0)."""
+    if status == 401:
+        return True
+    return status == 403 and (reason is None or " cannot " in f" {reason} ")
+
+
 class Api:
     """A tiny JSON client on a Kubernetes ``ApiClient`` (explicit kubeconfig)."""
 
@@ -727,14 +752,19 @@ class Api:
                 return None
             asked = asked_for(path, method)
             where = f" in namespace {asked['namespace']}" if asked["namespace"] else ""
+            # 0.92.0: the API's own reason, so a refusal that is not RBAC
+            # (an immutable field, a volume that cannot grow) says what it is.
+            reason = api_reason(error)
+            denied = _rbac_denied(error.status, reason)
             raise GitOpsError(
                 "gitops-cluster-failed",
                 f"the API refused {asked['verb']} {asked['resource']}{where} "
-                f"(HTTP {error.status})",
+                f"(HTTP {error.status})" + (f": {reason}" if reason else ""),
                 details={
-                    "denied" if error.status in {401, 403} else "refused": {
+                    "denied" if denied else "refused": {
                         **asked,
                         "status": error.status,
+                        **({"reason": reason} if reason else {}),
                     }
                 },
             ) from None
@@ -828,9 +858,12 @@ def _canonical(value: Any) -> bytes:
 class ObjectPlan:
     """The plan of one controller object."""
 
-    operation: str  # create | apply | no-op | delete | absent
+    operation: str  # create | apply | replace | no-op | delete | absent
     manifest: Mapping[str, Any]
     live_uid: str | None = None
+    #: 0.92.0: why the operation is what it is (a ``replace`` says why the
+    #: object cannot be changed in place, and what goes with it).
+    note: str | None = None
 
     def describe(self) -> dict[str, Any]:
         meta = self.manifest["metadata"]
@@ -842,6 +875,8 @@ class ObjectPlan:
         }
         if "namespace" in meta:
             item["namespace"] = meta["namespace"]
+        if self.note:
+            item["note"] = self.note
         return item
 
 
@@ -921,54 +956,172 @@ def plan_objects(
     return InstallPlan(action, tuple(planned), _cluster_uid(api), dict(config), schema)
 
 
+#: How long a replaced object may take to go (its finalizers run first).
+REPLACE_SECONDS = 120.0
+
+
+def _claim_users(api: Api, namespace: str, claim: str) -> list[str]:
+    """The pods of ``namespace`` that mount ``claim`` and have not ended."""
+    found = api.call(f"/api/v1/namespaces/{namespace}/pods", "GET")
+    users = []
+    for pod in (found or {}).get("items") or () if isinstance(found, dict) else ():
+        if (pod.get("status") or {}).get("phase") in {"Succeeded", "Failed"}:
+            continue
+        for volume in (pod.get("spec") or {}).get("volumes") or ():
+            if (volume.get("persistentVolumeClaim") or {}).get("claimName") == claim:
+                users.append(str((pod.get("metadata") or {}).get("name")))
+                break
+    return sorted(users)
+
+
+def _replace(
+    api: Api,
+    item: ObjectPlan,
+    live: Mapping[str, Any],
+    log: Callable[[str], None],
+    clock: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> None:
+    """Delete ``item``'s object and create it again (0.92.0).
+
+    A claim in use by a pod that has not ended is left as it is (refused).
+    A claim's bound volume with reclaim ``Retain`` is first set to
+    ``Delete``, so the provisioner removes the volume and its data with the
+    claim instead of leaving them on the node.
+    """
+    manifest = dict(item.manifest)
+    meta = manifest["metadata"]
+    if manifest["kind"] == "PersistentVolumeClaim":
+        users = _claim_users(api, meta["namespace"], meta["name"])
+        if users:
+            raise GitOpsError(
+                "gitops-cluster-failed",
+                f"PersistentVolumeClaim/{meta['name']} is in use by pod "
+                f"{', '.join(users)}; it is replaced once that ends (run init again)",
+            )
+        volume = (live.get("spec") or {}).get("volumeName")
+        pv = api.call(f"/api/v1/persistentvolumes/{volume}", "GET") if volume else None
+        policy = ((pv or {}).get("spec") or {}).get("persistentVolumeReclaimPolicy")
+        if isinstance(pv, dict) and policy == "Retain":
+            api.call(
+                f"/api/v1/persistentvolumes/{volume}",
+                "PATCH",
+                {"spec": {"persistentVolumeReclaimPolicy": "Delete"}},
+                "application/merge-patch+json",
+                missing_ok=False,
+            )
+            log(f"  reclaim PersistentVolume/{volume}: Delete (was Retain)")
+    precondition = {
+        "uid": live["metadata"]["uid"],
+        "resourceVersion": live["metadata"]["resourceVersion"],
+    }
+    api.call(
+        object_path(manifest),
+        "DELETE",
+        {"preconditions": precondition, "propagationPolicy": "Background"},
+    )
+    deadline = clock() + REPLACE_SECONDS
+    while api.get(manifest) is not None:
+        if clock() >= deadline:
+            raise GitOpsError(
+                "gitops-cluster-failed",
+                f"{manifest['kind']}/{meta['name']} was deleted but is still there "
+                f"after {int(REPLACE_SECONDS)} s (a finalizer holds it); run init again",
+            )
+        sleep(1.0)
+    api.call(object_path(manifest, collection=True), "POST", manifest, missing_ok=False)
+
+
 def execute(
-    api: Api, plan: InstallPlan, log: Callable[[str], None] = lambda _: None
+    api: Api,
+    plan: InstallPlan,
+    log: Callable[[str], None] = lambda _: None,
+    *,
+    failures: list[dict[str, Any]] | None = None,
+    clock: Callable[[], float] | None = None,
+    sleep: Callable[[float], None] | None = None,
 ) -> list[dict[str, Any]]:
-    """Run a plan (the caller checked its hash). Deletes go in reverse order."""
+    """Run a plan (the caller checked its hash). Deletes go in reverse order.
+
+    With ``failures`` (0.92.0), an object the API refuses is recorded there
+    (its ``describe()`` plus ``message``) and the rest of the plan still
+    runs; without it, the first refusal raises. A changed object
+    (``gitops-plan-changed``) always stops the plan.
+    """
+    import time
+
     done: list[dict[str, Any]] = []
     items = list(plan.objects)
     if plan.action == "disable":
         items.reverse()
+    now, wait = clock or time.monotonic, sleep or time.sleep
     for item in items:
-        manifest = dict(item.manifest)
-        if item.operation == "create":
+        if failures is None:
+            step = _execute_one(api, item, log, now, wait)
+        else:
+            try:
+                step = _execute_one(api, item, log, now, wait)
+            except GitOpsError as error:
+                if error.code != "gitops-cluster-failed":
+                    raise
+                failures.append({**item.describe(), "message": str(error)})
+                meta = item.manifest["metadata"]
+                log(f"  failed {item.manifest['kind']}/{meta['name']}: {error}")
+                continue
+        if step is not None:
+            done.append(step)
+    return done
+
+
+def _execute_one(
+    api: Api,
+    item: ObjectPlan,
+    log: Callable[[str], None],
+    clock: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> dict[str, Any] | None:
+    manifest = dict(item.manifest)
+    if item.operation == "create":
+        api.call(
+            object_path(manifest, collection=True),
+            "POST",
+            manifest,
+            missing_ok=False,
+        )
+    elif item.operation in {"apply", "delete", "replace"}:
+        live = api.get(manifest)
+        if live is None or live["metadata"].get("uid") != item.live_uid:
+            raise GitOpsError(
+                "gitops-plan-changed",
+                "an object changed since the plan; plan again",
+            )
+        if item.operation == "replace":
+            _replace(api, item, live, log, clock, sleep)
+            log(f"  replace {manifest['kind']}/{manifest['metadata']['name']}")
+            return item.describe()
+        meta = {
+            "uid": live["metadata"]["uid"],
+            "resourceVersion": live["metadata"]["resourceVersion"],
+        }
+        if item.operation == "apply":
+            body = {**manifest, "metadata": {**manifest["metadata"], **meta}}
             api.call(
-                object_path(manifest, collection=True),
-                "POST",
-                manifest,
+                object_path(manifest),
+                "PATCH",
+                body,
+                "application/merge-patch+json",
                 missing_ok=False,
             )
-        elif item.operation in {"apply", "delete"}:
-            live = api.get(manifest)
-            if live is None or live["metadata"].get("uid") != item.live_uid:
-                raise GitOpsError(
-                    "gitops-plan-changed",
-                    "an object changed since the plan; plan again",
-                )
-            meta = {
-                "uid": live["metadata"]["uid"],
-                "resourceVersion": live["metadata"]["resourceVersion"],
-            }
-            if item.operation == "apply":
-                body = {**manifest, "metadata": {**manifest["metadata"], **meta}}
-                api.call(
-                    object_path(manifest),
-                    "PATCH",
-                    body,
-                    "application/merge-patch+json",
-                    missing_ok=False,
-                )
-            else:
-                api.call(
-                    object_path(manifest),
-                    "DELETE",
-                    {"preconditions": meta, "propagationPolicy": "Background"},
-                )
         else:
-            continue
-        done.append(item.describe())
-        log(f"  {item.operation} {manifest['kind']}/{manifest['metadata']['name']}")
-    return done
+            api.call(
+                object_path(manifest),
+                "DELETE",
+                {"preconditions": meta, "propagationPolicy": "Background"},
+            )
+    else:
+        return None
+    log(f"  {item.operation} {manifest['kind']}/{manifest['metadata']['name']}")
+    return item.describe()
 
 
 def removable(

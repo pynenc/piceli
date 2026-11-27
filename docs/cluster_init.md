@@ -92,6 +92,30 @@ applies, then waits up to `--wait` seconds (default 120) for every node's
 mirror agent to report. Init is idempotent: a re-run with nothing to change
 prints `unchanged` (exit 0); after a change it plans only that.
 
+An object the API refuses does not stop the plan (0.92.0): init applies
+every other object, then fails with `cluster-init-partial` (exit 1), listing
+each refused object under `failed` with the API's own reason (for example
+`only dynamically provisioned pvc can be resized`), not only its HTTP
+status. A re-run plans only what is left.
+
+**A development cache that cannot grow is replaced** (0.92.0). The claim
+`piceli-dev-cache` holds only the cache, which runs rebuild. When
+`cache_size` asks for a size the claim cannot reach in place (a smaller
+one; a larger one on a storage class without `allowVolumeExpansion: true`
+or on a volume that class did not provision; or another storage class), the
+plan says `replace` with the reason:
+
+```text
+  replace  PersistentVolumeClaim/piceli-dev-cache in piceli-dev (the cache; its storage class local-retain cannot resize volumes: deleted with its volume and made again at 110Gi)
+```
+
+Approving the plan approves the replacement. Init sets a bound `Retain`
+volume to `Delete` first, so the provisioner removes the old volume and its
+directory on the node with the claim, then deletes the claim, waits for it
+to go (up to 120 s) and creates it at the new size. The next run starts
+with a cold cache. A claim that a run's pod still uses is left as it is
+(refused, the rest applied): run init again when the run has ended.
+
 ## Upgrading the controller and the UI
 
 `cluster init` installs the UI; an upgrade does not need it again. When the

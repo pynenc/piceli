@@ -406,3 +406,36 @@ def test_init_keeps_the_volume_delete_rule_gitops_enable_added(
     assert again.exit_code == 0, again.output
     assert json.loads(again.stdout)["state"] == "unchanged"
     assert has_volume_delete(api.objects[("ClusterRole", NAME)])
+
+
+def test_a_refused_object_is_reported_after_the_rest_of_the_plan_is_applied(
+    cluster: tuple[FakeAPI, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0.92.0: init applies what it can and names what the API refused."""
+    api, url = cluster
+    ref = _composition(tmp_path, url)
+    planned = json.loads(_init(ref).stdout)
+    real = cluster_init.execute_init
+
+    def refusing(api_: Any, plan: Any, log: Any, failures: Any = None) -> Any:
+        done = real(api_, plan, log, failures)
+        failures.append(
+            {
+                "operation": "apply",
+                "kind": "PersistentVolumeClaim",
+                "name": "piceli-dev-cache",
+                "message": "the API refused patch persistentvolumeclaims (HTTP 403): "
+                "only dynamically provisioned pvc can be resized",
+            }
+        )
+        return done
+
+    monkeypatch.setattr(cluster_init, "execute_init", refusing)
+    done = _init(ref, "--approve", planned["plan_hash"])
+    assert done.exit_code == 1, done.output
+    body = json.loads(done.stdout)
+    assert body["state"] == "failed" and body["reason"] == "cluster-init-partial"
+    assert "only dynamically provisioned pvc can be resized" in body["message"]
+    assert body["failed"][0]["name"] == "piceli-dev-cache"
+    assert ("ConfigMap", "piceli-cluster") in api.objects  # the rest was applied
+    assert body["done"]

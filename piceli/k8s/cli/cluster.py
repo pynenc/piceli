@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
-from piceli.cli_contract import EXIT_APPROVAL, emit_json, reject, say
+from piceli.cli_contract import EXIT_APPROVAL, emit_json, fail, reject, say
 from piceli.k8s.cli.cluster_access import AllowExecOption, ExecSha256Option, exec_policy
 
 if TYPE_CHECKING:
@@ -314,7 +314,11 @@ def init(
         for item in plan.objects.objects:
             meta = item.manifest["metadata"]
             where = f" in {meta['namespace']}" if "namespace" in meta else ""
-            say(f"  {item.operation:8} {item.manifest['kind']}/{meta['name']}{where}")
+            note = f" ({item.note})" if item.note else ""
+            say(
+                f"  {item.operation:8} {item.manifest['kind']}/{meta['name']}"
+                f"{where}{note}"
+            )
         if plan.ui == "unavailable":
             say("  the UI is declared but this Piceli build cannot install it yet")
         say(f"plan hash: {plan.plan_hash}")
@@ -350,9 +354,20 @@ def init(
                 "the plan changed since it was approved (or the hash is wrong); "
                 "review the new plan above",
             )
-        done = execute_init(api, plan, say)
+        failed: list[dict[str, Any]] = []
+        done = execute_init(api, plan, say, failed)
         mirrors = _wait_for_mirrors(api, cluster, max(0, wait))
         _say_mirrors(mirrors)
+        if failed:
+            # 0.92.0: the rest of the plan was applied; name what was not.
+            fail(
+                "cluster-init-partial",
+                f"{len(failed)} object(s) not applied: "
+                + "; ".join(f"{f['kind']}/{f['name']}: {f['message']}" for f in failed),
+                done=done,
+                failed=failed,
+                mirrors=mirrors,
+            )
         emit_json(
             {
                 **body,
