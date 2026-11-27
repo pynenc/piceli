@@ -92,7 +92,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli gitops disable`](#cli-gitops-disable) | Remove the controller (plan first; --approve HASH removes). Never an environment. | writes | yes |
 | [`piceli gitops enable`](#cli-gitops-enable) | Install the GitOps controller (plan first; --approve HASH installs). | writes | yes |
 | [`piceli gitops history`](#cli-gitops-history) | Each environment's deploy runs, newest first, with their time windows. | reads | no |
-| [`piceli gitops hosts`](#cli-gitops-hosts) | The health events, quarantine, source blocks and container-engine backoff the controller recorded per build host. | reads | no |
+| [`piceli gitops hosts`](#cli-gitops-hosts) | The health events, quarantine, source blocks and container-engine backoff the controller recorded per build host, and (0.89.0) whether its in-cluster fallback waits for each host (busy, live, upgrading, stale). | reads | no |
 | [`piceli gitops rebuild`](#cli-gitops-rebuild) | Ask the controller to rebuild the images a host built and deploy them. | writes | no |
 | [`piceli gitops release-host`](#cli-gitops-release-host) | Ask the controller to forget a build host's health events (end its quarantine). | writes | no |
 | [`piceli gitops run`](#cli-gitops-run) | Run the controller loop (the Deployment's entrypoint); --once for one poll. | writes | no |
@@ -876,7 +876,7 @@ Take the builds the controller publishes, build and deliver them, answer it.
 **Contract**
 
 - **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=DevBuilds(hosts=[...])), credential profile, the controller's status, each source with this machine's Git access, MODULE:ATTR of each --publish NixCache, and its signing key and S3 write keys from this machine's credentials (0.25.0)
-- **Writes:** the controller's requests (build-claim, built, build-failed, nix-published, build-host-version), --version-file PATH: the controller's Piceli version (0.33.0), the binary cache: closure, signed manifest, tag pointer (--publish), images in the cluster's registry (through a port-forward), ~/.cache/piceli/builder (Git mirrors), the piceli-build-cache volume, the host's health record (piceli-health-* volumes)
+- **Writes:** the controller's requests (build-claim, built, build-failed, nix-published, build-host-version; 0.89.0: build-host-lease, an idle host's lease), --version-file PATH: the controller's Piceli version (0.33.0), the binary cache: closure, signed manifest, tag pointer (--publish), images in the cluster's registry (through a port-forward), ~/.cache/piceli/builder (Git mirrors), the piceli-build-cache volume, the host's health record (piceli-health-* volumes)
 - **Cluster:** writes
 - **Approval required:** no
 - **Safe to retry:** yes
@@ -2170,7 +2170,7 @@ Each environment's deploy runs, newest first, with their time windows.
 (cli-gitops-hosts)=
 ### `piceli gitops hosts`
 
-The health events, quarantine, source blocks and container-engine backoff the controller recorded per build host.
+The health events, quarantine, source blocks and container-engine backoff the controller recorded per build host, and (0.89.0) whether its in-cluster fallback waits for each host (busy, live, upgrading, stale).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |

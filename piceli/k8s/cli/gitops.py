@@ -1877,7 +1877,9 @@ def hosts(
     as_json: JsonOption = False,
 ) -> None:
     """The health events, quarantine, source blocks and container-engine
-    backoff the controller recorded per build host."""
+    backoff the controller recorded per build host, and (0.89.0) whether
+    its in-cluster fallback waits for each host (busy, live, upgrading,
+    stale)."""
     with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
         with _guard():
             document = channel.read_status() or {}
@@ -1918,6 +1920,34 @@ def hosts(
                 + f": {item.get('reason')}; cause: source "
                 f"(piceli gitops release-host {name})"
             )
+    # 0.89.0: whether the in-cluster fallback waits for each host, and why not.
+    from piceli.infra.build_host_status import liveness
+    from piceli.infra.remote_builds import CLAIM_STALE_SECONDS, LEASE_SECONDS
+
+    alive = liveness(controller)
+    for name, item in alive.items():
+        state = item["state"]
+        if state == "busy":
+            text = f"busy: builds {', '.join(item['builds'])}"
+        elif state == "live":
+            text = f"live: last heard {item['last_seen']} ({item['seen']})"
+        elif state == "upgrading":
+            moving = item["upgrading"]
+            text = (
+                f"UPGRADING: runs piceli {moving.get('version')}, restarts on "
+                f"{moving.get('to')} (since {moving.get('since')}); the fallback "
+                f"waits for it until {item['until']}"
+            )
+        elif state == "stale":
+            text = (
+                f"STALE: last heard {item['last_seen']} ({item['seen']}), over "
+                f"{int(CLAIM_STALE_SECONDS // 60)} min ago: taken for gone; the "
+                "in-cluster fallback does not wait for it (an idle builder serve "
+                f"renews its lease every {int(LEASE_SECONDS // 60)} min)"
+            )
+        else:
+            text = "never seen: is builder serve running there?"
+        say(f"{name:<16} host  {text}")
     if not found and not mismatched and not sources and not engine:
         say("no health events or blocks recorded for any build host or builder node")
     for name, entry in sorted(found.items()):
@@ -1939,6 +1969,7 @@ def hosts(
                 "version_mismatch": mismatched,
                 "source_quarantine": sources,  # 0.75.0
                 "engine_backoff": engine,  # 0.75.0
+                "liveness": alive,  # 0.89.0
             }
         )
 

@@ -400,6 +400,80 @@ commands = [
 - `$PICELI_SHARED_TARGET_DIR` stays set when the build runs none of the
   shared commands: a command can read their outputs of an earlier build.
 
+(host-builds-derived)=
+## Derived images (0.89.0)
+
+A release often adds one small file (its number) to an image the test
+environment already ran. Rebuilding for that takes minutes and ships digests
+nobody tested. A **derived image** instead takes a built image of the same
+spec, by its digest, and appends the files as one layer. Nothing is compiled
+and no command runs:
+
+```toml
+[context.release]
+source = "decisions"
+include = ["release/**"]
+
+[[output.image]]
+name = "web-base"
+repository = "shop/web-base"
+contexts = ["app"]                     # the base no longer reads the decision
+# base, target_files, entrypoint ... as usual
+
+[[output.image]]
+name = "web"
+repository = "shop/web"
+from = "web-base"                      # another [[output.image]] of this spec
+files = { "release/release.json" = "/usr/local/share/release.json" }   # from the stage
+contexts = ["release"]                 # only these feed its key
+```
+
+- A derived image takes only `name`, `repository`, `from`, `files`,
+  `contexts` and `labels`. Anything else (`base`, `target_files`,
+  `entrypoint`, `user` ...) is refused when the spec is loaded
+  (`invalid-spec`). `from` must name a built `[[output.image]]` of the same
+  spec: not itself, not another derived image. Each `files` key must be in
+  a context the image reads, and a command's `images` cannot name it.
+- **Its change key** (see {doc}`compositions`) is the base image's key plus
+  the files of its own contexts. A new release decision changes only the
+  derived keys; a change of the base changes both.
+- **No build.** When only derived keys changed, a composition controller
+  claims no build host and starts no build Job. It reads the base image the
+  environment already recorded for the base's key, pinned by digest, and
+  appends the files in the cluster registry over the OCI (Open Container
+  Initiative) Distribution API, as `crane append` does: the base layers and
+  config are kept, the config's `rootfs.diff_ids` and `history` get one
+  entry, and a new manifest is pushed by digest. The base layers are mounted
+  from the base's repository, not downloaded.
+- **Never from a rebuilt base.** When the base's key is the one the
+  environment last recorded but the controller lost its image record, the
+  controller does not build the base again on its own: the step fails with
+  `derived-base-unrecorded`. Rebuild it on purpose with
+  `piceli gitops sync ENV --component BASE`.
+- **Several platforms.** A base that is an OCI image index gets one derived
+  manifest per platform and a new index over them (attestation manifests of
+  the base are left out).
+- **The same files give the same layer**: sorted entries, `mtime` from
+  `build.source_date_epoch`, root owner, modes `0644`/`0755`, a gzip header
+  without name or time. One layer blob is shared by every image derived with
+  the same files.
+- **Recorded like a built image**: digest, `pull_ref`, and a provenance
+  record with `builder: derive`, `derived_from: {image, digest}`, the added
+  files' sha256 and the layer digest. The status, `piceli gitops history`
+  and `piceli gitops show --json` show `derived_from` on the derived
+  component, so a release can compare it with the digest of the run that
+  passed. The SLSA (Supply-chain Levels for Software Artifacts) provenance
+  statement (build type `https://piceli.dev/derived-image/v1`) names the
+  base digest and each file's sha256; it is attached to the image as an OCI
+  referrer when the registry takes it.
+- The controller, its builder image and every build host must run 0.89.0
+  or later: an older one refuses a spec with `from` (`invalid-spec`).
+- **Only a composition controller makes them.** `piceli artifacts
+  build-spec run` refuses a spec with a derived image
+  (`derived-image-local-unsupported`). A `piceli deploy` outside a
+  composition does not make them either: an app that uses one is refused
+  (`pipeline-image-unknown`).
+
 ## The toolchain the source pins
 
 By default a command uses whatever Rust, node or wasm tools the build
@@ -594,5 +668,8 @@ provenance records the build's start and end times.
 | `base-image-unavailable`, `base-image-invalid`, `base-platform-unavailable`, `base-layer-unsupported` | The base image cannot be used |
 | `build-builder-mismatch` | The spec was written for the other builder |
 | `host-build-path-not-staged` | A command names a path inside a context that its `include` does not stage |
+| `derived-base-unavailable`, `derived-base-invalid` | The base of a derived image cannot be read by its digest, or does not match it |
+| `derived-base-unrecorded` | A derived image changed, but the record of its unchanged base is gone; the base is not rebuilt silently |
+| `derived-image-local-unsupported` | A local `build-spec run` was given a derived image |
 
 `piceli explain <code>` prints the cause and the fix of each.

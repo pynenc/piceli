@@ -2311,6 +2311,13 @@ def _run_host_build_command(args: argparse.Namespace, *, runner: Runner | None) 
     from piceli.artifacts.multi_platform import MultiPlatformHostBuild
 
     spec = HostBuildSpec.from_toml(args.spec)
+    if spec.derived:
+        # 0.89.0: a composition controller appends derived images.
+        raise BuildSpecError(
+            "derived-image-local-unsupported",
+            f"derived image {spec.derived[0].name!r}: a local build does not "
+            "append derived images; a composition controller makes them",
+        )
     if args.cache_dir is not None:
         spec = spec.with_cache_dir(args.cache_dir.absolute())
     build = MultiPlatformHostBuild(spec, tuple(args.platforms or ()))

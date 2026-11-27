@@ -626,3 +626,64 @@ def test_gitops_builds_names_the_host_that_built_the_images(
     assert built["host"] == "laptop"
     assert sorted(built["images"]) == ["api", "catalog", "web"]
     assert controller.state.get("delivered_builds") == {}
+
+
+# ------------------------------------- idle hosts and upgrades (0.89.0)
+
+
+def test_a_report_of_another_version_starts_the_upgrade_grace_once() -> None:
+    from piceli.infra import remote_builds
+
+    state: dict[str, Any] = {}
+    body = {"host": "builder-1", "version": "0.1.0"}
+    assert remote_builds.host_version(state, body, "0.2.0", 100.0) is True
+    remote_builds.seen(state, "build-host-version", body, 100.0, ok=True)
+    assert remote_builds.host_version(state, body, "0.2.0", 500.0) is True
+    record = state[remote_builds.HOSTS_KEY]["builder-1"]
+    assert record["upgrading"]["since_epoch"] == 100.0  # its first report counts
+    shown = remote_builds.public_hosts(state)["builder-1"]["upgrading"]
+    assert shown == {"version": "0.1.0", "to": "0.2.0", "since": "1970-01-01T00:01:40Z"}
+
+    # The lease is a sighting; a request on the new version ends the grace.
+    lease = {"host": "builder-1", "version": "0.2.0"}
+    remote_builds.seen(state, "build-host-lease", lease, 900.0, ok=True)
+    record = state[remote_builds.HOSTS_KEY]["builder-1"]
+    assert "upgrading" not in record and record["seen"] == "build-host-lease"
+    assert record["seen_epoch"] == 900.0
+    assert remote_builds.host_version(state, lease, "0.2.0", 950.0) is False
+
+
+def test_gitops_hosts_liveness_says_why_a_host_is_not_waited_for() -> None:
+    from piceli.infra.build_host_status import liveness
+    from piceli.infra.remote_builds import CLAIM_STALE_SECONDS, _iso
+
+    now = 1_000_000.0
+    controller = {
+        "build_hosts_declared": ["builder-1", "builder-2", "builder-3", "builder-4"],
+        "build_hosts": {
+            "builder-1": {"seen_at": _iso(now - 60), "seen": "build-host-lease"},
+            "builder-2": {"seen_at": _iso(now - CLAIM_STALE_SECONDS - 1), "seen": "built"},
+            "builder-3": {
+                "seen_at": _iso(now - 1200),
+                "seen": "build-host-version",
+                "upgrading": {"version": "0.1.0", "to": "0.2.0", "since": _iso(now - 1200)},
+            },
+            "builder-5": {"seen_at": _iso(now - 30), "seen": "build-claim"},
+        },
+        "builds_wanted": [{"id": "b1", "claimed": {"host": "builder-5"}}],
+        "last_poll": _iso(now),
+    }  # fmt: skip
+    found = liveness(controller)
+    assert {name: item["state"] for name, item in found.items()} == {
+        "builder-1": "live",
+        "builder-2": "stale",
+        "builder-3": "upgrading",
+        "builder-4": "never-seen",
+        "builder-5": "busy",
+    }
+    assert [name for name, item in found.items() if item["waits"]] == [
+        "builder-1", "builder-3", "builder-5",
+    ]  # fmt: skip
+    assert found["builder-5"]["builds"] == ["b1"]
+    assert found["builder-3"]["until"] == _iso(now - 1200 + 1800)
+    assert liveness(controller, now + 1200)["builder-3"]["state"] == "stale"

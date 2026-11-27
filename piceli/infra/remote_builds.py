@@ -70,6 +70,19 @@ The waiting step says why. A host whose mirror of a source is corrupt
 re-clones it once before it hands the build over
 (:func:`piceli.infra.builder_serve.export_source`).
 
+0.89.0: an idle build host is live, not dead. ``builder serve`` renews a
+lease (``build-host-lease``) every :data:`LEASE_SECONDS` while it polls
+with nothing to claim, so "not heard from for :data:`CLAIM_STALE_SECONDS`"
+means the host is gone. A host that reports another Piceli version than
+the controller's (``build-host-version``; it claims nothing until it
+restarts on that version) is coming for :data:`UPGRADE_GRACE_SECONDS`:
+the fallback waits ``host_wait`` for it. A host that claims a build while
+its in-cluster fallback Job runs takes it over: the build stays wanted
+(``fallback`` on the entry) while the Job runs; on the step's next look the
+Job is stopped when it has not finished, and the host's answer is the
+build's only result (when the Job finished first, its result is used and
+the host's answer is refused, the build being no longer wanted).
+
 Standing by (0.29.0, ``piceli builder serve --once --take-next``): a host
 that waits to take the next build says so (``build-standby``); while it
 stands by, the in-cluster fallback waits for it at most
@@ -178,6 +191,14 @@ STANDBY_KEY = "build_standby"
 #: 0.29.0: a standby lives this long after its last report, and holds the
 #: fallback at most this long past its usual time.
 STANDBY_SECONDS = 120.0
+#: 0.89.0: an idle ``builder serve`` renews its lease (``build-host-lease``)
+#: this often, well under :data:`CLAIM_STALE_SECONDS` (one request per
+#: renewal; a lost one or two never makes a host stale).
+LEASE_SECONDS = 120.0
+#: 0.89.0: a host that reported another Piceli version than the
+#: controller's counts as coming this long after its first such report: it
+#: restarts on the controller's version, then claims.
+UPGRADE_GRACE_SECONDS = 1800.0
 #: What each answer says about the build it names.
 _OUTCOMES = {
     "build-claim": "claimed",
@@ -703,6 +724,34 @@ class HostBuilds:
     def _wanted(self) -> dict[str, Any]:
         return self.state.setdefault(STATE_KEY, {})
 
+    def _named(
+        self,
+        kind: str,
+        body: dict[str, Any],
+        platforms: Sequence[str] = (),
+        placed: Sequence[str] | None = None,
+    ) -> tuple[dict[str, Any], tuple[str, ...], str]:
+        """The body a host gets (with the nodes it delivers into), the
+        platforms built and the wanted build's id (see :meth:`_ask`)."""
+        built = tuple(platforms or self.platforms)
+        if self.nodes:
+            nodes = {
+                node: platform
+                for node, platform in self.nodes.items()
+                if placed is None or node in placed
+            } or dict(self.nodes)
+            missing = sorted(set(nodes.values()) - set(built))
+            if missing:
+                raise CompositionError(
+                    "composition-invalid",
+                    f"the nodes run {', '.join(missing)} but the controller builds "
+                    f"{', '.join(self.platforms)}: enable it with every node's "
+                    "platform (piceli gitops enable --platform ...)",
+                )
+            body = {**body, "deliver": {"mode": "nodes", "nodes": nodes}}
+        found = build_id(kind, {**identity(kind, body), "platforms": list(built)})
+        return body, built, found
+
     def _ask(
         self,
         kind: str,
@@ -728,23 +777,7 @@ class HostBuilds:
         node): only those get the images, and only their platforms must be
         enabled."""
         wanted = self._wanted()
-        built = tuple(platforms or self.platforms)
-        if self.nodes:
-            nodes = {
-                node: platform
-                for node, platform in self.nodes.items()
-                if placed is None or node in placed
-            } or dict(self.nodes)
-            missing = sorted(set(nodes.values()) - set(built))
-            if missing:
-                raise CompositionError(
-                    "composition-invalid",
-                    f"the nodes run {', '.join(missing)} but the controller builds "
-                    f"{', '.join(self.platforms)}: enable it with every node's "
-                    "platform (piceli gitops enable --platform ...)",
-                )
-            body = {**body, "deliver": {"mode": "nodes", "nodes": nodes}}
-        found = build_id(kind, {**identity(kind, body), "platforms": list(built)})
+        body, built, found = self._named(kind, body, platforms, placed)
         now = self.clock()
         owner = self.owner()
         failure = (self.state.get(FAILED_KEY) or {}).get(found)
@@ -833,22 +866,38 @@ class HostBuilds:
 
     def _live(self, host: str, now: float) -> bool:
         """0.71.0: whether the controller heard from ``host`` (a claim, a
-        report, a standby) within :data:`CLAIM_STALE_SECONDS`, or it stands
-        by now."""
+        report, a standby; 0.89.0: the lease an idle host renews) within
+        :data:`CLAIM_STALE_SECONDS`, or it stands by now."""
         seen = (self.state.get(HOSTS_KEY) or {}).get(host) or {}
         if now - float(seen.get("seen_epoch") or 0) < CLAIM_STALE_SECONDS:
             return True
         return host in live_standby(self.state, now)
 
+    def _upgrading(self, host: str, now: float) -> dict[str, Any] | None:
+        """0.89.0: ``host`` reported another Piceli version than the
+        controller's less than :data:`UPGRADE_GRACE_SECONDS` ago (it claims
+        nothing until it restarts on the controller's version), or ``None``."""
+        seen = (self.state.get(HOSTS_KEY) or {}).get(host) or {}
+        record = seen.get("upgrading")
+        if not isinstance(record, Mapping):
+            return None
+        if now - float(record.get("since_epoch") or 0) >= UPGRADE_GRACE_SECONDS:
+            return None
+        return dict(record)
+
     def _soon(self, entry: Mapping[str, Any]) -> str | None:
         """0.71.0: why the in-cluster fallback does not wait ``host_wait``
         for ``entry``, or ``None``: no declared host may take it (handed
         over, quarantined for one of its sources, also by an earlier
-        build), or none that may is live."""
+        build), or none that may is live (0.89.0: or restarts on the
+        controller's version, :meth:`_upgrading`)."""
         eligible = self._eligible(entry)
         if eligible == []:
             return "no declared host may take it"
-        if eligible and not any(self._live(h, self.clock()) for h in eligible):
+        now = self.clock()
+        if eligible and not any(
+            self._live(h, now) or self._upgrading(h, now) is not None for h in eligible
+        ):
             return (
                 f"no live host may take it (none reported in the last "
                 f"{int(CLAIM_STALE_SECONDS // 60)} min)"
@@ -1005,6 +1054,12 @@ class HostBuilds:
             stage = (entry.get("progress") or {}).get("stage")
             if stage:
                 text += f" ({stage})"
+            taken = entry.get("taken_over")
+            if isinstance(taken, Mapping):  # 0.89.0
+                text += (
+                    f"; it took the build over from the in-cluster fallback "
+                    f"(Job {taken.get('job') or '?'} stopped at {taken.get('at')})"
+                )
         elif entry.get("claimed"):
             held = entry["claimed"]
             text += (
@@ -1022,6 +1077,15 @@ class HostBuilds:
             soon = self._soon(entry)
             if soon is not None:  # 0.71.0: why it does not wait host_wait
                 text += f" ({soon})"
+            for host in self._eligible(entry) or ():
+                coming = self._upgrading(host, now)
+                if coming is not None and not self._live(host, now):
+                    # 0.89.0: why it waits for a host that claims nothing yet
+                    text += (
+                        f"; build host {host} runs piceli {coming.get('version')} "
+                        f"and restarts on {coming.get('to')} (since "
+                        f"{coming.get('since')})"
+                    )
         elif why.startswith("offered first"):
             text += f"; {why}"
         elif claimed is None or not why.startswith("claimed by"):
@@ -1048,19 +1112,92 @@ class HostBuilds:
         if jobs is not None:
             jobs.cancelled(kind, work)
             if jobs.running(kind, work):
-                # 0.42.0: the fallback's Job runs: looked at, not offered again.
-                return fallback()
+                # 0.42.0: the fallback's Job runs: looked at, not offered again
+                # (0.89.0: unless a build host claimed it meanwhile).
+                found = self._named(kind, body, **placement)[2]
+                taken, result = self._look_at_fallback(
+                    found, kind, work, jobs, fallback
+                )
+                if not taken:
+                    return result
             stopped = jobs.supersede(kind, work)
         entry = self._ask(kind, body, names, stopped_jobs=stopped, **placement)
         if self._fallback_due(entry, method):
-            del self._wanted()[entry["id"]]
+            now = self.clock()
             # 0.75.0: counted, so a run of fallback builds raises an alarm.
-            fell_back(self.state, self.owner(), self.clock())
-            return fallback()
+            fell_back(self.state, self.owner(), now)
+            # 0.89.0: still wanted while its Job runs, so a host that claims
+            # it takes it over (:meth:`_look_at_fallback`).
+            entry.pop("taken_over", None)
+            entry["fallback"] = {"at": _iso(now), "epoch": now}
+            return self._fallen_back(str(entry["id"]), fallback)
         raise BuildPending(
             self.waiting(entry, method, names),
             retry_at=self._fallback_at(entry, method),
         )
+
+    def _fallen_back(self, found: str, fallback: Callable[[], Any]) -> Any:
+        """Run or look at the in-cluster fallback of wanted build ``found``.
+
+        0.89.0: while its Job runs (``BuildPending``) the build stays wanted;
+        once the fallback answers (images or a failure) it is no longer
+        wanted, so a host's later answer is refused: one result per build."""
+        try:
+            result = fallback()
+        except BuildPending:
+            raise
+        except BaseException:
+            self._drop_fallback(found)
+            raise
+        self._drop_fallback(found)
+        return result
+
+    def _drop_fallback(self, found: str) -> None:
+        wanted = self._wanted()
+        if (wanted.get(found) or {}).get("fallback") is not None:
+            del wanted[found]
+
+    def _look_at_fallback(
+        self,
+        found: str,
+        kind: str,
+        work: Any,
+        jobs: Any,
+        fallback: Callable[[], Any],
+    ) -> tuple[bool, Any]:
+        """0.89.0: look at the running in-cluster fallback Job of wanted
+        build ``found``: ``(False, its result)``, or ``(True, None)`` when a
+        build host took the build over.
+
+        The Job is looked at first: finished, its result (or its failure)
+        stands, whoever claimed. Still running, and a host holds a live
+        claim (the controller took its ``build-claim``): the Job is stopped
+        and the host's answer is the build's result. Without such a claim
+        nothing is stopped: the step keeps waiting for the Job."""
+        entry = self._wanted().get(found)
+        if entry is not None and entry.get("fallback") is None:
+            entry = None  # not this fallback's (left by a controller before 0.89.0)
+        now = self.clock()
+        if entry is not None:
+            entry["asked_epoch"] = now  # not pruned while its Job runs
+        try:
+            result = self._fallen_back(found, fallback)
+        except BuildPending:
+            held = live_claim(entry, now) if entry is not None else None
+            if entry is None or held is None:
+                raise
+        else:
+            return False, result
+        stop = getattr(jobs, "stop_build", None)
+        job = stop(kind, work) if callable(stop) else None
+        since = entry.pop("fallback")
+        entry["taken_over"] = {
+            "host": held.get("host"),
+            "job": job,
+            "fallback_at": since.get("at"),
+            "at": _iso(now),
+        }
+        return True, None
 
     def build_spec(self, request: Any, checkout: Any) -> dict[str, Any]:
         return self._build(
@@ -1170,6 +1307,10 @@ def public(state: Mapping[str, Any], now: float) -> list[dict[str, Any]]:
             }
         if isinstance(item.get("prefer"), Mapping):  # 0.42.0
             item["prefer"] = {k: v for k, v in item["prefer"].items() if k != "epoch"}
+        if isinstance(item.get("fallback"), Mapping):  # 0.89.0: its Job runs
+            item["fallback"] = {
+                k: v for k, v in item["fallback"].items() if k != "epoch"
+            }
         failure = entry.get("failed")
         if failure:
             # 0.22.0: shown, so hosts never offer it again and people see why.
@@ -1299,16 +1440,25 @@ def seen(
     """Remember that a build host sent ``body`` (0.28.0, ``piceli builder
     status``): its Piceli version, when and what; with ``ok`` (the
     controller took it) also the build it names and the outcome. A refused
-    claim is a sighting, never a build of its own."""
+    claim is a sighting, never a build of its own. 0.89.0: so is the lease
+    an idle host renews (``build-host-lease``); a request on another
+    version than the one it was upgrading from ends ``upgrading``."""
     host = str(body.get("host") or "")[:64]
     if not host or kind not in (
         *_OUTCOMES, "build-progress", "build-standby", "build-host-version",
+        "build-host-lease",
     ):  # fmt: skip
         return
     hosts = state.setdefault(HOSTS_KEY, {})
     entry = dict(hosts.get(host) or {})
     if body.get("version"):
         entry["version"] = str(body["version"])[:40]
+        upgrading = entry.get("upgrading")
+        if (
+            isinstance(upgrading, Mapping)
+            and upgrading.get("version") != (entry["version"])
+        ):
+            entry.pop("upgrading")  # 0.89.0: it restarted on another version
     entry.update(seen_at=_iso(now), seen_epoch=now, seen=kind)
     outcome = _OUTCOMES.get(kind)
     if ok and outcome is not None:
@@ -1328,12 +1478,50 @@ def seen(
         del hosts[name]
 
 
+def host_version(
+    state: dict[str, Any], body: Mapping[str, Any], version: str, now: float
+) -> bool:
+    """``build-host-version`` (0.33.0) seen by a controller on ``version``
+    (0.89.0): whether the host runs another version. Its first report of
+    another version starts ``upgrading`` (``{version, to, since}`` in
+    ``controller.build_hosts``): the host claims nothing until it restarts
+    on ``version``, and counts as coming for :data:`UPGRADE_GRACE_SECONDS`.
+    A report of the same version ends it."""
+    host = str(body.get("host") or "")[:64]
+    reported = str(body.get("version") or "")[:40]
+    if not host:
+        return False
+    hosts = state.setdefault(HOSTS_KEY, {})
+    entry = dict(hosts.get(host) or {})
+    other = bool(reported) and version not in ("", "unknown") and reported != version
+    before = entry.get("upgrading")
+    if not other:
+        entry.pop("upgrading", None)
+    elif not isinstance(before, Mapping) or (
+        before.get("version"),
+        before.get("to"),
+    ) != (reported, version):
+        entry["upgrading"] = {
+            "version": reported,
+            "to": version,
+            "since": _iso(now),
+            "since_epoch": now,
+        }
+    hosts[host] = entry
+    return other
+
+
 def public_hosts(state: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     """``controller.build_hosts`` in the status (0.28.0)."""
-    return {
-        name: {k: v for k, v in entry.items() if k != "seen_epoch"}
-        for name, entry in sorted((state.get(HOSTS_KEY) or {}).items())
-    }
+    found: dict[str, dict[str, Any]] = {}
+    for name, entry in sorted((state.get(HOSTS_KEY) or {}).items()):
+        item = {k: v for k, v in entry.items() if k != "seen_epoch"}
+        if isinstance(item.get("upgrading"), Mapping):  # 0.89.0
+            item["upgrading"] = {
+                k: v for k, v in item["upgrading"].items() if k != "since_epoch"
+            }
+        found[name] = item
+    return found
 
 
 def cancel(state: dict[str, Any], build: str, by: Any, now: float) -> None:

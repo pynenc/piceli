@@ -517,10 +517,15 @@ def _image_records(
     controller = _dict(status.get("controller"))
     envs = _dict(status.get("envs"))
     live: set[str] = set()
+    hosts_hold: set[str] = set()  # 0.89.0: builds a host took over from a Job
     for entry in controller.get("builds_wanted") or ():
         entry = _dict(entry)
         if entry.get("kind") == "nix-publish":
             continue
+        if entry.get("fallback") and not entry.get("claimed"):
+            continue  # 0.89.0: its in-cluster Job runs: the Job's record below
+        if entry.get("fallback"):
+            hosts_hold.add(str(entry.get("id")))
         owner = str(entry.get("owner") or "")
         target = str(_dict(envs.get(owner)).get("group") or owner) or None
         progress = _dict(entry.get("progress"))
@@ -583,6 +588,8 @@ def _image_records(
         # 0.42.0: an in-cluster build Job that runs (the controller looks at
         # it once per poll).
         entry = _dict(entry)
+        if str(entry.get("id")) in hosts_hold:
+            continue  # 0.89.0: a host took it over; the Job stops at the next look
         owner = str(entry.get("owner") or "")
         target = str(_dict(envs.get(owner)).get("group") or owner) or None
         live.add(owner)

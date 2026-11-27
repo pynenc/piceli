@@ -213,6 +213,73 @@ def _pinned(receipt: Mapping[str, Any], what: str) -> BuiltImage:
     return BuiltImage(ref, ref.rsplit("@", 1)[-1])
 
 
+#: 0.89.0: what a derived image's provenance names as where it was made.
+DERIVE_HOST = "controller"
+
+
+def derive_images(
+    backend: Any,
+    route: Any,
+    items: Sequence[Any],
+    say: Callable[[str], None] = lambda _: None,
+) -> dict[str, BuiltImage]:
+    """0.89.0: append each derived image's files to its recorded base, in the
+    registry ``route`` reaches; no build. ``items`` are
+    :class:`piceli.infra.pipelines.DeriveItem`. Each image's ``extra`` holds
+    ``derived_from`` and its provenance record (base digest, the added
+    files' sha256, the layer); the provenance statement is attached to the
+    image as an OCI referrer when the registry takes it."""
+    from piceli.infra import provenance
+
+    done: dict[str, BuiltImage] = {}
+    for item in items:
+        say(
+            f"[derive] {item.component}: {item.base}@{item.base_digest[:19]} "
+            f"+ {len(item.files)} file(s)"
+        )
+        began = _utc()
+        from piceli.artifacts.oci_layers import LayerError
+        from piceli.artifacts.registry import RegistryError
+
+        try:
+            receipt = backend.derive_deliver(route, item)
+        except LayerError as error:
+            raise CompositionError(
+                error.code, f"derived image {item.component!r}: {error}"
+            ) from None
+        except RegistryError as error:
+            raise CompositionError(
+                "derived-base-unavailable",
+                f"derived image {item.component!r}: the registry failed "
+                f"({error.reason})",
+            ) from None
+        base = {"image": item.base, "digest": item.base_digest}
+        record = provenance.record(
+            builder="derive",
+            host=DERIVE_HOST,
+            builder_image=None,
+            commits=dict(item.commits),
+            started_at=began,
+            finished_at=_utc(),
+            platforms=list(receipt.get("platforms") or ()),
+            derived_from=base,
+            files={file.path: file.sha256 for file in item.files},
+            layer=str((receipt.get("layer") or {}).get("digest") or "") or None,
+        )
+        extra: dict[str, Any] = {"derived_from": base, "provenance": record}
+        platforms = dict(receipt.get("platforms") or {})
+        if len(platforms) > 1:
+            extra = {"platforms": platforms, **extra}
+        image = BuiltImage(str(receipt["pull_ref"]), str(receipt["digest"]), extra)
+        try:
+            body = provenance.statement(item.repository, image.manifest_digest, record)
+            backend.registry_attach(route, item.repository, image.manifest_digest, body)
+        except Exception:  # the referrer is optional; the record is kept
+            pass
+        done[item.component] = image
+    return done
+
+
 class LocalBuilder:
     """Build on this machine; push through a route to the registry.
 
@@ -345,6 +412,10 @@ class LocalBuilder:
             )
             done[item.component] = _pinned(receipt, item.component)
         return done
+
+    def derive(self, items: Sequence[Any]) -> dict[str, BuiltImage]:
+        """0.89.0: append derived images in the registry (no build)."""
+        return derive_images(self._backend(), self.route, items, self.say)
 
     def build_spec(
         self, request: Any, checkout: Callable[[str, str, Path], Any]
@@ -1480,6 +1551,15 @@ class JobBuilder:
                 "resources": {"requests": {"storage": self.settings.storage}},
             },
         }
+
+    def derive(self, items: Sequence[Any]) -> dict[str, BuiltImage]:
+        """0.89.0: append derived images in the registry, from the controller
+        (the route it mirrors through); no build Job."""
+        if self.backend is None:
+            from piceli.pipeline.backend import Backend
+
+            self.backend = Backend()
+        return derive_images(self.backend, self.mirror_route, items, self.say)
 
     def mirror(self, items: Sequence[MirrorItem]) -> dict[str, BuiltImage]:
         if self.backend is None:

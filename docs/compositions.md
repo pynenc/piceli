@@ -89,6 +89,10 @@ Docker engine and is refused with `component-build-unsupported`):
   declared `{ run = [...], images = [...] }` runs only for them, see
   {doc}`host_builds`); the others keep their cached digest, render
   identically and apply as no-op.
+- A derived image (`from = "<image>"`, 0.89.0) has the base image's key
+  plus the files of its own contexts as its key. A change only it reads (a
+  release decision) builds nothing: the controller appends its files to the
+  recorded base digest (see {ref}`host-builds-derived`).
 - `Build(node_facts=…)` declared on the build is used for the build's
   platform (page size); otherwise the facts of the controller's first
   `--platform`.

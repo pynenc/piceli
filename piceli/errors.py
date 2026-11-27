@@ -4127,6 +4127,39 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         False,
         "host-build",
     ),
+    # --- 0.89.0 derived images ---
+    _E(
+        "derived-base-unavailable",
+        "Base of a derived image cannot be read",
+        "The registry did not serve the base image of a derived image by its recorded digest (it is gone, or the registry cannot be reached).",
+        "Check the registry, then sync again; if the base was removed, rebuild it with `piceli gitops sync ENV --component BASE`.",
+        True,
+        "host-build",
+    ),
+    _E(
+        "derived-base-invalid",
+        "Base of a derived image is invalid",
+        "The base manifest, index or config of a derived image does not match its digest, or its layers differ from its config.",
+        "Rebuild the base image with `piceli gitops sync ENV --component BASE`.",
+        False,
+        "host-build",
+    ),
+    _E(
+        "derived-base-unrecorded",
+        "Base image record of a derived image is missing",
+        "A derived image changed, and its base's change key is the one the environment last recorded, but the controller no longer has the base's image record. A derived image is only made from the base the environment already runs, so the controller does not build the base again on its own.",
+        "Rebuild the base on purpose with `piceli gitops sync ENV --component BASE`; the derived image is then made from the new base.",
+        False,
+        "host-build",
+    ),
+    _E(
+        "derived-image-local-unsupported",
+        "Derived images are made by the composition controller",
+        "`piceli artifacts build-spec run` was given a `host-build.toml` with a derived image (`from = ...`). A local build does not append derived images.",
+        "Remove the derived images for the local build, or let a composition controller make them.",
+        False,
+        "host-build",
+    ),
     # --- 0.9.0 restore points ---
     _E(
         "restore-point-writer-unsupported",

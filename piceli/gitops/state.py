@@ -73,6 +73,8 @@ REQUEST_KINDS = (
     "build-host-version",
     # 0.83.0: piceli gitops candidate request|release COMMIT
     "candidate",
+    # 0.89.0: an idle build host renews its lease (it is live, not dead)
+    "build-host-lease",
 )  # fmt: skip
 #: Env states a status may carry.
 ENV_STATES = (
@@ -503,6 +505,21 @@ def build_host_version_request(
     the version it really runs. ``version``: the running one by default."""
     return request(
         "build-host-version",
+        host=str(host)[:64],
+        version=str(version)[:40] if version else _piceli_version(),
+        at=_now(),
+    )
+
+
+def build_host_lease_request(
+    host: str, version: str | None = None
+) -> tuple[str, dict[str, Any]]:
+    """An idle ``host`` renews its lease (0.89.0, ``piceli builder serve``,
+    every ``LEASE_SECONDS`` while it has nothing to claim): a sighting, so
+    the controller counts it live and its in-cluster fallback waits
+    ``host_wait`` for it. ``version``: the running one by default."""
+    return request(
+        "build-host-lease",
         host=str(host)[:64],
         version=str(version)[:40] if version else _piceli_version(),
         at=_now(),

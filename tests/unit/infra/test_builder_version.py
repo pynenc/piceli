@@ -388,3 +388,45 @@ def test_builder_serve_uses_the_controllers_image_unless_overridden(
     assert result.exit_code == 0, result.output
     assert pulled[-1] == pinned
     assert "differs from the controller's builder image" in result.stderr
+
+
+# ---------------------------------------------- the idle host's lease (0.89.0)
+
+
+def test_an_idle_host_renews_its_lease_once_every_lease_seconds(
+    tmp_path: Path,
+) -> None:
+    from piceli.infra.remote_builds import LEASE_SECONDS
+
+    channel = DirectoryChannel(tmp_path / "state")
+    channel.publish({"controller": {"version": __version__, "builds_wanted": []}})
+    clock = {"now": 1000.0}
+    worker = _image_worker(tmp_path, channel, clock=lambda: clock["now"])
+    sent = []
+    for _ in range(40):  # ten minutes of 15-second polls, nothing to claim
+        assert worker.once() is None
+        sent += [
+            b for b in channel.requests().values() if b["kind"] == "build-host-lease"
+        ]
+        channel.remove_requests(list(channel.requests()))
+        clock["now"] += 15
+    assert len(sent) == int(600 // LEASE_SECONDS)
+    assert {(b["host"], b["version"]) for b in sent} == {("builder-1", __version__)}
+
+
+def test_a_host_that_may_not_claim_renews_no_lease(tmp_path: Path) -> None:
+    channel = DirectoryChannel(tmp_path / "state")
+    worker = _image_worker(tmp_path, channel)
+    # Not declared by the controller's composition: no lease.
+    channel.publish(
+        {"controller": {"version": __version__, "build_hosts_declared": ["builder-2"]}}
+    )
+    assert worker.once() is None
+    assert channel.requests() == {}
+    # A controller on another version knows no lease: the version is said.
+    channel.publish({"controller": {"version": "99.0.0"}})
+    with pytest.raises(VersionMismatch):
+        worker.once()
+    kinds = [b["kind"] for b in channel.requests().values()]
+    assert kinds == ["build-host-version"]
+    assert worker.renew_lease() is False
