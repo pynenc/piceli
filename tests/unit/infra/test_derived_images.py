@@ -276,3 +276,46 @@ def test_a_lost_base_record_fails_instead_of_building_the_base(
     assert main.get("reason") == "derived-base-unrecorded", main
     assert ports.builder.built == [["api", "worker"]]  # the base was not rebuilt
     assert len(ports.builder.derived) == 1
+
+
+def _plan(pipeline: Any, name: str, **_kw: Any) -> dict[str, Any]:
+    return {"state": "planned", "plan_hash": "sha256:" + "e" * 64, "deploy": {}}
+
+
+def test_the_canary_appends_derived_images_dry_instead_of_refusing_them(
+    world: dict[str, Any],
+) -> None:
+    """0.93.0 (ops#114): the canary's builder had no ``derive``, so every
+    composition with derived images failed the canary at resolve."""
+    from piceli.gitops.canary import DryPorts, dry_run, summary_lines
+
+    controller, ports = world["controller"], world["ports"]
+    _with_release(world, '{"release": "1.4.0"}\n')
+    body = dry_run(controller, DryPorts(ports, _plan))
+    main = body["envs"]["main"]
+    assert main["state"] == "ok", main
+    assert sorted(main["builds"]) == ["api", "worker"]
+    assert main["derives"] == ["api-release"]
+    assert ports.builder.built == []  # nothing built by the real ports
+    assert (
+        "main: imports, plans 0 changes, builds 2 components, appends 1 derived image: ok"
+        in summary_lines(body)
+    )
+
+
+def test_the_canary_reuses_the_live_controllers_derived_images(
+    world: dict[str, Any],
+) -> None:
+    from piceli.gitops.canary import DryPorts, dry_run, known_images
+
+    controller, ports = world["controller"], world["ports"]
+    ports.builder = DerivingBuilder()
+    _with_release(world, '{"release": "1.4.0"}\n')
+    live = controller.poll_once()
+    assert live["envs"]["main"]["state"] == "deployed"
+    controller.state["envs"] = {}
+    body = dry_run(controller, DryPorts(ports, _plan, known=known_images(live)))
+    main = body["envs"]["main"]
+    assert main["state"] == "ok", main
+    assert main["builds"] == [] and main["derives"] == []
+    assert len(ports.builder.derived) == 1  # only the live controller appended

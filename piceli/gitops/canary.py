@@ -69,6 +69,8 @@ class DryBuilder:
     def __init__(self, known: Mapping[tuple[str, str], tuple[str, str]]) -> None:
         self.known = dict(known)
         self.builds: list[str] = []
+        #: 0.93.0: the derived images a step would append (no build).
+        self.derives: list[str] = []
 
     def _image(self, name: str, key: str, repository: str, *, count: bool) -> Any:
         from piceli.infra.builders import BuiltImage
@@ -93,6 +95,20 @@ class DryBuilder:
             name: self._image(name, wanted["key"], wanted["repository"], count=True)
             for name, wanted in request.images.items()
         }
+
+    def derive(self, items: Any) -> dict[str, Any]:
+        """0.93.0: the derived images a step would append (``DeriveItem``):
+        the live controller's image for the same key, or a placeholder. The
+        live builders append them (0.89.0); without this the canary refused
+        every composition with derived images."""
+        done = {}
+        for item in items:
+            done[item.component] = self._image(
+                item.component, item.key, item.repository, count=False
+            )
+            if (item.component, item.key) not in self.known:
+                self.derives.append(item.component)
+        return done
 
     def mirror(self, items: Any) -> dict[str, Any]:
         return {
@@ -326,6 +342,7 @@ def _check(
         return {"state": "skipped", "why": f"waiting for a ref of {missing}"}
     ports.progress["stage"] = "resolve"
     start = len(ports.builder.builds)
+    derived = len(getattr(ports.builder, "derives", ()))
     result: dict[str, Any] = {"revision": dict(record.get("revision") or {})}
     try:
         controller._deploy(record)
@@ -352,6 +369,7 @@ def _check(
             detail="the deploy step ended without a plan",
         )
     result["builds"] = ports.builder.builds[start:]
+    result["derives"] = list(getattr(ports.builder, "derives", ()))[derived:]
     result["digests"] = {
         key: entry.get("source_digest")
         for key, entry in sorted((record.get("components") or {}).items())
@@ -399,6 +417,9 @@ def summary_lines(body: Mapping[str, Any]) -> list[str]:
             )
             builds = len(env.get("builds") or ())
             built = _plural(builds, "component") if builds else "nothing"
+            appends = len(env.get("derives") or ())
+            if appends:  # 0.93.0: derived images, appended without a build
+                built += f", appends {_plural(appends, 'derived image')}"
             lines.append(f"{name}: imports, plans {planned}, builds {built}: ok")
         elif env.get("state") == "skipped":
             lines.append(f"{name}: not checked ({env.get('why')})")
