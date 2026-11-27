@@ -247,6 +247,10 @@ class HelmOptional:
     every value the objects need. To refuse a contradiction instead of
     leaving the objects out, see ``HelmChart(requires=...)``.
 
+    0.95.0: ``note`` is one line of the install notes (``NOTES.txt``),
+    printed only when the objects render (this value and every one in
+    ``when``). It is a template line: ``{{ .Release.Namespace }}`` works.
+
     Example::
 
         HelmOptional("Expose the intake to other namespaces",
@@ -262,6 +266,18 @@ class HelmOptional:
     patches: Sequence[tuple[Any, Any]] | Mapping[str, Any] = ()
     default_on_reuse: bool = False
     when: Sequence[str] = ()
+    note: str = ""
+
+    def install_note(self) -> str:
+        """0.95.0: the note's line, or ``""``.
+
+        :raises ValueError: a note that is not one line of text.
+        """
+        if not isinstance(self.note, str):
+            raise ValueError(f"note must be one line of text, got {self.note!r}")
+        if "\n" in self.note or "\r" in self.note or len(self.note) > 500:
+            raise ValueError("note must be one line of at most 500 characters")
+        return self.note.strip()
 
     def conditions(self) -> tuple[str, ...]:
         """0.95.0: the other values that must hold (a string is one name).
@@ -1457,6 +1473,8 @@ class HelmBundle:
     naming: Naming = field(default_factory=Naming)
     #: 0.94.0: the storage probe the chart runs before install, if any.
     storage_probe: StorageProbe | None = None
+    #: 0.95.0: (the ``if`` test, the line) of each optional value's note.
+    notes: tuple[tuple[str, str], ...] = ()
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -2146,6 +2164,14 @@ def build_helm(
             optional_inputs,
             {name: ".".join(path) for name, path in replaceable.items()},
         ).encode()
+    try:
+        notes = tuple(
+            (gate(name), item.install_note())
+            for name, (_p, item, _k) in sorted(optional.items())
+            if item.install_note()
+        )
+    except ValueError as error:
+        raise BundleError("bundle-invalid", str(error)) from None
     chart = HelmBundle(
         name=bundle.name,
         version=bundle.version,
@@ -2168,6 +2194,7 @@ def build_helm(
         retired=retired,
         naming=naming,
         storage_probe=probe,
+        notes=notes,
     )
     files["Chart.yaml"] = yaml.safe_dump(chart.metadata(), sort_keys=True).encode()
     files["templates/NOTES.txt"] = _notes(chart).encode()
@@ -2352,6 +2379,8 @@ def _notes(chart: HelmBundle) -> str:
             f"WARNING: {name} is retired and ignored: {hint}",
             "{{- end }}",
         ]
+    for test, line in chart.notes:  # 0.95.0: HelmOptional(note=...)
+        lines += [f"{{{{- if {test} }}}}", line, "{{- end }}"]
     return "\n".join(lines) + "\n"
 
 
@@ -2422,6 +2451,8 @@ def _readme(
         if patches:
             effect += (" and patches " if effect else "true patches ") + patches
         note = f"; {depends[name]}" if name in depends else ""
+        if item.note:  # 0.95.0
+            note += f"; the install notes then say: `{item.install_note()}`"
         lines.append(f"- `{name}` (true or false): {text}; {effect}{note}")
     for name, value in sorted((placed or {}).items()):
         lines.append(f"- `{name}`: {descriptions.get(name) or value.description}")

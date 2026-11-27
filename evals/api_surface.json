@@ -4886,7 +4886,9 @@
     "default",
     "default_on_reuse",
     "description",
+    "install_note",
     "keys",
+    "note",
     "objects",
     "patches",
     "resolved",
@@ -4896,12 +4898,14 @@
     "default",
     "default_on_reuse",
     "description",
+    "note",
     "objects",
     "patches",
     "when"
    ],
    "methods": {
     "conditions": [],
+    "install_note": [],
     "keys": [],
     "resolved": []
    }

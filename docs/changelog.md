@@ -20,6 +20,13 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   that would fail the default install are refused with `bundle-invalid`.
 - Charts that use neither render byte for byte as in 0.94.0.
 
+### An install note for an optional value (ops#117)
+
+- `HelmOptional(note="...")` prints one line in the install notes
+  (`NOTES.txt`) only when the value's objects render (`when` included); it
+  is a template line (`{{ .Release.Namespace }}` works), and the chart's
+  README lists it next to the value.
+
 ### An image may read no context
 
 - `contexts = []` on an `[[output.image]]` is accepted: the image's key is

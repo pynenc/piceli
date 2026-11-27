@@ -71,6 +71,8 @@ objects).
 - **Chart values that need other values**: an optional object can render
   only when several values are true, and a value can refuse to install
   without the one it needs, with a message naming both.
+- **An install note per optional value** (`HelmOptional(note=...)`),
+  printed only when the value is on.
 
 ## Web UI
 

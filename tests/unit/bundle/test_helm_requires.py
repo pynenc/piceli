@@ -355,3 +355,52 @@ def test_helm_refuses_a_value_without_the_one_it_needs(
     assert result.returncode == 0, result.stderr
     kinds = _kinds(result.stdout)
     assert (("NetworkPolicy", "agent-intake") in kinds) is (collector == "true")
+
+
+# ------------------------------------------------------------ install notes
+
+NOTE = "The intake is at https://agent-intake.{{ .Release.Namespace }}.svc:4318"
+NOTED = (
+    "optional={"
+    + INTAKE_EXPOSE
+    + ", 'collector.enabled': HelmOptional('Run the collector', "
+    "objects=[intake_policy], when=['intake.expose'], "
+    f"note={NOTE!r})}}"
+)
+
+
+def test_a_note_prints_only_when_its_objects_render(tmp_path: Path) -> None:
+    """0.95.0 (``HelmOptional(note=...)``): one NOTES.txt line under the
+    value's own test, ``when`` included; listed in the README."""
+    out = _write(tmp_path, NOTED)
+    notes = (out / "templates" / "NOTES.txt").read_text().splitlines()
+    assert notes[-3:] == [
+        f"{{{{- if and {COLLECTOR} {EXPOSE} }}}}",
+        NOTE,
+        "{{- end }}",
+    ]
+    readme = (out / "README.md").read_text()
+    assert f"; the install notes then say: `{NOTE}`" in readme
+
+
+def test_a_note_of_several_lines_is_refused(tmp_path: Path) -> None:
+    change = NOTED.replace(repr(NOTE), repr("one\ntwo"))
+    assert "note must be one line" in _refused(tmp_path, change, "lines")
+
+
+@pytest.mark.parametrize(("expose", "shown"), [("true", True), ("false", False)])
+def test_helm_prints_the_note_only_when_the_value_holds(
+    helm: str, tmp_path: Path, expose: str, shown: bool
+) -> None:
+    out = _write(tmp_path, NOTED)
+    result = subprocess.run(
+        [helm, "install", "agent", str(out), "-n", "edge", "--dry-run=client",
+         *BASE, "--set", f"intake.expose={expose}",
+         "--set", "collector.enabled=true"],
+        capture_output=True, text=True, timeout=120,
+        env={"PATH": os.environ["PATH"], "HOME": str(out.parent)},
+    )  # fmt: skip
+    assert result.returncode == 0, result.stderr
+    assert (
+        "The intake is at https://agent-intake.edge.svc:4318" in result.stdout
+    ) is shown

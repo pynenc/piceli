@@ -487,6 +487,23 @@ chart = HelmChart(
 - Only whole objects are gated. To change a container by a value, patch
   its workload (`patches`); a patched object cannot also be optional.
 
+### An install note for an optional value (0.95.0)
+
+`HelmOptional(note=...)` adds one line to the install notes (`NOTES.txt`),
+printed only when the value's objects render (the value and every one in
+`when`). It is a template line, so `{{ .Release.Namespace }}` works:
+
+```python
+"intake.expose": HelmOptional(
+    "Expose the intake",
+    objects=[intake],
+    note="The intake is at https://intake.{{ .Release.Namespace }}.svc:4318",
+)
+```
+
+`helm install` prints it after the status lines, and the chart's README
+lists it next to the value. A note is one line of at most 500 characters.
+
 ### Storage probe before install (0.94.0)
 
 A claim in a storage class the cluster's nodes cannot attach (a disk type
