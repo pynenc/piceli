@@ -217,6 +217,34 @@ def _images(
     return dict(sorted(images.items()))
 
 
+def env_access(config: EnvConfig, branch: str) -> Any:
+    """The ``Access`` of ``branch``'s environment (``None``: the main branch,
+    or none declared)."""
+    fixed = config.named(branch)
+    if fixed is not None:
+        return fixed.access or getattr(fixed.cluster, "access", None)
+    if _implicit_main(config, branch):
+        return None
+    return config.branch_access
+
+
+def _node_addresses(envs: Any, say: Say) -> tuple[str, ...]:
+    """The nodes' addresses for ``Access(tailnet=True)`` (0.91.0), or none
+    when the cluster cannot list nodes: the policies then admit the
+    operator's proxies alone, as before."""
+    reader = getattr(envs, "node_addresses", None)
+    if reader is None:
+        return ()
+    try:
+        return tuple(reader())
+    except EnvError as error:
+        say(
+            f"piceli: cannot list the nodes ({error}); a tailnet device that is "
+            "also a node will not reach the LoadBalancer companions"
+        )
+        return ()
+
+
 def env_pipeline(
     pipeline: Pipeline,
     branch: str,
@@ -224,6 +252,7 @@ def env_pipeline(
     digests: Mapping[str, str] | None = None,
     build_receipt: Mapping[str, Any] | None = None,
     api_endpoints: tuple[tuple[str, int], ...] = (),
+    node_addresses: tuple[str, ...] = (),
 ) -> Pipeline:
     """The pipeline of one environment.
 
@@ -256,7 +285,7 @@ def env_pipeline(
     alias = pin_alias(pipeline) if pipeline.deliver is not None else None
     node = pipeline.target.nodes.get(alias) if alias is not None else None
     placement: dict[str, Any] = {}
-    access = None
+    access = env_access(config, branch)
     if fixed is not None:
         placement = {
             "stack": fixed.stack,
@@ -266,14 +295,12 @@ def env_pipeline(
             "environment": fixed.name,
             "prebuilt": bool(images),
         }
-        access = fixed.access or getattr(fixed.cluster, "access", None)
     elif not main:
         placement = {
             "stack": config.branch_stack,
             "on_nodes": config.branch_nodes,
             "replicas": config.branch_replicas,
         }
-        access = config.branch_access
     if access is not None and access.tailnet:
         from piceli.envs.access import exposed_services, http_ports
 
@@ -290,6 +317,7 @@ def env_pipeline(
         pin_node=node.name if node is not None else None,
         mirrors=mirror_references(pipeline) if pipeline.deliver is not None else {},
         api_endpoints=tuple(api_endpoints),
+        node_addresses=tuple(node_addresses) if access is not None else (),
         **placement,
     )
     derived = copy.copy(pipeline)
@@ -729,6 +757,9 @@ def env_up(
             build_receipt=build_receipt,
             api_endpoints=envs.api_endpoints()
             if config.allow_api and not main and not config.is_fixed(branch)
+            else (),
+            node_addresses=_node_addresses(envs, say)
+            if getattr(env_access(config, branch), "tailnet", False)
             else (),
         )
         if getattr(derived, "prune", None) is None:

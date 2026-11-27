@@ -29,6 +29,7 @@ Importing this module is side-effect free.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -261,6 +262,9 @@ class Backend:
     service: str
     selector: dict[str, str]
     ports: list[dict[str, Any]]
+    #: 0.91.0: a ``LoadBalancer`` companion serves it (not only an Ingress):
+    #: its tailnet IP is then reached from the nodes too (see :func:`node_peers`).
+    plain: bool = True
 
 
 @dataclass
@@ -385,6 +389,7 @@ def tailnet_plan(
                 )
             )
             served = []
+        plan.backends[-1].plain = not served
         for index, port in enumerate(served):
             plan.objects.append(
                 {
@@ -453,17 +458,66 @@ def _ingress_policy(policy: Mapping[str, Any]) -> bool:
     return "Ingress" in (spec.get("policyTypes") or ["Ingress"])
 
 
+def _address(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        return ipaddress.ip_address(value)
+    except ValueError:
+        return None
+
+
+def node_peers(nodes: Iterable[Mapping[str, Any]]) -> tuple[str, ...]:
+    """The addresses a node's own traffic to a pod comes from (0.91.0).
+
+    The Tailscale operator marks a companion's tailnet IP ``ipMode: VIP``, so
+    kube-proxy on every node sends that IP straight to the pod: a tailnet
+    device that is also a node reaches the pod from the node, not through
+    the operator's proxy. Per node: its ``InternalIP`` addresses, and the
+    first two addresses of each pod range (``spec.podCIDRs``): the overlay
+    and bridge addresses a node's traffic leaves from on flannel, k3s'
+    default (``flannel.1`` holds the range's first address, ``cni0`` the
+    next). Pods never get these two. Sorted, ``/32`` (``/128`` for IPv6).
+    """
+    found: set[ipaddress.IPv4Address | ipaddress.IPv6Address] = set()
+    for node in nodes:
+        status = node.get("status") or {}
+        for entry in status.get("addresses") or ():
+            if isinstance(entry, Mapping) and entry.get("type") == "InternalIP":
+                address = _address(str(entry.get("address") or ""))
+                if address is not None:
+                    found.add(address)
+        spec = node.get("spec") or {}
+        ranges = list(spec.get("podCIDRs") or ()) or [spec.get("podCIDR")]
+        for value in ranges:
+            if not value:
+                continue
+            try:
+                network = ipaddress.ip_network(str(value), strict=False)
+            except ValueError:
+                continue
+            found.add(network.network_address)
+            if network.num_addresses > 1:
+                found.add(network.network_address + 1)
+    return tuple(
+        f"{address}/{address.max_prefixlen}"
+        for address in sorted(found, key=lambda a: (a.version, int(a)))
+    )
+
+
 def allow_tailnet(
     policies: Sequence[dict[str, Any]],
     backends: Sequence[Backend],
     manifests: Sequence[Mapping[str, Any]],
     access: Access,
+    nodes: Sequence[str] = (),
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Let the operator's proxies reach the exposed pods (in place).
 
     Every ingress policy whose ``podSelector`` selects a pod template of
     ``manifests`` that an exposed Service's selector matches gets one rule
     admitting ``access.operator_namespace`` on those Services' target ports.
+    With ``nodes`` (CIDRs, :func:`node_peers`; 0.91.0), a second rule admits
+    them on the ports of the Services a ``LoadBalancer`` companion serves,
+    so a tailnet device that is a node of the cluster reaches them too.
     Returns ``(changed policies, notes)``: a policy that cannot be evaluated,
     and a Service whose pods the release does not create, are notes.
     """
@@ -500,6 +554,7 @@ def allow_tailnet(
         spec = policy.setdefault("spec", {})
         selector = spec.get("podSelector")
         ports: list[dict[str, Any]] = []
+        plain: list[dict[str, Any]] = []
         unknown = False
         for backend, matched in pods:
             for _name, labels in matched:
@@ -510,6 +565,8 @@ def allow_tailnet(
                     for entry in backend.ports:
                         if entry not in ports:
                             ports.append(dict(entry))
+                        if backend.plain and entry not in plain:
+                            plain.append(dict(entry))
                     break
         if unknown:
             notes.append(
@@ -525,10 +582,14 @@ def allow_tailnet(
             continue
         if not ports:
             continue
-        rule = {"from": [source], "ports": ports}
+        wanted = [{"from": [source], "ports": ports}]
+        if nodes and plain:
+            peers = [{"ipBlock": {"cidr": cidr}} for cidr in nodes]
+            wanted.append({"from": peers, "ports": plain})
         rules = spec.setdefault("ingress", [])
-        if rule not in rules:
-            rules.append(rule)
+        added = [rule for rule in wanted if rule not in rules]
+        if added:
+            rules.extend(added)
             changed.append(policy)
     return changed, notes
 
@@ -559,13 +620,15 @@ def tailnet_report(
     env: str,
     namespace: str,
     http: Mapping[str, tuple[int, ...]] | None = None,
+    nodes: Sequence[str] = (),
 ) -> dict[str, Any]:
     """What a rendered environment puts on the tailnet, and why not the rest.
 
     ``manifests``: the environment's rendered objects (companions and the
     amended policies included). ``tailnet`` lists each companion (kind,
     name, Service, host, ports); ``policies`` the ingress policies that admit
-    the operator's namespace; ``notes`` every :data:`SKIPPED` Service and
+    the operator's namespace; ``nodes`` the node addresses admitted beside
+    it (:func:`node_peers`); ``notes`` every :data:`SKIPPED` Service and
     :data:`UNCHANGED` policy. Never contacts the cluster.
     """
     import copy
@@ -573,7 +636,7 @@ def tailnet_report(
     plan = tailnet_plan(manifests, access, exposed, env, namespace, http)
     policies = [dict(m) for m in manifests if m.get("kind") == "NetworkPolicy"]
     _changed, notes = allow_tailnet(
-        copy.deepcopy(policies), plan.backends, manifests, access
+        copy.deepcopy(policies), plan.backends, manifests, access, nodes
     )
     companions = []
     for item in plan.objects:
@@ -599,5 +662,7 @@ def tailnet_report(
         "operator_namespace": access.operator_namespace,
         "tailnet": companions,
         "policies": admitting(policies, access),
+        # 0.91.0: the node addresses also admitted on LoadBalancer ports.
+        "nodes": list(nodes),
         "notes": plan.notes + notes,
     }

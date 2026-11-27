@@ -793,11 +793,14 @@ def isolate(
             env.exposed_http,
         )
         policies = [m for ref, m in manifests.items() if ref.kind == "NetworkPolicy"]
-        amended, _notes = allow_tailnet(policies, plan.backends, everything, env.access)
+        nodes = env.node_addresses  # 0.91.0: a tailnet device may be a node
+        amended, _notes = allow_tailnet(
+            policies, plan.backends, everything, env.access, nodes
+        )
         for policy in amended:
             changed_ref = next(ref for ref, m in manifests.items() if m is policy)
             components = _replace(components, changed_ref, policy)
-        allow_tailnet(added, plan.backends, everything, env.access)
+        allow_tailnet(added, plan.backends, everything, env.access, nodes)
         added += plan.objects
     if added:
         if any(component.name == COMPONENT for component in components):

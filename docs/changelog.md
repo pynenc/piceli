@@ -4,6 +4,24 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.91.0
+
+### A tailnet device that is a node reaches the LoadBalancer companions (ops#112)
+
+- The Tailscale operator marks a companion's tailnet IP `ipMode: VIP`, so
+  kube-proxy on every node sends it straight to the pod, and the packet
+  comes from the node, not from the operator's proxy. The ingress policies
+  admitted only the operator's namespace, so a tailnet device that is also a
+  cluster node was refused (for example a TURN server's port 3478).
+- `env up` and the GitOps controller now read the nodes when an environment
+  declares `Access(tailnet=True)` and add a second rule on the ports of the
+  plain companions: each node's `InternalIP` and the first two addresses of
+  its pod range (`flannel.1` and `cni0` on flannel). Ports served by a
+  Tailscale `Ingress` (`https=True`) are not opened to the nodes. Nothing is
+  widened beyond those ports.
+- The plan's `access` lists them as `nodes`. When the nodes cannot be
+  listed, `env up` says so and admits only the operator, as before.
+
 ## Version 0.90.0
 
 ### The development cache's budget follows its disk (ops#111)

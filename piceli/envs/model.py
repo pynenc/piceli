@@ -1205,6 +1205,10 @@ class BranchEnv:
     #: ``(address, port)`` of the API server, read by ``env up`` when
     #: ``config.allow_api`` (the egress the isolation then allows).
     api_endpoints: tuple[tuple[str, int], ...] = ()
+    #: 0.91.0: the nodes' addresses (CIDRs, :func:`piceli.envs.access.node_peers`),
+    #: read by ``env up`` with ``Access(tailnet=True)``: admitted beside the
+    #: operator's proxies on the ports of LoadBalancer companions.
+    node_addresses: tuple[str, ...] = ()
     #: 0.19: ``Access`` of the environment and the Services it exposes on
     #: the tailnet (``{service: ports}``, see :mod:`piceli.envs.access`).
     access: Any = None

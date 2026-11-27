@@ -66,13 +66,11 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.90
+## What's new in 0.91
 
-- **The development cache's budget follows its disk**: a run's budget is at
-  most the cache plus half its disk's free space (`cache_free_share`), and
-  its log says which limit applies.
-- **`piceli dev run` warns when the installed config differs from the
-  declared one**, naming the fields.
+- **A tailnet device that is also a cluster node reaches the services
+  `Access(tailnet=True)` exposes**: the ingress policies now admit the nodes
+  on the exposed LoadBalancer ports, beside the Tailscale operator.
 
 ## Web UI
 
