@@ -976,6 +976,8 @@ def job_run(
                 merged = receipt
             else:
                 merged["outputs"]["images"].update(receipt["outputs"]["images"])
+                # 0.94.0: every spec's image scans.
+                merged.setdefault("scans", {}).update(receipt.get("scans") or {})
                 merged.setdefault("builds", {})[spec.name] = receipt
         assert merged is not None
         receipts[platform] = merged

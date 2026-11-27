@@ -146,6 +146,18 @@ def add_copy_command(sub: Any) -> None:
     )
     cmd.add_argument("--move-tag", action="store_true")
     cmd.add_argument("--approve", help="the plan digest printed without --approve")
+    scan = cmd.add_mutually_exclusive_group()  # 0.94.0
+    scan.add_argument(
+        "--scan-policy",
+        type=Path,
+        help="a TOML file with a [scan] table (enabled, ignore = waivers) for "
+        "the vulnerability scan of the source",
+    )
+    scan.add_argument(
+        "--no-scan",
+        action="store_true",
+        help="do not scan the source for known vulnerabilities (recorded in the plan)",
+    )
     source = cmd.add_mutually_exclusive_group()
     source.add_argument("--from-credentials", type=Path)
     source.add_argument("--from-docker-config", type=Path)
@@ -822,6 +834,7 @@ def run_copy_command(args: argparse.Namespace, **seams: Any) -> int:
     )
     from piceli.artifacts.image_copy import CopyError, summary
     from piceli.artifacts.registry import describe
+    from piceli.artifacts.scan import ScanError
     from piceli.cli_contract import EXIT_APPROVAL, emit_json, say
 
     sleep = seams.pop("sleep", time.sleep)
@@ -833,6 +846,7 @@ def run_copy_command(args: argparse.Namespace, **seams: Any) -> int:
             timeout=args.timeout,
             source_ca_file=args.from_ca_file.absolute() if args.from_ca_file else None,
             ca_file=args.ca_file.absolute() if args.ca_file else None,
+            scan=_copy_scan_policy(args),
         )
         plan = CopySetPlan.parse(items, options)
         if args.approve is None or args.approve != plan.digest:
@@ -897,10 +911,20 @@ def run_copy_command(args: argparse.Namespace, **seams: Any) -> int:
         else:
             say(f"copy: {sum(i.state == 'done' for i in report.items)} copied")
         return 0
-    except (CopyError, CopySetError, DeliveryInputError) as error:
+    except (CopyError, CopySetError, DeliveryInputError, ScanError) as error:
         return rejection(error.code if error.code in ERRORS else "copy-invalid")
     except (ValueError, KeyError, TypeError, OSError):
         return rejection("copy-invalid")
+
+
+def _copy_scan_policy(args: argparse.Namespace) -> Any:
+    """0.94.0: ``--no-scan`` or ``--scan-policy FILE``; ``None``: the default."""
+    from piceli.artifacts.scan import ScanPolicy
+
+    if getattr(args, "no_scan", False):
+        return ScanPolicy.off()
+    path = getattr(args, "scan_policy", None)
+    return ScanPolicy.load(path) if path is not None else None
 
 
 def run_copy_job_command(args: argparse.Namespace, **seams: Any) -> int:

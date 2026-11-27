@@ -4,6 +4,54 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.94.0
+
+### An OpenTelemetry Collector image built with OCB (ops#115)
+
+- Host builds can build an OpenTelemetry Collector image with OCB
+  (OpenTelemetry Collector Builder). An `[output.image.collector]` table
+  lists only the components you want, as short names or full module pins
+  (a stable module such as `k8sattributesprocessor` v1.x needs its full pin).
+- Piceli writes the manifest and builds a static binary for each platform
+  with the Go that the new `build.toolchains.go` pins (a version, or a
+  go.mod `toolchain` line, checked against go.dev).
+- `/THIRD-PARTY-NOTICES` is written from the licence and NOTICE files of
+  every linked Go module, Go's own included. The SBOM (software bill of
+  materials) lists each module as `pkg:golang`, and the provenance records
+  the collector version, the components and the manifest's sha256.
+- New errors: `collector-notices-failed`, `collector-licence-missing`.
+
+### Every image is scanned for known vulnerabilities (ops#115)
+
+- Images are scanned for known CVEs (Common Vulnerabilities and Exposures)
+  with Grype 0.122.1, pinned by sha256: each host-build archive before it
+  is pushed or recorded, each mirror copy before it is ready, and the source
+  of `piceli artifacts copy` before anything is copied.
+- A Critical finding with a fixed version fails with `image-vulnerable`.
+  A waiver needs a reason and an end date (`[scan] ignore` in
+  `host-build.toml`, `--scan-policy FILE` or `PICELI_SCAN_POLICY`).
+- Receipts record `scans` (scanner version, database build time, counts by
+  severity, waived ids), and `attestations/<image>.scan.json` sits beside
+  the SBOM. Turning scanning off (`[scan] enabled = false`, `--no-scan`) is
+  recorded as `"scan": "off"`.
+- New errors: `image-vulnerable`, `image-scan-failed`,
+  `image-scanner-checksum`, `scan-policy-invalid`.
+
+### A storage probe before a chart's install (ops#115)
+
+- `HelmChart(storage_probe=StorageProbe(image=..., timeout_seconds=180,
+  size="1Gi"))` adds Helm `pre-install` hooks. A Job (`sh` and `curl`)
+  creates a claim in `storageClass` and a pod that mounts it, then deletes
+  both once the pod runs.
+- Otherwise the install stops before any app object, with one line that
+  names the newest warning event (`FailedAttachVolume`,
+  `ProvisioningFailed`, `FailedScheduling`) and the storage classes to try.
+  Helm 4 prints that line; Argo CD shows it as the termination message.
+- Values `storageProbe.enabled` (default true) and
+  `storageProbe.timeoutSeconds`. Every hook object passes the safety gate;
+  the ClusterRole only reads storage classes. Chart only, and only for an
+  app with a claim.
+
 ## Version 0.93.0
 
 ### The canary checks compositions with derived images (ops#114)

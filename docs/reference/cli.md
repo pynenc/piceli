@@ -372,6 +372,8 @@ Copy an image by digest (index, every platform, SBOM, provenance, signatures) to
 | `--no-referrers` | boolean | `False` | copy only the image, not its SBOM, provenance and signatures |
 | `--move-tag` | boolean | `False` |  |
 | `--approve` | text |  | the plan digest printed without --approve |
+| `--scan-policy` | path |  | a TOML file with a [scan] table (enabled, ignore = waivers) for the vulnerability scan of the source |
+| `--no-scan` | boolean | `False` | do not scan the source for known vulnerabilities (recorded in the plan) |
 | `--from-credentials` | path |  |  |
 | `--from-docker-config` | path |  |  |
 | `--from-ca-file` | path |  |  |
@@ -390,7 +392,7 @@ Copy an image by digest (index, every platform, SBOM, provenance, signatures) to
 | `--credentials-secret` | text |  | with --in-cluster: a Secret with keys source-username, source-password, source-token and the same for target |
 | `--image` | text |  | with --in-cluster: the Job's image (default: the controller's) |
 
-Mutually exclusive: `from_credentials` / `from_docker_config`; `credentials` / `docker_config`.
+Mutually exclusive: `no_scan` / `scan_policy`; `from_credentials` / `from_docker_config`; `credentials` / `docker_config`.
 
 **Contract**
 

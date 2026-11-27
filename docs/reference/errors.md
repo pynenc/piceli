@@ -155,6 +155,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`codegen-cluster-read-failed`](#error-codegen-cluster-read-failed) | codegen | yes |
 | [`codegen-flags-conflict`](#error-codegen-flags-conflict) | codegen | no |
 | [`codegen-output-refused`](#error-codegen-output-refused) | codegen | no |
+| [`collector-licence-missing`](#error-collector-licence-missing) | host-build | no |
+| [`collector-notices-failed`](#error-collector-notices-failed) | host-build | yes |
 | [`command-cancelled`](#error-command-cancelled) | artifacts-delivery | yes |
 | [`command-failed`](#error-command-failed) | artifacts-delivery | no |
 | [`command-output-limit`](#error-command-output-limit) | artifacts-delivery | no |
@@ -411,6 +413,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`image-invalid`](#error-image-invalid) | build-spec | no |
 | [`image-mismatch`](#error-image-mismatch) | build-spec | no |
 | [`image-not-immutable`](#error-image-not-immutable) | images | no |
+| [`image-scan-failed`](#error-image-scan-failed) | artifacts-registry | yes |
+| [`image-scanner-checksum`](#error-image-scanner-checksum) | artifacts-registry | yes |
+| [`image-vulnerable`](#error-image-vulnerable) | artifacts-registry | no |
 | [`immutable-field-changed`](#error-immutable-field-changed) | release | no |
 | [`import-cancelled`](#error-import-cancelled) | artifacts-delivery | yes |
 | [`import-discovery-failed`](#error-import-discovery-failed) | import | yes |
@@ -698,6 +703,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`runner-disk-low`](#error-runner-disk-low) | maintenance | yes |
 | [`runner-memory-low`](#error-runner-memory-low) | maintenance | yes |
 | [`runner-tool-missing`](#error-runner-tool-missing) | maintenance | no |
+| [`scan-policy-invalid`](#error-scan-policy-invalid) | artifacts-registry | no |
 | [`scope-mismatch`](#error-scope-mismatch) | kubernetes | no |
 | [`secret-adoption-incomplete`](#error-secret-adoption-incomplete) | secrets | no |
 | [`secret-adoption-invalid`](#error-secret-adoption-invalid) | secrets | no |
@@ -1318,6 +1324,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Configure the registry to accept uploads on its own address.
 - **Retry-safe:** no
 
+(error-image-scan-failed)=
+### `image-scan-failed`
+
+**Image scan could not run.** The vulnerability database could not be fetched or is too old, the scanner failed, or its report could not be read. Scanning fails closed: the image was not pushed, recorded or copied.
+
+- **Fix:** Give the build or copy HTTPS access to github.com and the Grype database server, then run again. To build without a scan, say so: `[scan] enabled = false` or `--no-scan` (recorded as `"scan": "off"`).
+- **Retry-safe:** yes
+
+(error-image-scanner-checksum)=
+### `image-scanner-checksum`
+
+**Scanner download does not match its pin.** The Grype tarball's sha256 is not the one Piceli pins, so nothing was installed.
+
+- **Fix:** Run again; if it repeats, check the network path to github.com (a proxy that rewrites downloads).
+- **Retry-safe:** yes
+
+(error-image-vulnerable)=
+### `image-vulnerable`
+
+**Image has a fixable critical vulnerability.** The scan (0.94.0, Grype) of a built, mirrored or copied image found a Critical vulnerability that has a fixed version and no live waiver. `details.images` lists each image, digest and platform with its findings (`id`, `severity`, `package`, `installed`, `fixed_in`, `waived`, `waiver_expired`). Nothing was pushed, recorded or copied.
+
+- **Fix:** Update the package or the base image to the fixed version, or add a waiver with a reason and an end date: `[scan] ignore = [{ id = "CVE-…", reason = "…", until = "YYYY-MM-DD" }]`.
+- **Retry-safe:** no
+
 (error-invalid-blob-redirect)=
 ### `invalid-blob-redirect`
 
@@ -1437,6 +1467,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** The receipt's `error` (and the CLI line) names the side, host, request and exception; check that address, network and TLS settings (`--ca-file`), then retry.
 - **Retry-safe:** yes
+
+(error-scan-policy-invalid)=
+### `scan-policy-invalid`
+
+**Scan policy cannot be read.** A `[scan]` table or `--scan-policy` file is malformed: an unknown key, a bad id, an empty reason, a date that is not YYYY-MM-DD, or an id listed twice.
+
+- **Fix:** Correct the table; each waiver needs `id`, `reason` and `until`.
+- **Retry-safe:** no
 
 (error-too-many-redirects)=
 ### `too-many-redirects`
@@ -4876,6 +4914,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Fix the input named in the message. The Git credentials belong in a Secret, never in the URL; plan again (`piceli build job ... --plan`) when the hash changed.
 - **Retry-safe:** no
+
+(error-collector-licence-missing)=
+### `collector-licence-missing`
+
+**A collector module has no licence.** A Go module linked into the collector has no `LICENSE*`, `LICENCE*`, `COPYING*` or `NOTICE*` file and no parent module in the list has one, or the pinned Go has no `LICENSE`. `/THIRD-PARTY-NOTICES` would be incomplete, so the image is not made.
+
+- **Fix:** Drop or replace that component, or pin a version that ships its licence.
+- **Retry-safe:** no
+
+(error-collector-notices-failed)=
+### `collector-notices-failed`
+
+**Collector notices could not be written.** After an OpenTelemetry Collector build (0.94.0, `[output.image.collector]`), `go version -m` failed or listed no modules, a linked module is not in the build cache's module cache, a module is replaced by a local directory, or a licence file is larger than 1 MiB.
+
+- **Fix:** Check the binary and the `toolchains.go` pin; if the module cache is damaged, remove `<cache>/go/mod` and build again.
+- **Retry-safe:** yes
 
 (error-derived-base-invalid)=
 ### `derived-base-invalid`

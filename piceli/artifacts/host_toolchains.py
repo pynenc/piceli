@@ -3,12 +3,13 @@
 A ``host-build.toml`` may declare, in ``[build]``::
 
     toolchains = { rust = "app/rust-toolchain.toml", node = "app/.nvmrc",
-                   wasm-bindgen = "app/Cargo.lock", binaryen = "123" }
+                   wasm-bindgen = "app/Cargo.lock", binaryen = "123",
+                   go = "app/go.mod" }
 
 Every key is optional. A value is a path relative to the stage root (the
 first part names a context's staging directory, the rest a file that
-context includes) or, for ``node``, ``wasm-bindgen`` and ``binaryen``, a
-version. Parsing and installing are shared with development runs
+context includes) or, for ``node``, ``wasm-bindgen``, ``binaryen`` and
+``go`` (0.94.0), a version. Parsing and installing are shared with development runs
 (:mod:`piceli.dev.toolchains`); this module reads the pins from the scanned
 contexts at plan time and maps failures to fixed error codes:
 
@@ -33,6 +34,8 @@ from piceli.dev import toolchains
 
 #: Variables a spec that pins Rust may not set in ``build.env``.
 RUST_ENV = frozenset({"RUSTUP_HOME", "RUSTUP_TOOLCHAIN"})
+#: 0.94.0: variables a spec that pins Go may not set in ``build.env``.
+GO_ENV = toolchains.GO_ENV
 
 
 def _error(error: toolchains.ToolchainError) -> BuildSpecError:

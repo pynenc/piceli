@@ -451,6 +451,9 @@ pipeline = Pipeline(
   without the node's platform, or a single-platform image for another
   platform, fails with `mirror-platform-unavailable` before anything is
   written.
+- **Scanned before it is used (0.94.0).** The copy is scanned for known
+  vulnerabilities in the registry; a critical one with a fix fails the mirror
+  (`image-vulnerable`). See {doc}`image_scanning`.
 - **The release pulls the copy.** Every container whose image is a mirrored
   image is rewritten to the copy, with the same digest, and pinned to the
   registry node like a workload using a built image. The release still records

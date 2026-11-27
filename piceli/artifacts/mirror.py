@@ -58,6 +58,7 @@ from piceli.artifacts.registry import (
     is_loopback,
     validate_host,
 )
+from piceli.artifacts.scan import ScanError
 
 SCHEMA = "piceli.mirror-delivery.v1"
 DOCKER_HUB = "docker.io"
@@ -425,6 +426,7 @@ def mirror_image(
     node_registry: str,
     max_seconds: float = 3600.0,
     cancel: threading.Event | None = None,
+    scan_policy: Any = None,
 ) -> dict[str, Any]:
     """Copy ``source`` into ``target_repository``; returns the receipt.
 
@@ -433,6 +435,13 @@ def mirror_image(
     :param target_registry: ``host[:port]`` the copy is pushed to (receipt).
     :param node_registry: ``host[:port]`` nodes pull from; the receipt's
         ``pull_ref`` is ``<node_registry>/<target_repository>@<digest>``.
+    :param scan_policy: 0.94.0: the copy is scanned in the target before it
+        is ready (:func:`piceli.artifacts.scan.scan_registry`): ``None`` reads
+        the policy ``PICELI_SCAN_POLICY`` names (else the default), a
+        :class:`~piceli.artifacts.scan.ScanPolicy` is used as given, and
+        ``"caller"`` skips it (``artifacts copy`` scans the source first).
+        A vulnerable image is ``state: failed``, ``reason: image-vulnerable``
+        with ``vulnerabilities`` (image, digest, findings).
 
     Every operational outcome returns a receipt with ``state`` ``succeeded``,
     ``failed`` or ``rejected`` and a registered ``reason``.
@@ -474,11 +483,20 @@ def mirror_image(
     marks = prepare_clients(source_client, target_client, copy.deadline)
     try:
         result = _mirror(copy, source, platform, receipt)
+        _scan(copy, source, receipt, scan_policy)
         receipt.update(
             result=result,
             state="succeeded",
             reason=None,
             pull_ref=f"{node_registry}/{target_repository}@{source.digest}",
+        )
+    except ScanError as error:  # 0.94.0
+        receipt.update(
+            result="failed",
+            state="failed",
+            reason=error.code,
+            message=str(error),
+            **({"vulnerabilities": error.details} if error.details else {}),
         )
     except MirrorError as error:
         rejected = error.code in {"mirror-digest-mismatch", "mirror-manifest-invalid"}
@@ -496,6 +514,40 @@ def mirror_image(
     receipt["finished_at"] = _now()
     receipt["seconds"] = round(time.monotonic() - clock, 3)
     return receipt
+
+
+def _scan(
+    copy: _Copy, source: MirrorSource, receipt: dict[str, Any], policy: Any
+) -> None:
+    """0.94.0: scan the copy in the target (the platforms copied, else every
+    one the target holds); records ``receipt["scan"]``."""
+    from piceli.artifacts.scan import ScanPolicy, scan_registry
+
+    if policy == "caller":
+        return
+    if policy is None:
+        policy = ScanPolicy.from_environment()
+    copied = [
+        str(item["digest"])
+        for item in receipt["image"]["manifests"]
+        if item.get("digest") != source.digest
+    ]
+    receipt["scan"] = scan_registry(
+        policy,
+        copy.target,
+        copy.target_repository,
+        source.digest,
+        image=source.key,
+        only=copied or None,
+        # Already present: the platforms the target holds.
+        present=None
+        if copied
+        else (
+            lambda digest: (
+                copy.target.manifest_digest(copy.target_repository, digest) == digest
+            )
+        ),
+    )
 
 
 def prepare_clients(
@@ -616,6 +668,7 @@ def public(receipt: Mapping[str, Any]) -> dict[str, Any]:
             "digest": (receipt.get("image") or {}).get("digest"),
             "reference": receipt.get("pull_ref"),
             "seconds": receipt.get("seconds"),
+            "vulnerabilities": receipt.get("vulnerabilities"),  # 0.94.0
         }.items()
         if value is not None
     }

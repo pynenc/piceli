@@ -292,7 +292,7 @@ def combine_receipts(
         for platform, receipt in receipts.items():
             slug = platform_slug(platform)
             entry = dict(receipt["outputs"]["images"][image.name])
-            for key in ("archive", "sbom", "provenance"):
+            for key in ("archive", "sbom", "provenance", "scan"):
                 value = entry.get(key)
                 if isinstance(value, str):
                     entry[key] = f"{slug}/{value}"
@@ -356,6 +356,7 @@ def combine_receipts(
         },
         "steps": [step for receipt in receipts.values() for step in receipt["steps"]],
         **_shared(spec, receipts),
+        **_scans(receipts),  # 0.94.0
         "started_at": started_at,
         "finished_at": _now(),
     }
@@ -385,3 +386,10 @@ def _changed(receipts: Iterable[Mapping[str, Any]]) -> list[str] | None:
             return None
         names.update(value)
     return sorted(names)
+
+
+def _scans(receipts: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    """0.94.0: each platform's image scans (:func:`piceli.artifacts.scan.combined`)."""
+    from piceli.artifacts.scan import combined
+
+    return combined(receipts)

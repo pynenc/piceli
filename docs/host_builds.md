@@ -497,6 +497,7 @@ Every key is optional. A value is a path relative to the stage root
 | `node` | a `.nvmrc` or `.node-version` holding an exact version, or `"24.11.0"` | the `nodejs.org` tarball, checked against that release's `SHASUMS256.txt` |
 | `wasm-bindgen` | the `wasm-bindgen` version of a `Cargo.lock`, or `"0.2.114"` | `cargo install --locked wasm-bindgen-cli --version …`, with the pinned Rust |
 | `binaryen` | a file holding a version, or `"123"` | the GitHub release tarball, checked against its published `.sha256` |
+| `go` (0.94.0) | a `go.mod` with a `toolchain go1.26.11` line, or `"1.26.11"`; a `go 1.26` line alone is a minimum, not a release, and is refused | the `go.dev` tarball, checked against the sha256 in `https://go.dev/dl/?mode=json&include=all` |
 
 - **Plan.** The versions are read from the scanned contexts. The plan hash
   and the preview cover them, and a composition's image change key covers
@@ -511,23 +512,105 @@ Every key is optional. A value is a path relative to the stage root
   up on the commands' `PATH`, then on yours.
 - **Run.** `RUSTUP_HOME` and `RUSTUP_TOOLCHAIN` select the pinned Rust (the
   rustup proxies of a declared `cargo` honour them; `build.env` cannot set
-  them), and the `bin` directories of node, wasm-bindgen and binaryen come
-  first on `PATH`. Commands still start declared tools only: call `node`,
-  `wasm-bindgen` or `wasm-opt` from a declared `sh`, a build script or a
-  cargo command.
+  them), and the `bin` directories of node, wasm-bindgen, binaryen and go
+  come first on `PATH`. Commands still start declared tools only: call
+  `node`, `wasm-bindgen`, `wasm-opt` or `go` from a declared `sh`, a build
+  script or a cargo command. A pinned Go also sets `GOTOOLCHAIN=local` (no
+  other Go is downloaded), `GOMODCACHE=<cache>/go/mod`,
+  `GOCACHE=<cache>/go/build`, `GOPATH=<cache>/go/path` and
+  `GOFLAGS=-modcacherw -trimpath` (the module cache stays removable);
+  `build.env` cannot set them, and `build.tools` cannot list `go` (a declared
+  tool runs this machine's own go).
 
 ```text
 <cache>/toolchains/rustup/                          RUSTUP_HOME
 <cache>/toolchains/node/<version>-<os>-<arch>/bin
 <cache>/toolchains/binaryen/<version>-<os>-<arch>/bin
 <cache>/toolchains/wasm-bindgen/<version>-<os>-<arch>/bin
+<cache>/toolchains/go/<version>-<os>-<arch>/bin     (GOROOT is its parent)
 <cache>/toolchains/<tool>-<key>.done
+<cache>/go/mod, <cache>/go/build                    GOMODCACHE, GOCACHE
 ```
 
 Installing needs public HTTPS once per version. The receipt's `toolchains`
 records each tool's pin, whether this build installed it, how long it took,
 and the download's URL and sha256; the provenance records the pins and the
 downloads (below). Development runs read the same pins ({doc}`dev_builds`).
+
+(host-builds-collector)=
+## An OpenTelemetry Collector (0.94.0)
+
+An image can be an OpenTelemetry Collector holding only the components you
+list. Piceli builds it with OCB (OpenTelemetry Collector Builder) and the Go
+the spec pins; you write no command:
+
+```toml
+[build]
+toolchains = { go = "1.26.11" }        # or "<context>/go.mod" with a toolchain line
+
+[context.conf]
+path = "otel"
+include = ["config.yaml"]
+
+[[output.image]]
+name = "collector"
+repository = "shop/collector"
+base = "scratch"                       # or a base pinned by digest
+user = "10001:10001"
+files = { "conf/config.yaml" = "/etc/otelcol/config.yaml" }
+cmd = ["--config", "/etc/otelcol/config.yaml"]
+
+[output.image.collector]
+version = "0.166.0"                    # the OCB and collector release, exact
+receivers = ["otlp", "statsd"]
+processors = ["memory_limiter", "resource",
+              "github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor v1.5.0"]
+extensions = ["health_check", "file_storage"]
+exporters = ["otlp_http"]
+# connectors = [], binary = "/otelcol", notices = "/THIRD-PARTY-NOTICES"
+```
+
+- **Components.** Each entry is a short name (its module at `v<version>`)
+  or a full pin `"<module path> v<semver>"`. Short names: receivers `otlp`,
+  `statsd`, `mongodb`, `rabbitmq`, `prometheus`, `hostmetrics`; processors
+  `batch`, `memory_limiter`, `resource`, `attributes`, `filter`,
+  `transform`; exporters `otlp`, `otlp_http`, `debug`; extensions
+  `health_check`, `file_storage`, `zpages`. Renamed types take both
+  spellings (`otlphttp`, `memorylimiter`, `healthcheck`, `filestorage`).
+  `k8sattributes` is a stable module with its own version (v1.5.0 at
+  collector 0.166.0), so it needs the full pin. An unknown name, a module
+  listed twice, or a collector without a receiver or an exporter is refused
+  (`invalid-spec`, the message lists the known names).
+- **What runs.** After the spec's own commands (if any), for each platform:
+  Piceli writes the OCB manifest (the distribution and only those
+  components; OCB adds its default configuration providers) to
+  `<target>/piceli-collector/<image>/manifest.yaml`, runs `go install
+  go.opentelemetry.io/collector/cmd/builder@v<version>` (into
+  `<cache>/go/ocb/`), then OCB with `CGO_ENABLED=0`, `GOOS=linux` and the
+  platform's `GOARCH`. The steps are `collector-<image>-install`,
+  `-build` and `-notices`. A build of other images only skips them.
+- **The image.** The binary goes to `binary` and is the entrypoint. A
+  collector image cannot set `target_files`, `shared_files` or
+  `entrypoint`; it takes `files` (a configuration), `dirs`, `cmd`, `env`,
+  `user`, `labels` and `base` as usual. The spec needs `toolchains.go`
+  (`invalid-spec` names the key); `build.tools` and `build.commands` become
+  optional.
+- **Notices.** Piceli runs `go version -m` on the binary and writes
+  `/THIRD-PARTY-NOTICES`: Go's own `LICENSE`, then for each linked module (by
+  path and version) its `LICENSE*`, `LICENCE*`, `COPYING*` and `NOTICE*`
+  files from the module cache. A module without one uses the files of its
+  nearest parent module in the list and says so; with none, the build fails
+  (`collector-licence-missing`).
+- **Records.** The SBOM lists every linked module (`pkg:golang/<path>@<version>`,
+  its `go.sum` hash as a comment) and the Go standard library; the
+  provenance and the receipt record the version, the components and the
+  manifest's sha256. The plan hash, the spec digest and a composition's
+  change key cover the table.
+
+Building needs public HTTPS (the Go module proxy) the first time; set
+`GOPROXY` in `build.env` to use another proxy. A pinned Go older than the
+collector's `go.mod` needs stops the build (`GOTOOLCHAIN=local` downloads no
+other Go). A full example: `examples/builds/otel-collector/host-build.toml`.
 
 ## Several platforms
 
@@ -644,7 +727,8 @@ Next to each archive the build writes `attestations/<image>.spdx.json`, an
 SPDX 2.3 document (the image by manifest digest, its base by digest, every
 file the build put in it with its sha256, and every package pinned by a
 staged `Cargo.lock`, with its registry checksum and `pkg:cargo` URL; the
-lockfiles pin a superset of what one binary links), and
+lockfiles pin a superset of what one binary links; for a collector image,
+every Go module linked into it, see above), and
 `attestations/<image>.provenance.json`, an in-toto Statement v1 with a SLSA
 provenance v1 predicate (subject: the manifest digest; the spec and plan
 hashes, commands, `env`, node facts, tool digests, source commits,
@@ -652,6 +736,9 @@ contexts and base; the pinned toolchains, and each toolchain download by URL
 and sha256). The receipt records both by path and sha256. They hold
 no local path, secret or process output. The SBOM is deterministic; the
 provenance records the build's start and end times.
+
+Each image is then scanned for known vulnerabilities before it is pushed or
+recorded (0.94.0): see {doc}`image_scanning`.
 
 ## Errors
 
@@ -671,5 +758,7 @@ provenance records the build's start and end times.
 | `derived-base-unavailable`, `derived-base-invalid` | The base of a derived image cannot be read by its digest, or does not match it |
 | `derived-base-unrecorded` | A derived image changed, but the record of its unchanged base is gone; the base is not rebuilt silently |
 | `derived-image-local-unsupported` | A local `build-spec run` was given a derived image |
+| `collector-notices-failed` | `go version -m` could not list a collector's modules, or a linked module is not in the module cache |
+| `collector-licence-missing` | A module linked into a collector has no licence file, and no parent module in the list has one |
 
 `piceli explain <code>` prints the cause and the fix of each.

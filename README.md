@@ -66,10 +66,14 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.93
+## What's new in 0.94
 
-- **`gitops enable --canary` checks compositions with derived images**: it
-  appends them dry, instead of refusing the upgrade.
+- **An OpenTelemetry Collector image built with OCB**: only the components
+  you list, with licence notices and its Go modules in the SBOM.
+- **Every built, mirrored and copied image is scanned** for known
+  vulnerabilities; a fixable critical one stops the run.
+- **A storage probe before a chart's install** names why a storage class
+  cannot attach and which classes to try.
 
 ## Web UI
 

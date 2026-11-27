@@ -1,0 +1,42 @@
+# The collector's configuration, copied to /etc/otelcol/config.yaml.
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+  statsd:
+    endpoint: 0.0.0.0:8125
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 20
+  resource:
+    attributes:
+      - key: service.namespace
+        value: shop
+        action: upsert
+
+exporters:
+  otlp_http:
+    endpoint: https://otlp.example.org
+  debug: {}
+
+service:
+  extensions: [health_check]
+  pipelines:
+    metrics:
+      receivers: [otlp, statsd]
+      processors: [memory_limiter, resource]
+      exporters: [otlp_http]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource]
+      exporters: [otlp_http, debug]

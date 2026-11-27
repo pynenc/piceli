@@ -4,7 +4,7 @@ Standard library only and self-contained: development runs ship this file
 into their pod next to :mod:`piceli.dev.pod` (:func:`piceli.dev.jobs.wrapper_source`),
 and host builds (:mod:`piceli.artifacts.host_toolchains`) import it.
 
-Four tools, each pinned by a file of the source or by a literal version:
+Five tools, each pinned by a file of the source or by a literal version:
 
 * ``rust``: a ``rust-toolchain.toml`` (or legacy ``rust-toolchain``):
   channel, targets, components, profile. Installed with ``rustup toolchain
@@ -17,6 +17,11 @@ Four tools, each pinned by a file of the source or by a literal version:
   ``.sha256``.
 * ``wasm-bindgen``: the ``wasm-bindgen`` version of a ``Cargo.lock`` or a
   version (``0.2.114``). ``cargo install --locked wasm-bindgen-cli``.
+* ``go`` (0.94.0): the ``toolchain go1.X.Y`` line of a ``go.mod`` or a
+  version (``1.26.11``). The official ``go.dev`` tarball, checked against
+  the sha256 that ``https://go.dev/dl/?mode=json&include=all`` publishes.
+  Selected with ``GOTOOLCHAIN=local`` and a module and build cache inside
+  the cache (:func:`go_env`).
 
 Each is installed once per cache, keyed by its version (and for Rust the
 parsed pin), under a file lock so concurrent installs do not race, with a
@@ -27,7 +32,9 @@ done-marker so the next use skips it::
     <cache>/toolchains/node/<version>-<os>-<arch>/bin
     <cache>/toolchains/binaryen/<version>-<os>-<arch>/bin
     <cache>/toolchains/wasm-bindgen/<version>-<os>-<arch>/bin
+    <cache>/toolchains/go/<version>-<os>-<arch>/bin   (GOROOT: its parent)
     <cache>/toolchains/<tool>-<version>-<os>-<arch>.done
+    <cache>/go/mod, <cache>/go/build                  GOMODCACHE, GOCACHE
 
 Errors are :class:`ToolchainError` with a ``kind``: ``invalid`` (a pin that
 cannot be read), ``checksum`` (a download that does not match its published
@@ -56,18 +63,25 @@ from typing import Any
 
 #: The tools a pin may name, in the order they are installed (wasm-bindgen
 #: is built with the pinned Rust).
-TOOLS = ("rust", "node", "binaryen", "wasm-bindgen")
+TOOLS = ("rust", "node", "binaryen", "wasm-bindgen", "go")
 #: A download larger than this is refused (a wrong URL, not a toolchain).
 MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
 #: A pin file larger than this is refused.
 MAX_PIN_BYTES = 4 * 1024 * 1024
 NODE_DIST = "https://nodejs.org/dist"
 BINARYEN_RELEASES = "https://github.com/WebAssembly/binaryen/releases/download"
+#: 0.94.0: Go's downloads and their published checksums.
+GO_DIST = "https://go.dev/dl"
+GO_RELEASES = GO_DIST + "/?mode=json&include=all"
+#: 0.94.0: the variables that select the pinned Go (:func:`go_env`).
+GO_ENV = frozenset({"GOTOOLCHAIN", "GOMODCACHE", "GOCACHE", "GOPATH", "GOFLAGS"})
 
 _CHANNEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 _ITEM = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _SEMVER = re.compile(r"v?([0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4})")
 _BINARYEN = re.compile(r"(?:version_)?([0-9]{1,4})")
+_GO = re.compile(r"(?:go)?([0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4})")
+_GO_TOOLCHAIN = re.compile(r"toolchain\s+go([^\s/]+)\s*(?://.*)?")
 _PATH = re.compile(r"[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]{0,511}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
@@ -92,6 +106,8 @@ def is_literal(tool: str, value: str) -> bool:
         return False
     if tool == "binaryen":
         return _BINARYEN.fullmatch(value) is not None
+    if tool == "go":
+        return _GO.fullmatch(value) is not None
     return _SEMVER.fullmatch(value) is not None
 
 
@@ -112,6 +128,15 @@ def check_declared(declared: Mapping[str, Any], where: str) -> dict[str, str]:
             )
         if not isinstance(value, str) or not value:
             raise ToolchainError("invalid", f"{where}.{tool} must be a string")
+        if (
+            tool == "go"
+            and not is_literal(tool, value)
+            and re.fullmatch(r"(?:go)?[0-9]+(?:\.[0-9]+)*", value)
+        ):
+            raise ToolchainError(
+                "invalid",
+                f"{where}.go: {value!r} is not an exact Go release (1.26.11)",
+            )
         if not is_literal(tool, value):
             normal = posixpath.normpath(value)
             if (
@@ -212,6 +237,32 @@ def parse_wasm_bindgen(text: str, where: str) -> str:
     return versions[0]
 
 
+def parse_go(text: str, where: str) -> str:
+    """The exact Go a ``go.mod`` pins: its ``toolchain go1.X.Y`` line (0.94.0).
+
+    A ``go 1.26`` directive alone is a minimum, not a toolchain, so it is
+    refused.
+    """
+    for line in text.splitlines():
+        match = _GO_TOOLCHAIN.fullmatch(line.strip())
+        if match is None:
+            continue
+        exact = _GO.fullmatch(match.group(1))
+        if exact is None:
+            raise ToolchainError(
+                "invalid",
+                f"{where}: toolchain go{match.group(1)[:40]} is not an exact "
+                "release (go1.26.11)",
+            )
+        return exact.group(1)
+    raise ToolchainError(
+        "invalid",
+        f"{where}: no 'toolchain go1.X.Y' line; a 'go 1.X' directive is a "
+        "minimum, not an exact Go (add 'toolchain go1.26.11', or pin a version "
+        'such as "1.26.11")',
+    )
+
+
 def resolve(
     declared: Mapping[str, str], read: Callable[[str], bytes]
 ) -> dict[str, dict[str, Any]]:
@@ -240,6 +291,12 @@ def resolve(
             version = parse_node(text, label)
         elif tool == "binaryen":
             version = parse_binaryen(text, label)
+        elif tool == "go":
+            version = (
+                parse_go(text, label)
+                if where is not None
+                else _GO.fullmatch(value).group(1)  # type: ignore[union-attr]
+            )
         else:
             version = (
                 parse_wasm_bindgen(text, label)
@@ -290,6 +347,51 @@ def binaryen_asset(version: str, system: str, arch: str) -> str:
     if arch not in names:
         raise ToolchainError("failed", f"binaryen has no build for {system}/{arch}")
     return f"binaryen-version_{version}-{names[arch]}-{label}.tar.gz"
+
+
+def go_asset(version: str, system: str, arch: str) -> str:
+    if system not in {"linux", "darwin"} or arch not in {"amd64", "arm64"}:
+        raise ToolchainError("failed", f"go has no build for {system}/{arch}")
+    return f"go{version}.{system}-{arch}.tar.gz"
+
+
+def go_checksum(listing: bytes, version: str, asset: str) -> str:
+    """The sha256 go.dev publishes for ``asset`` (its release list as JSON)."""
+    try:
+        releases = json.loads(listing)
+    except ValueError:
+        raise ToolchainError(
+            "failed", f"go {version}: the go.dev release list is not JSON"
+        ) from None
+    for release in releases if isinstance(releases, list) else ():
+        if not isinstance(release, dict) or release.get("version") != f"go{version}":
+            continue
+        for item in release.get("files") or ():
+            if (
+                isinstance(item, dict)
+                and item.get("filename") == asset
+                and item.get("kind") == "archive"
+                and isinstance(item.get("sha256"), str)
+                and _SHA256.fullmatch(item["sha256"].lower())
+            ):
+                return item["sha256"].lower()
+    raise ToolchainError(
+        "failed", f"go {version}: no {asset} in the go.dev release list"
+    )
+
+
+def go_env(cache: Path) -> dict[str, str]:
+    """0.94.0: what selects the pinned Go for a command: no toolchain switch
+    (``GOTOOLCHAIN=local``), and the module and build caches inside the cache.
+    ``-modcacherw`` keeps the module cache removable like the rest of it."""
+    root = cache / "go"
+    return {
+        "GOTOOLCHAIN": "local",
+        "GOMODCACHE": str(root / "mod"),
+        "GOCACHE": str(root / "build"),
+        "GOPATH": str(root / "path"),
+        "GOFLAGS": "-modcacherw -trimpath",
+    }
 
 
 # ------------------------------------------------------------------ once
@@ -523,6 +625,32 @@ def provision_binaryen(
     return installed, marker, final / "bin"
 
 
+def provision_go(
+    cache: Path,
+    pin: Mapping[str, Any],
+    emit: Callable[[str], None],
+    *,
+    system: str,
+    arch: str,
+    opener: Opener | None = None,
+) -> tuple[bool, dict[str, Any], Path]:
+    """0.94.0: the go.dev tarball, checked against go.dev's published sha256."""
+    version = str(pin["version"])
+    asset = go_asset(version, system, arch)
+    final = cache / "toolchains" / "go" / f"{version}-{system}-{arch}"
+
+    def install() -> dict[str, Any]:
+        emit(f"installing go {version} ({pin.get('file') or 'literal'})")
+        listing, _ = _fetch(opener, GO_RELEASES)
+        expected = go_checksum(listing, version, asset)
+        return _install_tarball(
+            cache, "go", version, system, arch, f"{GO_DIST}/{asset}", expected, opener
+        )
+
+    installed, marker = _once(cache, "go", f"{version}-{system}-{arch}", install, final)
+    return installed, marker, final / "bin"
+
+
 def _tail(completed: Any) -> str:
     text = (completed.stderr or completed.stdout or "").strip().splitlines()[-5:]
     return " | ".join(text)[:600]
@@ -658,7 +786,7 @@ def provision(
     clock: Callable[[], float] = time.monotonic,
 ) -> tuple[dict[str, str], list[str], dict[str, dict[str, Any]]]:
     """Install every pinned tool once; returns the environment to set
-    (``RUSTUP_HOME``, ``RUSTUP_TOOLCHAIN``), the ``bin`` directories to put
+    (``RUSTUP_HOME``, ``RUSTUP_TOOLCHAIN``; for Go :func:`go_env`), the ``bin`` directories to put
     first on ``PATH`` and a report per tool (its pin, whether this call
     installed it, seconds, and the download's URL and sha256).
 
@@ -688,6 +816,11 @@ def provision(
                 installed, marker, bin_dir = provision_binaryen(
                     cache, pin, emit, system=system, arch=arch, opener=opener
                 )
+            elif tool == "go":
+                installed, marker, bin_dir = provision_go(
+                    cache, pin, emit, system=system, arch=arch, opener=opener
+                )
+                selected = {**selected, **go_env(cache)}
             else:
                 installed, marker, bin_dir = provision_wasm_bindgen(
                     cache,

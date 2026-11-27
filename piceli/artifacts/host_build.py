@@ -98,7 +98,8 @@ from piceli.artifacts.build_spec import (
     parse_labels,
     source_refusal,
 )
-from piceli.artifacts.host_toolchains import RUST_ENV
+from piceli.artifacts.host_collector import CollectorSpec
+from piceli.artifacts.host_toolchains import GO_ENV, RUST_ENV
 from piceli.artifacts.host_toolchains import parse as parse_toolchains
 from piceli.artifacts.host_toolchains import resolve as resolve_toolchains
 from piceli.artifacts.node_facts import PLACEHOLDERS, NodeFacts
@@ -215,6 +216,9 @@ class HostImage:
     #: 0.31.0: image config labels (``labels = {...}``), such as the OCI
     #: ``org.opencontainers.image.licenses`` a registry shows.
     labels: tuple[tuple[str, str], ...] = ()
+    #: 0.94.0: an OpenTelemetry Collector built with OCB
+    #: (:mod:`piceli.artifacts.host_collector`).
+    collector: CollectorSpec | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -237,6 +241,8 @@ class HostImage:
                 else {}
             ),
             **({"labels": dict(self.labels)} if self.labels else {}),
+            # 0.94.0: only when declared, so every other digest is unchanged.
+            **({"collector": self.collector.to_dict()} if self.collector else {}),
         }
 
     def reads(self, contexts: tuple[str, ...]) -> tuple[str, ...]:
@@ -363,6 +369,9 @@ class HostBuildSpec:
     the same time as the platform's commands, not before them."""
     derived: tuple[DerivedImage, ...] = ()
     """0.89.0: images appended from another image of the spec, no build."""
+    scan: Any = None
+    """0.94.0: the ``[scan]`` table (:class:`piceli.artifacts.scan.ScanPolicy`);
+    ``None``: scan with no waivers."""
 
     builder_kind: ClassVar[str] = "host"
     network: ClassVar[str] = "host"
@@ -403,10 +412,21 @@ class HostBuildSpec:
         if len(set(into)) != len(into):
             raise _fail("contexts must be staged into different directories")
         self._check_derived()
-        if not self.commands:
+        # 0.94.0: a collector image's build is implicit; such a spec may
+        # declare no command and no tool of its own.
+        collectors = [item.name for item in self.images if item.collector]
+        if not self.commands and not collectors:
             raise _fail("declare build.commands")
-        if not self.tools or len(set(self.tools)) != len(self.tools):
+        if (not self.tools and not collectors) or len(set(self.tools)) != len(
+            self.tools
+        ):
             raise _fail("declare build.tools, each once")
+        if collectors and not dict(self.toolchains).get("go"):
+            raise _fail(
+                f"image {collectors[0]!r} has a collector table, which is built "
+                "with Go: pin it in build.toolchains.go (a version such as "
+                '"1.26.11", or <context>/go.mod with a toolchain line)'
+            )
         for command in (*self.shared_commands, *self.commands):
             if command[0] not in self.tools:
                 raise _fail(
@@ -470,6 +490,19 @@ class HostBuildSpec:
             raise _fail(
                 f"build.env cannot set {sorted(RUST_ENV & set(self.env))}: "
                 "build.toolchains pins rust"
+            )
+        if dict(self.toolchains).get("go") and "go" in self.tools:
+            # A declared tool runs by the path the plan pinned: this
+            # machine's go, not the one build.toolchains installs.
+            raise _fail(
+                "build.tools lists go, but build.toolchains pins go: a command "
+                "would start this machine's go; start it from a declared sh "
+                "(or make), where the pinned go is first on PATH"
+            )
+        if dict(self.toolchains).get("go") and GO_ENV & set(self.env):
+            raise _fail(
+                f"build.env cannot set {sorted(GO_ENV & set(self.env))}: "
+                "build.toolchains pins go"
             )
         if (
             not isinstance(self.source_date_epoch, int)
@@ -540,16 +573,23 @@ class HostBuildSpec:
         _keys(
             document,
             {"revision", "name", "build", "context", "output"},
-            {"inputs"},
+            {"inputs", "scan"},
             "host build spec",
         )
         if document["revision"] != HOST_BUILD_REVISION:
             raise _fail(f"revision must be {HOST_BUILD_REVISION!r}")
         build = document["build"]
+        # 0.94.0: a spec whose images include a collector may leave out
+        # build.tools and build.commands (the collector's build is implicit).
+        tables = (document.get("output") or {}).get("image")
+        collector = isinstance(tables, list) and any(
+            isinstance(item, dict) and "collector" in item for item in tables
+        )
         _keys(
             build,
-            {"tools", "commands"},
+            set() if collector else {"tools", "commands"},
             {
+                *(("tools", "commands") if collector else ()),
                 "platform",
                 "platforms",
                 "workdir",
@@ -565,13 +605,19 @@ class HostBuildSpec:
         platforms = build.get("platforms", [])
         if not isinstance(platforms, list) or ("platforms" in build and not platforms):
             raise _fail("build.platforms must be a non-empty list")
-        tools = build["tools"]
-        if not isinstance(tools, list) or not 0 < len(tools) <= 32:
+        tools = build.get("tools", [])
+        if (
+            not isinstance(tools, list)
+            or not (0 if collector else 1) <= len(tools) <= 32
+        ):
             raise _fail("build.tools must list 1-32 host tool names")
         for tool in tools:
             _match(_TOOL, tool, "build.tools entry")
-        items = build["commands"]
-        if not isinstance(items, list) or not 0 < len(items) <= 64:
+        items = build.get("commands", [])
+        if (
+            not isinstance(items, list)
+            or not (0 if collector else 1) <= len(items) <= 64
+        ):
             raise _fail("build.commands must be a list of argv lists")
         # Other braces in a command stay literal (shell ``${VAR}``): only the
         # known placeholders are substituted.
@@ -627,6 +673,7 @@ class HostBuildSpec:
                 if isinstance(item, dict) and "from" in item
             ),
             files=tuple(_file_output(item) for item in output.get("files", [])),
+            scan=_scan_policy(document["scan"]) if "scan" in document else None,
             commands=commands,
             shared_commands=shared_commands,
             command_images=command_images,
@@ -696,6 +743,8 @@ class HostBuildSpec:
                 if self.derived
                 else {}
             ),
+            # 0.94.0: only when declared, so every other digest is unchanged.
+            **({"scan": self.scan.to_dict()} if self.scan is not None else {}),
         }
 
     @property
@@ -847,7 +896,9 @@ class HostBuildSpec:
                 target_files=tuple(
                     (_rel_path(substitute(src, facts), "target_files key"), dest)
                     for src, dest in image.target_files
-                ),
+                )
+                # 0.94.0: the collector's binary and notices.
+                + (_collector_files(image) if image.collector else ()),
             )
             for image in self.images
             if self.selected is None or image.name in self.selected
@@ -892,6 +943,11 @@ class HostBuildSpec:
             shared_env,
             files,
             self._kept_images(self.shared_commands, self.shared_command_images),
+            {
+                image.name: _collector_plan(image.collector)
+                for image in images
+                if image.collector is not None
+            },
         )
 
     # --- execution -------------------------------------------------------
@@ -961,7 +1017,12 @@ class HostBuildSpec:
             started_at,
             finished_at,
             execution.toolchains,
+            execution.collectors,
         )
+        # 0.94.0: each image is scanned before it is pushed or recorded.
+        from piceli.artifacts.scan import scan_build
+
+        scanned = scan_build(self.scan, outputs, output_dir, cache, progress)
         receipt = {
             "revision": BUILD_RECEIPT_REVISION,
             "state": "succeeded",
@@ -984,6 +1045,7 @@ class HostBuildSpec:
             "steps": list(execution.steps),
             # 0.22: the toolchains the spec pins, as installed for this build.
             **({"toolchains": execution.toolchains} if self.toolchains else {}),
+            **scanned,  # 0.94.0: "scans" per image, or "scan": "off"
             "started_at": started_at,
             "finished_at": finished_at,
         }
@@ -1023,8 +1085,12 @@ class HostBuildSpec:
         started_at: str,
         finished_at: str,
         toolchains: Mapping[str, Any] | None = None,
+        collectors: Mapping[str, Any] | None = None,
     ) -> None:
-        """Write each image's SBOM and provenance; record them in ``outputs``."""
+        """Write each image's SBOM and provenance; record them in ``outputs``.
+
+        ``collectors`` (0.94.0): per collector image, the Go modules linked
+        into its binary, which its SBOM lists."""
         from piceli.artifacts import attestations
 
         directory = output_dir / "attestations"
@@ -1043,6 +1109,9 @@ class HostBuildSpec:
                         entry,
                         crates,
                         self.source_date_epoch,
+                        go_modules=attestations.go_packages(
+                            (collectors or {}).get(image.name)
+                        ),
                     ),
                 ),
                 (
@@ -1066,6 +1135,29 @@ class HostBuildSpec:
                     "path": f"attestations/{written['path']}",
                     "sha256": written["sha256"],
                 }
+
+
+def _collector_files(image: HostImage) -> tuple[tuple[str, str], ...]:
+    from piceli.artifacts.host_collector import mappings
+
+    assert image.collector is not None
+    return mappings(image.name, image.collector)
+
+
+def _collector_plan(collector: CollectorSpec) -> dict[str, Any]:
+    """0.94.0: what the plan hash and preview hold of one collector image."""
+    return {
+        "version": collector.version,
+        "manifest_sha256": collector.manifest_sha256,
+        "components": sum(len(items) for _, items in collector.components),
+    }
+
+
+def _scan_policy(value: Any) -> Any:
+    """0.94.0: the ``[scan]`` table (:mod:`piceli.artifacts.scan`)."""
+    from piceli.artifacts.scan import parse_policy
+
+    return parse_policy(value)
 
 
 def _commands(
@@ -1164,9 +1256,16 @@ def _image(item: Any) -> HostImage:
             "contexts",
             "shared_files",
             "labels",
+            "collector",
         },
         "output.image",
     )
+    collector = None
+    if "collector" in item:  # 0.94.0
+        from piceli.artifacts import host_collector
+
+        collector = host_collector.parse(item["collector"], str(item["name"]))
+        host_collector.check_image(item, collector)
     contexts = item.get("contexts")
     if contexts is not None:
         if (
@@ -1194,7 +1293,13 @@ def _image(item: Any) -> HostImage:
     ):
         if not isinstance(table, dict) or len(table) > 256:
             raise _fail(f"output.image.{what} must be a table")
-    if not files and not target_files and not shared_files and not dirs:
+    if (
+        not files
+        and not target_files
+        and not shared_files
+        and not dirs
+        and collector is None
+    ):
         raise _fail(f"image {item['name']!r} adds nothing to its base")
     owned = []
     for path, value in dirs.items():
@@ -1243,7 +1348,11 @@ def _image(item: Any) -> HostImage:
             )
         ),
         tuple(sorted(owned, key=lambda entry: entry.path)),
-        _argv(item["entrypoint"], "entrypoint") if "entrypoint" in item else None,
+        (collector.binary,)
+        if collector is not None
+        else (
+            _argv(item["entrypoint"], "entrypoint") if "entrypoint" in item else None
+        ),
         _argv(item["cmd"], "cmd") if "cmd" in item else None,
         _match(_USER, item["user"], "user") if "user" in item else None,
         _abs_path(item["workdir"], "workdir") if "workdir" in item else None,
@@ -1256,6 +1365,7 @@ def _image(item: Any) -> HostImage:
             )
         ),
         labels,
+        collector,
     )
 
 
@@ -1365,6 +1475,9 @@ class HostBuildPlan:
     #: 0.78.0: per shared command, the images it is for (``()``: every one).
     #: The spec digest covers it; not hashed again.
     shared_images: tuple[tuple[str, ...], ...] = ()
+    #: 0.94.0: per collector image, its version, manifest sha256 and how many
+    #: components it lists (:mod:`piceli.artifacts.host_collector`).
+    collectors: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
     @property
     def platform(self) -> str:
@@ -1403,6 +1516,12 @@ class HostBuildPlan:
                     **(
                         {"files": [item.to_dict() for item in self.files]}
                         if self.files
+                        else {}
+                    ),
+                    # 0.94.0: only when declared.
+                    **(
+                        {"collectors": {k: dict(v) for k, v in self.collectors.items()}}
+                        if self.collectors
                         else {}
                     ),
                 }
@@ -1468,6 +1587,11 @@ class HostBuildPlan:
                     }
                 }
                 if self.files
+                else {}
+            ),
+            **(
+                {"collectors": {k: dict(v) for k, v in self.collectors.items()}}
+                if self.collectors
                 else {}
             ),
             "executes_code": True,
