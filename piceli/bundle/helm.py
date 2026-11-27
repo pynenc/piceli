@@ -50,6 +50,11 @@ kustomize base and ``prepare.sh``:
   adds ``pre-install`` hooks that check the claims' storage class attaches
   on the cluster's nodes and fail the install with one line saying why not
   (:mod:`piceli.bundle.probe`); ``storageProbe.enabled=false`` skips it.
+- **Values that need other values** (0.95.0). ``HelmOptional(when=[...])``
+  renders (and patches) only when every listed boolean value is true too
+  (``{{- if and (A) (B) }}``); ``HelmChart(requires={"a.on": ["b.on"]})``
+  fails the install with ``a.on=true needs b.on=true`` when the first is
+  true and a needed one is not.
 
 Cluster-scoped objects (ClusterRoles and their bindings) are part of the
 release, so ``helm uninstall`` removes them. The chart is deterministic: the
@@ -235,6 +240,17 @@ class HelmOptional:
     one of the optional objects, nor gated or patched by another value; the
     patched render passes the safety gate too.
 
+    0.95.0: ``when`` lists other boolean values (toggles or optional values)
+    that must also be true: the objects render, and the patches apply, only
+    when this value and every one in ``when`` hold (``{{- if and (A) (B)
+    }}``, each read as its own value reads). It is not transitive: list
+    every value the objects need. To refuse a contradiction instead of
+    leaving the objects out, see ``HelmChart(requires=...)``.
+
+    0.95.0: ``note`` is one line of the install notes (``NOTES.txt``),
+    printed only when the objects render (this value and every one in
+    ``when``). It is a template line: ``{{ .Release.Namespace }}`` works.
+
     Example::
 
         HelmOptional("Expose the intake to other namespaces",
@@ -249,6 +265,31 @@ class HelmOptional:
     default: bool = False
     patches: Sequence[tuple[Any, Any]] | Mapping[str, Any] = ()
     default_on_reuse: bool = False
+    when: Sequence[str] = ()
+    note: str = ""
+
+    def install_note(self) -> str:
+        """0.95.0: the note's line, or ``""``.
+
+        :raises ValueError: a note that is not one line of text.
+        """
+        if not isinstance(self.note, str):
+            raise ValueError(f"note must be one line of text, got {self.note!r}")
+        if "\n" in self.note or "\r" in self.note or len(self.note) > 500:
+            raise ValueError("note must be one line of at most 500 characters")
+        return self.note.strip()
+
+    def conditions(self) -> tuple[str, ...]:
+        """0.95.0: the other values that must hold (a string is one name).
+
+        :raises ValueError: a name that is not a string, or one named twice.
+        """
+        names = (self.when,) if isinstance(self.when, str) else tuple(self.when)
+        if not all(isinstance(name, str) for name in names):
+            raise ValueError(f"when must list value names, got {self.when!r}")
+        if len(set(names)) != len(names):
+            raise ValueError(f"when names a value twice: {list(names)}")
+        return names
 
     def keys(self) -> list[str]:
         """The objects as ``"Kind/name"``."""
@@ -339,6 +380,12 @@ class HelmChart:
         attaches on the cluster's nodes before the app installs (values
         ``storageProbe.enabled`` and ``storageProbe.timeoutSeconds``). Only
         for an app with at least one claim.
+    :param requires: 0.95.0: boolean value name (a toggle or optional value)
+        → the boolean values it needs. When the first is true and a needed
+        one is not, the install fails with Helm's ``fail`` and the message
+        ``a.on=true needs b.on=true``; the schema, ``values.yaml`` and the
+        README note it. A value needing itself, a cycle, or defaults that
+        would fail the default install are refused.
     """
 
     target: Any
@@ -353,6 +400,28 @@ class HelmChart:
     retired: Mapping[str, str] = field(default_factory=dict)
     existing_secrets: Mapping[str, Sequence[str]] = field(default_factory=dict)
     storage_probe: StorageProbe | None = None
+    requires: Mapping[str, Sequence[str]] = field(default_factory=dict)
+
+    def requirements(self) -> dict[str, tuple[str, ...]]:
+        """0.95.0: value name → the values it needs (checked for shape).
+
+        :raises ValueError: a name list that is not a list of strings, an
+            empty one, or one naming a value twice.
+        """
+        result: dict[str, tuple[str, ...]] = {}
+        for name, needed in self.requires.items():
+            if isinstance(needed, str) or not all(
+                isinstance(item, str) for item in needed
+            ):
+                raise ValueError(
+                    f"requires {name!r}: a list of value names, got {needed!r}"
+                )
+            if not needed:
+                raise ValueError(f"requires {name!r} names no value")
+            if len(set(needed)) != len(needed):
+                raise ValueError(f"requires {name!r} names a value twice")
+            result[str(name)] = tuple(needed)
+        return result
 
     def secret_values(self) -> dict[str, tuple[str, ...]]:
         """0.80.0: value name → the app Secrets it replaces (checked for shape).
@@ -558,6 +627,71 @@ def _flag(path: str, default: bool, on_reuse: bool = False) -> str:
     if not (default and on_reuse):
         return ref
     return f'(or (kindIs "invalid" {ref}) {ref})'
+
+
+def _group(expression: str) -> str:
+    """``expression`` as one argument of a template function (0.95.0)."""
+    return expression if expression.startswith("(") else f"({expression})"
+
+
+def _check_dependencies(
+    when: Mapping[str, Sequence[str]],
+    requires: Mapping[str, Sequence[str]],
+    defaults: Mapping[str, bool],
+) -> None:
+    """0.95.0: ``when`` and ``requires`` name boolean values of the chart,
+    never the value itself; ``requires`` has no cycle and its defaults hold.
+
+    :raises BundleError: ``bundle-invalid``.
+    """
+    known = sorted(defaults)
+    for name, others in sorted(when.items()):
+        unknown = sorted(set(others) - set(defaults))
+        if unknown:
+            raise BundleError(
+                "bundle-invalid",
+                f"optional {name} when names {unknown}, which are not toggles or "
+                f"optional values (the boolean values: {known})",
+            )
+        if name in others:
+            raise BundleError(
+                "bundle-invalid", f"optional {name} cannot wait on itself (when)"
+            )
+    for name, needed in sorted(requires.items()):
+        unknown = sorted(({name} | set(needed)) - set(defaults))
+        if unknown:
+            raise BundleError(
+                "bundle-invalid",
+                f"requires names {unknown}, which are not toggles or optional "
+                f"values (the boolean values: {known})",
+            )
+        if name in needed:
+            raise BundleError("bundle-invalid", f"requires: {name} needs itself")
+    for start in sorted(requires):
+        path = [start]
+        stack = [(start, iter(requires[start]))]
+        while stack:
+            _name, pending = stack[-1]
+            other = next(pending, None)
+            if other is None:
+                stack.pop()
+                path.pop()
+                continue
+            if other == start:
+                cycle = " -> ".join([*path, start])
+                raise BundleError("bundle-invalid", f"requires has a cycle: {cycle}")
+            if other in path or other not in requires:
+                continue
+            path.append(other)
+            stack.append((other, iter(requires[other])))
+    for name, needed in sorted(requires.items()):
+        for other in needed:
+            if defaults[name] and not defaults[other]:
+                raise BundleError(
+                    "bundle-invalid",
+                    f"requires: {name} defaults to true and {other} to false, "
+                    f"so the default install would fail; change a default",
+                )
 
 
 def _text(value: Any) -> str:
@@ -1339,6 +1473,8 @@ class HelmBundle:
     naming: Naming = field(default_factory=Naming)
     #: 0.94.0: the storage probe the chart runs before install, if any.
     storage_probe: StorageProbe | None = None
+    #: 0.95.0: (the ``if`` test, the line) of each optional value's note.
+    notes: tuple[tuple[str, str], ...] = ()
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -1640,6 +1776,40 @@ def build_helm(
     on_reuse.update(
         {name: item.default_on_reuse for name, (_p, item, _k) in optional.items()}
     )
+    # 0.95.0: values that need other values.
+    try:
+        when = {
+            name: item.conditions()
+            for name, (_p, item, _k) in optional.items()
+            if item.when
+        }
+        requires = declared.requirements()
+    except ValueError as error:
+        raise BundleError("bundle-invalid", str(error)) from None
+    _check_dependencies(when, requires, defaults)
+
+    def gate(name: str) -> str:
+        """The test of ``name``: its own flag and, with ``when``, every other."""
+        flags = [
+            _flag(value, defaults[value], on_reuse[value])
+            for value in (name, *when.get(name, ()))
+        ]
+        if len(flags) == 1:
+            return flags[0]
+        return "and " + " ".join(_group(flag) for flag in flags)
+
+    depends: dict[str, str] = {}
+    for name in sorted(set(when) | set(requires)):
+        notes = [f"only with {other}=true" for other in when.get(name, ())]
+        notes += [
+            f"needs {other}=true (else the install fails)"
+            for other in requires.get(name, ())
+        ]
+        depends[name] = "; ".join(notes)
+
+    def noted(name: str, text: str) -> str:
+        return f"{text}; {depends[name]}" if name in depends else text
+
     gated: dict[str, str] = {}
     for name, (_parts, _item, keys) in optional.items():
         for key in keys:
@@ -1692,7 +1862,7 @@ def build_helm(
             assert mine is not None
             body = templater.text(templater.manifest(mine))
             if file in gated:
-                flag = _flag(gated[file], defaults[gated[file]], on_reuse[gated[file]])
+                flag = gate(gated[file])
                 body = f"{{{{- if {flag} }}}}\n{body}{{{{- end }}}}\n"
             files[f"templates/{file}"] = (header + body).encode()
             continue
@@ -1700,13 +1870,14 @@ def build_helm(
         theirs = {item.file: item for item in variants[toggle].objects}.get(file)
         on = templater.text(templater.manifest(theirs)) if theirs else ""
         off = templater.text(templater.manifest(mine)) if mine else ""
-        flag = _flag(toggle, defaults[toggle], on_reuse[toggle])
+        flag = gate(toggle)
         if on and off:
             body = f"{{{{- if {flag} }}}}\n{on}{{{{- else }}}}\n{off}{{{{- end }}}}\n"
         elif on:
             body = f"{{{{- if {flag} }}}}\n{on}{{{{- end }}}}\n"
         else:
-            body = f"{{{{- if not {flag} }}}}\n{off}{{{{- end }}}}\n"
+            negated = f"({flag})" if flag.startswith("and ") else flag
+            body = f"{{{{- if not {negated} }}}}\n{off}{{{{- end }}}}\n"
         files[f"templates/{file}"] = (header + body).encode()
     missing = sorted(
         name
@@ -1742,6 +1913,25 @@ def build_helm(
         files[naming.secrets_template] = (
             f"# The Secrets of {bundle.name}: generated once, kept across upgrades\n"
             + body
+        ).encode()
+
+    if requires:
+        checks = [
+            f"# {naming.product}-requires.yaml: values that need other values "
+            f"({naming.tool_name} {bundle.name} {bundle.version})"
+        ]
+        for name, needed in sorted(requires.items()):
+            for other in needed:
+                first = _flag(name, defaults[name], on_reuse[name])
+                second = _flag(other, defaults[other], on_reuse[other])
+                message = f"{name}=true needs {other}=true"
+                checks += [
+                    f"{{{{- if and {_group(first)} (not {_group(second)}) }}}}",
+                    f"{{{{- fail {_literal(message)} }}}}",
+                    "{{- end }}",
+                ]
+        files[f"templates/{naming.product}-requires.yaml"] = (
+            "\n".join(checks) + "\n"
         ).encode()
 
     if probe is not None:
@@ -1785,7 +1975,7 @@ def build_helm(
         )
     for name, toggle in sorted(toggles.items()):
         values[name] = toggle.default
-        text = descriptions.get(name) or toggle.description
+        text = noted(name, descriptions.get(name) or toggle.description)
         schema[name] = {"type": "boolean", "description": text}
         comments.append(
             f"# {name}: {text}" + (" (required)" if name in required else "")
@@ -1806,7 +1996,7 @@ def build_helm(
         here_s[parts[-1]] = node
 
     for name, (parts, item, _keys) in sorted(optional.items()):
-        text = descriptions.get(name) or item.description
+        text = noted(name, descriptions.get(name) or item.description)
         put(parts, item.default, {"type": "boolean", "description": text})
         comments.append(
             f"# {name}: {text} (true installs its objects"
@@ -1974,6 +2164,14 @@ def build_helm(
             optional_inputs,
             {name: ".".join(path) for name, path in replaceable.items()},
         ).encode()
+    try:
+        notes = tuple(
+            (gate(name), item.install_note())
+            for name, (_p, item, _k) in sorted(optional.items())
+            if item.install_note()
+        )
+    except ValueError as error:
+        raise BundleError("bundle-invalid", str(error)) from None
     chart = HelmBundle(
         name=bundle.name,
         version=bundle.version,
@@ -1996,11 +2194,12 @@ def build_helm(
         retired=retired,
         naming=naming,
         storage_probe=probe,
+        notes=notes,
     )
     files["Chart.yaml"] = yaml.safe_dump(chart.metadata(), sort_keys=True).encode()
     files["templates/NOTES.txt"] = _notes(chart).encode()
     files["README.md"] = _readme(
-        chart, descriptions, toggles, declared.optional, declared.values
+        chart, descriptions, toggles, declared.optional, declared.values, depends
     ).encode()
     return chart
 
@@ -2180,6 +2379,8 @@ def _notes(chart: HelmBundle) -> str:
             f"WARNING: {name} is retired and ignored: {hint}",
             "{{- end }}",
         ]
+    for test, line in chart.notes:  # 0.95.0: HelmOptional(note=...)
+        lines += [f"{{{{- if {test} }}}}", line, "{{- end }}"]
     return "\n".join(lines) + "\n"
 
 
@@ -2189,7 +2390,9 @@ def _readme(
     toggles: Mapping[str, HelmToggle],
     optional: Mapping[str, HelmOptional] | None = None,
     placed: Mapping[str, HelmValue] | None = None,
+    depends: Mapping[str, str] | None = None,
 ) -> str:
+    depends = depends or {}
     lines = [
         f"# {chart.name}",
         "",
@@ -2238,7 +2441,8 @@ def _readme(
         )
     for name in sorted(toggles):
         text = descriptions.get(name) or toggles[name].description
-        lines.append(f"- `{name}` (true or false): {text}")
+        note = f"; {depends[name]}" if name in depends else ""
+        lines.append(f"- `{name}` (true or false): {text}{note}")
     for name, item in sorted((optional or {}).items()):
         text = descriptions.get(name) or item.description
         objects = ", ".join(item.keys())
@@ -2246,7 +2450,10 @@ def _readme(
         patches = ", ".join(item.resolved())
         if patches:
             effect += (" and patches " if effect else "true patches ") + patches
-        lines.append(f"- `{name}` (true or false): {text}; {effect}")
+        note = f"; {depends[name]}" if name in depends else ""
+        if item.note:  # 0.95.0
+            note += f"; the install notes then say: `{item.install_note()}`"
+        lines.append(f"- `{name}` (true or false): {text}; {effect}{note}")
     for name, value in sorted((placed or {}).items()):
         lines.append(f"- `{name}`: {descriptions.get(name) or value.description}")
     if chart.existing_secret_keys:

@@ -444,6 +444,66 @@ env = {"APP_RELEASE": HelmRelease.name, "APP_NAMESPACE": HelmRelease.namespace}
 the chart sets to `{{ .Release.Name }}`; in a kustomize bundle or a
 `piceli deploy` the annotation is absent and the variable is empty.
 
+### Values that need other values (0.95.0)
+
+Some optional objects are useful only with others. A collector that sends
+to the intake Service needs `intake.expose`; on its own it would send
+nowhere. Two ways to say so:
+
+```python
+chart = HelmChart(
+    pipeline,
+    optional={
+        "intake.expose": HelmOptional("Expose the intake", objects=[intake]),
+        "collector.enabled": HelmOptional(
+            "Run the collector",
+            objects=[collector, collector_policy],
+            default=True,
+            when=["intake.expose"],  # rendered only when both are true
+        ),
+    },
+    # or refuse the contradiction instead of leaving the objects out:
+    # requires={"collector.enabled": ["intake.expose"]},
+)
+```
+
+- **`when`** gates the value's objects (and its `patches`) on every listed
+  value too: the template is one `{{- if and (A) (B) }}`, each value read
+  as it always is (with `default_on_reuse`, a missing value reads as its
+  default). `collector.enabled=true, intake.expose=false` then installs no
+  collector, silently. `when` names toggles or optional values. It is not
+  transitive: list every value the objects need.
+- **`requires`** fails the install (Helm's `fail`) when the first value is
+  true and a needed one is not, with one line:
+  `collector.enabled=true needs intake.expose=true`. `helm template` and
+  Argo CD fail the same way.
+- `values.yaml`, `values.schema.json` and the chart's README note each
+  dependency on the value's line (`only with intake.expose=true`, `needs
+  intake.expose=true`).
+- Checked when the chart is built (`bundle-invalid`): a name that is not a
+  toggle or optional value, a value that names itself, a cycle in
+  `requires`, and `requires` defaults that would fail the default install
+  (the first `true`, the needed one `false`).
+- Only whole objects are gated. To change a container by a value, patch
+  its workload (`patches`); a patched object cannot also be optional.
+
+### An install note for an optional value (0.95.0)
+
+`HelmOptional(note=...)` adds one line to the install notes (`NOTES.txt`),
+printed only when the value's objects render (the value and every one in
+`when`). It is a template line, so `{{ .Release.Namespace }}` works:
+
+```python
+"intake.expose": HelmOptional(
+    "Expose the intake",
+    objects=[intake],
+    note="The intake is at https://intake.{{ .Release.Namespace }}.svc:4318",
+)
+```
+
+`helm install` prints it after the status lines, and the chart's README
+lists it next to the value. A note is one line of at most 500 characters.
+
 ### Storage probe before install (0.94.0)
 
 A claim in a storage class the cluster's nodes cannot attach (a disk type

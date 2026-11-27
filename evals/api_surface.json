@@ -4843,6 +4843,8 @@
     "optional_inputs",
     "patched_values",
     "required",
+    "requirements",
+    "requires",
     "retired",
     "secret_values",
     "setting_keys",
@@ -4859,6 +4861,7 @@
     "optional",
     "optional_inputs",
     "required",
+    "requires",
     "retired",
     "settings",
     "storage_env",
@@ -4869,6 +4872,7 @@
    ],
    "methods": {
     "patched_values": [],
+    "requirements": [],
     "secret_values": [],
     "setting_keys": []
    },
@@ -4878,22 +4882,30 @@
   },
   "HelmOptional": {
    "attrs": [
+    "conditions",
     "default",
     "default_on_reuse",
     "description",
+    "install_note",
     "keys",
+    "note",
     "objects",
     "patches",
-    "resolved"
+    "resolved",
+    "when"
    ],
    "init": [
     "default",
     "default_on_reuse",
     "description",
+    "note",
     "objects",
-    "patches"
+    "patches",
+    "when"
    ],
    "methods": {
+    "conditions": [],
+    "install_note": [],
     "keys": [],
     "resolved": []
    }
@@ -18393,5 +18405,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.94.0"
+ "version": "0.95.0"
 }
