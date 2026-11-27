@@ -4,6 +4,20 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.90.0
+
+### The development cache's budget follows its disk (ops#111)
+
+- **`DevBuilds(cache_free_share=)`** (default `0.5`, `0` turns it off): the
+  budget of a run is the smaller of `cache_budget` × `cache_size` and what
+  the cache holds plus that share of its disk's free space, measured when the
+  run starts. A bigger `cache_size` is then safe on a disk shared with other
+  data. Its log says which applies: `[piceli-dev] cache budget: ... GiB (...)`;
+  the budget report has `max_bytes`, `cap_bytes` and `limited_by`.
+- **`piceli dev run` says when the installed config is not the declared
+  one**: one line naming the fields (`cache_size: 80Gi -> 110Gi`). Runs use
+  the installed config; `piceli cluster init` applies the declaration.
+
 ## Version 0.89.0
 
 ### A derived image appends files to a built image, without a build (ops#110)

@@ -3292,6 +3292,7 @@
    },
    "attrs": [
     "cache_budget",
+    "cache_free_share",
     "cache_size",
     "describe",
     "from_dict",
@@ -3310,6 +3311,7 @@
    ],
    "init": [
     "cache_budget",
+    "cache_free_share",
     "cache_size",
     "hosts",
     "image",
@@ -18351,5 +18353,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.89.0"
+ "version": "0.90.0"
 }
