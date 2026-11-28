@@ -308,6 +308,19 @@ def test_what_is_transient_follows_the_registry_clients_rules() -> None:
     assert not is_transient(failed("registry-error"))
     assert not is_transient(failed("registry-unauthorized"))
     assert not is_transient(failed("copy-verification-failed"))
+
+
+def test_a_failed_item_keeps_the_text_of_its_check() -> None:
+    """0.96.0 (ops#100): the report and the ledger name what failed."""
+    said = "tag 1.0: the target names nothing, not sha256:..."
+    script = Script(
+        {item("api").target: [failed("copy-verification-failed", message=said)]}
+    )
+    report, _, store = run([item("api")], script, attempts=1)
+    assert report.failed == "copy-verification-failed"
+    assert report.failed_detail == said
+    assert report.to_dict()["items"][0]["detail"] == said
+    assert store.load("release")["items"][item("api").key]["detail"] == said
     assert not is_transient(copied())
 
 

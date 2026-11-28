@@ -4,6 +4,22 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.96.0
+
+### A failed copy names its check, and a candidate tries it again (ops#100)
+
+- `copy-verification-failed` says which read-back check failed and what it
+  compared: the manifest digest read back, the tag, the served bytes, a
+  platform manifest or a referrer, for example
+  `tag 1.4.0: the target names nothing, not sha256:…`. It is the copy
+  receipt's `message`, the copy set's `detail` (report and ledger) and a
+  candidate's `detail` (`<component>: <text>`).
+- A release candidate whose copy fails with `copy-verification-failed` or
+  `copy-failed` is tried again with the candidate backoff (60 s, then 5, 15
+  and 30 minutes, at most five tries), as a registry that does not answer
+  already is. A registry still settling after a push no longer leaves the
+  candidate failed until someone requests it.
+
 ## Version 0.95.0
 
 ### Chart values that need other values (ops#116)

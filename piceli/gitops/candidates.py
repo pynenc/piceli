@@ -23,7 +23,9 @@ State of a candidate, ``state["candidates"][commit]``:
     ``reason`` says why (``candidate-no-image``, ``candidate-run-missing``,
     a permanent reason of the copy set, or the last transient one after
     :data:`MAX_ATTEMPTS` tries; ``candidate-credentials-missing`` counts as
-    transient: the Secret may appear);
+    transient: the Secret may appear, and since 0.96.0 so do
+    ``copy-verification-failed`` and ``copy-failed``); ``detail`` names the
+    component and, since 0.96.0, the failed check and what it compared;
 ``cancelled``
     a newer commit passed while it was building
     (``candidate-superseded``); a request resumes it from its ledger.
@@ -74,7 +76,9 @@ SOURCE_UNKNOWN = "candidate-source-unknown"
 COPY_ERROR = "candidate-copy-error"
 CREDENTIALS_MISSING = "candidate-credentials-missing"
 _TRANSIENT = ("unreachable", "timeout", "timed-out", "transient", "temporar")
-_RETRYABLE = (CREDENTIALS_MISSING,)
+#: 0.96.0: copy reasons a later try may cure (a registry still settling
+#: after a push, ops#100): the copy is content-addressed, a retry is safe.
+_RETRYABLE = (CREDENTIALS_MISSING, "copy-verification-failed", "copy-failed")
 _LABEL = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
 _TARGET = re.compile(
     r"oci://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]{1,5})?"
@@ -742,8 +746,13 @@ class Candidates:
                     if getattr(report, "ok", False):
                         job.set(name, True)
                     else:
+                        # 0.96.0: the failed check and what it compared.
+                        said = getattr(report, "failed_detail", None)
                         job.set(
-                            name, False, str(getattr(report, "failed", None) or "?")
+                            name,
+                            False,
+                            str(getattr(report, "failed", None) or "?"),
+                            f"{name}: {said}" if said else None,
                         )
                         return
             finally:

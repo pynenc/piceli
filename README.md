@@ -66,13 +66,12 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.95
+## What's new in 0.96
 
-- **Chart values that need other values**: an optional object can render
-  only when several values are true, and a value can refuse to install
-  without the one it needs, with a message naming both.
-- **An install note per optional value** (`HelmOptional(note=...)`),
-  printed only when the value is on.
+- **A failed copy names its check**: `copy-verification-failed` says which
+  read-back failed (tag, bytes, platform, referrer) and what it compared.
+- **Release candidates try a failed copy again** with their backoff when
+  the registry was still settling, instead of staying failed.
 
 ## Web UI
 
