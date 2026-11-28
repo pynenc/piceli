@@ -4,6 +4,17 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.98.0
+
+### Scheduling values for named workloads (ops#118)
+
+- `HelmChart(scheduling=["web"])` gives `nodeSelector`, `tolerations` and
+  `affinity` only to the named workloads; a DaemonSet that runs on every
+  node keeps its own. The storage probe's Job and pod get them when the
+  workload whose claim it probes is named. A name that is not a workload
+  of the bundle, an empty list or a bare string is refused with
+  `bundle-invalid`. `scheduling=True` is still every workload.
+
 ## Version 0.97.0
 
 ### A storage probe that needs nothing from the app's images (ops#115)
