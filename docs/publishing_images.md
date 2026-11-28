@@ -194,7 +194,8 @@ piceli artifacts copy --from oci://127.0.0.1:5000/shop/api@sha256:<index digest>
    (`copy-tag-exists`) before anything is pushed, unless `--move-tag`.
 5. **Read back**: the tag names the digest, each platform manifest is
    there and each referrer is listed (`copy-verification-failed`
-   otherwise).
+   otherwise; since 0.96.0 the receipt's `message` names the check and
+   what it compared).
 
 Before step 2 the source digest is scanned for known vulnerabilities
 (0.94.0; `--scan-policy FILE`, `--no-scan`): see {doc}`image_scanning`.

@@ -53,6 +53,7 @@ from piceli.artifacts.registry import (
     RETRY_STATUSES,
     RegistryCredentials,
     RegistryError,
+    describe,
     docker_config_credentials,
 )
 from piceli.artifacts.scan import ScanPolicy
@@ -68,6 +69,8 @@ MAX_RETRIES = 100
 MAX_SET_BYTES = 1024 * 1024
 #: A failed copy with one of these reasons is tried again as a whole. Other
 #: reasons (a refused tag, bad credentials, a digest mismatch) are permanent.
+#: 0.96.0: the longest error text a failed item keeps.
+MAX_DETAIL = 400
 TRANSIENT_REASONS = frozenset({"registry-unreachable"})
 #: Reasons that are transient only with one of :data:`~piceli.artifacts.registry.RETRY_STATUSES`.
 STATUS_REASONS = frozenset({"registry-error", "upload-rejected"})
@@ -421,6 +424,8 @@ class ItemResult:
     receipt_digest: str | None = None
     skipped: bool = False
     receipt: dict[str, Any] | None = field(default=None, repr=False)
+    #: 0.96.0: what the failed check compared (the error's text), if known.
+    detail: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         value: dict[str, Any] = {
@@ -435,6 +440,8 @@ class ItemResult:
         }
         if self.receipt is not None:
             value["receipt"] = self.receipt
+        if self.detail:
+            value["detail"] = self.detail
         return value
 
     @classmethod
@@ -449,6 +456,7 @@ class ItemResult:
             receipt_digest=value.get("receipt_digest"),
             skipped=bool(value.get("skipped")),
             receipt=value.get("receipt"),
+            detail=value.get("detail"),
         )
 
 
@@ -472,6 +480,14 @@ class CopyReport:
             if item.state == "failed":
                 return item.reason or "copy-failed"
         return None if self.ok else "copy-failed"
+
+    @property
+    def failed_detail(self) -> str | None:
+        """0.96.0: the text of the first failed item's error, else ``None``."""
+        for item in self.items:
+            if item.state == "failed":
+                return item.detail
+        return None
 
     def to_dict(self) -> dict[str, Any]:
         value: dict[str, Any] = {
@@ -713,11 +729,15 @@ def run_copy_set(
                 break
             reason = str(receipt.get("reason") or "copy-failed")
             result.state, result.reason, result.receipt = "failed", reason, receipt
+            result.detail = _detail(receipt)
             records[item.key] = _record("failed", total, reason, None)
+            if result.detail:
+                records[item.key]["detail"] = result.detail
             persist()
             if not (transient or is_transient(receipt)) or number == attempts:
                 stopped = True
-                say(f"copy {item.key}: failed [{reason}]")
+                said = f": {result.detail}" if result.detail else ""
+                say(f"copy {item.key}: failed [{reason}]{said}")
                 break
             wait = pause(number, backoff_base, backoff_cap, jitter)
             report.retries.append(
@@ -743,9 +763,29 @@ def _try(
     try:
         return run(item), False
     except RegistryError as error:
-        return {"state": "failed", "reason": error.reason}, error.transient
+        return _failed(error.reason, error), error.transient
     except (CopyError, DeliveryInputError, CopySetError) as error:
-        return {"state": "failed", "reason": error.code}, False
+        return _failed(error.code, error), False
+
+
+def _failed(reason: str, error: BaseException) -> dict[str, Any]:
+    """A failed receipt; 0.96.0: with the error's text when it says more."""
+    found: dict[str, Any] = {"state": "failed", "reason": reason}
+    text = str(error)
+    if text and text != reason:
+        found["detail"] = text[:MAX_DETAIL]
+    return found
+
+
+def _detail(receipt: Mapping[str, Any]) -> str | None:
+    """The text a failed receipt keeps of its error (0.96.0), else ``None``."""
+    for key in ("detail", "message"):
+        found = receipt.get(key)
+        if isinstance(found, str) and found:
+            return found[:MAX_DETAIL]
+    error = receipt.get("error")
+    found = describe(error) if isinstance(error, Mapping) else ""
+    return found[:MAX_DETAIL] or None
 
 
 __all__ = [

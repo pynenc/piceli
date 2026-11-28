@@ -215,3 +215,29 @@ def test_the_plan_needs_a_digest_and_its_own_approval(
         "--to", "oci://ghcr.io/example/api:1", capsys=capsys,
     )  # fmt: skip
     assert code == 2 and refused["reason"] == "copy-invalid"
+
+
+def test_a_failed_read_back_names_the_check_and_what_it_compared(
+    source: OciRegistry, target: OciRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0.96.0 (ops#100): the receipt says which check failed and the values."""
+    index, _, _ = _built(source)
+    real = StreamedOciRegistryClient.manifest_digest
+    other = "sha256:" + "f" * 64
+    asked: list[str] = []
+
+    def settling(self: Any, repository: str, reference: str) -> Any:
+        if reference == "1":
+            asked.append(reference)
+            if len(asked) > 1:  # the read-back after the push
+                return other
+        return real(self, repository, reference)
+
+    monkeypatch.setattr(StreamedOciRegistryClient, "manifest_digest", settling)
+    plan = CopyPlan.parse(
+        f"oci://{source.host}/{REPO}@{index}", f"oci://{target.host}/example/api:1"
+    )
+    receipt = Copier().copy(plan, CopyGrant(plan.digest, 4e9))
+    assert receipt["state"] == "failed"
+    assert receipt["reason"] == "copy-verification-failed"
+    assert receipt["message"] == f"tag 1: the target names {other}, not {index}"

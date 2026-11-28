@@ -136,6 +136,8 @@ class Rig:
             raise found
         if found is None:
             return SimpleNamespace(ok=True, failed=None)
+        if isinstance(found, tuple):  # (reason, the failed check's text)
+            return SimpleNamespace(ok=False, failed=found[0], failed_detail=found[1])
         return SimpleNamespace(ok=False, failed=found)
 
     def poll(self, record: dict[str, Any]) -> None:
@@ -808,3 +810,23 @@ def test_a_missing_secret_is_bounded_and_a_request_tries_again(
     assert other.record(A)["retry_at"] is not None
     other.candidates.request(A[:9])
     assert other.record(A)["retry_at"] is None
+
+
+def test_a_failed_read_back_is_tried_again_and_names_its_check() -> None:
+    """0.96.0 (ops#100): copy-verification-failed is retried with the
+    backoff, and the state names the component, the check and the values."""
+    rig = Rig()
+    said = "tag 1: the target names nothing, not sha256:..."
+    rig.outcome["web"] = ("copy-verification-failed", said)
+    record = passed((A, NOW - 3600, "run-1"))
+    rig.poll(record)
+    found = rig.record(A)
+    assert found["state"] == "building"
+    assert found["reason"] == "copy-verification-failed"
+    assert found["detail"] == f"web: {said}"
+    assert found["retry_at"] == _iso(NOW + BACKOFF[0])
+    del rig.outcome["web"]
+    rig.now += BACKOFF[0]
+    rig.poll(record)
+    assert rig.record(A)["state"] == "ready"
+    assert len(rig.copied) == 2

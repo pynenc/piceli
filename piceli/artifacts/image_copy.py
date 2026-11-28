@@ -283,6 +283,8 @@ class Copier:
             self._copy(plan, receipt, time.time() + self.timeout, cancel)
         except CopyError as error:
             receipt.update(state="failed", reason=error.code)
+            if str(error) != error.code:  # 0.96.0: what the check compared
+                receipt["message"] = str(error)
         except ScanError as error:  # 0.94.0: nothing was copied
             receipt.update(state="failed", reason=error.code, message=str(error))
             if error.details:
@@ -375,7 +377,12 @@ class Copier:
         receipt["blobs"] = blobs
         body, header = sink.get_manifest(target.repository, wanted)
         if _sha(body) != wanted:
-            raise CopyError("copy-verification-failed")
+            # 0.96.0: every check names what it compared.
+            raise CopyError(
+                "copy-verification-failed",
+                f"manifest read back: the target served {len(body)} bytes "
+                f"with digest {_sha(body)} for {wanted}",
+            )
         media, document = _media_type(body, header)
         receipt["media_type"] = media
         children = _children(document) if media in INDEX_TYPES else {}
@@ -503,16 +510,29 @@ class Copier:
         """Read back what the target serves (module docstring, step 5)."""
         target, wanted = plan.target, plan.source.digest
         repository = target.repository
-        if target.tag is not None and (
-            sink.manifest_digest(repository, target.tag) != wanted
-        ):
-            raise CopyError("copy-verification-failed")
+        if target.tag is not None:
+            tagged = sink.manifest_digest(repository, target.tag)
+            if tagged != wanted:
+                raise CopyError(
+                    "copy-verification-failed",
+                    f"tag {target.tag}: the target names {tagged or 'nothing'}, "
+                    f"not {wanted}",
+                )
         served, _ = sink.get_manifest(repository, wanted)
         if served != body:
-            raise CopyError("copy-verification-failed")
-        for child in receipt["platforms"].values():
-            if sink.manifest_digest(repository, child) != child:
-                raise CopyError("copy-verification-failed")
+            raise CopyError(
+                "copy-verification-failed",
+                f"served bytes of {wanted}: the target served {len(served)} bytes "
+                f"(digest {_sha(served)}), the copy pushed {len(body)}",
+            )
+        for platform, child in receipt["platforms"].items():
+            found = sink.manifest_digest(repository, child)
+            if found != child:
+                raise CopyError(
+                    "copy-verification-failed",
+                    f"platform {platform}: the target answers {found or 'nothing'} "
+                    f"for {child}",
+                )
         listed: dict[str, set[str]] = {}
         for item in receipt["referrers"]:
             subject = item["subject"]
@@ -522,7 +542,11 @@ class Copier:
                     for entry in referrers(sink, repository, subject)
                 }
             if item["digest"] not in listed[subject]:
-                raise CopyError("copy-verification-failed")
+                raise CopyError(
+                    "copy-verification-failed",
+                    f"referrer {item['digest']} of {subject}: not among the "
+                    f"{len(listed[subject])} referrers the target lists",
+                )
 
 
 def _children(document: Mapping[str, Any]) -> dict[str, str]:

@@ -88,7 +88,7 @@ candidate 0123abc: not ready: candidate-no-image (component web has no image ref
 | State | Meaning |
 | --- | --- |
 | `waiting` | The commit passed; the quiet time is not over. |
-| `building` | The images are being copied. A temporary failure (a registry that does not answer) is tried again, 60 seconds later, then 5, 15 and 30 minutes, up to five tries. A missing credentials Secret is tried again the same way (it may be created later; a mounted Secret appears without a restart), and a `request` tries at once. |
+| `building` | The images are being copied. A temporary failure (a registry that does not answer; since 0.96.0 also `copy-verification-failed` and `copy-failed`, a registry still settling after a push) is tried again, 60 seconds later, then 5, 15 and 30 minutes, up to five tries. A missing credentials Secret is tried again the same way (it may be created later; a mounted Secret appears without a restart), and a `request` tries at once. |
 | `ready` | Every image is copied. |
 | `failed` | `reason` says why; it is not tried again until you ask. |
 | `cancelled` | A newer commit passed while it was building. A request continues it from its ledger. |
@@ -98,6 +98,9 @@ the detail names it; since 0.87.0 a digest without an image reference is
 copied from the cluster registry, `<registry repository>/<component>@digest`), `candidate-no-component` (the run has no such component),
 `candidate-run-missing` (the history no longer has the run), `candidate-copy-error`,
 `candidate-credentials-missing`, and the reason the copy set reports.
+The detail names the component and, since 0.96.0, the copy's own text:
+for `copy-verification-failed` the check that failed and what it compared
+(`web: tag abc1234def56: the target names nothing, not sha256:…`).
 `candidate-superseded` is the reason of a cancelled candidate.
 
 A newer passed commit cancels a candidate still building (the copy stops between
