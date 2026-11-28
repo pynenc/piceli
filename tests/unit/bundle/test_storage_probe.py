@@ -12,6 +12,7 @@ server giving the same answers, and every script test runs both.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import os
 import shutil
@@ -847,3 +848,101 @@ def test_scheduling_refuses_a_value_the_chart_already_names() -> None:
                 helm_app.pipeline, scheduling=True, toggles={"affinity": toggle}
             ),
         )
+
+
+# ------------------------------------------------------------ 0.98.0
+
+
+def _with_daemonset() -> Any:
+    """The test bundle plus a DaemonSet that must run on every node."""
+    from piceli.bundle.build import BundleObject
+
+    bundle = _bundle()
+    (statefulset,) = [o for o in bundle.objects if o.kind == "StatefulSet"]
+    pod = json.loads(json.dumps(statefulset.manifest["spec"]["template"]["spec"]))
+    pod.pop("volumes", None)
+    for container in pod.get("containers") or ():
+        container.pop("volumeMounts", None)
+    labels = {"app.kubernetes.io/name": "node-agent"}
+    daemonset = {
+        "apiVersion": "apps/v1",
+        "kind": "DaemonSet",
+        "metadata": {"name": "node-agent", "namespace": "agent", "labels": labels},
+        "spec": {
+            "selector": {"matchLabels": labels},
+            "template": {"metadata": {"labels": labels}, "spec": pod},
+        },
+    }
+    return dataclasses.replace(
+        bundle,
+        objects=(*bundle.objects, BundleObject("node-agent.yaml", daemonset)),
+    )
+
+
+def test_scheduling_for_named_workloads_leaves_the_others_alone(
+    helm: str, tmp_path: Path
+) -> None:
+    """ops#118: the values place the named workload and the probe of its
+    claim; a DaemonSet on every node keeps its own scheduling."""
+    chart = build_helm(
+        _with_daemonset(),
+        declaration=HelmChart(
+            helm_app.pipeline, storage_probe=StorageProbe(), scheduling=["agent"]
+        ),
+    )
+    assert chart.scheduled == ("agent",)
+    assert "the pods of agent" in chart.files["README.md"].decode()
+    objects = _render(helm, tmp_path, "--set", "nodeSelector.pool=x", chart=chart)
+    placed = [
+        objects[("StatefulSet", "agent")]["spec"]["template"]["spec"],
+        objects[("Job", NAME)]["spec"]["template"]["spec"],
+        json.loads(_probe_env(objects)["PROBE_POD"])["spec"],
+    ]
+    for pod in placed:
+        assert pod["nodeSelector"] == {"pool": "x"}
+    daemon = objects[("DaemonSet", "node-agent")]["spec"]["template"]["spec"]
+    assert "nodeSelector" not in daemon
+
+
+def test_scheduling_for_a_workload_without_the_claim_leaves_the_probe(
+    helm: str, tmp_path: Path
+) -> None:
+    chart = build_helm(
+        _with_daemonset(),
+        declaration=HelmChart(
+            helm_app.pipeline, storage_probe=StorageProbe(), scheduling=["node-agent"]
+        ),
+    )
+    objects = _render(helm, tmp_path, "--set", "nodeSelector.pool=x", chart=chart)
+    daemon = objects[("DaemonSet", "node-agent")]["spec"]["template"]["spec"]
+    assert daemon["nodeSelector"] == {"pool": "x"}
+    for pod in (
+        objects[("StatefulSet", "agent")]["spec"]["template"]["spec"],
+        objects[("Job", NAME)]["spec"]["template"]["spec"],
+        json.loads(_probe_env(objects)["PROBE_POD"])["spec"],
+    ):
+        assert "nodeSelector" not in pod
+
+
+@pytest.mark.parametrize(
+    ("scheduling", "match"),
+    [
+        (["shop"], r"scheduling names \['shop'\], which are not workloads"),
+        ([], "names no workload"),
+        ("agent", "a list of workload names"),
+        ([""], "a list of workload names"),
+    ],
+)
+def test_scheduling_refuses_names_that_are_not_workloads(
+    scheduling: Any, match: str
+) -> None:
+    with pytest.raises(BundleError, match=match):
+        build_helm(
+            _bundle(),
+            declaration=HelmChart(helm_app.pipeline, scheduling=scheduling),
+        )
+
+
+def test_scheduling_false_adds_no_values() -> None:
+    values = yaml.safe_load(_chart(StorageProbe()).files["values.yaml"])
+    assert "nodeSelector" not in values

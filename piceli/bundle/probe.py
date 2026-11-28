@@ -526,8 +526,8 @@ def _pod(manifest: Mapping[str, Any]) -> Mapping[str, Any] | None:
     return found[0] if found else None
 
 
-def claim_workload(objects: Sequence[Mapping[str, Any]]) -> Mapping[str, Any] | None:
-    """The pod spec of the first workload that mounts a claim, if any."""
+def claim_owner(objects: Sequence[Mapping[str, Any]]) -> Mapping[str, Any] | None:
+    """0.98.0: the first workload that mounts a claim (its whole manifest)."""
     for manifest in objects:
         pod = _pod(manifest)
         if pod is None:
@@ -538,8 +538,14 @@ def claim_workload(objects: Sequence[Mapping[str, Any]]) -> Mapping[str, Any] | 
             for volume in pod.get("volumes") or ()
         )
         if templates or claims:
-            return pod
+            return manifest
     return None
+
+
+def claim_workload(objects: Sequence[Mapping[str, Any]]) -> Mapping[str, Any] | None:
+    """The pod spec of the first workload that mounts a claim, if any."""
+    owner = claim_owner(objects)
+    return None if owner is None else _pod(owner)
 
 
 def first_claim(objects: Sequence[Mapping[str, Any]]) -> Mapping[str, Any] | None:

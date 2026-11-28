@@ -66,13 +66,11 @@ objects).
 > experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
-## What's new in 0.97
+## What's new in 0.98
 
-- **A storage probe for any app image**: without `image=`, the probe runs
-  Piceli's own pinned image, so distroless and `scratch` apps can use it.
-- **Chart values that place every pod** (`HelmChart(scheduling=True)`):
-  `nodeSelector`, `tolerations` and `affinity`, for the workloads and the
-  probe alike.
+- **Scheduling values for named workloads**: `HelmChart(scheduling=["web"])`
+  places only those workloads and their storage probe; a DaemonSet that
+  runs on every node keeps its own scheduling.
 
 ## Web UI
 

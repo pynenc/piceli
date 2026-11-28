@@ -582,6 +582,12 @@ helm install shop ./chart --set nodeSelector.pool=data \
   `nodeAffinity`, `podAffinity` or `podAntiAffinity`). The storage probe
   takes only `nodeAffinity`: the app's pods do not exist yet.
 
+Since 0.98.0, `HelmChart(scheduling=["web"])` gives the values only to
+the named workloads. A DaemonSet that must run on every node (a log reader)
+keeps its own scheduling. The storage probe's Job and pod get the values
+when the workload whose claim it probes is one of them. A name that is not
+a workload of the bundle, or an empty list, is refused (`bundle-invalid`).
+
 So on a class that binds a volume only when a pod is scheduled
 (`WaitForFirstConsumer`), the probe's volume lands on the node pool the app
 will use. The values are empty by default, and charts without
