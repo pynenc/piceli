@@ -517,7 +517,7 @@ from piceli import HelmChart, StorageProbe
 
 chart = HelmChart(
     pipeline,
-    storage_probe=StorageProbe(image=WEB_IMAGE, timeout_seconds=180, size="1Gi"),
+    storage_probe=StorageProbe(timeout_seconds=180, size="1Gi"),
 )
 ```
 
@@ -525,12 +525,18 @@ chart = HelmChart(
   the claims already exist): a ServiceAccount, a Role (create, get and delete
   claims and pods in the release namespace, list events), a ClusterRole that
   only reads storage classes, their bindings, a NetworkPolicy that lets the
-  probe reach the API server, and a Job. The Job runs `sh` and `curl` from
-  `image` (pinned by digest, like every chart image; usually the app's own),
-  as `app.cluster_identity` does. It creates a claim `<release>-storage-probe`
+  probe reach the API server, and a Job. Without `image` (0.97.0), the Job
+  runs Piceli's controller image, pinned by digest in Piceli
+  (`ghcr.io/pynenc/piceli-controller@sha256:…`, `piceli.bundle.probe.DEFAULT_IMAGE`),
+  with a Python version of the probe: the app's images need no shell.
+  `image.registry` rewrites its host for a mirror; copy it there with the
+  app's images. With `image=` (pinned by digest, like every chart image) the
+  Job runs `sh` and `curl` from that image, as `app.cluster_identity` does.
+  It creates a claim `<release>-storage-probe`
   of `size` in `storageClass` (the default class when empty) and a pod that
   mounts it, on the nodes where the app's claim workload runs (its node
-  selector, tolerations and node affinity). Once the pod runs, it deletes
+  selector, tolerations and node affinity, and the chart's scheduling
+  values when it has them, below). Once the pod runs, it deletes
   both and prints how long it took. Every object passes the
   [safety gate](#the-safety-gate).
 - **The message.** When the pod does not run within
@@ -558,6 +564,29 @@ chart = HelmChart(
   class whose reclaim policy is `Retain`, its volume stays; delete it by hand.
 - **Only for an app with a claim** (otherwise `bundle-invalid`), and only in
   the Helm chart: the kustomize bundle has no hook to run it before the app.
+
+### Where the pods run (0.97.0)
+
+`HelmChart(scheduling=True)` gives the chart three values that place every
+pod, the storage probe's included:
+
+```sh
+helm install shop ./chart --set nodeSelector.pool=data \
+  --set 'tolerations[0].key=pool,tolerations[0].operator=Exists'
+```
+
+- `nodeSelector`: node labels every pod needs. A workload's own selector
+  stays; the value wins on the same key.
+- `tolerations`: added to each workload's own.
+- `affinity`: merged with each workload's own (the value wins on
+  `nodeAffinity`, `podAffinity` or `podAntiAffinity`). The storage probe
+  takes only `nodeAffinity`: the app's pods do not exist yet.
+
+So on a class that binds a volume only when a pod is scheduled
+(`WaitForFirstConsumer`), the probe's volume lands on the node pool the app
+will use. The values are empty by default, and charts without
+`scheduling=True` render as before. A chart that already names one of these
+values is refused (`bundle-invalid`).
 
 Publish the chart to an OCI registry as `helm push` does, with an approval
 of its digest like every Piceli publish:

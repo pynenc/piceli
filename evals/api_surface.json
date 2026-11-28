@@ -4846,6 +4846,7 @@
     "requirements",
     "requires",
     "retired",
+    "scheduling",
     "secret_values",
     "setting_keys",
     "settings",
@@ -4863,6 +4864,7 @@
     "required",
     "requires",
     "retired",
+    "scheduling",
     "settings",
     "storage_env",
     "storage_probe",
@@ -11366,7 +11368,9 @@
   "StorageProbe": {
    "attrs": [
     "checked",
+    "command",
     "image",
+    "pinned",
     "size",
     "timeout_seconds"
    ],
@@ -11376,7 +11380,8 @@
     "timeout_seconds"
    ],
    "methods": {
-    "checked": []
+    "checked": [],
+    "command": []
    },
    "returns": {
     "checked": "StorageProbe"
@@ -18405,5 +18410,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.96.0"
+ "version": "0.97.0"
 }

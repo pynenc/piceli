@@ -4,6 +4,26 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.97.0
+
+### A storage probe that needs nothing from the app's images (ops#115)
+
+- `StorageProbe()` without `image=` runs Piceli's controller image, pinned
+  by digest in Piceli (`piceli.bundle.probe.DEFAULT_IMAGE`, the 0.96.0
+  image), with a Python version of the probe: the same API calls and the
+  same lines as the `sh` and `curl` script. Distroless and `scratch` app
+  images now work. `image.registry` rewrites its host for a mirror;
+  `image=` keeps the `sh` script.
+
+### Where the pods run (ops#115)
+
+- `HelmChart(scheduling=True)` adds the values `nodeSelector`,
+  `tolerations` and `affinity`. Every workload gets them, merged with its
+  own (the value wins on a key; tolerations are added). The storage
+  probe's Job and pod get them too (of `affinity`, only `nodeAffinity`).
+  So `--set nodeSelector.pool=x` puts the app and the probe's volume on one
+  node pool. Charts without it render byte for byte as in 0.96.0.
+
 ## Version 0.96.0
 
 ### A failed copy names its check, and a candidate tries it again (ops#100)
