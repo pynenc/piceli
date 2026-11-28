@@ -11,7 +11,9 @@ hooks ``pre-install``:
   its ClusterRoleBinding (named after the release namespace and name), a
   NetworkPolicy that lets the probe reach the API server, and
 - a Job running :data:`SCRIPT` (POSIX ``sh`` and ``curl``, the way
-  ``app.cluster_identity`` reads the cluster): it creates a claim of
+  ``app.cluster_identity`` reads the cluster) in the image given, or since
+  0.97.0, without one, :data:`PYTHON_SCRIPT` (the same steps and lines with
+  Python's standard library) in :data:`DEFAULT_IMAGE`: it creates a claim of
   ``size`` in ``storageClass`` and a pod that mounts it, waits until the pod
   runs, and deletes both. When the pod does not start in time it prints one
   line with the newest warning event and the other storage classes, and
@@ -58,6 +60,13 @@ HOOK_ANNOTATIONS = {
     "helm.sh/hook": "pre-install",
     "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded",
 }
+#: 0.97.0: the image a probe without ``image=`` runs: Piceli's own controller
+#: image (it has ``sh`` and Python, not ``curl``), pinned here by digest.
+#: ``image.registry`` rewrites its host for a mirror like any chart image.
+DEFAULT_IMAGE = (
+    "ghcr.io/pynenc/piceli-controller@sha256:"
+    "fb997ba5d7493d8535883009b9f71d16278f1202ccdca15467f849ba703346f3"
+)  # 0.96.0
 _DIGEST = re.compile(r"@sha256:[a-f0-9]{64}$")
 _SIZE = re.compile(r"^[0-9]+(Ki|Mi|Gi|Ti|Pi|k|M|G|T|P)?$")
 _SMALL = {
@@ -246,6 +255,201 @@ exit 1
 """
 
 
+#: 0.97.0: :data:`SCRIPT` with Python's standard library, for an image with
+#: Python and no ``curl`` (:data:`DEFAULT_IMAGE`). Same environment, same
+#: API calls, same output lines; ``PROBE_API`` (a base URL) is for tests.
+PYTHON_SCRIPT = r"""
+import json, os, re, signal, ssl, sys, time, urllib.error, urllib.request
+
+sa = os.environ.get("SERVICE_ACCOUNT_DIR") or "/var/run/secrets/kubernetes.io/serviceaccount"
+host = os.environ.get("KUBERNETES_SERVICE_HOST") or sys.exit("not in a pod")
+if ":" in host:
+    host = "[" + host + "]"
+base = os.environ.get("PROBE_API") or (
+    "https://" + host + ":" + (os.environ.get("KUBERNETES_SERVICE_PORT") or "443"))
+token = open(sa + "/token").read().strip()
+ns = open(sa + "/namespace").read().strip()
+name = os.environ["PROBE_NAME"]
+klass = os.environ.get("PROBE_CLASS") or ""
+timeout = int(os.environ.get("PROBE_TIMEOUT") or "180")
+poll = float(os.environ.get("PROBE_POLL") or "2")
+pods = "/api/v1/namespaces/" + ns + "/pods"
+claims = "/api/v1/namespaces/" + ns + "/persistentvolumeclaims"
+context = None if base.startswith("http://") else ssl.create_default_context(cafile=sa + "/ca.crt")
+default = ""
+start = int(time.time())
+
+
+def say(line):
+    sys.stdout.write(line + "\n")
+    sys.stdout.flush()
+
+
+def api(method, path, body=None):
+    # (HTTP status, JSON document or {}); status 0: unreachable
+    headers = {"Authorization": "Bearer " + token}
+    data = None
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+        data = body.encode()
+    request = urllib.request.Request(base + path, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=20, context=context) as answer:
+            code, text = answer.status, answer.read()
+    except urllib.error.HTTPError as error:
+        code, text = error.code, error.read()
+    except (OSError, ValueError):
+        return 0, {}
+    try:
+        found = json.loads(text or b"{}")
+    except ValueError:
+        found = {}
+    return code, found if isinstance(found, dict) else {}
+
+
+def one_line(text):
+    return " ".join(str(text or "").splitlines())
+
+
+def stamp(event):
+    series = event.get("series") or {}
+    for value in (event.get("lastTimestamp"), series.get("lastObservedTime"),
+                  event.get("eventTime"), event.get("firstTimestamp")):
+        found = re.match(r"([0-9]+)-([0-9]+)-([0-9]+)T([0-9]+):([0-9]+):([0-9]+)", str(value or ""))
+        if found:
+            return int("".join(found.groups()))
+    return 0
+
+
+def newest(events):
+    best, best_at = "", -1
+    for item in events.get("items") or ():
+        if item.get("type") != "Warning":
+            continue
+        at = stamp(item)
+        if at >= best_at:
+            best_at = at
+            best = one_line(item.get("reason")) + ": " + one_line(item.get("message"))
+    return best
+
+
+def classes():
+    global default
+    names = []
+    code, found = api("GET", "/apis/storage.k8s.io/v1/storageclasses")
+    if not 200 <= code < 300:
+        return names
+    for item in found.get("items") or ():
+        meta = item.get("metadata") or {}
+        if not meta.get("name"):
+            continue
+        names.append(meta["name"])
+        marked = (meta.get("annotations") or {}).get("storageclass.kubernetes.io/is-default-class")
+        if marked == "true":
+            default = default or meta["name"]
+    return names
+
+
+def what():
+    if klass:
+        return 'storage class "%s"' % klass
+    if default:
+        return 'the default storage class "%s"' % default
+    return "the default storage class"
+
+
+def elapsed():
+    return int(time.time()) - start
+
+
+def cleanup():
+    api("DELETE", pods + "/" + name + "?gracePeriodSeconds=0")
+    api("DELETE", claims + "/" + name)
+
+
+def create(path, body, kind):
+    while True:
+        code, found = api("POST", path, body)
+        if 200 <= code < 300:
+            return found
+        if code == 0:
+            say("storage probe: cannot reach the API server at " + base)
+            sys.exit(1)
+        if code != 409:
+            say("storage probe: the cluster refused the %s (HTTP %d: %s)"
+                % (kind, code, one_line(found.get("message"))))
+            sys.exit(1)
+        if elapsed() >= timeout:
+            say("storage probe: the %s %s of an earlier run is still being deleted" % (kind, name))
+            sys.exit(1)
+        time.sleep(poll)
+
+
+def stop(*_):
+    sys.exit(1)
+
+
+def main():
+    global default
+    claim = os.environ["PROBE_CLAIM"].replace("@NAME@", name)
+    if klass:
+        claim = claim.replace("@CLASS@", klass)
+    else:
+        claim = claim.replace(',"storageClassName":"@CLASS@"', "")
+    pod = (os.environ["PROBE_POD"].replace("@NAME@", name)
+           .replace("@IMAGE@", os.environ.get("PROBE_IMAGE") or "")
+           .replace('"@PULL@"', os.environ.get("PROBE_PULL_SECRETS") or "[]"))
+    made = create(claims, claim, "claim")
+    if not klass:
+        default = str((made.get("spec") or {}).get("storageClassName") or "")
+    create(pods, pod, "pod")
+    phase = "Pending"
+    while True:
+        _code, found = api("GET", pods + "/" + name)
+        status = found.get("status") or {}
+        phase = str(status.get("phase") or "")
+        waiting = ""
+        for item in (status.get("initContainerStatuses") or []) + (status.get("containerStatuses") or []):
+            reason = ((item.get("state") or {}).get("waiting") or {}).get("reason")
+            if reason:
+                waiting = str(reason)
+                break
+        if phase in ("Running", "Succeeded"):
+            say("storage probe: %s attached on these nodes in %ds" % (what(), elapsed()))
+            return 0
+        if phase == "Failed":
+            break
+        if waiting not in ("", "ContainerCreating", "PodInitializing"):
+            say("storage probe: %s attached on these nodes in %ds (the probe container did not start: %s)"
+                % (what(), elapsed(), waiting))
+            return 0
+        if elapsed() >= timeout:
+            break
+        time.sleep(poll)
+    _code, events = api("GET", "/api/v1/namespaces/" + ns + "/events?fieldSelector=involvedObject.name%3D" + name)
+    cause = newest(events) or ("no warning event: the probe pod stayed %s for %ds" % (phase or "Pending", timeout))
+    names = classes()
+    chosen = klass or default
+    others = [item for item in names if item != chosen]
+    if others:
+        hint = "set storageClass to one of: " + ", ".join(others)
+    else:
+        hint = "ask the cluster's administrator for a class these nodes can attach"
+    say("%s cannot attach on these nodes (%s): %s" % (what(), cause, hint))
+    return 1
+
+
+signal.signal(signal.SIGTERM, stop)
+signal.signal(signal.SIGHUP, stop)
+try:
+    cleanup()
+    code = main()
+finally:
+    cleanup()
+sys.exit(code)
+"""
+
+
 @dataclass(frozen=True)
 class StorageProbe:
     """Check before install that the chart's storage class attaches (0.94.0).
@@ -260,22 +464,36 @@ class StorageProbe:
     an app with at least one claim.
 
     :param image: An image with ``sh`` and ``curl``, pinned by digest like
-        every image of a chart (usually the app's own).
+        every image of a chart (usually the app's own). 0.97.0: empty (the
+        default): :data:`DEFAULT_IMAGE`, Piceli's controller image, runs
+        :data:`PYTHON_SCRIPT`.
     :param timeout_seconds: The default wait for the pod, 10 to 3600.
     :param size: The probe claim's size (a whole quantity, ``1Gi``).
 
     Example::
 
-        chart = HelmChart(pipeline, storage_probe=StorageProbe(image=WEB_IMAGE))
+        chart = HelmChart(pipeline, storage_probe=StorageProbe())
     """
 
-    image: str
+    image: str = ""
     timeout_seconds: int = 180
     size: str = "1Gi"
 
+    @property
+    def pinned(self) -> str:
+        """The image the probe runs: ``image``, else :data:`DEFAULT_IMAGE`."""
+        return self.image or DEFAULT_IMAGE
+
+    def command(self) -> list[str]:
+        """The Job's command: the ``sh`` script in a given image, the Python
+        one in :data:`DEFAULT_IMAGE` (0.97.0)."""
+        if self.image:
+            return ["/bin/sh", "-c", SCRIPT]
+        return ["python3", "-I", "-B", "-c", PYTHON_SCRIPT]
+
     def checked(self) -> StorageProbe:
         """``self``, or :class:`~piceli.bundle.build.BundleError` ``bundle-invalid``."""
-        if not isinstance(self.image, str) or not _DIGEST.search(self.image):
+        if not isinstance(self.image, str) or not _DIGEST.search(self.pinned):
             raise BundleError(
                 "bundle-invalid",
                 "storage_probe image must be pinned by digest in a registry "
@@ -460,6 +678,9 @@ class Names:
     deadline: Any  # the Job's activeDeadlineSeconds (an integer)
     storage_class: str
     pull_secrets: str
+    #: 0.97.0: the ``PROBE_POD`` value when the chart templates it (its
+    #: scheduling values); ``None``: the pod's JSON as it is.
+    pod: Any = None
 
 
 def hook_objects(
@@ -579,7 +800,7 @@ def hook_objects(
                         "automountServiceAccountToken": True,
                         "containers": [
                             {
-                                "command": ["/bin/sh", "-c", SCRIPT],
+                                "command": probe.command(),
                                 "env": [
                                     {"name": "PROBE_NAME", "value": names.name},
                                     {"name": "PROBE_IMAGE", "value": names.image},
@@ -593,9 +814,14 @@ def hook_objects(
                                         "value": names.pull_secrets,
                                     },
                                     {"name": "PROBE_CLAIM", "value": as_json(claim)},
-                                    {"name": "PROBE_POD", "value": as_json(probe_pod)},
+                                    {
+                                        "name": "PROBE_POD",
+                                        "value": as_json(probe_pod)
+                                        if names.pod is None
+                                        else names.pod,
+                                    },
                                 ],
-                                "image": probe.image,
+                                "image": probe.pinned,
                                 "name": "probe",
                                 "resources": json.loads(json.dumps(_SMALL)),
                                 "securityContext": json.loads(
@@ -628,7 +854,7 @@ def literal_names(bundle: str, namespace: str, probe: StorageProbe) -> Names:
         name=f"{bundle}-storage-probe",
         cluster=f"{namespace}:{bundle}:storage-probe",
         namespace=namespace,
-        image=probe.image,
+        image=probe.pinned,
         timeout=str(probe.timeout_seconds),
         deadline=probe.timeout_seconds + 60,
         storage_class="",

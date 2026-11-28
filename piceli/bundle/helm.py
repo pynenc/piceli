@@ -55,6 +55,11 @@ kustomize base and ``prepare.sh``:
   (``{{- if and (A) (B) }}``); ``HelmChart(requires={"a.on": ["b.on"]})``
   fails the install with ``a.on=true needs b.on=true`` when the first is
   true and a needed one is not.
+- **Scheduling** (0.97.0). ``HelmChart(scheduling=True)`` adds the values
+  ``nodeSelector``, ``tolerations`` and ``affinity``: every workload gets
+  them, merged with its own (the value wins on a key; tolerations are
+  added), and so do the storage probe's Job and pod (of ``affinity`` only
+  ``nodeAffinity``).
 
 Cluster-scoped objects (ClusterRoles and their bindings) are part of the
 release, so ``helm uninstall`` removes them. The chart is deterministic: the
@@ -69,7 +74,7 @@ import copy
 import json
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from piceli.bundle.build import (
@@ -386,6 +391,12 @@ class HelmChart:
         ``a.on=true needs b.on=true``; the schema, ``values.yaml`` and the
         README note it. A value needing itself, a cycle, or defaults that
         would fail the default install are refused.
+    :param scheduling: 0.97.0: the chart-wide values ``nodeSelector``,
+        ``tolerations`` and ``affinity``, rendered into every workload
+        (merged with what it declares: the value wins on a key, tolerations
+        are added) and into the storage probe's Job and pod (of
+        ``affinity``, only ``nodeAffinity``: the app's pods do not exist
+        yet).
     """
 
     target: Any
@@ -401,6 +412,7 @@ class HelmChart:
     existing_secrets: Mapping[str, Sequence[str]] = field(default_factory=dict)
     storage_probe: StorageProbe | None = None
     requires: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    scheduling: bool = False
 
     def requirements(self) -> dict[str, tuple[str, ...]]:
         """0.95.0: value name → the values it needs (checked for shape).
@@ -759,8 +771,11 @@ class _Templater:
         values_at: Mapping[str, Sequence[tuple[list[str], str, int]]] | None = None,
         value_defaults: Mapping[str, Any] | None = None,
         storage_env: Mapping[str, int] | None = None,
+        scheduling: bool = False,
     ) -> None:
         self.name = name
+        #: 0.97.0: workloads read nodeSelector, tolerations and affinity.
+        self.scheduling = scheduling
         self.namespace = namespace
         self.naming = naming or Naming()
         self.settings = settings
@@ -974,6 +989,8 @@ class _Templater:
                 image = container.get("image") if isinstance(container, dict) else None
                 if isinstance(image, str):
                     container["image"] = self.scalar(self.image(image))
+        if self.scheduling:
+            self.schedule(pod)
         if "imagePullSecrets" not in pod:
             self.optional(
                 pod,
@@ -983,6 +1000,19 @@ class _Templater:
                 '{{ $names = append $names (dict "name" .) }}{{ end }}'
                 "{{ toJson $names }}",
             )
+
+    def schedule(self, pod: dict[str, Any]) -> None:
+        """0.97.0: the pod's nodeSelector, tolerations and affinity from the
+        values, merged with its own (the value wins on a key; tolerations
+        are added)."""
+        for key, (merged, empty, read) in SCHEDULING.items():
+            ref = f"({_value(key)} | default {empty})"
+            own = pod.get(key)
+            expression = _value(key)
+            if own:
+                text = _literal(json.dumps(own, sort_keys=True, separators=(",", ":")))
+                expression = merged.format(value=ref, own=f"({read} {text})")
+            self.optional(pod, key, expression)
 
     def image(self, image: str) -> str:
         """``image`` with ``image.registry`` in place of its registry, as JSON."""
@@ -1475,6 +1505,8 @@ class HelmBundle:
     storage_probe: StorageProbe | None = None
     #: 0.95.0: (the ``if`` test, the line) of each optional value's note.
     notes: tuple[tuple[str, str], ...] = ()
+    #: 0.97.0: the chart has the values nodeSelector, tolerations, affinity.
+    scheduling: bool = False
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -1730,6 +1762,17 @@ def build_helm(
             raise BundleError(
                 "bundle-invalid", f"the value {'.'.join(parts)} is named twice"
             )
+    if declared.scheduling:
+        taken = sorted(
+            {"nodeSelector", "tolerations", "affinity"}
+            & ({*names} | {parts[0] for parts in paths})
+        )
+        if taken:
+            raise BundleError(
+                "bundle-invalid",
+                f"scheduling=True adds the values {taken}, which the chart "
+                "already names",
+            )
     probe = _storage_probe(bundle, declared.storage_probe, names, paths)
     # 0.31.0: an existing Secret holds every key of the app's Secrets; two
     # Secrets with one key name could not share it, so it is not offered.
@@ -1765,6 +1808,7 @@ def build_helm(
         else frozenset(),
         secret_values={name: ".".join(path) for name, path in replaceable.items()},
         values_at=values_at, storage_env=storage_env,
+        scheduling=bool(declared.scheduling),
         value_defaults={
             name: _value_default(item, targets, by_key)
             for name, (_parts, item, targets) in placed_values.items()
@@ -2078,6 +2122,32 @@ def build_helm(
     comments.append(
         "# storageClass: storage class of every claim (empty: the cluster's default)"
     )
+    if declared.scheduling:
+        # 0.97.0: where every workload (and the storage probe) runs.
+        values.update(nodeSelector={}, tolerations=[], affinity={})
+        schema["nodeSelector"] = {
+            "type": "object",
+            "additionalProperties": {"type": "string"},
+            "description": "Node labels every pod needs (merged with each "
+            "workload's own; this value wins on a key)",
+        }
+        schema["tolerations"] = {
+            "type": "array",
+            "items": {"type": "object"},
+            "description": "Tolerations added to every pod's own",
+        }
+        schema["affinity"] = {
+            "type": "object",
+            "description": "Affinity of every pod (merged with each workload's "
+            "own; the storage probe takes only nodeAffinity)",
+        }
+        comments += [
+            "# nodeSelector: node labels every pod needs (merged with each "
+            "workload's own)",
+            "# tolerations: added to every pod's own",
+            "# affinity: every pod's affinity (merged; the storage probe takes "
+            "only nodeAffinity)",
+        ]
     if templater.claims:
         values["deleteDataOnUninstall"] = False
         schema["deleteDataOnUninstall"] = {
@@ -2195,6 +2265,7 @@ def build_helm(
         naming=naming,
         storage_probe=probe,
         notes=notes,
+        scheduling=bool(declared.scheduling),
     )
     files["Chart.yaml"] = yaml.safe_dump(chart.metadata(), sort_keys=True).encode()
     files["templates/NOTES.txt"] = _notes(chart).encode()
@@ -2238,6 +2309,42 @@ def _storage_probe(
     return probe
 
 
+#: 0.97.0: scheduling value → (the merge with a pod's own, the empty value,
+#: the function that reads the pod's own JSON).
+SCHEDULING = {
+    "nodeSelector": ("(merge (deepCopy {value}) {own})", "dict", "fromJson"),
+    "tolerations": ("(concat {own} {value})", "list", "fromJsonArray"),
+    "affinity": ("(merge (deepCopy {value}) {own})", "dict", "fromJson"),
+}
+
+
+def _probe_pod(bundle: Bundle, annotation: Mapping[str, str]) -> str:
+    """0.97.0: the probe pod's JSON (``PROBE_POD``) with the scheduling
+    values set the way :meth:`_Templater.schedule` sets a workload's; of
+    ``affinity`` only ``nodeAffinity`` (the app's pods do not exist yet)."""
+    from piceli.bundle.probe import as_json, claim_workload, pod_manifest
+
+    pod = pod_manifest(
+        bundle.name, annotation, claim_workload([o.manifest for o in bundle.objects])
+    )
+    node = _value("affinity.nodeAffinity")
+    return (
+        # No left trim on the first action: it would eat the space after
+        # ``value:``.
+        f"{{{{ $probePod := fromJson {_literal(as_json(pod))} -}}}}"
+        "{{- $probeSpec := $probePod.spec -}}"
+        f"{{{{- with (merge (deepCopy ({_value('nodeSelector')} | default dict)) "
+        "($probeSpec.nodeSelector | default dict)) -}}"
+        '{{- $_ := set $probeSpec "nodeSelector" . -}}{{- end -}}'
+        "{{- with (concat ($probeSpec.tolerations | default list) "
+        f"({_value('tolerations')} | default list)) -}}}}"
+        '{{- $_ := set $probeSpec "tolerations" . -}}{{- end -}}'
+        f"{{{{- with {node} -}}}}"
+        '{{- $_ := set $probeSpec "affinity" (dict "nodeAffinity" .) -}}{{- end -}}'
+        "{{ $probePod | toJson | toJson }}"
+    )
+
+
 def _probe_template(bundle: Bundle, probe: StorageProbe, templater: _Templater) -> str:
     """0.94.0: the probe's hook objects, rendered when ``storageProbe.enabled``."""
     from piceli.bundle.probe import Names, first_claim, hook_objects
@@ -2257,7 +2364,7 @@ def _probe_template(bundle: Bundle, probe: StorageProbe, templater: _Templater) 
             '{{ printf "%s:%s:storage-probe" $.Release.Namespace $.Release.Name | toJson }}'
         ),
         namespace=bundle.namespace,
-        image=templater.scalar(templater.image(probe.image)),
+        image=templater.scalar(templater.image(probe.pinned)),
         timeout=templater.scalar(f"{{{{ {timeout} | toString | toJson }}}}"),
         deadline=templater.scalar(f"{{{{ add {timeout} 60 }}}}"),
         storage_class=templater.scalar(
@@ -2273,6 +2380,8 @@ def _probe_template(bundle: Bundle, probe: StorageProbe, templater: _Templater) 
     annotation = {
         bundle.naming.key(BUNDLE_ANNOTATION): f"{bundle.name}@{bundle.version}"
     }
+    if templater.scheduling:
+        names = replace(names, pod=templater.scalar(_probe_pod(bundle, annotation)))
     documents = [
         "---\n"
         + templater.text(
@@ -2492,6 +2601,19 @@ def _readme(
         lines.append(
             "- `deleteDataOnUninstall`: uninstall also deletes the data claims"
         )
+    if chart.scheduling:
+        lines += [
+            "- `nodeSelector`: node labels every pod needs, merged with each "
+            "workload's own (this value wins on a key), for example "
+            "`--set nodeSelector.pool=data`",
+            "- `tolerations`: tolerations added to every pod's own",
+            "- `affinity`: every pod's affinity, merged with its own"
+            + (
+                "; the storage probe takes only `nodeAffinity`"
+                if chart.storage_probe is not None
+                else ""
+            ),
+        ]
     probe = chart.storage_probe
     if probe is not None:
         lines += [
